@@ -360,7 +360,7 @@ class JsonDB {
     }
     
     // 캐시 클리어
-    public function clearCache(string $name = null): void {
+    public function clearCache(?string $name = null): void {
         if ($name) {
             unset($this->cache[$name]);
         } else {

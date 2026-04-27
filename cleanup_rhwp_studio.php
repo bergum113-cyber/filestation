@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php_version_check.php';
 /**
  * rhwp studio 이전 버전 파일 자동 정리 스크립트
  * 

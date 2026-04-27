@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php_version_check.php';
 /**
  * API Router - REST API 엔드포인트
  */

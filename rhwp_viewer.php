@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php_version_check.php';
 /**
  * rhwp WASM 기반 HWP/HWPX 뷰어
  * 

@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php_version_check.php';
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/lang.php';
 

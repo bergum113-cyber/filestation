@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php_version_check.php';
 /**
  * WebDAV 엔드포인트
  * 

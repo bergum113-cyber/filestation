@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php_version_check.php';
 /**
  * Webhard HWP/HWPX 통합 뷰어
  * 

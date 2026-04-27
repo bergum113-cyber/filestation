@@ -5165,7 +5165,7 @@ class FileManager {
     }
     
     // 휴지통 비우기
-    public function emptyTrash(int $userId = null): array {
+    public function emptyTrash(?int $userId = null): array {
         $trash = $this->db->load('trash');
         $newTrash = [];
         $deletedCount = 0;
@@ -5206,7 +5206,7 @@ class FileManager {
     }
     
     // 휴지통 목록 조회
-    public function getTrashList(int $userId = null): array {
+    public function getTrashList(?int $userId = null): array {
         $trash = $this->db->load('trash');
         
         if ($userId !== null) {

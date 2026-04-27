@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php_version_check.php';
 /**
  * FileStation 동기화 Cron 스크립트
  * 

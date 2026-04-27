@@ -343,7 +343,7 @@ class ShareManager {
     }
     
     // 공유 링크로 접근
-    public function accessShare(string $token, string $password = null): array {
+    public function accessShare(string $token, ?string $password = null): array {
         $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
         
         if (!$share) {
@@ -424,7 +424,7 @@ class ShareManager {
     }
     
     // 공유 파일 다운로드
-    public function downloadShare(string $token, string $password = null): void {
+    public function downloadShare(string $token, ?string $password = null): void {
         $access = $this->accessShare($token, $password);
         
         if (!$access['success']) {
@@ -1360,7 +1360,7 @@ class ShareManager {
     /**
      * 파일 드롭 공유 링크로 파일 업로드
      */
-    public function uploadToFileDrop(string $token, array $file, string $password = null): array {
+    public function uploadToFileDrop(string $token, array $file, ?string $password = null): array {
         $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
         
         if (!$share || ($share['share_type'] ?? '') !== 'filedrop') {

@@ -35,7 +35,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 | 구분 | 항목 |
 |---|---|
-| **PHP** | 7.4 ~ 8.4 |
+| **PHP** | 8.0 ~ 8.4 (8.2~8.3 권장) |
 | **웹서버** | Apache / Nginx / IIS |
 | **필수 확장** | json, mbstring, zip, gd |
 | **선택 확장** | curl, intl, ssh2 (SFTP용), smbclient (SMB용) |
@@ -453,7 +453,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 백엔드
 
-- **언어**: PHP 7.4 ~ 8.4 호환
+- **언어**: PHP 8.0 ~ 8.4 호환 (PHP 8.2 ~ 8.3 권장)
 - **데이터베이스**: JsonDB (file-based, 원자적 쓰기)
 - **웹 서버**: Apache (.htaccess) / Nginx / IIS
 - **외부 의존성**:

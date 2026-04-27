@@ -1,4 +1,5 @@
 <?php
+require_once __DIR__ . '/php_version_check.php';
 /**
  * OnlyOffice 문서 편집기 페이지
  * 

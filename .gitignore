@@ -1,0 +1,151 @@
+# FileStation .gitignore
+# 사용자 데이터 / 캐시 / 로그는 GitHub에 올리지 않음
+
+# 사용자 데이터 (DB, 세션, 캐시 등)
+/data/
+/data/*
+
+# 캐시
+/cache/
+/tmp/
+/temp/
+
+# 로그
+*.log
+/logs/
+/data/logs/
+/data/debug/
+/data/access_logs/
+/data/login_logs/
+/data/activity_logs/
+
+# 사용자 업로드 (스토리지)
+/storage/
+/uploads/
+
+# 휴지통
+/data/trash/
+/data/.trash/
+
+# 세션
+/data/sessions/
+
+# 임시 파일
+/data/temp_uploads/
+/data/temp/
+/data/uploads_chunks/
+
+# 검색 인덱스 (DB)
+/data/file_index/
+/data/index/
+
+# HLS 세그먼트 캐시
+/data/hls/
+/data/hls_cache/
+
+# 썸네일 캐시
+/data/thumbnails/
+/data/thumb_cache/
+
+# 작업 큐
+/data/jobs/
+/data/job_queue/
+
+# 사용자별 파일 잠금 정보
+/data/locks/
+
+# 파일 버전 백업
+/data/file_versions/
+
+# 환경 설정 (민감 정보)
+config.local.php
+.env
+.env.local
+*.local.php
+
+# 시크릿 키 / 인증서
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+oauth_keys/
+ssl/
+ssl_certs/
+
+# OnlyOffice 관련
+/onlyoffice_cache/
+/onlyoffice_documents/
+
+# 백업 파일
+*.bak
+*.backup
+*~
+*.swp
+*.tmp
+
+# OS 파일
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE 파일
+.idea/
+.vscode/
+*.sublime-*
+.project
+.settings/
+
+# Windows
+*.exe
+*.dll
+*.zip.local
+
+# 압축 파일 (배포용 zip은 Releases로)
+FileStation_v*.zip
+FileStation_*.tar.gz
+
+# Composer (사용 시)
+/vendor/
+composer.lock
+
+# Node.js (rhwp-studio 빌드용 외)
+/node_modules/
+
+# rhwp 빌드 임시 파일 (배포 결과물은 포함)
+/rhwp-build/
+/rhwp-temp/
+
+# 데이터베이스 백업
+*.sql
+*.sql.gz
+*.db
+*.sqlite
+
+# 사용자 설정 (개인 환경)
+/assets/file-icons/custom/*
+!/assets/file-icons/custom/.gitkeep
+
+# 임시 다운로드
+/data/downloads/
+/data/exports/
+
+# 사용자 통계 (생성된 데이터)
+/data/stats/
+/data/access_stats/
+
+# 디버그
+/debug/
+/data/debug_*
+
+# 이메일 큐
+/data/mail_queue/
+
+# rate limit 추적 파일
+/data/rate_limits/
+
+# 차단 IP 기록
+/data/blocked_*
+
+# 작업 결과
+/data/job_results/
