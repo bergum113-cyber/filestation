@@ -1,0 +1,173 @@
+# ============================================================
+# FileStation v5.7.5 - Nginx 보안 설정
+# ============================================================
+# 사용법: 이 파일을 참고하여 nginx 서버 블록에 적용하세요.
+# 예: /etc/nginx/sites-available/filestation.conf
+# ============================================================
+
+server {
+    listen 80;
+    # listen 443 ssl http2;
+    server_name your-domain.com;
+
+    root /var/www/filestation;
+    index index.php;
+
+    # ─────────────────────────────────────
+    # PHP 설정 (대용량 파일 업로드 지원)
+    # ─────────────────────────────────────
+    client_max_body_size 0;
+    client_body_timeout 3600s;
+    proxy_read_timeout 3600s;
+    fastcgi_read_timeout 3600s;
+    fastcgi_send_timeout 3600s;
+
+    # ─────────────────────────────────────
+    # 보안 헤더
+    # ─────────────────────────────────────
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+
+    # ─────────────────────────────────────
+    # [핵심] data/ 폴더 차단 (JSON DB 보호)
+    # site_images 이미지만 허용, 나머지 전부 차단
+    # ─────────────────────────────────────
+    location ^~ /data/ {
+        # site_images 이미지만 허용
+        location ~ ^/data/site_images/.*\.(jpg|jpeg|png|gif|webp|svg|ico)$ {
+            expires 30d;
+            access_log off;
+        }
+        # 나머지 전부 차단 (JSON, PHP 등)
+        deny all;
+        return 403;
+    }
+
+    # ─────────────────────────────────────
+    # [핵심] api/ 폴더 차단 (PHP 클래스 직접 접근 방지)
+    # Auth.php, JsonDB.php 등 include 전용 파일
+    # ─────────────────────────────────────
+    location ^~ /api/ {
+        deny all;
+        return 403;
+    }
+
+    # ─────────────────────────────────────
+    # [핵심] users/ 폴더 차단 (사용자 파일 보호)
+    # 모든 파일은 api.php를 통해서만 접근
+    # ─────────────────────────────────────
+    location ^~ /users/ {
+        deny all;
+        return 403;
+    }
+
+    # ─────────────────────────────────────
+    # [핵심] shared/ 폴더 차단 (공유 파일 보호)
+    # 모든 파일은 api.php를 통해서만 접근
+    # ─────────────────────────────────────
+    location ^~ /shared/ {
+        deny all;
+        return 403;
+    }
+
+    # ─────────────────────────────────────
+    # [핵심] config.php 직접 접근 차단
+    # ─────────────────────────────────────
+    location = /config.php {
+        deny all;
+        return 403;
+    }
+
+    # ─────────────────────────────────────
+    # [핵심] lang.php 직접 접근 차단
+    # ─────────────────────────────────────
+    location = /lang.php {
+        deny all;
+        return 403;
+    }
+
+    # ─────────────────────────────────────
+    # 숨김 파일 차단 (.htaccess, .git 등)
+    # ─────────────────────────────────────
+    location ~ /\. {
+        deny all;
+        return 403;
+    }
+
+    # ─────────────────────────────────────
+    # 디렉토리 리스팅 비활성화
+    # ─────────────────────────────────────
+    autoindex off;
+
+    # ─────────────────────────────────────
+    # 정적 파일 캐싱 (성능)
+    # ─────────────────────────────────────
+    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf)$ {
+        expires 7d;
+        access_log off;
+        add_header Cache-Control "public, immutable";
+    }
+
+    # ─────────────────────────────────────
+    # api.php PathInfo 지원 (PDF 미리보기 파일명)
+    # api.php/filename.pdf 패턴
+    # ─────────────────────────────────────
+    location ~ ^/api\.php(/|$) {
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        # 또는: fastcgi_pass 127.0.0.1:9000;
+        fastcgi_param SCRIPT_FILENAME $document_root/api.php;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+        include fastcgi_params;
+        fastcgi_read_timeout 3600s;
+    }
+
+    # ─────────────────────────────────────
+    # WebDAV 엔드포인트
+    # FileStation의 WebDAV는 PHP가 직접 처리합니다.
+    # Nginx는 모든 HTTP 메서드(PROPFIND, PUT 등)를 PHP-FPM에 전달하면 됩니다.
+    # fastcgi_params에 REQUEST_METHOD가 포함되어 있으면 별도 설정 없이 동작합니다.
+    # ─────────────────────────────────────
+    location = /mydav.php {
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_param SCRIPT_FILENAME $document_root/mydav.php;
+        include fastcgi_params;
+        fastcgi_read_timeout 3600s;
+        
+        # Authorization 헤더 전달 (WebDAV Basic Auth 필수)
+        fastcgi_param HTTP_AUTHORIZATION $http_authorization;
+        
+        # 대용량 파일 업로드 허용
+        client_max_body_size 0;
+    }
+
+    # ─────────────────────────────────────
+    # 허용된 PHP 파일만 실행
+    # index.php, api.php, share.php 등
+    # ─────────────────────────────────────
+    location ~ ^/(index|api|share|hwp_viewer|office_viewer|onlyoffice|mydav)\.php$ {
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        # 또는: fastcgi_pass 127.0.0.1:9000;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+        fastcgi_read_timeout 3600s;
+
+        # WebDAV Authorization 헤더 전달
+        fastcgi_param HTTP_AUTHORIZATION $http_authorization;
+    }
+
+    # ─────────────────────────────────────
+    # 그 외 PHP 파일 실행 차단
+    # ─────────────────────────────────────
+    location ~ \.php$ {
+        deny all;
+        return 403;
+    }
+
+    # ─────────────────────────────────────
+    # 기본 요청 처리
+    # ─────────────────────────────────────
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+}

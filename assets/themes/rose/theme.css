@@ -1,0 +1,486 @@
+/* ========================================
+   Rose 테마 - 부드러운 로즈색
+   성능: ⭐⭐⭐⭐⭐
+   ======================================== */
+
+:root {
+    /* 테마 변수 */
+    --theme-primary: #e11d48;
+    --theme-primary-hover: #be123c;
+    --theme-bg: #fff1f2;
+    --theme-sidebar: #ffe4e6;
+    --theme-header: #ffffff;
+    --theme-content: #ffffff;
+    --theme-border: #fecdd3;
+    --theme-text: #4c0519;
+    --theme-text-muted: #be123c;
+    --theme-hover: #fda4af;
+    --theme-selected: #fb7185;
+    
+    /* style.css 변수 재정의 */
+    --sidebar-bg: #ffe4e6;
+    --sidebar-text: #4c0519;
+    --bg: #fff1f2;
+    --border: #fecdd3;
+    --primary: #e11d48;
+    --primary-dark: #be123c;
+}
+
+/* 로그인 페이지 */
+.login-page {
+    background: linear-gradient(135deg, #e11d48 0%, #fb7185 100%);
+}
+
+.login-box {
+    background: #ffffff;
+    box-shadow: 0 10px 40px rgba(225, 29, 72, 0.25);
+}
+
+/* 헤더 */
+.header {
+    background: var(--theme-header);
+    border-bottom: 1px solid var(--theme-border);
+}
+
+.logo {
+    color: var(--theme-primary);
+}
+
+/* 검색창 */
+.search-box {
+    background: #fff5f5 !important;
+    border: 1px solid var(--theme-border);
+}
+
+.search-box input {
+    color: var(--theme-text) !important;
+    background: transparent !important;
+}
+
+.search-box input::placeholder {
+    color: var(--theme-text-muted) !important;
+}
+
+.search-box button {
+    color: var(--theme-text-muted) !important;
+}
+
+/* 사이드바 - 로즈색 배경 */
+.sidebar {
+    background: #ffe4e6 !important;
+    border-right: 1px solid var(--theme-border);
+    color: var(--theme-text);
+}
+
+.sidebar h3 {
+    color: var(--theme-primary) !important;
+}
+
+.sidebar-section h3.section-toggle {
+    color: var(--theme-primary) !important;
+}
+
+.sidebar-section h3.section-toggle:hover {
+    color: #4c0519 !important;
+    background: #fda4af !important;
+}
+
+.sidebar-section h3.section-toggle .toggle-icon {
+    background: #fecdd3 !important;
+    color: var(--theme-primary) !important;
+}
+
+.sidebar-divider {
+    background: #fecdd3 !important;
+}
+
+.sidebar-quota {
+    border-top-color: #fecdd3 !important;
+}
+
+.quota-text {
+    color: var(--theme-text-muted) !important;
+}
+
+.storage-item {
+    color: var(--theme-text) !important;
+}
+
+.storage-item .storage-icon {
+    color: var(--theme-primary);
+}
+
+.menu-list li a {
+    color: var(--theme-text) !important;
+}
+
+.storage-item:hover,
+.menu-list li:hover {
+    background: #fda4af !important;
+}
+
+.storage-item.active, .menu-list li.active > a {
+    background: #fb7185 !important;
+    color: #ffffff !important;
+    font-weight: 500;
+}
+
+.storage-item.active .storage-icon {
+    color: #ffffff;
+}
+
+/* 콘텐츠 영역 */
+.content-area {
+    background: var(--theme-bg);
+}
+
+.file-area {
+    background: var(--theme-content);
+}
+
+/* 파일 아이템 */
+.file-item {
+    color: var(--theme-text);
+}
+
+.file-item:hover {
+    background: var(--theme-hover);
+}
+
+.file-item.selected {
+    background: var(--theme-selected);
+    color: #ffffff;
+}
+
+.file-size,
+.file-date {
+    color: var(--theme-text-muted);
+}
+
+/* 툴바 */
+.toolbar {
+    background: var(--theme-content);
+    border-bottom: 1px solid var(--theme-border);
+}
+
+/* 브레드크럼 */
+.breadcrumb {
+    background: var(--theme-content);
+    border-bottom: 1px solid var(--theme-border);
+}
+
+.breadcrumb a {
+    color: var(--theme-primary);
+}
+
+/* 모달 */
+.modal {
+    background: #ffffff;
+    box-shadow: 0 10px 50px rgba(225, 29, 72, 0.15);
+}
+
+.modal-header {
+    background: linear-gradient(135deg, #e11d48 0%, #f43f5e 100%);
+    color: #ffffff;
+    border-bottom: none;
+}
+
+.modal-header h2 {
+    color: #ffffff;
+}
+
+.modal-header .modal-close {
+    color: #ffffff;
+}
+
+.modal-header .modal-close:hover {
+    background: rgba(255,255,255,0.2);
+}
+
+/* 버튼 */
+.btn-primary {
+    background: var(--theme-primary);
+}
+
+.btn-primary:hover {
+    background: var(--theme-primary-hover);
+}
+
+/* 테이블 */
+.modal-body table th,
+.info-table th {
+    background: #fff5f5;
+    color: var(--theme-primary);
+}
+
+.modal-body table tr:hover {
+    background: var(--theme-hover);
+}
+
+/* 입력 필드 */
+input:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--theme-primary);
+    box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.1);
+}
+
+/* 설정 탭 */
+.settings-tab.active {
+    color: var(--theme-primary);
+    border-bottom-color: var(--theme-primary);
+}
+
+/* 배지/태그 */
+.search-storage {
+    background: var(--theme-hover);
+    color: #ffffff;
+}
+
+/* 승인 알림 */
+.pending-notification {
+    background: linear-gradient(135deg, #e11d48 0%, #f43f5e 100%);
+}
+
+/* 진행 바 */
+.progress-fill {
+    background: linear-gradient(90deg, #e11d48, #fb7185);
+}
+
+/* 용량 바 */
+.quota-bar {
+    background: #fecdd3;
+}
+
+.quota-fill {
+    background: linear-gradient(90deg, #e11d48, #f43f5e);
+}
+
+/* 컨텍스트 메뉴 */
+.context-menu {
+    background: #ffffff;
+    border: 1px solid var(--theme-border);
+}
+
+.context-menu li {
+    color: var(--theme-text);
+}
+
+.context-menu li:hover {
+    background: var(--theme-hover);
+}
+
+/* 스크롤바 */
+::-webkit-scrollbar-thumb {
+    background: #fda4af;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #fb7185;
+}
+
+/* 체크박스 */
+.item-checkbox {
+    accent-color: var(--theme-primary);
+}
+
+/* 설정 상태 바 */
+.settings-status-bar {
+    background: #fff5f5;
+    border-color: var(--theme-border);
+}
+
+/* ========== 보안 설정 스타일 ========== */
+.security-mode-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.security-mode-section h4 {
+    color: var(--theme-text);
+}
+
+.checkbox-label {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.checkbox-label:hover {
+    background: var(--theme-hover);
+}
+
+.mode-hint {
+    background: #fef3c7 !important;
+    color: #92400e !important;
+}
+
+
+.input-column label {
+    color: var(--theme-text);
+}
+
+.input-column label small {
+    color: var(--theme-text-muted);
+}
+
+.input-column input,
+.input-column textarea {
+    background: var(--theme-bg) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+}
+
+#security-blocked-ips,
+#security-allowed-ips,
+#security-blocked-countries,
+#security-allowed-countries {
+    background: var(--theme-bg) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+}
+
+#security-blocked-ips:disabled,
+#security-allowed-ips:disabled,
+#security-blocked-countries:disabled,
+#security-allowed-countries:disabled {
+    background: var(--theme-hover) !important;
+    color: var(--theme-text-muted) !important;
+}
+
+.security-extra-section {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.extra-item label {
+    color: var(--theme-text);
+}
+
+.security-admin-section textarea {
+    background: var(--theme-bg);
+    border-color: #fb7185;
+    color: var(--theme-text);
+}
+
+.security-section {
+    border-bottom-color: var(--theme-border);
+}
+
+.security-section h4 {
+    color: var(--theme-text);
+}
+
+.security-section textarea,
+.security-section input {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.security-toggle-section {
+    background: var(--theme-hover);
+    border: 1px solid var(--theme-border);
+}
+
+.toggle-label {
+    color: var(--theme-text);
+}
+
+.security-warning {
+    background: #fef3c7 !important;
+    color: #92400e !important;
+}
+
+
+.security-info-bar {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.security-info-bar code {
+    background: var(--theme-primary);
+    color: #ffffff;
+}
+
+/* 보안 모달 헤더 */
+.security-header {
+    background: linear-gradient(135deg, var(--theme-primary-hover) 0%, var(--theme-primary) 100%) !important;
+}
+
+/* 사용자 관리 상태 배지 */
+.settings-status-bar .status-on {
+    color: #166534;
+    background: #dcfce7;
+}
+
+.settings-status-bar .status-off {
+    color: #991b1b;
+    background: #fee2e2;
+}
+
+.settings-status-bar .status-auto {
+    color: #9a3412;
+    background: #ffedd5;
+}
+
+.settings-status-bar .settings-link {
+    color: var(--theme-primary-hover);
+}
+
+/* 검색 인덱스 요구사항 박스 */
+.index-requirement {
+    color: #374151;
+    background: #f3f4f6;
+    border: 1px solid #d1d5db;
+}
+
+.index-requirement code {
+    background: #e5e7eb;
+    color: #1f2937;
+}
+
+/* 검색 인덱스 자동 갱신 상태 */
+.index-auto-status #index-auto-on {
+    background: #dcfce7;
+    color: #166534;
+    border-color: #86efac;
+}
+
+.index-auto-status #index-auto-off {
+    background: #fef3c7;
+    color: #92400e;
+    border-color: #fcd34d;
+}
+
+.index-auto-status a {
+    color: var(--theme-primary-hover);
+}
+
+/* ========== 게시판 테마 적용 ========== */
+.board-table thead tr { background: var(--theme-hover); }
+.board-table thead th { color: var(--theme-text-muted); }
+.board-table td { color: var(--theme-text); }
+.board-table tbody tr { border-bottom-color: var(--theme-border); }
+.board-table tbody tr:hover { background: var(--theme-hover); }
+.board-table tbody tr.board-row-current { background: var(--theme-selected); }
+.board-col-num, .board-col-author, .board-col-date, .board-col-views { color: var(--theme-text-muted); }
+.board-comment-badge { color: var(--theme-primary); }
+.board-detail-header { border-color: var(--theme-border); }
+.board-detail-header h2 { color: var(--theme-text); }
+.board-detail-meta { color: var(--theme-text-muted); }
+.board-detail-author { color: var(--theme-text); }
+.board-detail-body { color: var(--theme-text); }
+.board-detail-body table td, .board-detail-body table th { border-color: var(--theme-border); color: var(--theme-text); }
+.board-detail-footer { border-color: var(--theme-border); }
+.board-detail-postlist { border-color: var(--theme-border); }
+.cmt-section { border-color: var(--theme-border); }
+.cmt-header { color: var(--theme-text); }
+.cmt-item { border-color: var(--theme-border); }
+.board-pg-num { color: var(--theme-text); }
+.board-pg-num:hover { background: var(--theme-hover); color: var(--theme-primary); }
+.board-pg-current { background: var(--theme-primary); color: #fff !important; }
+.board-pg-nav { color: var(--theme-text-muted); }
+.board-pg-nav:hover { background: var(--theme-hover); color: var(--theme-primary); }
+.board-pg-disabled { color: var(--theme-border) !important; }

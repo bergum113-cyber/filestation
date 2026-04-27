@@ -1,0 +1,6 @@
+# FileStation — PHP 업로드/실행 제한 해제
+php_value upload_max_filesize 10G
+php_value post_max_size 10G
+php_value memory_limit -1
+php_value max_execution_time 0
+php_value max_input_time -1

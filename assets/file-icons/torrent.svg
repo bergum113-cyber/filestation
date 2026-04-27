@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- 배경 문서 -->
+  <path d="M10 6 L30 6 L38 14 L38 42 L10 42 Z" fill="#2d4f8e" stroke="#1e3a6f" stroke-width="1"/>
+  <!-- 접힌 모서리 -->
+  <path d="M30 6 L30 14 L38 14 Z" fill="#4a6fb0"/>
+  <!-- 다운로드 화살표 -->
+  <circle cx="24" cy="24" r="9" fill="#5cb85c"/>
+  <path d="M24 18 L24 28 M19 23 L24 28 L29 23" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- "토렌트" 텍스트 -->
+  <text x="24" y="40" font-family="Arial, sans-serif" font-size="7" font-weight="bold" text-anchor="middle" fill="#ffd54f">토렌트</text>
+</svg>

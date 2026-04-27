@@ -1,0 +1,32 @@
+# data 폴더 직접 접근 차단
+# site_images 폴더의 이미지 파일만 허용
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    # site_images 이미지 허용
+    RewriteRule ^site_images/.*\.(jpg|jpeg|png|gif|webp|ico)$ - [L]
+    # 그 외 모든 요청 차단
+    RewriteRule .* - [F,L]
+</IfModule>
+
+# mod_rewrite 없는 환경: 전체 차단 (site_images도 차단됨)
+<IfModule !mod_rewrite.c>
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</IfModule>
+
+# PHP 파일 실행 차단 (보안 강화)
+<FilesMatch "\.php$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>

@@ -1,0 +1,2822 @@
+/* ========================================
+   Dark 테마 - 눈이 편한 다크 모드
+   성능: ⭐⭐⭐⭐⭐
+   ======================================== */
+
+:root {
+    /* 테마 변수 */
+    --theme-primary: #6c9eff;
+    --theme-primary-hover: #5a8ae6;
+    --theme-bg: #1a1a2e;
+    --theme-sidebar: #16213e;
+    --theme-header: #16213e;
+    --theme-content: #1f1f3a;
+    --theme-border: #2d2d50;
+    --theme-text: #e4e4e7;
+    --theme-text-muted: #9ca3af;
+    --theme-hover: #2a2a4a;
+    --theme-selected: #3730a3;
+    
+    /* style.css 변수 재정의 */
+    --sidebar-bg: #16213e;
+    --sidebar-text: #e4e4e7;
+    --bg: #1a1a2e;
+    --border: #2d2d50;
+    --primary: #6c9eff;
+    --primary-dark: #5a8ae6;
+    --dark: #e4e4e7;
+    --secondary: #9ca3af;
+    --light: #2a2a4a;
+}
+
+/* ========== 전역 텍스트 ========== */
+body {
+    color: var(--theme-text);
+}
+
+/* ========== 로그인 페이지 ========== */
+.login-page {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+.login-box {
+    background: var(--theme-content);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+    color: var(--theme-text);
+}
+
+.login-box h1 {
+    color: var(--theme-text);
+}
+
+.login-box input {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.login-box input::placeholder {
+    color: var(--theme-text-muted);
+}
+
+.login-box label {
+    color: var(--theme-text);
+}
+
+/* ========== 헤더 ========== */
+.header {
+    background: var(--theme-header);
+    border-bottom: 1px solid var(--theme-border);
+    color: var(--theme-text);
+}
+
+.logo {
+    color: var(--theme-text);
+}
+
+#user-name {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 검색창 ========== */
+.search-box {
+    background: var(--theme-bg) !important;
+    border: 1px solid var(--theme-border) !important;
+}
+
+.search-box input {
+    background: transparent !important;
+    color: var(--theme-text) !important;
+}
+
+.search-box input::placeholder {
+    color: var(--theme-text-muted);
+}
+
+.search-box button {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 사이드바 ========== */
+.sidebar {
+    background: var(--theme-sidebar);
+    border-right: 1px solid var(--theme-border);
+    color: var(--theme-text);
+}
+
+.sidebar h3 {
+    color: var(--theme-text-muted);
+}
+
+.sidebar-section h3.section-toggle {
+    color: var(--theme-text-muted);
+}
+
+.sidebar-section h3.section-toggle:hover {
+    color: #ffffff;
+    background: var(--theme-hover);
+}
+
+.sidebar-section h3.section-toggle .toggle-icon {
+    background: var(--theme-border);
+    color: var(--theme-text-muted);
+}
+
+.storage-item,
+.menu-list li a {
+    color: var(--theme-text);
+}
+
+.storage-item:hover,
+.menu-list li:hover {
+    background: var(--theme-hover);
+}
+
+.storage-item.active, .menu-list li.active > a {
+    background: var(--theme-selected);
+    color: #ffffff;
+}
+
+.sidebar-divider {
+    background: var(--theme-border);
+}
+
+.sidebar-quota {
+    border-top-color: var(--theme-border);
+}
+
+.quota-text {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 콘텐츠 영역 ========== */
+.content-area {
+    background: var(--theme-bg);
+}
+
+.file-area {
+    background: var(--theme-content);
+}
+
+/* ========== 툴바 ========== */
+.toolbar {
+    background: var(--theme-content);
+    border-bottom: 1px solid var(--theme-border);
+}
+
+.toolbar .btn {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.toolbar .btn:hover {
+    background: var(--theme-border);
+}
+
+/* ========== 브레드크럼 ========== */
+.breadcrumb {
+    background: var(--theme-content);
+    border-bottom: 1px solid var(--theme-border);
+    color: var(--theme-text);
+}
+
+.breadcrumb a {
+    color: var(--theme-primary);
+}
+
+.breadcrumb span {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 파일 목록 ========== */
+.file-list {
+    background: var(--theme-content);
+}
+
+.file-item {
+    color: var(--theme-text);
+}
+
+.file-item:hover {
+    background: var(--theme-hover);
+}
+
+.file-item.selected {
+    background: var(--theme-selected);
+}
+
+.file-name {
+    color: var(--theme-text);
+}
+
+.file-size,
+.file-date {
+    color: var(--theme-text-muted);
+}
+
+/* 리스트 뷰 */
+.file-list.list-view .file-item {
+    background: transparent;
+    border-bottom: 1px solid var(--theme-border);
+}
+
+.file-list.list-view .file-item:hover {
+    background: var(--theme-hover);
+}
+
+.file-list.list-view .file-item.selected {
+    background: var(--theme-selected);
+}
+
+/* 그리드 뷰 */
+.file-list.grid-view .file-item {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.file-list.grid-view .file-item:hover {
+    background: var(--theme-border);
+}
+
+.file-list.grid-view .file-item.selected {
+    background: var(--theme-selected);
+    border-color: var(--theme-primary);
+}
+
+/* ========== 모달 ========== */
+#modal-overlay {
+    background: rgba(0, 0, 0, 0.7);
+}
+
+.modal {
+    background: var(--theme-content);
+    box-shadow: 0 10px 50px rgba(0,0,0,0.5);
+    color: var(--theme-text);
+}
+
+.modal-header {
+    background: var(--theme-sidebar);
+    border-bottom: 1px solid var(--theme-border);
+    color: var(--theme-text);
+}
+
+.modal-header h2 {
+    color: var(--theme-text);
+}
+
+.modal-close {
+    color: var(--theme-text-muted);
+}
+
+.modal-close:hover {
+    color: var(--theme-text);
+}
+
+.modal-body {
+    color: var(--theme-text);
+}
+
+.modal-footer {
+    background: var(--theme-sidebar);
+    border-top: 1px solid var(--theme-border);
+}
+
+/* ========== 폼 요소 ========== */
+.modal-body input,
+.modal-body select,
+.modal-body textarea {
+    background: var(--theme-bg) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+}
+
+/* select 요소 강화 */
+select,
+.modal select,
+.modal-body select,
+#storage-type,
+#bulk-quota-target,
+#bulk-quota-unit,
+#bulk-delete-scope,
+#bulk-delete-type {
+    background: var(--theme-bg) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+}
+
+.modal-body input::placeholder,
+.modal-body textarea::placeholder {
+    color: var(--theme-text-muted);
+}
+
+.modal-body label {
+    color: var(--theme-text);
+}
+
+.form-group label {
+    color: var(--theme-text);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+/* ========== 테이블 ========== */
+.modal-body table {
+    color: var(--theme-text);
+}
+
+.modal-body table th {
+    background: var(--theme-sidebar);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.modal-body table td {
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.modal-body table tr:hover {
+    background: var(--theme-hover);
+}
+
+.data-table {
+    background: var(--theme-content);
+}
+
+.data-table th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.data-table td {
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.data-table tr:hover {
+    background: var(--theme-hover);
+}
+
+.info-table th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text-muted);
+}
+
+.info-table td {
+    color: var(--theme-text);
+}
+
+/* ========== 버튼 ========== */
+.btn {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.btn:hover {
+    background: var(--theme-border);
+}
+
+.btn-primary {
+    background: var(--theme-primary);
+    color: #ffffff;
+    border-color: var(--theme-primary);
+}
+
+.btn-primary:hover {
+    background: var(--theme-primary-hover);
+}
+
+.btn-secondary {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.btn-danger {
+    background: #dc3545;
+    color: #ffffff;
+}
+
+/* ========== 컨텍스트 메뉴 ========== */
+.context-menu {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+
+.context-menu li {
+    color: var(--theme-text);
+}
+
+.context-menu li:hover {
+    background: var(--theme-hover);
+}
+
+/* ========== 토스트 ========== */
+.toast {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+
+/* ========== 설정 탭 ========== */
+.settings-tabs {
+    background: var(--theme-sidebar);
+    border-bottom-color: var(--theme-border);
+}
+
+.settings-tab {
+    color: var(--theme-text-muted);
+}
+
+.settings-tab:hover {
+    color: var(--theme-text);
+    background: var(--theme-hover);
+}
+
+.settings-tab.active {
+    color: var(--theme-primary);
+    border-bottom-color: var(--theme-primary);
+}
+
+/* ========== 설정 상태 바 ========== */
+.settings-status-bar {
+    background: var(--theme-sidebar);
+    border-color: var(--theme-border);
+}
+
+.settings-status-bar .status-on {
+    background: rgba(46, 125, 50, 0.3);
+    color: #81c784;
+}
+
+.settings-status-bar .status-off {
+    background: rgba(198, 40, 40, 0.3);
+    color: #ef9a9a;
+}
+
+/* ========== 공유 카드 ========== */
+.share-card {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.share-card-header {
+    background: var(--theme-sidebar);
+    border-bottom-color: var(--theme-border);
+}
+
+.share-file-name {
+    color: var(--theme-text);
+}
+
+.share-file-path {
+    color: var(--theme-text-muted);
+}
+
+.share-card-body {
+    background: var(--theme-content);
+}
+
+.share-url-input {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.share-meta {
+    color: var(--theme-text-muted);
+}
+
+.share-meta span {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 활동 로그 필터 ========== */
+.activity-filters {
+    background: var(--theme-sidebar);
+    border-color: var(--theme-border);
+}
+
+.activity-filters .filter-group label {
+    color: var(--theme-text);
+}
+
+.activity-filters .filter-group input,
+.activity-filters .filter-group select {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.activity-filters .filter-search input {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.activity-filters .filter-search input::placeholder {
+    color: var(--theme-text-muted);
+}
+
+.activity-stats {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+
+.activity-pagination .page-info {
+    color: var(--theme-text-muted);
+}
+
+/* 활동 로그 테이블 */
+#activity-table {
+    background: var(--theme-content);
+}
+
+#activity-table th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+#activity-table td {
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+#activity-table tr:hover {
+    background: var(--theme-hover);
+}
+
+/* ========== 로그인 기록 테이블 ========== */
+#login-logs-table {
+    background: var(--theme-content);
+}
+
+#login-logs-table th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+#login-logs-table td {
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+#login-logs-table tr:hover {
+    background: var(--theme-hover);
+}
+
+/* ========== 사용자 테이블 ========== */
+#users-table {
+    background: var(--theme-content);
+}
+
+#users-table th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+#users-table td {
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+#users-table tr:hover {
+    background: var(--theme-hover);
+}
+
+/* ========== 스크롤바 ========== */
+::-webkit-scrollbar-track {
+    background: var(--theme-bg);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--theme-border);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #4a4a6a;
+}
+
+/* ========== 빈 폴더 메시지 ========== */
+.empty-folder,
+.empty-msg {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 체크박스 ========== */
+.item-checkbox {
+    accent-color: var(--theme-primary);
+}
+
+/* ========== 알림 박스 ========== */
+.info-box {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+/* ========== 용량 바 ========== */
+.quota-bar {
+    background: var(--theme-border);
+}
+
+/* ========== 상태 배지 ========== */
+.status-badge {
+    color: #ffffff;
+}
+
+.badge-success {
+    background: #2e7d32;
+}
+
+.badge-danger {
+    background: #c62828;
+}
+
+.badge-warning {
+    background: #f57c00;
+    color: #ffffff;
+}
+
+/* ========== 폴더 트리 ========== */
+.folder-tree-item {
+    color: var(--theme-text);
+}
+
+.folder-tree-item:hover {
+    background: var(--theme-hover);
+}
+
+.folder-tree-item.selected {
+    background: var(--theme-selected);
+}
+
+/* ========== 인덱스 상태 ========== */
+.index-auto-status #index-auto-on {
+    background: rgba(46, 125, 50, 0.3);
+    color: #81c784;
+    border-color: rgba(46, 125, 50, 0.5);
+}
+
+.index-auto-status #index-auto-off {
+    background: rgba(245, 124, 0, 0.3);
+    color: #ffb74d;
+    border-color: rgba(245, 124, 0, 0.5);
+}
+
+/* ========== SQLite 경고 ========== */
+.sqlite-warning {
+    background: rgba(255, 193, 7, 0.2);
+    border-color: rgba(255, 193, 7, 0.5);
+    color: #ffcc80;
+}
+
+/* ========== 설정 설명 ========== */
+.setting-desc {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 현재 경로 표시 ========== */
+.current-path {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 설정 항목 ========== */
+.setting-item {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.setting-item label {
+    color: var(--theme-text);
+}
+
+.setting-label {
+    color: var(--theme-text);
+}
+
+/* ========== 보안 설정 섹션 ========== */
+.security-section {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.security-section h4 {
+    color: var(--theme-text);
+}
+
+.security-section textarea,
+.security-section input {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+/* ========== 역할 관리 ========== */
+.role-item {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.role-item.role-default {
+    background: var(--theme-selected);
+}
+
+/* ========== QoS ========== */
+.qos-item {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.qos-tabs {
+    border-bottom-color: var(--theme-border);
+}
+
+.qos-tab-btn {
+    color: var(--theme-text-muted);
+}
+
+.qos-tab-btn:hover {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+
+.qos-tab-btn.active {
+    color: var(--theme-primary);
+    border-bottom-color: var(--theme-primary);
+}
+
+.qos-user-search input {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+/* ========== 부관리자 권한 섹션 ========== */
+.sub-admin-section {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.sub-admin-section h4 {
+    color: var(--theme-text);
+}
+
+.admin-menu-checks label {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.admin-menu-checks label:hover {
+    background: var(--theme-border);
+}
+
+/* ========== 탭 버튼 ========== */
+.tab-btn {
+    color: var(--theme-text-muted);
+    background: transparent;
+}
+
+.tab-btn:hover {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+
+.tab-btn.active {
+    background: var(--theme-selected);
+    color: #ffffff;
+}
+
+/* ========== 스토리지 카드 ========== */
+.storage-card {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.storage-card-header {
+    background: var(--theme-sidebar);
+    border-bottom-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.storage-info {
+    color: var(--theme-text);
+}
+
+.storage-meta {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 정보 카드 ========== */
+.info-card {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.info-card h4 {
+    color: var(--theme-text);
+    border-bottom-color: var(--theme-border);
+}
+
+.info-row {
+    color: var(--theme-text);
+    border-bottom-color: var(--theme-border);
+}
+
+.info-row .label {
+    color: var(--theme-text-muted);
+}
+
+.info-row .value {
+    color: var(--theme-text);
+}
+
+/* ========== 권한 설정 ========== */
+.perm-section {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.perm-user-item {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.perm-storage-name {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+}
+
+/* ========== 드롭다운 ========== */
+.dropdown-menu {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.4);
+}
+
+.dropdown-item {
+    color: var(--theme-text);
+}
+
+.dropdown-item:hover {
+    background: var(--theme-hover);
+}
+
+/* ========== 알림 ========== */
+.alert {
+    border-color: var(--theme-border);
+}
+
+.alert-info {
+    background: rgba(108, 158, 255, 0.2);
+    border-color: rgba(108, 158, 255, 0.5);
+    color: #90caf9;
+}
+
+.alert-warning {
+    background: rgba(255, 193, 7, 0.2);
+    border-color: rgba(255, 193, 7, 0.5);
+    color: #ffcc80;
+}
+
+.alert-danger {
+    background: rgba(220, 53, 69, 0.2);
+    border-color: rgba(220, 53, 69, 0.5);
+    color: #ef9a9a;
+}
+
+/* ========== 검색 결과 ========== */
+.search-results {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.search-result-item {
+    border-bottom-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.search-result-item:hover {
+    background: var(--theme-hover);
+}
+
+.search-storage {
+    background: var(--theme-selected);
+    color: #ffffff;
+}
+
+.search-path {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 조건부 삭제 ========== */
+.condition-item {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.condition-item label {
+    color: var(--theme-text);
+}
+
+/* ========== 미리보기 모달 ========== */
+.preview-info {
+    background: var(--theme-sidebar);
+    border-top-color: var(--theme-border);
+    color: var(--theme-text-muted);
+}
+
+/* ========== 빈 상태 ========== */
+.empty-state,
+.no-data {
+    color: var(--theme-text-muted);
+}
+
+/* ========== select 옵션 ========== */
+.modal-body select option,
+select option {
+    background: var(--theme-bg) !important;
+    color: var(--theme-text) !important;
+}
+
+/* ========== 테마 선택 UI ========== */
+.theme-item {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.theme-item:hover {
+    border-color: var(--theme-primary);
+}
+
+.theme-item.active {
+    border-color: var(--theme-primary);
+    background: var(--theme-selected);
+}
+
+.theme-item span {
+    color: var(--theme-text);
+}
+
+/* ========== 휴지통 ========== */
+.trash-toolbar {
+    background: var(--theme-sidebar);
+    border-color: var(--theme-border);
+}
+
+.trash-info {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 공유 URL 박스 ========== */
+.share-url-box {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+}
+
+.share-url-box input {
+    background: transparent;
+    color: var(--theme-text);
+}
+
+/* ========== 국가 코드 목록 ========== */
+#country-codes-list {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+}
+
+.country-group strong {
+    color: var(--theme-primary);
+}
+
+.country-group span {
+    color: var(--theme-text);
+}
+
+/* ========== 이미지 업로드 ========== */
+.image-preview {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+}
+
+.image-preview .no-image {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 진행 바 ========== */
+.progress-fill {
+    background: linear-gradient(90deg, var(--theme-primary), var(--theme-primary-hover));
+}
+
+/* ========== 승인 알림 ========== */
+.pending-notification {
+    background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+}
+
+/* ========== 드래그 앤 드롭 ========== */
+.file-area.dragover {
+    background: rgba(108, 158, 255, 0.1);
+    border: 2px dashed var(--theme-primary);
+}
+
+/* ========== 모달 내부 h3 ========== */
+.modal-body h3 {
+    color: var(--theme-primary);
+    border-bottom-color: var(--theme-border);
+}
+
+/* ========== 링크 ========== */
+a {
+    color: var(--theme-primary);
+}
+
+a:hover {
+    color: var(--theme-primary-hover);
+}
+
+/* ========== 기타 텍스트 요소 ========== */
+.copyright-login {
+    color: var(--theme-text-muted);
+}
+
+.error-msg {
+    color: #ef5350;
+}
+
+/* ========== 파일 뷰어 버튼 ========== */
+.btn-icon {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.btn-icon:hover {
+    background: var(--theme-border);
+}
+
+.btn-icon.active {
+    background: var(--theme-selected);
+    color: #ffffff;
+}
+
+/* ========== 스토리지 권한 설정 ========== */
+.permission-section {
+    border-top-color: var(--theme-border);
+}
+
+.permission-section h4 {
+    color: var(--theme-text);
+}
+
+.permission-bulk {
+    background: var(--theme-hover);
+    border: 1px solid var(--theme-border);
+}
+
+.permission-bulk span {
+    color: var(--theme-text);
+}
+
+.permission-bulk label {
+    color: var(--theme-text);
+}
+
+.permission-list {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.permission-row {
+    background: var(--theme-content);
+    border-bottom-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.permission-row:hover {
+    background: var(--theme-hover);
+}
+
+.perm-user {
+    color: var(--theme-text);
+}
+
+.perm-checks label {
+    color: var(--theme-text);
+}
+
+/* ========== 권한 아이템 ========== */
+.perm-item {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+
+/* ========== WebDAV 연결 ========== */
+.webdav-url {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+
+.webdav-help {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+
+.webdav-help p,
+.webdav-help ol,
+.webdav-help li {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 페이지네이션 ========== */
+.pagination .page-info {
+    color: var(--theme-text-muted);
+}
+
+.pagination .page-link {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.pagination .page-link:hover {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.pagination .page-current {
+    background: var(--theme-primary);
+    border-color: var(--theme-primary);
+}
+
+/* ========== QoS 속도 제한 ========== */
+.qos-item {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+
+.qos-item-name {
+    color: var(--theme-text);
+}
+
+.qos-username {
+    color: var(--theme-text-muted);
+}
+
+.qos-item-settings label {
+    color: var(--theme-text);
+}
+
+.qos-item-settings input {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.qos-unit {
+    color: var(--theme-text-muted);
+}
+
+.qos-empty {
+    color: var(--theme-text-muted);
+}
+
+.qos-tabs {
+    border-bottom-color: var(--theme-border);
+}
+
+.qos-tab-btn {
+    color: var(--theme-text-muted);
+    background: transparent;
+}
+
+.qos-tab-btn:hover {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+
+.qos-tab-btn.active {
+    color: var(--theme-primary);
+    border-bottom-color: var(--theme-primary);
+    background: transparent;
+}
+
+/* ========== 세션 관리 ========== */
+.session-item {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.session-item.current {
+    background: var(--theme-selected);
+    border-color: var(--theme-primary);
+}
+
+.session-device {
+    color: var(--theme-text);
+}
+
+.session-details {
+    color: var(--theme-text-muted);
+}
+
+/* ========== IP/국가 차단 설정 ========== */
+.security-mode-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.security-mode-section h4 {
+    color: var(--theme-text);
+}
+
+.checkbox-label {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.checkbox-label:hover {
+    background: var(--theme-hover);
+}
+
+.mode-hint {
+    background: rgba(245, 124, 0, 0.2);
+    color: #ffb74d;
+}
+
+.input-column label {
+    color: var(--theme-text);
+}
+
+.input-column label small {
+    color: var(--theme-text-muted);
+}
+
+.input-column input,
+.input-column textarea {
+    background: var(--theme-bg) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+}
+
+/* IP 차단 설정 textarea (disabled 포함) */
+#security-blocked-ips,
+#security-allowed-ips,
+#security-blocked-countries,
+#security-allowed-countries {
+    background: var(--theme-bg) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+}
+
+#security-blocked-ips:disabled,
+#security-allowed-ips:disabled,
+#security-blocked-countries:disabled,
+#security-allowed-countries:disabled {
+    background: var(--theme-hover) !important;
+    color: var(--theme-text-muted) !important;
+}
+
+.security-extra-section {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.extra-item label {
+    color: var(--theme-text);
+}
+
+.security-admin-section textarea {
+    background: var(--theme-bg);
+    border-color: #ef9a9a;
+    color: var(--theme-text);
+}
+
+/* ========== 데이터 테이블 (일반) ========== */
+.data-table {
+    background: var(--theme-content);
+}
+
+.data-table th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+    border-bottom-color: var(--theme-border);
+}
+
+.data-table td {
+    color: var(--theme-text);
+    border-bottom-color: var(--theme-border);
+}
+
+.data-table tr:hover {
+    background: var(--theme-hover);
+}
+
+/* ========== 보안 섹션 (일반) ========== */
+.security-section {
+    border-bottom-color: var(--theme-border);
+}
+
+.security-section h4 {
+    color: var(--theme-text);
+}
+
+.security-section textarea,
+.security-section input {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+/* ========== 상태 배지 ========== */
+.badge-success,
+.badge-active {
+    background: #2e7d32;
+    color: #ffffff;
+}
+
+.status-badge.active {
+    background: #2e7d32;
+    color: #ffffff;
+}
+
+/* 사용자 관리 상태 배지 */
+.status-active {
+    background: #2e7d32;
+    color: #ffffff;
+}
+
+.status-inactive {
+    background: #455a64;
+    color: #b0bec5;
+}
+
+.status-suspended {
+    background: #c62828;
+    color: #ffffff;
+}
+
+.status-pending {
+    background: #f57c00;
+    color: #ffffff;
+}
+
+/* ========== 로그인 실패 행 ========== */
+.login-logs-table tr.fail {
+    background: rgba(198, 40, 40, 0.3);
+    color: #ef9a9a;
+}
+
+.login-logs-table tr.fail td {
+    color: #ef9a9a;
+}
+
+.login-logs-table tr.fail:hover {
+    background: rgba(198, 40, 40, 0.4);
+}
+
+/* ========== 차단 기능 활성화 섹션 ========== */
+.security-toggle-section {
+    background: var(--theme-hover);
+    border: 1px solid var(--theme-border);
+}
+
+.toggle-label {
+    color: var(--theme-text);
+}
+
+.security-warning {
+    background: rgba(245, 124, 0, 0.2);
+    color: #ffb74d;
+}
+
+/* ========== 현재 접속 정보 바 ========== */
+.security-info-bar {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.security-info-bar code {
+    background: var(--theme-primary);
+    color: #ffffff;
+}
+
+/* 보안 모달 헤더 */
+.security-header {
+    background: linear-gradient(135deg, var(--theme-primary-hover) 0%, var(--theme-primary) 100%) !important;
+}
+
+/* 사용자 관리 상태 배지 추가 */
+.settings-status-bar .status-auto {
+    background: rgba(245, 124, 0, 0.3);
+    color: #ffb74d;
+}
+
+.settings-status-bar .settings-link {
+    color: var(--theme-primary);
+}
+
+/* 검색 인덱스 요구사항 박스 */
+.index-requirement {
+    color: var(--theme-text);
+    background: var(--theme-hover);
+    border: 1px solid var(--theme-border);
+}
+
+.index-requirement code {
+    background: var(--theme-bg);
+    color: var(--theme-primary);
+}
+
+/* 검색 인덱스 자동 갱신 상태 */
+.index-auto-status #index-auto-on {
+    background: rgba(46, 125, 50, 0.2);
+    color: #81c784;
+    border-color: rgba(46, 125, 50, 0.4);
+}
+
+.index-auto-status #index-auto-off {
+    background: rgba(245, 124, 0, 0.2);
+    color: #ffb74d;
+    border-color: rgba(245, 124, 0, 0.4);
+}
+
+.index-auto-status a {
+    color: var(--theme-primary);
+}
+
+/* ========== 접속 통계 ========== */
+.stats-summary {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.stats-summary .stat-item {
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.stats-summary .stat-item .stat-label {
+    color: var(--theme-text-muted);
+}
+
+.stats-summary .stat-item .stat-value {
+    color: var(--theme-text);
+}
+
+.stats-tabs .stats-tab-btn {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.stats-tabs .stats-tab-btn.active {
+    background: var(--theme-primary);
+    color: #ffffff;
+}
+
+/* 접속 통계 테이블 */
+#stats-table-container table {
+    background: var(--theme-content);
+}
+
+#stats-table-container th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+#stats-table-container td {
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+#stats-table-container tr:hover {
+    background: var(--theme-hover);
+}
+
+/* 오늘/어제 하이라이트 */
+#stats-table-container tr td:first-child .badge {
+    background: var(--theme-primary);
+    color: #ffffff;
+}
+
+/* ========== 공지 설정 ========== */
+.popup-settings-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.popup-settings-section h4 {
+    color: var(--theme-text);
+}
+
+.popup-settings-section label {
+    color: var(--theme-text);
+}
+
+.popup-list-empty {
+    background: var(--theme-hover);
+    color: var(--theme-text-muted);
+}
+
+.popup-item {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.popup-item:hover {
+    background: var(--theme-border);
+}
+
+.banner-settings-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.banner-settings-section h4 {
+    color: var(--theme-text);
+}
+
+.banner-settings-section label {
+    color: var(--theme-text);
+}
+
+.banner-settings-section th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+}
+
+.banner-settings-section td {
+    color: var(--theme-text);
+}
+
+/* ========== 가입시 약관 ========== */
+.terms-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.terms-section h4 {
+    color: var(--theme-text);
+}
+
+.terms-section label {
+    color: var(--theme-text);
+}
+
+.terms-section small {
+    color: var(--theme-text-muted);
+}
+
+/* ========== 시스템 설정 ========== */
+.system-settings-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.system-settings-section h4 {
+    color: var(--theme-text);
+}
+
+.system-settings-section label {
+    color: var(--theme-text);
+}
+
+.system-settings-section small {
+    color: var(--theme-text-muted);
+}
+
+.smtp-guide {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.smtp-guide h4 {
+    color: var(--theme-text);
+}
+
+.smtp-guide table th {
+    background: var(--theme-sidebar);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.smtp-guide table td {
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.smtp-guide table tr:nth-child(even) {
+    background: var(--theme-hover);
+}
+
+/* OnlyOffice 설정 박스 */
+.onlyoffice-guide {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.onlyoffice-guide h4 {
+    color: var(--theme-text);
+}
+
+.onlyoffice-guide pre {
+    background: var(--theme-bg);
+    color: var(--theme-text);
+    border-color: var(--theme-border);
+}
+
+.onlyoffice-guide code {
+    color: var(--theme-primary);
+}
+
+/* ========== GeoIP 설정 ========== */
+.geoip-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.geoip-section h4 {
+    color: var(--theme-text);
+}
+
+.geoip-source-options label {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.geoip-source-options label:hover {
+    background: var(--theme-border);
+}
+
+.geoip-source-options input:checked + label {
+    background: var(--theme-primary);
+    color: #ffffff;
+}
+
+.geoip-warning {
+    background: rgba(245, 124, 0, 0.2);
+    color: #ffb74d;
+}
+
+/* ========== 차단 로그 ========== */
+.block-log-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.block-log-section h4 {
+    color: var(--theme-text);
+}
+
+.block-log-empty {
+    background: var(--theme-hover);
+    color: var(--theme-text-muted);
+}
+
+/* ========== 날짜 입력 필드 ========== */
+input[type="date"] {
+    background: var(--theme-bg) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+    color-scheme: dark;
+}
+
+/* ========== 코드 블록 ========== */
+pre, code {
+    background: var(--theme-bg);
+    color: var(--theme-text);
+}
+
+.modal-body pre {
+    background: var(--theme-bg);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.modal-body code {
+    background: var(--theme-bg);
+    color: var(--theme-primary);
+}
+
+/* ========== 힌트/안내 박스 ========== */
+.hint-box,
+.info-box,
+.notice-box {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.warning-box {
+    background: rgba(245, 124, 0, 0.15);
+    border-color: rgba(245, 124, 0, 0.4);
+    color: #ffb74d;
+}
+
+.success-box {
+    background: rgba(46, 125, 50, 0.15);
+    border-color: rgba(46, 125, 50, 0.4);
+    color: #81c784;
+}
+
+.error-box {
+    background: rgba(198, 40, 40, 0.15);
+    border-color: rgba(198, 40, 40, 0.4);
+    color: #ef9a9a;
+}
+
+/* ========== 체크박스/라디오 라벨 ========== */
+.modal-body .checkbox-wrapper,
+.modal-body .radio-wrapper {
+    color: var(--theme-text);
+}
+
+/* ========== 구분선 ========== */
+.modal-body hr {
+    border-color: var(--theme-border);
+}
+
+/* ========== placeholder 스타일 ========== */
+::placeholder {
+    color: var(--theme-text-muted) !important;
+    opacity: 1;
+}
+
+/* ========== disabled 상태 ========== */
+input:disabled,
+select:disabled,
+textarea:disabled {
+    background: var(--theme-hover) !important;
+    color: var(--theme-text-muted) !important;
+    opacity: 0.7;
+}
+
+/* ========== 스위치/토글 ========== */
+.toggle-switch {
+    background: var(--theme-border);
+}
+
+.toggle-switch.active {
+    background: var(--theme-primary);
+}
+
+/* ========== 알림 박스 (인라인) ========== */
+.alert-info {
+    background: rgba(33, 150, 243, 0.15);
+    border-color: rgba(33, 150, 243, 0.4);
+    color: #64b5f6;
+}
+
+.alert-warning {
+    background: rgba(245, 124, 0, 0.15);
+    border-color: rgba(245, 124, 0, 0.4);
+    color: #ffb74d;
+}
+
+.alert-success {
+    background: rgba(46, 125, 50, 0.15);
+    border-color: rgba(46, 125, 50, 0.4);
+    color: #81c784;
+}
+
+.alert-danger {
+    background: rgba(198, 40, 40, 0.15);
+    border-color: rgba(198, 40, 40, 0.4);
+    color: #ef9a9a;
+}
+
+/* ========== 공통 박스 클래스 오버라이드 ========== */
+.info-box-light {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.info-box-success {
+    background: rgba(46, 125, 50, 0.15);
+    border-color: rgba(46, 125, 50, 0.4);
+    color: #81c784;
+}
+
+.info-box-danger {
+    background: rgba(198, 40, 40, 0.15);
+    border-color: rgba(198, 40, 40, 0.4);
+    color: #ef9a9a;
+}
+
+.info-box-warning {
+    background: rgba(245, 124, 0, 0.15);
+    border-color: rgba(245, 124, 0, 0.4);
+    color: #ffb74d;
+}
+
+.text-muted {
+    color: var(--theme-text-muted) !important;
+}
+
+.text-danger {
+    color: #ef5350 !important;
+}
+
+.code-block {
+    background: var(--theme-bg);
+    color: var(--theme-text);
+    border: 1px solid var(--theme-border);
+}
+
+/* 계정 위험 영역 */
+.account-danger-zone {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.account-danger-zone h4 {
+    color: var(--theme-text) !important;
+}
+
+/* 2FA 관리자 설정 섹션 */
+.totp-admin-section {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.totp-admin-section label {
+    color: var(--theme-text);
+}
+
+/* 백업 코드 경고 */
+#backup-codes-container p {
+    color: var(--theme-text);
+}
+
+#backup-codes-container p strong {
+    color: #ef5350;
+}
+
+/* OnlyOffice 가이드 pre */
+.onlyoffice-section pre {
+    background: var(--theme-bg) !important;
+    color: var(--theme-text) !important;
+    border: 1px solid var(--theme-border);
+}
+
+/* 백신 정보 박스 */
+.antivirus-info-box {
+    background: rgba(46, 125, 50, 0.15) !important;
+    border-color: rgba(46, 125, 50, 0.4) !important;
+    color: #81c784 !important;
+}
+
+.antivirus-info-box p {
+    color: #81c784;
+}
+
+.antivirus-info-box span {
+    color: #ffb74d !important;
+}
+
+/* 랜섬웨어 경고 박스 */
+.ransomware-warning-box {
+    background: rgba(198, 40, 40, 0.15) !important;
+    border-color: rgba(198, 40, 40, 0.4) !important;
+    color: #ef9a9a !important;
+}
+
+/* 검색 인덱스 정보 박스 */
+.index-info-box {
+    background: rgba(46, 125, 50, 0.15);
+    border-color: rgba(46, 125, 50, 0.4);
+    color: #81c784;
+}
+
+.index-info-box p {
+    color: var(--theme-text);
+}
+
+/* 현재 사용량 표시 */
+#storage-used-size {
+    color: var(--theme-text-muted) !important;
+}
+
+#calc-usage-warning {
+    color: #ffb74d !important;
+}
+
+/* 이름 변경 미리보기 */
+#rename-ext-preview {
+    color: var(--theme-text-muted) !important;
+}
+
+/* 빈 메시지 */
+.empty-message {
+    color: var(--theme-text-muted) !important;
+}
+
+/* 폼 그룹 배경 */
+.form-group-bg {
+    background: var(--theme-hover);
+    border: 1px solid var(--theme-border);
+}
+
+/* 모달 내 모든 작은 텍스트 */
+.modal-body small {
+    color: var(--theme-text-muted);
+}
+
+/* 버튼 아웃라인 스타일 */
+.btn-outline-danger {
+    color: #ef5350 !important;
+    border-color: #ef5350 !important;
+    background: transparent;
+}
+
+.btn-outline-danger:hover {
+    background: rgba(239, 83, 80, 0.1);
+}
+
+/* ========== 스토리지 추가/수정 모달 ========== */
+#modal-storage .modal-body,
+#modal-edit-storage .modal-body {
+    background: var(--theme-content);
+}
+
+/* 저장 시 현재 사용량 계산 체크박스 영역 */
+#modal-storage [style*="background:#f8f9fa"],
+#modal-edit-storage [style*="background:#f8f9fa"],
+[style*="background:#f8f9fa"] {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+/* 사용자 권한 섹션 */
+.permission-section {
+    background: var(--theme-content);
+}
+
+.permission-bulk {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.permission-list {
+    background: var(--theme-content) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.permission-row {
+    background: var(--theme-content) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.permission-row:hover {
+    background: var(--theme-hover) !important;
+}
+
+/* ========== 접속 통계 모달 ========== */
+.stats-summary-box {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.stats-summary-item {
+    color: var(--theme-text);
+}
+
+.stats-summary-title {
+    color: var(--theme-text-muted) !important;
+}
+
+.stats-summary-value {
+    color: var(--theme-text) !important;
+}
+
+.stats-summary-sub {
+    color: var(--theme-text-muted) !important;
+}
+
+.stats-summary-divider {
+    background: var(--theme-border) !important;
+}
+
+/* 접속 통계 탭 */
+.stats-tabs {
+    border-color: var(--theme-border);
+}
+
+.stats-tab-btn {
+    background: var(--theme-hover) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.stats-tab-btn.active {
+    background: var(--theme-primary) !important;
+    color: #ffffff !important;
+}
+
+/* 접속 통계 테이블 */
+.stats-table {
+    background: var(--theme-content);
+}
+
+.stats-table th {
+    background: var(--theme-sidebar) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.stats-table td {
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.stats-table tr:hover {
+    background: var(--theme-hover) !important;
+}
+
+/* 오늘/어제 행 하이라이트 */
+.stats-table tr.today-row {
+    background: rgba(46, 125, 50, 0.15) !important;
+}
+
+.stats-table tr.yesterday-row {
+    background: rgba(255, 152, 0, 0.15) !important;
+}
+
+.stats-table .badge-today {
+    background: #4caf50 !important;
+    color: #ffffff !important;
+}
+
+.stats-table .badge-yesterday {
+    background: #ff9800 !important;
+    color: #ffffff !important;
+}
+
+/* ========== 공지 설정 모달 ========== */
+.notice-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.notice-section h3 {
+    color: var(--theme-text);
+}
+
+.notice-section h3 small {
+    color: var(--theme-text-muted) !important;
+}
+
+.notice-section-header {
+    color: var(--theme-text);
+}
+
+/* 팝업 배치 설정 박스 */
+.notice-section [style*="background:#f8f9fa"] {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.notice-section label {
+    color: var(--theme-text) !important;
+}
+
+/* 팝업 리스트 테이블 */
+.popup-list-table {
+    background: var(--theme-content);
+}
+
+.popup-list-table th {
+    background: var(--theme-sidebar) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.popup-list-table td {
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+    background: var(--theme-content) !important;
+}
+
+.popup-list-table tr:hover td {
+    background: var(--theme-hover) !important;
+}
+
+/* 팝업 빈 상태 */
+#popup-empty {
+    background: var(--theme-hover) !important;
+    color: var(--theme-text-muted) !important;
+}
+
+#popup-empty p {
+    color: var(--theme-text-muted) !important;
+}
+
+/* 구분선 */
+.notice-section hr,
+hr[style*="dashed"] {
+    border-color: var(--theme-border) !important;
+}
+
+/* 상단 배너 테이블 */
+.notice-form-table {
+    background: var(--theme-content);
+}
+
+.notice-form-table th {
+    background: var(--theme-sidebar) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.notice-form-table td {
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+    background: var(--theme-content) !important;
+}
+
+/* ========== 검색 인덱스 모달 ========== */
+.index-info-box {
+    background: rgba(46, 125, 50, 0.15) !important;
+    border-color: rgba(46, 125, 50, 0.4) !important;
+}
+
+.index-info-box p {
+    color: var(--theme-text) !important;
+}
+
+.index-requirement {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+}
+
+.index-requirement code {
+    background: var(--theme-bg) !important;
+    color: var(--theme-primary) !important;
+}
+
+.index-stats-table {
+    background: var(--theme-content);
+}
+
+.index-stats-table th {
+    background: var(--theme-sidebar) !important;
+    color: var(--theme-text) !important;
+}
+
+.index-stats-table td {
+    color: var(--theme-text) !important;
+}
+
+/* ========== 보안 설정 (IP/국가 차단) ========== */
+.geoip-section {
+    background: var(--theme-content) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.geoip-section h4 {
+    color: var(--theme-text) !important;
+}
+
+/* GeoIP 소스 선택 라디오 */
+.geoip-source-options {
+    background: transparent;
+}
+
+.geoip-source-options label {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+    color: var(--theme-text) !important;
+}
+
+.geoip-source-options input[type="radio"]:checked + label,
+.geoip-source-options label.selected {
+    background: var(--theme-primary) !important;
+    border-color: var(--theme-primary) !important;
+    color: #ffffff !important;
+}
+
+/* 차단 로그 섹션 */
+.block-log-section {
+    background: var(--theme-content);
+    border-color: var(--theme-border);
+}
+
+.block-log-section h4 {
+    color: var(--theme-text);
+}
+
+.block-log-empty {
+    background: var(--theme-hover) !important;
+    color: var(--theme-text-muted) !important;
+}
+
+/* ========== 가입시 약관 모달 ========== */
+#modal-terms .modal-body {
+    background: var(--theme-content);
+}
+
+#modal-terms label {
+    color: var(--theme-text);
+}
+
+#modal-terms small {
+    color: var(--theme-text-muted) !important;
+}
+
+/* ========== 시스템 설정 모달 ========== */
+#modal-system-settings .modal-body {
+    background: var(--theme-content);
+}
+
+/* SMTP 가이드 박스 */
+.smtp-guide,
+[class*="smtp-guide"],
+.modal-body > div[style*="background:#fff8e1"],
+.modal-body > div[style*="background: #fff8e1"] {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.smtp-guide h4,
+.smtp-guide table th {
+    color: var(--theme-text) !important;
+    background: var(--theme-sidebar) !important;
+}
+
+.smtp-guide table td {
+    color: var(--theme-text) !important;
+    background: var(--theme-content) !important;
+}
+
+.smtp-guide table tr:nth-child(even) td {
+    background: var(--theme-hover) !important;
+}
+
+/* OnlyOffice 가이드 */
+.onlyoffice-guide,
+[class*="onlyoffice"] {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.onlyoffice-guide h4 {
+    color: var(--theme-text) !important;
+}
+
+.onlyoffice-guide pre {
+    background: var(--theme-bg) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+/* ========== 일반 인라인 스타일 오버라이드 ========== */
+/* #f8f9fa 배경 */
+[style*="background:#f8f9fa"],
+[style*="background: #f8f9fa"] {
+    background: var(--theme-hover) !important;
+}
+
+/* #f5f5f5 배경 */
+[style*="background:#f5f5f5"],
+[style*="background: #f5f5f5"] {
+    background: var(--theme-bg) !important;
+}
+
+/* #fff8e1 배경 (노란색 안내) */
+[style*="background:#fff8e1"],
+[style*="background: #fff8e1"] {
+    background: rgba(255, 193, 7, 0.15) !important;
+    border-color: rgba(255, 193, 7, 0.4) !important;
+}
+
+/* #e0e0e0 테두리 */
+[style*="border:1px solid #e0e0e0"],
+[style*="border: 1px solid #e0e0e0"] {
+    border-color: var(--theme-border) !important;
+}
+
+/* #888, #666 색상 텍스트 */
+[style*="color:#888"],
+[style*="color: #888"],
+[style*="color:#666"],
+[style*="color: #666"] {
+    color: var(--theme-text-muted) !important;
+}
+
+/* #ddd 테두리 */
+[style*="border-top: 2px dashed #ddd"],
+[style*="border-top:2px dashed #ddd"] {
+    border-color: var(--theme-border) !important;
+}
+
+/* ========== 로그인 페이지 ========== */
+#show-backup-code,
+#show-otp-code,
+#show-forgot-password {
+    color: var(--theme-text-muted) !important;
+}
+
+#show-backup-code:hover,
+#show-otp-code:hover,
+#show-forgot-password:hover {
+    color: var(--theme-primary) !important;
+}
+
+.login-box p[style*="color:#666"] {
+    color: var(--theme-text-muted) !important;
+}
+
+/* ========== 사이드바 빈 메시지 ========== */
+.empty-message {
+    color: var(--theme-text-muted) !important;
+}
+
+/* ========== 스토리지 모달 ========== */
+#modal-add-storage small[style*="color:#888"],
+#modal-add-storage [style*="color:#666"] {
+    color: var(--theme-text-muted) !important;
+}
+
+#storage-used-size {
+    color: var(--theme-text-muted) !important;
+}
+
+#calc-usage-warning {
+    color: #ffb74d !important;
+}
+
+/* 용량 계산 박스 */
+#modal-add-storage [style*="background:#f8f9fa"] {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+/* ========== 이름 변경 모달 ========== */
+#modal-rename label[style*="color:#666"] {
+    color: var(--theme-text-muted) !important;
+}
+
+#rename-ext-preview {
+    color: var(--theme-text-muted) !important;
+}
+
+/* ========== 일괄 할당량 모달 ========== */
+#modal-bulk-quota .text-muted,
+#modal-bulk-quota [style*="color: #666"] {
+    color: var(--theme-text-muted) !important;
+}
+
+/* ========== 내 설정 모달 ========== */
+/* 회원 탈퇴 영역 */
+.account-danger-zone {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.account-danger-zone h4 {
+    color: var(--theme-text) !important;
+}
+
+/* 2FA 관리자 설정 */
+.totp-admin-section,
+#twofa-admin-settings {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+/* TOTP 키 표시 영역 */
+#twofa-admin-settings [style*="background:#fff"] {
+    background: var(--theme-bg) !important;
+    border-color: var(--theme-border) !important;
+}
+
+#totp-key-generated {
+    color: var(--theme-text-muted) !important;
+}
+
+/* QR 코드 영역 */
+#twofa-qr-code {
+    background: #ffffff !important;
+    border-color: var(--theme-border) !important;
+}
+
+#twofa-qr-code + p,
+[style*="text-align:center; color:#666"] {
+    color: var(--theme-text-muted) !important;
+}
+
+/* 시크릿 키 */
+#twofa-secret-key {
+    background: var(--theme-bg) !important;
+    color: var(--theme-primary) !important;
+}
+
+/* 백업 코드 경고 */
+#backup-codes-container p[style*="color:#c00"] {
+    color: #ef5350 !important;
+}
+
+/* ========== 시스템 설정 모달 ========== */
+/* OnlyOffice 가이드 pre */
+#modal-system-settings pre[style*="background:#f5f5f5"] {
+    background: var(--theme-bg) !important;
+    color: var(--theme-text) !important;
+    border: 1px solid var(--theme-border);
+}
+
+#modal-system-settings p[style*="color:#666"] {
+    color: var(--theme-text-muted) !important;
+}
+
+#modal-system-settings code {
+    background: var(--theme-bg);
+    color: var(--theme-primary);
+}
+
+/* ========== 백신 설정 모달 ========== */
+#modal-antivirus [style*="color: #f57c00"] {
+    color: #ffb74d !important;
+}
+
+/* 백신 로그 영역 */
+#antivirus-scan-log {
+    border-color: var(--theme-border) !important;
+}
+
+#antivirus-log-stats {
+    color: var(--theme-text-muted) !important;
+}
+
+#antivirus-log-content {
+    background: var(--theme-bg) !important;
+    color: var(--theme-text) !important;
+}
+
+/* 삭제 버튼 */
+#btn-delete-filtered-antivirus-logs {
+    color: #ef5350 !important;
+    border-color: #ef5350 !important;
+}
+
+/* ========== 랜섬웨어 방지 모달 ========== */
+#modal-ransomware [style*="border: 1px solid #ddd"] {
+    border-color: var(--theme-border) !important;
+    background: var(--theme-content);
+}
+
+#modal-ransomware [style*="color: #666"] {
+    color: var(--theme-text-muted) !important;
+}
+
+#modal-ransomware [style*="border-left: 3px solid #e0e0e0"] {
+    border-color: var(--theme-border) !important;
+}
+
+/* 랜섬웨어 로그 */
+#ransomware-log-stats {
+    color: var(--theme-text-muted) !important;
+}
+
+#ransomware-log-content {
+    background: var(--theme-bg) !important;
+    color: var(--theme-text) !important;
+}
+
+/* ========== 삭제된 사용자 모달 ========== */
+#deleted-users-empty {
+    color: var(--theme-text-muted) !important;
+}
+
+/* ========== 공지 설정 모달 ========== */
+#modal-notice h3 small {
+    color: var(--theme-text-muted) !important;
+}
+
+#popup-empty {
+    color: var(--theme-text-muted) !important;
+}
+
+#popup-empty p {
+    color: var(--theme-text-muted) !important;
+}
+
+/* 구분선 */
+#modal-notice hr {
+    border-color: var(--theme-border) !important;
+}
+
+/* 저장 버튼 영역 */
+#modal-notice [style*="border-top:1px solid #eee"] {
+    border-color: var(--theme-border) !important;
+}
+
+/* ========== 팝업 편집 모달 ========== */
+#modal-popup-edit .form-group[style*="background: #f8f9fa"] {
+    background: var(--theme-hover) !important;
+    border-color: var(--theme-border) !important;
+}
+
+/* ========== 가입시 약관 모달 ========== */
+#modal-terms [style*="background: #f8f9fa"] {
+    background: var(--theme-hover) !important;
+}
+
+/* ========== 모든 모달 공통 ========== */
+/* #f0f0f0 배경 */
+[style*="background: #f0f0f0"],
+[style*="background:#f0f0f0"] {
+    background: var(--theme-hover) !important;
+}
+
+/* #fff 배경 (QR 코드 제외) */
+.modal-body [style*="background:#fff"]:not(#twofa-qr-code),
+.modal-body [style*="background: #fff"]:not(#twofa-qr-code) {
+    background: var(--theme-bg) !important;
+}
+
+/* #eee, #e9ecef 테두리 */
+[style*="border:1px solid #e9ecef"],
+[style*="border: 1px solid #e9ecef"],
+[style*="border-top:1px solid #eee"],
+[style*="border-top: 1px solid #eee"] {
+    border-color: var(--theme-border) !important;
+}
+
+/* #ced4da 테두리 */
+[style*="border:1px solid #ced4da"],
+[style*="border: 1px solid #ced4da"] {
+    border-color: var(--theme-border) !important;
+}
+
+/* #999 색상 */
+[style*="color:#999"],
+[style*="color: #999"] {
+    color: var(--theme-text-muted) !important;
+}
+
+/* #333 색상 */
+[style*="color:#333"],
+[style*="color: #333"] {
+    color: var(--theme-text) !important;
+}
+
+/* ========== 테이블 공통 ========== */
+.modal-body table {
+    background: var(--theme-content);
+}
+
+.modal-body table th {
+    background: var(--theme-sidebar) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.modal-body table td {
+    background: var(--theme-content) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+.modal-body table tr:hover td {
+    background: var(--theme-hover) !important;
+}
+
+/* ========== 활동 로그 모달 ========== */
+#modal-activity-logs .modal-body {
+    background: var(--theme-content);
+}
+
+.activity-log-filters {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+.activity-log-filters label {
+    color: var(--theme-text);
+}
+
+/* ========== 일괄 삭제 모달 ========== */
+#modal-bulk-delete .modal-body {
+    background: var(--theme-content);
+}
+
+/* ========== 권한 모달 ========== */
+#modal-permissions .modal-body {
+    background: var(--theme-content);
+}
+
+/* ========== 상세 정보 모달 ========== */
+#modal-detailed-info .modal-body,
+#modal-info .modal-body {
+    background: var(--theme-content);
+}
+
+.info-table {
+    background: var(--theme-content);
+}
+
+.info-table th {
+    background: var(--theme-sidebar) !important;
+    color: var(--theme-text-muted) !important;
+}
+
+.info-table td {
+    color: var(--theme-text) !important;
+}
+
+/* ========== 전체 로그인 기록 모달 ========== */
+#modal-all-logins .modal-body {
+    background: var(--theme-content);
+}
+
+.login-logs-filters {
+    background: var(--theme-hover);
+    border-color: var(--theme-border);
+}
+
+/* ========== 휴지통 모달 ========== */
+#modal-trash .modal-body,
+#modal-my-trash .modal-body {
+    background: var(--theme-content);
+}
+
+.trash-list {
+    background: var(--theme-content);
+}
+
+.trash-item {
+    border-color: var(--theme-border);
+    color: var(--theme-text);
+}
+
+.trash-item:hover {
+    background: var(--theme-hover);
+}
+
+/* ========== 시스템 정보 모달 ========== */
+#modal-system-info .modal-body {
+    background: var(--theme-content);
+}
+
+/* ========== 확인 모달 ========== */
+#modal-confirm .modal-body {
+    background: var(--theme-content);
+    color: var(--theme-text);
+}
+
+/* ========== 미리보기 모달 ========== */
+#modal-preview .modal-body {
+    background: var(--theme-bg);
+}
+
+/* ========== 중복 파일 모달 ========== */
+#modal-duplicate .modal-body {
+    background: var(--theme-content);
+    color: var(--theme-text);
+}
+
+/* ========== 파일 버전 모달 ========== */
+.version-file-info {
+    background: var(--theme-hover) !important;
+    color: var(--theme-text);
+}
+
+.version-file-info strong {
+    color: var(--theme-text-muted);
+}
+
+#version-list-table th {
+    background: var(--theme-sidebar) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+#version-list-table td {
+    background: var(--theme-content) !important;
+    color: var(--theme-text) !important;
+    border-color: var(--theme-border) !important;
+}
+
+#version-list-table tr:hover td {
+    background: var(--theme-hover) !important;
+}
+
+#version-empty {
+    color: var(--theme-text-muted) !important;
+}
+
+#version-empty small {
+    color: var(--theme-text-muted) !important;
+}
+
+#version-loading {
+    color: var(--theme-text-muted) !important;
+}
+
+.setting-notice {
+    background: rgba(255, 193, 7, 0.1);
+    border-color: rgba(255, 193, 7, 0.3);
+}
+
+.setting-notice p,
+.setting-notice ul,
+.setting-notice ol,
+.setting-notice li {
+    color: var(--theme-text);
+}
+
+.setting-notice a {
+    color: #60a5fa;
+}
+
+.notify-dropdown {
+    background: var(--theme-sidebar);
+    border-color: var(--theme-border);
+}
+
+.notify-dropdown-header {
+    color: var(--theme-text);
+    border-bottom-color: var(--theme-border);
+}
+
+.notify-item { border-bottom-color: var(--theme-border); }
+.notify-item:hover { background: rgba(255,255,255,0.05); }
+.notify-item-text { color: var(--theme-text); }
+.notify-item-icon { background: rgba(102, 126, 234, 0.2); }
+.notify-empty { color: var(--theme-text-muted); }
+
+/* 시계 다크 테마 */
+/* 시계 다크 테마 */
+.digital-clock.style-1 .clock-time { color: #e4e4e7; }
+.digital-clock.style-1 .clock-date { color: #9ca3af; }
+.digital-clock.style-2 { background: rgba(96,165,250,0.1); border-color: rgba(96,165,250,0.2); }
+.digital-clock.style-2 .clock-time { color: #60a5fa; }
+.digital-clock.style-2 .clock-date { color: #9ca3af; }
+.digital-clock.style-3 { background: #1e1e3a; border-color: #2d2d50; }
+.digital-clock.style-3 .seg-digit { background: #252545; border-color: #2d2d50; color: #60a5fa; }
+.digital-clock.style-3 .seg-colon { color: #60a5fa; }
+.digital-clock.style-3 .clock-date { color: #9ca3af; }
+/* 플립 D 화이트 — 다크 전환 */
+.digital-clock.style-8 { background: #333; border-color: #444; }
+.digital-clock.style-8 .flip-half.upper { background: linear-gradient(180deg, #4a4a4a, #3e3e3e); border-bottom-color: #222; }
+.digital-clock.style-8 .flip-half.lower { background: linear-gradient(180deg, #3a3a3a, #333); }
+.digital-clock.style-8 .flip-flap.front { background: linear-gradient(180deg, #4a4a4a, #3e3e3e); border-bottom-color: #222; }
+.digital-clock.style-8 .flip-flap.back { background: linear-gradient(180deg, #3a3a3a, #333); }
+.digital-clock.style-8 .flip-num { color: #eee; }
+.digital-clock.style-8 .flip-dot { background: #888; }
+.digital-clock.style-8 .clock-date { color: #aaa; }
+.digital-clock.style-9 { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.1); }
+.digital-clock.style-9 .clock-time { color: #e4e4e7; }
+.digital-clock.style-9 .clock-date { color: #9ca3af; }
+
+/* ========== 게시판 테마 적용 ========== */
+.board-table thead tr { background: var(--theme-hover); }
+.board-table thead th { color: var(--theme-text-muted); }
+.board-table td { color: var(--theme-text); }
+.board-table tbody tr { border-bottom-color: var(--theme-border); }
+.board-table tbody tr:hover { background: var(--theme-hover); }
+.board-table tbody tr.board-row-current { background: var(--theme-selected); }
+.board-col-num, .board-col-author, .board-col-date, .board-col-views { color: var(--theme-text-muted); }
+.board-comment-badge { color: var(--theme-primary); }
+.board-detail-header { border-color: var(--theme-border); }
+.board-detail-header h2 { color: var(--theme-text); }
+.board-detail-meta { color: var(--theme-text-muted); }
+.board-detail-author { color: var(--theme-text); }
+.board-detail-body { color: var(--theme-text); }
+.board-detail-body table td, .board-detail-body table th { border-color: var(--theme-border); color: var(--theme-text); }
+.board-detail-footer { border-color: var(--theme-border); }
+.board-detail-postlist { border-color: var(--theme-border); }
+.cmt-section { border-color: var(--theme-border); }
+.cmt-header { color: var(--theme-text); }
+.cmt-item { border-color: var(--theme-border); }
+.board-pg-num { color: var(--theme-text); }
+.board-pg-num:hover { background: var(--theme-hover); color: var(--theme-primary); }
+.board-pg-current { background: var(--theme-primary); color: #fff !important; }
+.board-pg-nav { color: var(--theme-text-muted); }
+.board-pg-nav:hover { background: var(--theme-hover); color: var(--theme-primary); }
+.board-pg-disabled { color: var(--theme-border) !important; }
