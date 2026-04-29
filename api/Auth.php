@@ -249,6 +249,12 @@ class Auth {
             
             // 활동 시간 갱신
             $_SESSION['last_activity'] = time();
+            
+            // ★ sessions DB의 last_activity도 갱신 (펜닐님 진단: 세션 관리 화면에서 안 보이는 문제)
+            //   recordSession은 로그인 시점만 호출 → Remember Me 자동 로그인 시 DB 미기록
+            //   isLoggedIn에서 한 번 더 호출 → DB 기록 보장 + last_activity 갱신
+            //   이미 있으면 last_activity만 갱신, 없으면 추가
+            $this->recordSession($_SESSION['user_id'], $_SERVER['REMOTE_ADDR'] ?? '');
         }
         
         return isset($_SESSION['user_id']);
@@ -1554,7 +1560,9 @@ class Auth {
             return [
                 'session_id' => substr($s['session_id'] ?? '', 0, 8) . '...',
                 'ip' => $s['ip'] ?? '',
-                'user_agent' => $this->parseUserAgent($s['user_agent'] ?? ''),
+                // ★ raw user_agent 반환 (클라이언트가 parseUserAgentDetails로 가공 — 로그인 기록과 동일 패턴)
+                //   이전: parseUserAgent로 "Chrome / Mac" 형식 가공 → iPhone이 Mac으로 잘못 표시되는 버그
+                'user_agent' => $s['user_agent'] ?? '',
                 'created_at' => $s['created_at'] ?? '',
                 'last_activity' => $s['last_activity'] ?? '',
                 'is_current' => ($s['session_id'] ?? '') === $currentSessionId

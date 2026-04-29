@@ -1,0 +1,1687 @@
+/**
+ * ============================================================================
+ * 🌐 [공유 스트리밍 MP3 플레이어 CSS] FSAudioPlayer 스타일
+ * ============================================================================
+ * 
+ * ⚠️ 주의: 이 파일은 *공유 페이지(share.php) 전용*입니다.
+ * 
+ * - 사용처: share.php (외부 공유 링크 stream 모드)
+ * - 짝 파일: assets/css/style.css 안의 .fap-* (메인 페이지 일반 플레이어 CSS)
+ * - 두 곳 모두 같은 클래스명(.fap-*)이지만 ★독립★ 입니다.
+ *   하나 수정하면 다른 쪽도 수정해야 일관성 유지됩니다.
+ * 
+ * ⚠️ 이 파일을 수정하면 *공유 스트리밍*만 영향받습니다.
+ *    메인 미리보기 CSS를 수정하려면 → assets/css/style.css의 .fap-* 섹션
+ * ============================================================================
+ * 
+ * 원본 위치: assets/css/style.css (라인 4669~6060 + 모바일 10230~10276)
+ * 추출 사유: 공유 스트리밍(share.php)에서 동일 플레이어 사용
+ * 
+ * 의존성: 없음 (독립적으로 동작)
+ */
+
+/* ========== 데스크톱 + 공통 ========== */
+/* FSAudioPlayer 커스텀 스타일 */
+.fap {
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    padding: 28px 32px 20px;
+    color: #fff;
+    font-family: inherit;
+    user-select: none;
+    -webkit-user-select: none;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    position: relative;
+}
+
+/* ★ 볼륨 토스트 (드래그/키보드 단축키 시 볼륨바 좌측 위에 표시) */
+.fap-vol-toast {
+    position: absolute;
+    bottom: calc(100% + 2px);    /* 볼륨바 위 2px (살짝 내림) */
+    left: 0;                      /* 볼륨바 왼쪽 끝 (시작 쪽) */
+    background: rgba(0, 0, 0, 0.78);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 10px;
+    border-radius: 5px;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(4px);  /* 페이드 시작 위치 */
+    transition: opacity 0.18s ease, transform 0.18s ease;
+    z-index: 30;
+    font-variant-numeric: tabular-nums;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    user-select: none;
+    -webkit-user-select: none;
+    white-space: nowrap;
+}
+.fap-vol-toast.show {
+    opacity: 1;
+    transform: translateY(0);  /* 페이드 완료 위치 */
+}
+/* 현재 곡 표시 */
+.fap-now {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+    flex-shrink: 0;
+}
+.fap-now-cover {
+    width: 56px;
+    height: 56px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, rgba(124,110,246,0.25), rgba(124,110,246,0.08));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+.fap-now-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+.fap-now-cover-icon {
+    font-size: 22px;
+}
+.fap-now-info { overflow: hidden; flex: 1; min-width: 0; text-align: left; }
+.fap-now-title {
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    color: #fff;
+    text-align: left;
+}
+.fap-now-meta {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.55);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 3px;
+    letter-spacing: 0.3px;
+    text-align: left;
+}
+/* 마퀴 공통 */
+.fap-marquee {
+    text-overflow: clip;
+}
+.fap-marquee > .fap-marquee-inner {
+    display: inline-block;
+    padding-right: 60px;
+    animation: fapMarquee var(--fap-marquee-dur, 10s) linear infinite;
+}
+/* hover 시 회전 일시정지 */
+.fap-marquee:hover > .fap-marquee-inner {
+    animation-play-state: paused;
+}
+@keyframes fapMarquee {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+/* 비주얼라이저 (주파수 막대 그래프) — seek bar 위쪽 */
+.fap-visualizer {
+    display: block;
+    width: 100%;
+    height: 40px;
+    margin-bottom: 8px;
+    background: transparent;
+    flex-shrink: 0;
+    image-rendering: crisp-edges;
+    cursor: pointer;
+}
+.fap-visualizer:hover {
+    opacity: 0.9;
+}
+/* 모드 변경 레이블 (클릭 시 잠깐 표시) */
+.fap-vis-label {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    background: rgba(0,0,0,0.6);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-size: 11px;
+    pointer-events: none;
+    opacity: 1;
+    transition: opacity 1s ease;
+    z-index: 10;
+}
+.fap-vis-label-fade {
+    opacity: 0;
+}
+
+/* 시크바 */
+.fap-seek {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    flex-shrink: 0;
+}
+.fap-time {
+    font-size: 11px;
+    /* ★ Default 시간 색상: 보라 (재생바와 동일) */
+    color: #7c6ef6;
+    min-width: 36px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+.fap-seek-bar {
+    flex: 1;
+    height: 20px;
+    position: relative;
+    cursor: pointer;
+    background: transparent;
+}
+.fap-seek-bar::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,0.25);
+    border-radius: 2px;
+    pointer-events: none;
+}
+.fap-seek-loaded {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,0.15);
+    border-radius: 2px;
+    width: 0;
+    pointer-events: none;
+    z-index: 1;
+}
+.fap-seek-played {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    background: #7c6ef6;
+    border-radius: 2px;
+    width: 0;
+    pointer-events: none;
+    z-index: 2;
+}
+.fap-seek-thumb {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 12px;
+    height: 12px;
+    background: #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 4px rgba(0,0,0,0.3);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 3;
+}
+.fap-seek-bar:hover .fap-seek-thumb,
+.fap-seek-bar:active .fap-seek-thumb { opacity: 1; }
+/* 컨트롤 버튼 */
+.fap-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-bottom: 14px;
+    flex-shrink: 0;
+}
+.fap-btn {
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.6);
+    cursor: pointer;
+    padding: 6px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, background 0.15s;
+    line-height: 0;
+}
+.fap-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+.fap-btn-play {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: #7c6ef6;
+    color: #fff;
+}
+.fap-btn-play:hover { background: #6b5de5; color: #fff; }
+/* ★ 볼륨 버튼: 스킨 강조색 (재생바와 동일) - 모든 스킨 통일 */
+/*    hover 시도 강조색 유지 (글로벌 .fap-btn:hover의 #fff 무력화) */
+.fap-btn-vol {
+    color: #7c6ef6;
+}
+.fap-btn-vol:hover {
+    color: #7c6ef6;
+}
+/* ★ 셔플/반복 버튼 hover 시 색상/배경 변화 비활성 (active 상태와 헷갈림 방지) */
+/*    펜닐님 요청: 클릭 후 마우스 떠도 active 색만 유지되어야 함 */
+/*    Default: 비활성 색(rgba(255,255,255,0.6))을 hover 시도 유지 */
+.fap-btn-shuffle:hover,
+.fap-btn-loop:hover {
+    color: rgba(255,255,255,0.6);  /* 비활성 색 유지 (hover로 흰색 안 됨) */
+    background: transparent !important;
+}
+/* 활성 상태 hover는 active 색 유지 */
+.fap-btn-shuffle.active:hover,
+.fap-btn-loop.active:hover {
+    color: #7c6ef6;  /* active 보라 그대로 */
+}
+/* ★ Active 상태 (셔플/반복 켜짐) — 색상만 변경 (배경 없음, 통일감) */
+/*    각 스킨에서 재생바/볼륨바 색과 동일한 강조색 사용 */
+.fap-btn-shuffle.active,
+.fap-btn-loop.active {
+    color: #7c6ef6;
+}
+.fap-btn-loop.active-one { position: relative; }
+.fap-btn-loop.active-one::after {
+    content: '1';
+    position: absolute;
+    /* ★ 아이콘 화살표 안쪽으로 이동 */
+    bottom: 50%;
+    right: 50%;
+    transform: translate(50%, 50%);
+    font-size: 7px;
+    font-weight: 700;
+    color: inherit;  /* 활성 색상 따라감 (스킨별) */
+    line-height: 1;
+    pointer-events: none;
+}
+/* 볼륨 */
+.fap-volume {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 0 2px;
+    flex-shrink: 0;
+}
+/* ★ iOS: Apple 정책상 JS에서 audio.volume 조절 불가 → 볼륨 영역 전체 숨김 (YouTube iOS 웹 방식) */
+.fap.fap-ios .fap-volume { display: none; }
+.fap-vol-bar {
+    flex: 1;
+    max-width: 120px;
+    height: 20px;
+    position: relative;
+    cursor: pointer;
+    background: transparent;
+}
+.fap-vol-bar::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,0.25);
+    border-radius: 2px;
+    pointer-events: none;
+}
+.fap-vol-level {
+    position: absolute;
+    left: 0;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    background: #7c6ef6;
+    border-radius: 2px;
+    width: 80%;
+    pointer-events: none;
+    z-index: 1;
+}
+.fap-vol-thumb {
+    position: absolute;
+    top: 50%;
+    left: 80%;
+    width: 10px;
+    height: 10px;
+    background: #fff;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 4px rgba(0,0,0,0.3);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    z-index: 2;
+}
+.fap-vol-bar:hover .fap-vol-thumb,
+.fap-vol-bar:active .fap-vol-thumb { opacity: 1; }
+/* 플레이리스트 */
+/* 플레이리스트 */
+.fap-playlist {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+.fap-playlist-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 0 4px;
+    flex-shrink: 0;
+}
+.fap-playlist-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.5);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.fap-playlist-count {
+    font-size: 10px;
+    background: rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.5);
+    padding: 1px 6px;
+    border-radius: 8px;
+}
+.fap-playlist-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    flex: 1;
+    overflow-y: auto;
+    border-radius: 8px;
+    min-height: 0;
+    position: relative;
+    contain: layout;
+    will-change: scroll-position;
+    /* 스크롤바: 작게 + 안 보이게 (호버 시만 살짝) */
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+.fap-playlist-list:hover {
+    scrollbar-color: rgba(255,255,255,0.2) transparent;
+}
+.fap-playlist-list::-webkit-scrollbar {
+    width: 4px;
+}
+.fap-playlist-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+.fap-playlist-list::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 2px;
+    transition: background 0.2s;
+}
+.fap-playlist-list:hover::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.2);
+}
+.fap-playlist-list:hover::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,0.3);
+}
+.fap-pl-virtual-spacer {
+    pointer-events: none;
+}
+.fap-pl-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 6px;
+}
+.fap-pl-item:hover { background: rgba(255,255,255,0.06); }
+.fap-pl-item.active { background: rgba(124,110,246,0.12); }
+/* ★ 활성 곡 이름 — 흰색 강제 제거. 각 스킨이 정의한 색상 따라감 */
+/*    default 스킨에선 흰색 유지 (item이 흰색 글자 기본) */
+.fap-pl-item.active .fap-pl-name { font-weight: 500; }
+.fap-pl-cover {
+    width: 36px;
+    height: 36px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.06);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    overflow: hidden;
+    font-size: 14px;
+}
+.fap-pl-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+/* ★ 재생중 곡 커버 ♪ 오버레이 비활성 (모든 스킨 공통) - 펜닐님 요청 */
+/*    이전엔 재생중 표시 위해 ♪ 표시했으나 썸네일과 겹쳐 보임 → 제거 */
+.fap-pl-item.playing .fap-pl-cover::after {
+    display: none !important;
+}
+.fap-pl-cover { position: relative; }
+/* ★ 재생목록 트랙 순번 (1, 2, ...) — 파일명에 이미 번호가 있어도 시각적으로 구분되는 작은 박스 */
+/*    color는 currentColor (곡 제목 색상 따라감) → 흰색/어두운 스킨 모두 호환 */
+/*    배경은 중성 회색 반투명 → 모든 스킨에서 적당히 보임 */
+.fap-pl-num {
+    font-size: 10px;
+    color: currentColor;
+    opacity: 0.55;
+    background: rgba(127,127,127,0.15);
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+    min-width: 22px;
+    text-align: center;
+    align-self: center;
+}
+.fap-pl-item.active .fap-pl-num {
+    opacity: 0.95;
+    background: rgba(127,127,127,0.25);
+}
+.fap-pl-name {
+    font-size: 13px;
+    /* ★ color: inherit → 부모 .fap-pl-item의 색상 따라감 */
+    /*    재생중일 때 각 스킨이 .fap-pl-item.playing color로 정의한 색 자연 상속 */
+    /*    비재생중엔 .fap 컨테이너의 기본 색상 상속 (default 흰색 70% 효과는 opacity로) */
+    color: inherit;
+    opacity: 0.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+}
+/* 재생중 곡 제목은 opacity 1로 (선명하게) */
+/* 재생중(playing)일 때만 선명 — 멈춤(active만)일 땐 일반 opacity */
+.fap-pl-item.playing .fap-pl-name {
+    opacity: 1;
+}
+/* 재생 중인 항목: 자동 마퀴 */
+.fap-pl-item.playing .fap-pl-name.pl-scrolling {
+    text-overflow: clip;
+}
+.fap-pl-item.playing .fap-pl-name.pl-scrolling > .fap-pl-text {
+    display: inline-block;
+    padding-right: 50px;
+    animation: fapMarquee var(--fap-pl-marquee-dur, 8s) linear infinite;
+}
+/* hover 시 마퀴 일시정지 */
+.fap-pl-item.playing:hover .fap-pl-name.pl-scrolling > .fap-pl-text {
+    animation-play-state: paused;
+}
+.fap-pl-dur {
+    font-size: 11px;
+    color: rgba(255,255,255,0.35);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+/* ★ 재생중 dur(재생시간) 색 — 곡 제목과 동일하게 (currentColor 활용) */
+/*    재생중(playing)일 때만 강조 — 멈춤(active만)일 땐 일반색 */
+.fap-pl-item.playing .fap-pl-dur {
+    color: currentColor;
+    opacity: 0.85;
+}
+
+/* ============================================================ */
+/* 스킨 선택기 (공통) */
+/* ============================================================ */
+.fap-skin-selector {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 20;
+}
+.fap-skin-btn {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: rgba(255,255,255,0.8);
+    padding: 5px 10px;
+    border-radius: 14px;
+    font-size: 11px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    transition: all 0.15s;
+}
+.fap-skin-btn:hover {
+    background: rgba(255,255,255,0.2);
+}
+.fap-skin-btn svg { flex-shrink: 0; }
+.fap-skin-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    background: rgba(20,20,30,0.95);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 8px;
+    min-width: 160px;
+    max-height: 400px;  /* 메뉴가 너무 길어지지 않도록 + 스크롤 가능 */
+    overflow-y: auto;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.4);
+}
+.fap-skin-item {
+    padding: 8px 14px;
+    font-size: 12px;
+    color: #ddd;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.fap-skin-item:hover { background: rgba(255,255,255,0.1); }
+.fap-skin-item.active {
+    background: rgba(102,126,234,0.3);
+    color: #fff;
+}
+
+/* 섹션 제목 (스킨 / 비주얼라이저 색상) */
+.fap-skin-section-title {
+    padding: 8px 14px 4px;
+    font-size: 10px;
+    color: rgba(255,255,255,0.45);
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    font-weight: 600;
+    border-top: 1px solid rgba(255,255,255,0.07);
+}
+.fap-skin-section-title:first-child { border-top: none; }
+
+/* 비주얼라이저 색상 선택 아이템 */
+.fap-vis-color-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 14px;
+    font-size: 12px;
+    color: #ddd;
+    cursor: pointer;
+    transition: background 0.12s;
+}
+.fap-vis-color-item:hover { background: rgba(255,255,255,0.1); }
+.fap-vis-color-item.active {
+    background: rgba(102,126,234,0.3);
+    color: #fff;
+}
+.fap-vis-color-swatch {
+    width: 26px;
+    height: 12px;
+    border-radius: 3px;
+    border: 1px solid rgba(255,255,255,0.15);
+    flex-shrink: 0;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.3);
+}
+.fap-vis-color-name {
+    flex: 1;
+    min-width: 0;
+}
+
+/* ============================================================ */
+/* 스킨 1: SOUNDCLOUD */
+/* ============================================================ */
+.fap.fap-skin-soundcloud {
+    background: #fff !important;
+    color: #333 !important;
+    padding: 20px !important;
+}
+.fap-skin-soundcloud .fap-skin-btn {
+    background: rgba(0,0,0,0.05);
+    border-color: rgba(0,0,0,0.1);
+    color: #666;
+}
+.fap-skin-soundcloud .fap-skin-btn:hover { background: rgba(0,0,0,0.1); }
+.fap-skin-soundcloud .fap-skin-menu {
+    background: #fff;
+    border-color: #ddd;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+.fap-skin-soundcloud .fap-skin-item { color: #333; }
+.fap-skin-soundcloud .fap-skin-item:hover { background: #f5f5f5; }
+.fap-skin-soundcloud .fap-skin-item.active {
+    background: rgba(255,85,0,0.15); color: #f50;
+}
+/* 비주얼라이저 색상 아이템 (흰 배경 대응) */
+.fap-skin-soundcloud .fap-skin-section-title {
+    color: rgba(0,0,0,0.5);
+    border-top-color: rgba(0,0,0,0.08);
+}
+.fap-skin-soundcloud .fap-vis-color-item { color: #333; }
+.fap-skin-soundcloud .fap-vis-color-item:hover { background: #f5f5f5; }
+.fap-skin-soundcloud .fap-vis-color-item.active {
+    background: rgba(255,85,0,0.15); color: #f50;
+}
+.fap-skin-soundcloud .fap-vis-color-swatch { border-color: rgba(0,0,0,0.15); }
+.fap-skin-soundcloud .fap-now-cover {
+    width: 60px !important; height: 60px !important;
+    border-radius: 4px !important;
+    background: linear-gradient(135deg, #f50, #f80) !important;
+}
+.fap-skin-soundcloud .fap-now-title { color: #333 !important; }
+.fap-skin-soundcloud .fap-now-meta { color: #999 !important; }
+.fap-skin-soundcloud .fap-visualizer { filter: hue-rotate(-160deg) saturate(1.5); }
+.fap-skin-soundcloud .fap-time { color: #f50 !important; }
+.fap-skin-soundcloud .fap-seek-bar::before { background: #ddd !important; }
+.fap-skin-soundcloud .fap-seek-played { background: #f50 !important; }
+.fap-skin-soundcloud .fap-seek-loaded { background: #ccc !important; }
+.fap-skin-soundcloud .fap-seek-thumb { background: #f50 !important; }
+.fap-skin-soundcloud .fap-btn { color: #666 !important; }
+.fap-skin-soundcloud .fap-btn:hover { color: #f50 !important; }
+/* ★ 셔플/반복 hover 시 색상 변화 X (active와 헷갈림 방지) */
+.fap-skin-soundcloud .fap-btn-shuffle:hover,
+.fap-skin-soundcloud .fap-btn-loop:hover { color: #666 !important; }
+.fap-skin-soundcloud .fap-btn-shuffle.active:hover,
+.fap-skin-soundcloud .fap-btn-loop.active:hover { color: #f50 !important; }
+.fap-skin-soundcloud .fap-btn-play {
+    background: #f50 !important; color: #fff !important;
+}
+.fap-skin-soundcloud .fap-btn-play:hover { background: #e64a00 !important; color: #fff !important; }
+/* ★ 볼륨 버튼: 스킨 강조색 (재생바와 동일) */
+.fap-skin-soundcloud .fap-btn-vol {
+    color: #f50 !important;
+}
+/* ★ Soundcloud active: 주황 색상만 (재생바와 동일) */
+.fap-skin-soundcloud .fap-btn-shuffle.active,
+.fap-skin-soundcloud .fap-btn-loop.active {
+    color: #f50 !important;
+}
+.fap-skin-soundcloud .fap-vol-bar::before { background: #ddd !important; }
+.fap-skin-soundcloud .fap-vol-level { background: #f50 !important; }
+.fap-skin-soundcloud .fap-playlist-header,
+.fap-skin-soundcloud .fap-playlist-title,
+.fap-skin-soundcloud .fap-playlist-count { color: #666 !important; }
+.fap-skin-soundcloud .fap-pl-item { color: #444 !important; border-bottom: 1px solid #eee; }
+.fap-skin-soundcloud .fap-pl-item:hover { background: #f5f5f5 !important; }
+.fap-skin-soundcloud .fap-pl-item.playing {
+    background: rgba(255,85,0,0.08) !important; color: #f50 !important;
+}
+.fap-skin-soundcloud .fap-pl-name,
+.fap-skin-soundcloud .fap-pl-dur { color: inherit !important; }
+
+/* ============================================================ */
+/* 스킨 2: CASSETTE TAPE */
+/* ============================================================ */
+.fap.fap-skin-cassette {
+    background: linear-gradient(180deg, #8b0000 0%, #5c0000 100%) !important;
+    color: #ffd700 !important;
+    padding: 30px 25px !important;
+    border-radius: 12px;
+    box-shadow:
+        0 12px 40px rgba(0,0,0,0.6),
+        inset 0 2px 0 rgba(255,255,255,0.2),
+        inset 0 -2px 0 rgba(0,0,0,0.3);
+}
+.fap-skin-cassette .fap-skin-btn {
+    background: rgba(0,0,0,0.3);
+    border-color: rgba(255,215,0,0.3);
+    color: #ffd700;
+}
+.fap-skin-cassette .fap-now {
+    background: #fff;
+    border: 2px solid #1a1a1a;
+    padding: 8px 12px !important;
+    border-radius: 2px;
+    color: #1a1a1a !important;
+    margin-bottom: 16px !important;
+}
+.fap-skin-cassette .fap-now-cover { display: none !important; }
+.fap-skin-cassette .fap-now-info { color: #1a1a1a !important; }
+.fap-skin-cassette .fap-now-title {
+    font-family: Georgia, serif; font-style: italic;
+    color: #1a1a1a !important;
+    font-size: 15px !important;
+}
+.fap-skin-cassette .fap-now-meta { color: #666 !important; font-size: 11px !important; }
+
+.fap-skin-cassette .fap-cass-window {
+    background: #1a1a1a;
+    border: 3px solid #1a1a1a; border-radius: 6px;
+    padding: 15px; margin-bottom: 16px;
+    display: flex; justify-content: space-around; align-items: center;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+    order: -1; /* 가장 위로 */
+}
+.fap-skin-cassette .fap-cass-reel {
+    width: 60px; height: 60px; border-radius: 50%;
+    background:
+        radial-gradient(circle, #333 0 20%, transparent 20%),
+        conic-gradient(#fff 0deg 45deg, #999 45deg 90deg, #fff 90deg 135deg, #999 135deg 180deg, #fff 180deg 225deg, #999 225deg 270deg, #fff 270deg 315deg, #999 315deg);
+    animation: fap-cass-spin 2s linear infinite;
+    border: 2px solid #555;
+}
+.fap-skin-cassette .fap-cass-center {
+    color: #ffd700; font-family: monospace; font-size: 10px; text-align: center;
+}
+.fap-skin-cassette .fap-cass-center div:first-child { font-size: 13px; font-weight: bold; }
+@keyframes fap-cass-spin { to { transform: rotate(360deg); } }
+
+.fap-skin-cassette .fap-visualizer { filter: hue-rotate(-30deg) saturate(0.8); opacity: 0.7; }
+.fap-skin-cassette .fap-time { color: #ffd700 !important; font-family: monospace; }
+.fap-skin-cassette .fap-seek-bar::before { background: rgba(255,215,0,0.2) !important; }
+.fap-skin-cassette .fap-seek-played { background: #ffd700 !important; }
+.fap-skin-cassette .fap-seek-thumb { background: #ffd700 !important; }
+.fap-skin-cassette .fap-btn {
+    background: #1a1a1a !important; color: #ffd700 !important;
+    width: 38px !important; height: 38px !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+.fap-skin-cassette .fap-btn-play { background: #ffd700 !important; color: #1a1a1a !important; width: 46px !important; height: 46px !important; }
+/* ★ Cassette: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
+/*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
+.fap-skin-cassette .fap-btn-shuffle,
+.fap-skin-cassette .fap-btn-loop {
+    opacity: 0.5;
+}
+.fap-skin-cassette .fap-btn-shuffle.active,
+.fap-skin-cassette .fap-btn-loop.active {
+    color: #ffd700 !important;
+    opacity: 1;
+}
+.fap-skin-cassette .fap-vol-bar::before { background: rgba(255,215,0,0.2) !important; }
+.fap-skin-cassette .fap-vol-level { background: #ffd700 !important; }
+.fap-skin-cassette .fap-playlist-header,
+.fap-skin-cassette .fap-playlist-title,
+.fap-skin-cassette .fap-playlist-count { color: #ffd700 !important; }
+.fap-skin-cassette .fap-pl-item { color: rgba(255,215,0,0.8) !important; border-bottom: 1px solid rgba(255,215,0,0.1); }
+.fap-skin-cassette .fap-pl-item:hover { background: rgba(255,215,0,0.1) !important; }
+.fap-skin-cassette .fap-pl-item.playing { background: rgba(255,215,0,0.2) !important; color: #ffd700 !important; }
+/* ★ 재생중 넘버링도 제목과 같은 색 (노랑) */
+/*    재생중(playing)일 때만 강조 — 멈춤(active만)일 땐 일반색 */
+.fap-skin-cassette .fap-pl-item.playing .fap-pl-num {
+    color: #ffd700 !important;
+    opacity: 1;
+}
+
+/* ============================================================ */
+/* 스킨 3: TERMINAL */
+/* ============================================================ */
+.fap.fap-skin-terminal {
+    background: #0c0c0c !important;
+    color: #00ff41 !important;
+    padding: 0 !important;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    font-family: 'Courier New', 'Consolas', monospace !important;
+    box-shadow: 0 10px 40px rgba(0,255,65,0.15);
+}
+.fap-skin-terminal .fap-skin-selector {
+    top: 5px; right: 12px; z-index: 20;
+}
+.fap-skin-terminal .fap-skin-btn {
+    background: rgba(0,0,0,0.5);
+    border-color: #30363d;
+    color: #00ff41;
+    font-family: inherit;
+}
+.fap-skin-terminal .fap-skin-menu {
+    background: #0c0c0c;
+    border-color: #30363d;
+    font-family: inherit;
+}
+.fap-skin-terminal .fap-skin-item { color: #c9d1d9; }
+.fap-skin-terminal .fap-skin-item:hover { background: #161b22; }
+.fap-skin-terminal .fap-skin-item.active { background: rgba(0,255,65,0.15); color: #00ff41; }
+/* 비주얼라이저 색상 아이템 (터미널 다크 배경 대응) */
+.fap-skin-terminal .fap-skin-section-title {
+    color: #8b949e;
+    border-top-color: #30363d;
+}
+.fap-skin-terminal .fap-vis-color-item { color: #c9d1d9; }
+.fap-skin-terminal .fap-vis-color-item:hover { background: #161b22; }
+.fap-skin-terminal .fap-vis-color-item.active { background: rgba(0,255,65,0.15); color: #00ff41; }
+.fap-skin-terminal .fap-vis-color-swatch { border-color: #30363d; }
+
+.fap-skin-terminal .fap-term-titlebar {
+    background: #161b22;
+    border-bottom: 1px solid #30363d;
+    padding: 8px 12px;
+    display: flex; gap: 6px; align-items: center;
+    font-size: 12px; color: #8b949e;
+    border-radius: 5px 5px 0 0;
+    order: -10;
+}
+.fap-skin-terminal .fap-term-dot {
+    width: 11px; height: 11px; border-radius: 50%;
+}
+.fap-skin-terminal .fap-term-dot.r { background: #ff5f56; }
+.fap-skin-terminal .fap-term-dot.y { background: #ffbd2e; }
+.fap-skin-terminal .fap-term-dot.g { background: #27c93f; }
+.fap-skin-terminal .fap-term-title { margin-left: 10px; color: #8b949e; font-size: 11px; }
+.fap-skin-terminal .fap-term-prompt {
+    padding: 8px 16px;
+    font-family: inherit;
+    color: #c9d1d9;
+    font-size: 13px;
+    border-top: 1px solid #30363d;
+}
+.fap-skin-terminal .fap-term-p { color: #58a6ff; margin-right: 8px; }
+.fap-skin-terminal .fap-term-cursor {
+    display: inline-block;
+    background: #00ff41;
+    width: 7px; height: 13px;
+    vertical-align: middle;
+    margin-left: 2px;
+    animation: fap-term-blink 1s step-end infinite;
+}
+@keyframes fap-term-blink { 50% { opacity: 0; } }
+
+.fap-skin-terminal .fap-now,
+.fap-skin-terminal .fap-visualizer,
+.fap-skin-terminal .fap-seek,
+.fap-skin-terminal .fap-controls,
+.fap-skin-terminal .fap-volume,
+.fap-skin-terminal .fap-playlist {
+    padding-left: 16px;
+    padding-right: 16px;
+}
+.fap-skin-terminal .fap-now-cover { display: none !important; }
+.fap-skin-terminal .fap-now-title {
+    color: #00ff41 !important;
+    font-family: inherit;
+    font-size: 14px !important;
+}
+.fap-skin-terminal .fap-now-title::before { content: "▶ "; color: #58a6ff; }
+.fap-skin-terminal .fap-now-meta {
+    color: #8b949e !important;
+    font-family: inherit;
+    font-size: 11px;
+}
+.fap-skin-terminal .fap-visualizer { filter: hue-rotate(75deg) saturate(1.5); }
+/* ★ Terminal 시간 표시: 형광초록 (스킨 색상에 맞춤 - 재생바와 동일) */
+.fap-skin-terminal .fap-time {
+    color: #00ff41 !important;
+    font-family: inherit;
+}
+.fap-skin-terminal .fap-seek-bar::before { background: #30363d !important; }
+.fap-skin-terminal .fap-seek-played { background: #00ff41 !important; }
+.fap-skin-terminal .fap-seek-loaded { background: #21262d !important; }
+.fap-skin-terminal .fap-seek-thumb { background: #00ff41 !important; }
+.fap-skin-terminal .fap-btn {
+    background: transparent !important;
+    border: 1px solid #30363d !important;
+    color: #00ff41 !important;
+    border-radius: 3px !important;
+    width: auto !important; height: auto !important;
+    padding: 6px 10px !important;
+}
+.fap-skin-terminal .fap-btn:hover { background: rgba(0,255,65,0.1) !important; border-color: #00ff41 !important; }
+/* ★ 셔플/반복 hover 색상/배경/보더 변화 X (active와 헷갈림 방지) */
+/*    기본 보더 (#30363d)는 유지, 형광초록으로 안 변하게 */
+.fap-skin-terminal .fap-btn-shuffle:hover,
+.fap-skin-terminal .fap-btn-loop:hover {
+    background: transparent !important;
+    border-color: #30363d !important;
+}
+.fap-skin-terminal .fap-btn-play {
+    background: rgba(0,255,65,0.15) !important;
+    border-color: #00ff41 !important;
+}
+/* ★ Terminal: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
+/*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
+.fap-skin-terminal .fap-btn-shuffle,
+.fap-skin-terminal .fap-btn-loop {
+    opacity: 0.5;
+}
+.fap-skin-terminal .fap-btn-shuffle.active,
+.fap-skin-terminal .fap-btn-loop.active {
+    color: #00ff41 !important;
+    opacity: 1;
+}
+.fap-skin-terminal .fap-vol-bar::before { background: #30363d !important; }
+.fap-skin-terminal .fap-vol-level { background: #00ff41 !important; }
+.fap-skin-terminal .fap-playlist-header {
+    color: #8b949e !important;
+    border-top: 1px solid #30363d;
+    padding-top: 12px !important;
+    margin-top: 10px;
+}
+.fap-skin-terminal .fap-playlist-title,
+.fap-skin-terminal .fap-playlist-count { color: #8b949e !important; }
+.fap-skin-terminal .fap-pl-item { color: #c9d1d9 !important; font-family: inherit; }
+.fap-skin-terminal .fap-pl-item:hover { background: #161b22 !important; }
+.fap-skin-terminal .fap-pl-item.playing {
+    background: rgba(0,255,65,0.1) !important; color: #00ff41 !important;
+}
+/* ★ 재생중 넘버링도 제목과 같은 색 (형광초록) */
+/*    재생중(playing)일 때만 강조 — 멈춤(active만)일 땐 일반색 */
+.fap-skin-terminal .fap-pl-item.playing .fap-pl-num {
+    color: #00ff41 !important;
+    opacity: 1;
+}
+
+/* ============================================================ */
+/* 스킨 4: PIXEL ART */
+/* ============================================================ */
+.fap.fap-skin-pixel {
+    background: #9bbc0f !important;
+    color: #0f380f !important;
+    padding: 16px !important;
+    border: 4px solid #0f380f;
+    font-family: 'Courier New', monospace !important;
+    box-shadow: 0 0 0 4px #9bbc0f, 8px 8px 0 #306230;
+    image-rendering: pixelated;
+}
+.fap-skin-pixel .fap-skin-btn {
+    background: #0f380f;
+    color: #9bbc0f;
+    border: 2px solid #0f380f;
+    border-radius: 0;
+    font-family: inherit;
+    font-weight: bold;
+}
+.fap-skin-pixel .fap-skin-menu {
+    background: #0f380f;
+    border: 2px solid #0f380f;
+    border-radius: 0;
+    font-family: inherit;
+}
+.fap-skin-pixel .fap-skin-item { color: #9bbc0f; font-weight: bold; text-transform: uppercase; }
+.fap-skin-pixel .fap-skin-item:hover { background: #306230; }
+.fap-skin-pixel .fap-skin-item.active { background: #9bbc0f; color: #0f380f; }
+/* 비주얼라이저 색상 아이템 (Game Boy 배경 대응) */
+.fap-skin-pixel .fap-skin-section-title {
+    color: #8bac0f;
+    border-top-color: #306230;
+    font-family: inherit;
+    font-weight: bold;
+}
+.fap-skin-pixel .fap-vis-color-item { color: #9bbc0f; font-weight: bold; text-transform: uppercase; }
+.fap-skin-pixel .fap-vis-color-item:hover { background: #306230; }
+.fap-skin-pixel .fap-vis-color-item.active { background: #9bbc0f; color: #0f380f; }
+.fap-skin-pixel .fap-vis-color-swatch { 
+    border-color: #0f380f;
+    border-radius: 0;
+    image-rendering: pixelated;
+}
+
+.fap-skin-pixel .fap-now-cover {
+    width: 100px !important; height: 100px !important;
+    border-radius: 0 !important;
+    background: #306230 !important;
+    border: 3px solid #0f380f !important;
+    image-rendering: pixelated;
+}
+.fap-skin-pixel .fap-now-cover img { image-rendering: pixelated; }
+.fap-skin-pixel .fap-now-title {
+    font-family: inherit;
+    text-transform: uppercase;
+    font-weight: bold;
+    color: #0f380f !important;
+    letter-spacing: 1px;
+}
+.fap-skin-pixel .fap-now-meta {
+    font-family: inherit;
+    color: #306230 !important;
+    text-transform: uppercase;
+    font-size: 11px;
+}
+.fap-skin-pixel .fap-visualizer { filter: hue-rotate(35deg) saturate(0.8) contrast(1.5); image-rendering: pixelated; }
+.fap-skin-pixel .fap-time { color: #0f380f !important; font-family: inherit; font-weight: bold; }
+.fap-skin-pixel .fap-seek-bar::before {
+    background: #0f380f !important;
+    height: 14px !important;
+    border-radius: 0 !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+}
+.fap-skin-pixel .fap-seek-played {
+    background: repeating-linear-gradient(90deg, #9bbc0f 0 6px, #0f380f 6px 7px) !important;
+    border-radius: 0 !important;
+    height: 10px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+}
+.fap-skin-pixel .fap-seek-thumb {
+    background: #9bbc0f !important;
+    border: 2px solid #0f380f;
+    border-radius: 0 !important;
+    width: 10px !important;
+    height: 14px !important;
+}
+.fap-skin-pixel .fap-btn {
+    background: #0f380f !important;
+    color: #9bbc0f !important;
+    border: 3px solid #0f380f !important;
+    border-radius: 0 !important;
+    font-weight: bold;
+    font-family: inherit;
+}
+.fap-skin-pixel .fap-btn:hover { background: #306230 !important; }
+/* ★ 셔플/반복 hover 배경 변화 X (active와 헷갈림 방지) — 원래 배경 유지 */
+.fap-skin-pixel .fap-btn-shuffle:hover,
+.fap-skin-pixel .fap-btn-loop:hover {
+    background: #0f380f !important;  /* 픽셀 기본 배경 유지 */
+}
+.fap-skin-pixel .fap-btn-play { background: #306230 !important; }
+/* ★ Pixel: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
+/*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
+.fap-skin-pixel .fap-btn-shuffle,
+.fap-skin-pixel .fap-btn-loop {
+    opacity: 0.5;
+}
+.fap-skin-pixel .fap-btn-shuffle.active,
+.fap-skin-pixel .fap-btn-loop.active {
+    color: #9bbc0f !important;
+    opacity: 1;
+}
+.fap-skin-pixel .fap-vol-bar::before { background: #0f380f !important; border-radius: 0 !important; }
+.fap-skin-pixel .fap-vol-level {
+    background: repeating-linear-gradient(90deg, #9bbc0f 0 4px, #0f380f 4px 5px) !important;
+    border-radius: 0 !important;
+}
+.fap-skin-pixel .fap-playlist-header { color: #0f380f !important; font-weight: bold; }
+.fap-skin-pixel .fap-playlist-title,
+.fap-skin-pixel .fap-playlist-count { color: #0f380f !important; font-family: inherit; text-transform: uppercase; }
+.fap-skin-pixel .fap-pl-item { color: #0f380f !important; font-family: inherit; border-bottom: 2px solid rgba(15,56,15,0.2); }
+.fap-skin-pixel .fap-pl-item:hover { background: rgba(15,56,15,0.1) !important; }
+.fap-skin-pixel .fap-pl-item.playing { background: #0f380f !important; color: #9bbc0f !important; }
+/* ★ 재생중 넘버링도 제목과 같은 색 (게임보이 연두) */
+/*    재생중(playing)일 때만 강조 — 멈춤(active만)일 땐 일반색 */
+.fap-skin-pixel .fap-pl-item.playing .fap-pl-num {
+    color: #9bbc0f !important;
+    opacity: 1;
+}
+
+
+/* ============================================================ */
+/* 스킨 6: APLAYER FIXED (이미지 1 기반) - 블랙핑크 스타일 */
+/* 좌측: 헤더 + 큰 앨범 커버 + 가사 + seek + 컨트롤 + 볼륨 */
+/* 우측: 플레이리스트 (각 트랙에 앨범 아트 포함) */
+/* ============================================================ */
+.fap.fap-skin-ap-fixed {
+    background: #fff !important;
+    color: #333 !important;
+    padding: 0 !important;
+    border-radius: 8px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+    overflow: hidden;
+    display: grid !important;
+    grid-template-columns: 340px 1fr;
+    /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 */
+    grid-template-rows: 340px auto auto auto auto !important;
+    gap: 0 !important;
+    min-height: 460px;
+    position: relative;
+}
+/* ★ iOS: 볼륨 영역 숨김 시 grid 마지막 행 제거 (좌측 column 빈 공간 방지) */
+.fap.fap-skin-ap-fixed.fap-ios {
+    grid-template-rows: 340px auto auto auto !important;
+    min-height: auto;
+}
+/* 스킨 선택기: 우측 상단에 고정, 플레이리스트 영역 위에 오버레이 */
+.fap-skin-ap-fixed .fap-skin-selector {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 30;
+}
+.fap-skin-ap-fixed .fap-skin-btn {
+    background: rgba(0,0,0,0.1);
+    border-color: rgba(0,0,0,0.15);
+    color: #666;
+    backdrop-filter: blur(6px);
+}
+.fap-skin-ap-fixed .fap-skin-btn:hover { background: rgba(0,0,0,0.2); color: #333; }
+.fap-skin-ap-fixed .fap-skin-menu {
+    background: #fff;
+    border-color: #ddd;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+}
+.fap-skin-ap-fixed .fap-skin-item { color: #333; }
+.fap-skin-ap-fixed .fap-skin-item:hover { background: #f5f5f5; }
+.fap-skin-ap-fixed .fap-skin-item.active { background: rgba(58,192,255,0.15); color: #3ac0ff; }
+/* 비주얼라이저 색상 아이템 (흰 배경 대응) */
+.fap-skin-ap-fixed .fap-skin-section-title {
+    color: rgba(0,0,0,0.5);
+    border-top-color: rgba(0,0,0,0.08);
+}
+.fap-skin-ap-fixed .fap-vis-color-item { color: #333; }
+.fap-skin-ap-fixed .fap-vis-color-item:hover { background: #f5f5f5; }
+.fap-skin-ap-fixed .fap-vis-color-item.active { background: rgba(58,192,255,0.15); color: #3ac0ff; }
+.fap-skin-ap-fixed .fap-vis-color-swatch { border-color: rgba(0,0,0,0.15); }
+
+/* 제목/아티스트 헤더 - 커버 위에 오버레이 (absolute) */
+.fap-skin-ap-fixed .fap-now {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 340px !important;
+    z-index: 10;
+    background: linear-gradient(180deg, rgba(40,20,25,0.85) 0%, rgba(40,20,25,0.7) 70%, rgba(40,20,25,0) 100%) !important;
+    color: #fff !important;
+    padding: 14px 16px 24px !important;
+    margin: 0 !important;
+    text-align: center;
+    display: flex !important;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    /* grid 배치 해제 */
+    grid-column: unset !important;
+    grid-row: unset !important;
+}
+/* fap-now 안의 작은 커버는 숨김 (아래에 큰 커버로 별도 표시) */
+.fap-skin-ap-fixed .fap-now-cover {
+    display: none !important;
+}
+.fap-skin-ap-fixed .fap-now-info {
+    color: #fff !important;
+    text-align: center;
+    width: 100%;
+}
+.fap-skin-ap-fixed .fap-now-title {
+    color: #fff !important;
+    font-size: 15px !important;
+    font-weight: 700;
+    margin-bottom: 3px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.fap-skin-ap-fixed .fap-now-meta {
+    color: rgba(255,255,255,0.75) !important;
+    font-size: 12px !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+}
+
+/* 1행: 큰 앨범 커버 (헤더 위에 오버레이로 제목 표시됨) */
+.fap-skin-ap-fixed .fap-visualizer {
+    /* 비주얼라이저는 ap-fixed에서 숨김 */
+    display: none !important;
+}
+.fap-skin-ap-fixed .fap-ap-cover-big {
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    height: 340px;
+    max-height: 340px;
+    overflow: hidden;
+    /* 기본 플레이어와 동일한 커버 배경 (옅은 보라톤) */
+    background: linear-gradient(135deg, rgba(124,110,246,0.25), rgba(124,110,246,0.08));
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+.fap-skin-ap-fixed .fap-ap-cover-big img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+/* 이미지 없을 때: 기본 플레이어의 🎵 아이콘 (큰 사이즈) */
+.fap-skin-ap-fixed .fap-ap-cover-icon {
+    font-size: 120px;
+    opacity: 0.5;
+    line-height: 1;
+}
+
+/* 3행: seek 바 - 가사 행 추가로 한 칸 밀림 */
+.fap-skin-ap-fixed .fap-seek {
+    grid-column: 1;
+    grid-row: 3;
+    padding: 2px 16px 4px !important;
+    background: #fff;
+    margin: 0 !important;
+}
+.fap-skin-ap-fixed .fap-time { color: #3ac0ff !important; font-size: 11px !important; }
+.fap-skin-ap-fixed .fap-seek-bar::before { background: #eee !important; height: 3px !important; }
+.fap-skin-ap-fixed .fap-seek-played { background: #3ac0ff !important; height: 3px !important; }
+.fap-skin-ap-fixed .fap-seek-loaded { background: #ddd !important; height: 3px !important; }
+.fap-skin-ap-fixed .fap-seek-thumb {
+    background: #3ac0ff !important;
+    width: 10px !important;
+    height: 10px !important;
+}
+
+/* 4행: 컨트롤 버튼들 (중앙 정렬) - 가사 행 추가로 한 칸 밀림 */
+.fap-skin-ap-fixed .fap-controls {
+    grid-column: 1;
+    grid-row: 4;
+    padding: 4px 16px !important;
+    background: #fff;
+    justify-content: center !important;
+    gap: 16px !important;
+}
+.fap-skin-ap-fixed .fap-btn {
+    color: #444 !important;
+    background: transparent !important;
+    width: 36px !important;
+    height: 36px !important;
+}
+.fap-skin-ap-fixed .fap-btn:hover { color: #3ac0ff !important; background: rgba(58,192,255,0.1) !important; }
+/* ★ 셔플/반복 hover 색상 변화 X (active와 헷갈림 방지) */
+.fap-skin-ap-fixed .fap-btn-shuffle:hover,
+.fap-skin-ap-fixed .fap-btn-loop:hover { color: #999 !important; background: transparent !important; }
+.fap-skin-ap-fixed .fap-btn-shuffle.active:hover,
+.fap-skin-ap-fixed .fap-btn-loop.active:hover { color: #3ac0ff !important; }
+/* ★ ap-fixed: 비활성은 중성 회색 (다른 스킨과 통일감) */
+.fap-skin-ap-fixed .fap-btn-shuffle,
+.fap-skin-ap-fixed .fap-btn-loop {
+    color: #999 !important;
+}
+/* ★ ap-fixed active: 스카이블루 (재생바와 동일) */
+.fap-skin-ap-fixed .fap-btn-shuffle.active,
+.fap-skin-ap-fixed .fap-btn-loop.active {
+    color: #3ac0ff !important;
+}
+.fap-skin-ap-fixed .fap-btn-play {
+    background: transparent !important;
+    color: #3ac0ff !important;
+    width: 48px !important;
+    height: 48px !important;
+    border: 1.5px solid #3ac0ff !important;
+}
+.fap-skin-ap-fixed .fap-btn-play:hover {
+    background: rgba(58,192,255,0.1) !important;
+}
+
+/* 5행: 볼륨 - 가사 행 추가로 한 칸 밀림 */
+.fap-skin-ap-fixed .fap-volume {
+    grid-column: 1;
+    grid-row: 5;
+    padding: 4px 16px 8px !important;
+    background: #fff;
+}
+.fap-skin-ap-fixed .fap-btn-vol { color: #3ac0ff !important; }
+.fap-skin-ap-fixed .fap-vol-bar::before { background: #eee !important; }
+.fap-skin-ap-fixed .fap-vol-level { background: #3ac0ff !important; }
+.fap-skin-ap-fixed .fap-vol-thumb { background: #3ac0ff !important; }
+
+/* 우측: 플레이리스트 (전 행에 걸쳐) */
+.fap-skin-ap-fixed .fap-playlist {
+    grid-column: 2;
+    grid-row: 1 / -1;
+    background: #fff;
+    border-left: 1px solid #eee;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
+}
+.fap-skin-ap-fixed .fap-playlist-header {
+    background: #fafafa;
+    border-bottom: 1px solid #eee;
+    padding: 14px 16px !important;
+    position: sticky; top: 0; z-index: 5;
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+}
+.fap-skin-ap-fixed .fap-playlist-title,
+.fap-skin-ap-fixed .fap-playlist-count { color: #666 !important; font-size: 14px !important; }
+.fap-skin-ap-fixed .fap-playlist-list {
+    flex: 1;
+    overflow-y: auto;
+    position: relative;
+}
+
+/* 플레이리스트 아이템: 앨범 아트 + 제목 (이미지 1처럼) */
+.fap-skin-ap-fixed .fap-pl-item {
+    padding: 10px 16px !important;
+    color: #333 !important;
+    border-bottom: 1px solid #f0f0f0 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+    height: 60px !important;
+}
+.fap-skin-ap-fixed .fap-pl-item:hover { background: #f5f5f5 !important; }
+.fap-skin-ap-fixed .fap-pl-item.active,
+.fap-skin-ap-fixed .fap-pl-item.playing {
+    background: #eeeeee !important;
+    color: #333 !important;
+}
+/* 재생 중일 때 제목 + 넘버링을 스카이블루 포인트 컬러로 (재생바와 동일) */
+/*    재생중(playing)일 때만 강조 — 멈춤(active만)일 땐 일반색 */
+.fap-skin-ap-fixed .fap-pl-item.playing .fap-pl-name,
+.fap-skin-ap-fixed .fap-pl-item.playing .fap-pl-num {
+    color: #3ac0ff !important;
+    font-weight: 500 !important;
+}
+/* ap-fixed 스킨에서는 재생 중 앨범아트에 ♪ 오버레이 덮지 않음 (깔끔한 디자인 유지) */
+.fap-skin-ap-fixed .fap-pl-item.playing .fap-pl-cover::after {
+    display: none !important;
+}
+/* 각 아이템의 커버 아트를 명확히 표시 */
+.fap-skin-ap-fixed .fap-pl-cover {
+    width: 40px !important;
+    height: 40px !important;
+    border-radius: 3px !important;
+    flex-shrink: 0 !important;
+    overflow: hidden !important;
+    background: linear-gradient(135deg, #ffb3c6, #ff6b9d) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    color: #fff !important;
+    font-size: 18px !important;
+}
+.fap-skin-ap-fixed .fap-pl-cover img {
+    width: 100%; height: 100%; object-fit: cover;
+}
+.fap-skin-ap-fixed .fap-pl-name {
+    flex: 1 !important;
+    color: #333 !important;
+    font-size: 14px !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    min-width: 0 !important;
+}
+.fap-skin-ap-fixed .fap-pl-dur {
+    color: #999 !important;
+    font-size: 12px !important;
+    flex-shrink: 0 !important;
+}
+/* ★ ap-fixed: 재생중 dur 색상도 스카이블루 (제목과 동일) */
+/*    재생중(playing)일 때만 강조 — 멈춤(active만)일 땐 일반색 */
+.fap-skin-ap-fixed .fap-pl-item.playing .fap-pl-dur {
+    color: #3ac0ff !important;
+    opacity: 1;
+}
+
+/* 반응형: 좁은 화면에서는 위아래로 스택 */
+@media (max-width: 768px) {
+    .fap.fap-skin-ap-fixed {
+        grid-template-columns: 1fr;
+        /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 / Row 6: 플레이리스트 */
+        grid-template-rows: 240px auto auto auto auto auto !important;
+        min-height: auto;
+    }
+    .fap-skin-ap-fixed .fap-now {
+        /* 모바일에서도 커버 위에 오버레이 */
+        width: 100% !important;
+    }
+    .fap-skin-ap-fixed .fap-ap-cover-big { grid-column: 1; grid-row: 1; height: 240px !important; max-height: 240px; }
+    .fap-skin-ap-fixed .fap-lyrics-wrap { grid-column: 1; grid-row: 2; }
+    .fap-skin-ap-fixed .fap-seek { grid-column: 1; grid-row: 3; }
+    .fap-skin-ap-fixed .fap-controls { grid-column: 1; grid-row: 4; }
+    .fap-skin-ap-fixed .fap-volume { grid-column: 1; grid-row: 5; }
+    .fap-skin-ap-fixed .fap-playlist {
+        grid-column: 1; grid-row: 6;
+        border-left: none;
+        border-top: 1px solid #eee;
+        max-height: 300px;
+    }
+    /* ★ iOS: 볼륨 영역 숨김 시 playlist를 row 5 자리로 이동 (빈 공간 방지) */
+    .fap.fap-skin-ap-fixed.fap-ios {
+        grid-template-rows: 240px auto auto auto auto !important;
+    }
+    .fap.fap-skin-ap-fixed.fap-ios .fap-playlist {
+        grid-row: 5;
+    }
+}
+
+
+
+/* ========== 모바일 (max-width: 768px) ========== */
+@media (max-width: 768px) {
+    /* 오디오 미리보기 */
+    .preview-audio-wrap {
+        min-width: 0 !important;
+        width: 100% !important;
+        padding: 0 !important;
+        min-height: auto !important;
+        height: 100% !important;
+    }
+    #fs-audio-player { max-width: 100% !important; height: 100% !important; }
+    .fap { padding: 40px 14px 12px; }  /* 스킨 버튼 공간 확보를 위해 상단 패딩 증가 */
+    .fap-controls { gap: 4px; }
+    .fap-vol-bar { max-width: 80px; }
+    
+    /* 모바일에서 스킨 선택기 버튼 - z-index 상향 + 상단 위치 조정 */
+    .fap-skin-selector {
+        top: 6px !important;
+        right: 8px !important;
+        z-index: 100 !important;  /* 제목/커버 위에 확실히 표시되도록 */
+    }
+    .fap-skin-btn {
+        padding: 4px 8px !important;
+        font-size: 10px !important;
+    }
+    .fap-skin-menu {
+        min-width: 140px !important;
+        max-height: 60vh !important;  /* 색상 7개 추가로 메뉴가 길어지므로 스크롤 처리 */
+        overflow-y: auto !important;
+        font-size: 11px !important;
+    }
+    .fap-skin-item {
+        padding: 7px 12px !important;
+        font-size: 11px !important;
+    }
+    /* 모바일: 비주얼라이저 색상 섹션 */
+    .fap-skin-section-title {
+        padding: 6px 12px 3px !important;
+        font-size: 9px !important;
+    }
+    .fap-vis-color-item {
+        padding: 6px 12px !important;
+        font-size: 11px !important;
+        gap: 8px !important;
+    }
+    .fap-vis-color-swatch {
+        width: 22px !important;
+        height: 10px !important;
+    }
+}
+
+/* ========== 가사 영역 (LRC + USLT + TXT) — 한 줄 가사 ========== */
+/* 한 줄 가사 디자인:
+ *  - 활성 라인 1줄만 표시 (공간 차지 최소)
+ *  - 비활성 라인은 모두 숨김
+ *  - 페이드 트랜지션 (활성 라인 변경 시 부드럽게)
+ *  - 스킨별 색상 자동 적응
+ */
+.fap-lyrics-wrap {
+    width: 100%;
+    max-width: 600px;
+    margin: 8px auto 4px;
+    box-sizing: border-box;
+    padding: 0 12px;
+}
+.fap-lyrics-scroll {
+    /* 가사 박스 (synced/static 동일 높이) */
+    height: 84px;
+    overflow: hidden;  /* synced=true는 스크롤 없음 */
+    padding: 4px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+}
+/* synced=false (USLT/TXT plain)에서는 스크롤 가능 */
+.fap-lyrics-wrap.fap-lyrics-static .fap-lyrics-scroll {
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: block;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.2) transparent;
+}
+.fap-lyrics-wrap.fap-lyrics-static .fap-lyrics-scroll::-webkit-scrollbar {
+    width: 4px;
+}
+.fap-lyrics-wrap.fap-lyrics-static .fap-lyrics-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+}
+.fap-lyrics-content {
+    width: 100%;
+    text-align: center;
+    user-select: text;
+}
+
+/* ── synced=true (LRC/SYLT/TXT synced): 3줄 고정 (이전/현재/다음) ── */
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line {
+    display: none;
+    transition: opacity 0.4s ease, color 0.3s ease;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+    line-height: 1.5;
+}
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active,
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    display: block;
+}
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.4);
+    font-weight: 400;
+    padding: 1px 0;
+}
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    padding: 3px 0;
+    animation: fapLyricsAppear 0.4s ease;
+}
+@keyframes fapLyricsAppear {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── synced=false (USLT/TXT plain): 모든 라인 표시 + 스크롤 ── */
+.fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 1px 0;
+    line-height: 1.6;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+}
+.fap-lyrics-content[data-synced="false"] .fap-lyrics-line.fap-lyrics-empty {
+    min-height: 6px;
+    line-height: 1;
+}
+
+/* 모바일 */
+@media (max-width: 768px) {
+    .fap-lyrics-wrap { padding: 0 8px; margin: 6px auto 2px; }
+    .fap-lyrics-scroll { height: 72px; }
+    .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+    .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+        font-size: 11px;
+    }
+    .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+        font-size: 14px;
+    }
+    .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+        font-size: 12px;
+        line-height: 1.5;
+    }
+}
+
+/* ====== 스킨별 가사 색상 ====== */
+/* SoundCloud (흰 배경, 검정 텍스트) */
+.fap-skin-soundcloud .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-soundcloud .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(51, 51, 51, 0.4);
+}
+.fap-skin-soundcloud .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #ff5500;
+    font-weight: 700;
+}
+.fap-skin-soundcloud .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #333;
+}
+
+/* Cassette (빨강 배경, 금색 텍스트) */
+.fap-skin-cassette .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-cassette .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(255, 215, 0, 0.4);
+}
+.fap-skin-cassette .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #f4d03f;
+    font-weight: 700;
+    text-shadow: 0 0 10px rgba(244, 208, 63, 0.5);
+}
+.fap-skin-cassette .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #ffd700;
+}
+
+/* Pixel (게임보이 연두 배경) */
+.fap-skin-pixel .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-pixel .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(15, 56, 15, 0.4);
+    font-family: 'Courier New', monospace;
+}
+.fap-skin-pixel .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #0f380f;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 1px;
+}
+.fap-skin-pixel .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #0f380f;
+    font-family: 'Courier New', monospace;
+}
+
+/* Terminal (검정 + 녹색) */
+.fap-skin-terminal .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-terminal .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(0, 255, 0, 0.35);
+    font-family: 'Courier New', monospace;
+}
+.fap-skin-terminal .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #0f0;
+    font-family: 'Courier New', monospace;
+    text-shadow: 0 0 8px rgba(0, 255, 65, 0.6);
+}
+.fap-skin-terminal .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #0f0;
+    font-family: 'Courier New', monospace;
+}
+
+/* APlayer Fixed (흰 배경) — 가사 위치: 시킹바 위 (Row 2), 굵은 회색 */
+.fap-skin-ap-fixed .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-ap-fixed .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(85, 85, 85, 0.4);
+    font-weight: 500;
+}
+.fap-skin-ap-fixed .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #555;
+    font-weight: 700;
+}
+.fap-skin-ap-fixed .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #555;
+    font-weight: 700;
+}
+/* AP-fixed에서 가사 영역 위치: 시킹바 위 (Row 2) */
+.fap-skin-ap-fixed .fap-lyrics-wrap {
+    grid-column: 1;
+    grid-row: 2;
+    margin: 0 !important;
+    padding: 2px 16px 2px !important;
+    background: #fff;
+}
+

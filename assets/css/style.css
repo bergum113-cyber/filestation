@@ -5055,6 +5055,29 @@ video::cue {
     position: relative;
     contain: layout;
     will-change: scroll-position;
+    /* 스크롤바: 작게 + 안 보이게 (호버 시만 살짝) */
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+.fap-playlist-list:hover {
+    scrollbar-color: rgba(255,255,255,0.2) transparent;
+}
+.fap-playlist-list::-webkit-scrollbar {
+    width: 4px;
+}
+.fap-playlist-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+.fap-playlist-list::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 2px;
+    transition: background 0.2s;
+}
+.fap-playlist-list:hover::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.2);
+}
+.fap-playlist-list:hover::-webkit-scrollbar-thumb:hover {
+    background: rgba(255,255,255,0.3);
 }
 .fap-pl-virtual-spacer {
     pointer-events: none;
@@ -5739,14 +5762,15 @@ video::cue {
     overflow: hidden;
     display: grid !important;
     grid-template-columns: 340px 1fr;
-    grid-template-rows: 340px auto auto auto !important;
+    /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 */
+    grid-template-rows: 340px auto auto auto auto !important;
     gap: 0 !important;
     min-height: 460px;
     position: relative;
 }
-/* ★ iOS: 볼륨 영역 숨김 시 grid 4번째 행 제거 (좌측 column 빈 공간 방지) */
+/* ★ iOS: 볼륨 영역 숨김 시 grid 마지막 행 제거 (좌측 column 빈 공간 방지) */
 .fap.fap-skin-ap-fixed.fap-ios {
-    grid-template-rows: 340px auto auto !important;
+    grid-template-rows: 340px auto auto auto !important;
     min-height: auto;
 }
 /* 스킨 선택기: 우측 상단에 고정, 플레이리스트 영역 위에 오버레이 */
@@ -5865,8 +5889,8 @@ video::cue {
 /* 2행: seek 바 */
 .fap-skin-ap-fixed .fap-seek {
     grid-column: 1;
-    grid-row: 2;
-    padding: 4px 16px 8px !important;
+    grid-row: 3;  /* 가사 행(2) 추가로 한 칸 밀림 */
+    padding: 2px 16px 4px !important;
     background: #fff;
     margin: 0 !important;
 }
@@ -5880,11 +5904,11 @@ video::cue {
     height: 10px !important;
 }
 
-/* 3행: 컨트롤 버튼들 (중앙 정렬) */
+/* 4행: 컨트롤 버튼들 (중앙 정렬) - 가사 행 추가로 한 칸 밀림 */
 .fap-skin-ap-fixed .fap-controls {
     grid-column: 1;
-    grid-row: 3;
-    padding: 10px 16px !important;
+    grid-row: 4;
+    padding: 4px 16px !important;
     background: #fff;
     justify-content: center !important;
     gap: 16px !important;
@@ -5922,11 +5946,11 @@ video::cue {
     background: rgba(58,192,255,0.1) !important;
 }
 
-/* 4행: 볼륨 */
+/* 5행: 볼륨 - 가사 행 추가로 한 칸 밀림 */
 .fap-skin-ap-fixed .fap-volume {
     grid-column: 1;
-    grid-row: 4;
-    padding: 8px 16px 16px !important;
+    grid-row: 5;
+    padding: 4px 16px 8px !important;
     background: #fff;
 }
 .fap-skin-ap-fixed .fap-btn-vol { color: #3ac0ff !important; }
@@ -6031,7 +6055,8 @@ video::cue {
 @media (max-width: 768px) {
     .fap.fap-skin-ap-fixed {
         grid-template-columns: 1fr;
-        grid-template-rows: 240px auto auto auto auto !important;
+        /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 / Row 6: 플레이리스트 */
+        grid-template-rows: 240px auto auto auto auto auto !important;
         min-height: auto;
     }
     .fap-skin-ap-fixed .fap-now {
@@ -6039,21 +6064,22 @@ video::cue {
         width: 100% !important;
     }
     .fap-skin-ap-fixed .fap-ap-cover-big { grid-column: 1; grid-row: 1; height: 240px !important; max-height: 240px; }
-    .fap-skin-ap-fixed .fap-seek { grid-column: 1; grid-row: 2; }
-    .fap-skin-ap-fixed .fap-controls { grid-column: 1; grid-row: 3; }
-    .fap-skin-ap-fixed .fap-volume { grid-column: 1; grid-row: 4; }
+    .fap-skin-ap-fixed .fap-lyrics-wrap { grid-column: 1; grid-row: 2; }
+    .fap-skin-ap-fixed .fap-seek { grid-column: 1; grid-row: 3; }
+    .fap-skin-ap-fixed .fap-controls { grid-column: 1; grid-row: 4; }
+    .fap-skin-ap-fixed .fap-volume { grid-column: 1; grid-row: 5; }
     .fap-skin-ap-fixed .fap-playlist {
-        grid-column: 1; grid-row: 5;
+        grid-column: 1; grid-row: 6;
         border-left: none;
         border-top: 1px solid #eee;
         max-height: 300px;
     }
-    /* ★ iOS: 볼륨 영역 숨김 시 playlist를 row 4 자리로 이동 (빈 공간 방지) */
+    /* ★ iOS: 볼륨 영역 숨김 시 playlist를 row 5 자리로 이동 (빈 공간 방지) */
     .fap.fap-skin-ap-fixed.fap-ios {
-        grid-template-rows: 240px auto auto auto !important;
+        grid-template-rows: 240px auto auto auto auto !important;
     }
     .fap.fap-skin-ap-fixed.fap-ios .fap-playlist {
-        grid-row: 4;
+        grid-row: 5;
     }
 }
 
@@ -6099,9 +6125,9 @@ video::cue {
     font-family: 'Consolas', 'Monaco', monospace;
     font-size: 13px;
     line-height: 1.5;
-    overflow: visible;
+    overflow: auto;
     width: 100%;
-    min-height: 100%;
+    height: 100%;
     box-sizing: border-box;
     white-space: pre-wrap;
     word-wrap: break-word;
@@ -9676,9 +9702,12 @@ tr:hover,
     }
 }
 
-/* 저사양 기기 감지 */
+/* 저사양 기기 감지 — 사용자 의도된 마퀴는 예외 처리 (펜닐님 결정)
+   사용자 OS/브라우저 "동작 줄이기" 설정 시에도 마퀴는 의도된 기능이므로 작동해야 함
+   접근성 보호 의도는 유지하되 (transition은 차단), 마퀴 animation만 허용
+   :not()으로 마퀴 관련 셀렉터 제외 */
 @media (prefers-reduced-motion: reduce) {
-    * {
+    *:not(.fap-marquee-inner):not(.fap-pl-text):not(.fs-vp-name-inner):not(.pl-name-inner) {
         transition: none !important;
         animation: none !important;
     }
@@ -10217,6 +10246,37 @@ tr:hover,
         pointer-events: auto;
     }
     .video-player-wrap.playing:not(.show-controls):hover .video-play-overlay { opacity: 0 !important; }
+
+    /* ★ 모바일: fs-vp-toggle 버튼 + 패널 — 터치(show-controls) 시만 표시 */
+    .video-player-wrap.playing .fs-vp-toggle {
+        opacity: 0 !important;
+        pointer-events: none;
+        transition: opacity 0.3s;
+    }
+    .video-player-wrap.playing.show-controls .fs-vp-toggle {
+        opacity: 1 !important;
+        pointer-events: auto;
+    }
+    .video-player-wrap.playing:not(.show-controls):hover .fs-vp-toggle { opacity: 0 !important; pointer-events: none; }
+    /* 패널: 모바일은 hover 무효 + show-controls 시만 표시 (height 0 처리로 영상 폭/높이 확보) */
+    .fs-vp-flex:has(.video-player-wrap.playing) .fs-vp-panel.open {
+        opacity: 0 !important;
+        pointer-events: none;
+        max-height: 0 !important;
+        margin-top: 0 !important;
+        overflow: hidden;
+        transition: opacity 0.3s, max-height 0.25s ease;
+    }
+    .fs-vp-flex:has(.video-player-wrap.playing.show-controls) .fs-vp-panel.open {
+        opacity: 1 !important;
+        pointer-events: auto;
+        max-height: 35vh !important;
+    }
+    .fs-vp-flex:has(.video-player-wrap.playing:not(.show-controls)):hover .fs-vp-panel.open {
+        opacity: 0 !important;
+        pointer-events: none;
+        max-height: 0 !important;
+    }
     
     /* 모바일: 자막 오버레이 컨트롤바 겹침 방지 */
     .subtitle-overlay {
@@ -10287,7 +10347,7 @@ tr:hover,
     .preview-code {
         min-width: 0 !important;
         width: 100% !important;
-        min-height: auto !important;
+        height: 100% !important;
         font-size: 12px !important;
         padding: 15px !important;
     }
@@ -14793,5 +14853,434 @@ body.video-pseudo-fs {
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
+    }
+}
+
+/* ============================================================================
+ * 🏠 [메인 MP3 플레이어 CSS] 가사 영역 (LRC + USLT + TXT) — 한 줄 가사
+ * ============================================================================
+ * 
+ * ⚠️ 주의: 이 CSS는 *메인 페이지(index.php) 전용*입니다.
+ * 
+ * - 사용처: 메인 페이지 미리보기 모달 (assets/js/app.js의 FSAudioPlayer)
+ * - 짝 파일: assets/css/fs-audio-player.css (공유 페이지 share.php 전용)
+ * - 두 곳 모두 같은 클래스명(.fap-lyrics-*)이지만 ★독립★ 입니다.
+ *   하나 수정하면 다른 쪽도 수정해야 일관성 유지됩니다.
+ * 
+ * ⚠️ 이 부분을 수정하면 *메인 미리보기*만 영향받습니다.
+ *    공유 스트리밍 가사 CSS는 → assets/css/fs-audio-player.css
+ * ============================================================================
+ * 한 줄 가사 디자인:
+ *  - 활성 라인 1줄만 표시 (공간 차지 최소)
+ *  - 비활성 라인은 모두 숨김 (.fap-lyrics-line:not(.fap-lyrics-active) { display:none })
+ *  - 페이드 트랜지션 (활성 라인 변경 시 부드럽게)
+ *  - 스킨별 색상 자동 적응
+ * ============================================================================
+ */
+.fap-lyrics-wrap {
+    width: 100%;
+    max-width: 600px;
+    margin: 8px auto 4px;
+    box-sizing: border-box;
+    padding: 0 12px;
+}
+.fap-lyrics-scroll {
+    /* 가사 박스 (synced/static 동일 높이) */
+    height: 84px;
+    overflow: hidden;  /* synced=true는 스크롤 없음 */
+    padding: 4px 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+}
+/* synced=false (USLT/TXT plain)에서는 스크롤 가능 */
+.fap-lyrics-content[data-synced="false"] {
+    /* 부모(lyrics-scroll)의 overflow 변경: 자식 selector로 부모 영향 (CSS만) — 
+       대신 wrap에 fap-lyrics-static 클래스가 붙으니 그것 사용 */
+}
+.fap-lyrics-wrap.fap-lyrics-static .fap-lyrics-scroll {
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: block;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.2) transparent;
+}
+.fap-lyrics-wrap.fap-lyrics-static .fap-lyrics-scroll::-webkit-scrollbar {
+    width: 4px;
+}
+.fap-lyrics-wrap.fap-lyrics-static .fap-lyrics-scroll::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+}
+.fap-lyrics-content {
+    width: 100%;
+    text-align: center;
+    user-select: text;
+}
+
+/* ── synced=true (LRC/SYLT/TXT synced): 3줄 고정 (이전/현재/다음) ── */
+/* 기본: 모든 라인 숨김 */
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line {
+    display: none;
+    transition: opacity 0.4s ease, color 0.3s ease;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+    line-height: 1.5;
+}
+/* 이전/현재/다음 라인만 표시 */
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active,
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    display: block;
+}
+/* 이전/다음 라인: 작게 + 흐릿 */
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.4);
+    font-weight: 400;
+    padding: 1px 0;
+}
+/* 현재 라인: 살짝 크게 + 진하게 (잘 보이게) */
+.fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    padding: 3px 0;
+    animation: fapLyricsAppear 0.4s ease;
+}
+@keyframes fapLyricsAppear {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── synced=false (USLT/TXT plain): 모든 라인 표시 + 스크롤 ── */
+.fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    display: block;
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.85);
+    padding: 1px 0;
+    line-height: 1.6;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+}
+.fap-lyrics-content[data-synced="false"] .fap-lyrics-line.fap-lyrics-empty {
+    min-height: 6px;
+    line-height: 1;
+}
+
+/* 모바일 */
+@media (max-width: 768px) {
+    .fap-lyrics-wrap { padding: 0 8px; margin: 6px auto 2px; }
+    .fap-lyrics-scroll { height: 72px; }  /* 모바일은 약간 작게 */
+    .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+    .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+        font-size: 11px;
+    }
+    .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+        font-size: 14px;
+    }
+    .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+        font-size: 12px;
+        line-height: 1.5;
+    }
+}
+
+/* ====== 스킨별 가사 색상 ====== */
+/* SoundCloud (흰 배경, 검정 텍스트) */
+.fap-skin-soundcloud .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-soundcloud .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(51, 51, 51, 0.4);  /* 흐릿 회색 */
+}
+.fap-skin-soundcloud .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #ff5500;
+    font-weight: 700;
+}
+.fap-skin-soundcloud .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #333;
+}
+
+/* Cassette (빨강 배경, 금색 텍스트) */
+.fap-skin-cassette .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-cassette .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(255, 215, 0, 0.4);  /* 흐릿 금색 */
+}
+.fap-skin-cassette .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #f4d03f;
+    font-weight: 700;
+    text-shadow: 0 0 10px rgba(244, 208, 63, 0.5);
+}
+.fap-skin-cassette .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #ffd700;
+}
+
+/* Pixel (게임보이 연두 배경) */
+.fap-skin-pixel .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-pixel .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(15, 56, 15, 0.4);
+    font-family: 'Courier New', monospace;
+}
+.fap-skin-pixel .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #0f380f;
+    font-weight: 700;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 1px;
+}
+.fap-skin-pixel .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #0f380f;
+    font-family: 'Courier New', monospace;
+}
+
+/* Terminal (검정 + 녹색) */
+.fap-skin-terminal .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-terminal .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(0, 255, 0, 0.35);
+    font-family: 'Courier New', monospace;
+}
+.fap-skin-terminal .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #0f0;
+    font-family: 'Courier New', monospace;
+    text-shadow: 0 0 8px rgba(0, 255, 65, 0.6);
+}
+.fap-skin-terminal .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #0f0;
+    font-family: 'Courier New', monospace;
+}
+
+/* APlayer Fixed (흰 배경) — 가사 위치: 시킹바 위 (Row 2), 굵은 회색 */
+.fap-skin-ap-fixed .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-prev,
+.fap-skin-ap-fixed .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-next {
+    color: rgba(85, 85, 85, 0.4);
+    font-weight: 500;
+}
+.fap-skin-ap-fixed .fap-lyrics-content[data-synced="true"] .fap-lyrics-line.fap-lyrics-active {
+    color: #555;
+    font-weight: 700;
+}
+.fap-skin-ap-fixed .fap-lyrics-content[data-synced="false"] .fap-lyrics-line {
+    color: #555;
+    font-weight: 700;
+}
+/* AP-fixed에서 가사 영역 위치: 시킹바 위 (Row 2) */
+.fap-skin-ap-fixed .fap-lyrics-wrap {
+    grid-column: 1;
+    grid-row: 2;
+    margin: 0 !important;
+    padding: 2px 16px 2px !important;
+    background: #fff;
+}
+
+/* ============================================================
+   메인 인덱스 동영상 미리보기 사이드 플레이리스트 패널
+   (share.php의 .share-playlist-panel 패턴을 메인용으로 포팅)
+   prefix: fs-vp- (FileStation Video Playlist)
+   펜닐님 결정 옵션 A: flex 방식 (영상 폭 자동 조정, 조금 흔들림 허용)
+   ============================================================ */
+
+/* flex wrapper — 영상 + 패널을 가로로 배치 */
+.fs-vp-flex {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    box-sizing: border-box;
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.fs-vp-flex .video-player-wrap {
+    flex: 1 1 auto;
+    min-width: 0;
+    position: relative;
+}
+
+.fs-vp-panel {
+    flex: 0 0 320px;
+    width: 320px;
+    background: #1e1e2e;
+    border-radius: 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    color: #ddd;
+    text-align: left;
+    opacity: 0;
+    transition: opacity 0.2s ease, flex-basis 0.25s ease, width 0.25s ease, margin 0.25s ease;
+    align-self: stretch;
+    max-height: 100%;
+}
+.fs-vp-panel.open {
+    display: flex;
+    opacity: 1;
+}
+.fs-vp-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+.fs-vp-header .fs-vp-icon { font-size: 20px; }
+.fs-vp-header .fs-vp-title { color: #fff; font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-vp-header .fs-vp-count { color: #888; font-size: 12px; flex-shrink: 0; }
+.fs-vp-header .fs-vp-close {
+    background: none;
+    border: none;
+    color: #aaa;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+.fs-vp-header .fs-vp-close:hover { color: #fff; }
+.fs-vp-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 6px 0;
+}
+.fs-vp-body::-webkit-scrollbar { width: 8px; }
+.fs-vp-body::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+.fs-vp-body::-webkit-scrollbar-track { background: transparent; }
+.fs-vp-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    color: #ccc;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s;
+    border-left: 3px solid transparent;
+    user-select: none;
+}
+.fs-vp-item:hover { background: rgba(255,255,255,0.06); }
+.fs-vp-item.current {
+    background: rgba(102,126,234,0.15);
+    border-left-color: #667eea;
+    color: #fff;
+}
+.fs-vp-item .fs-vp-num { color: #888; font-size: 11px; font-family: monospace; min-width: 26px; text-align: right; flex-shrink: 0; }
+.fs-vp-item.current .fs-vp-num { color: #667eea; font-weight: 600; }
+.fs-vp-item .fs-vp-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; position: relative; }
+.fs-vp-item .fs-vp-name-inner {
+    display: inline-block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+}
+/* ★ 마퀴: current 트랙 + is-overflow 시 작동 (이전 정상 패턴 복원)
+   - 평소: ellipsis 정상 작동
+   - is-overflow 추가 시: padding-left:100%로 오른쪽에서 시작 → 왼쪽으로 흐름 */
+.fs-vp-item.current .fs-vp-name-inner.is-overflow {
+    max-width: none;
+    overflow: visible;
+    text-overflow: clip;
+    padding-left: 100%;
+    animation: fs-vp-marquee 12s linear infinite;
+}
+.fs-vp-item.current:hover .fs-vp-name-inner.is-overflow {
+    animation-play-state: paused;
+}
+@keyframes fs-vp-marquee {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-100%); }
+}
+.fs-vp-item .fs-vp-meta { color: #666; font-size: 10px; flex-shrink: 0; }
+.fs-vp-item .fs-vp-play-icon { color: #888; font-size: 12px; flex-shrink: 0; }
+.fs-vp-item.current .fs-vp-play-icon { color: #667eea; }
+
+/* 목록 토글 버튼 (video-player-wrap 우상단 오버레이) */
+.fs-vp-toggle {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 12;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: rgba(0,0,0,0.55);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: #fff;
+    padding: 5px 11px;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+    backdrop-filter: blur(4px);
+}
+.fs-vp-toggle:hover { background: rgba(102,126,234,0.7); border-color: rgba(102,126,234,0.9); }
+.fs-vp-toggle.active { background: #667eea; border-color: #667eea; }
+
+/* ★ 재생 중: 토글 버튼 + 패널 둘 다 숨김 / hover 시 다시 표시
+   (배지 패턴과 동일 — .video-player-wrap.playing 클래스 기준)
+   토글 버튼은 wrap 자식, 패널은 wrap 형제(fs-vp-flex 자식)이므로 셀렉터 분리 */
+.video-player-wrap.playing .fs-vp-toggle {
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+.video-player-wrap.playing:hover .fs-vp-toggle {
+    opacity: 1;
+}
+/* 패널: fs-vp-flex 안 video-player-wrap이 재생 중일 때 숨김 + 폭 0 (영상 폭 100% 사용)
+   펜닐님 결정: opacity만으로는 패널 공간 차지 → 영상이 안 커짐
+   → flex-basis/width를 0으로 만들어 영상이 늘어나도록 */
+.fs-vp-flex:has(.video-player-wrap.playing) .fs-vp-panel.open {
+    opacity: 0;
+    pointer-events: none;
+    flex-basis: 0;
+    width: 0;
+    margin-left: 0;
+    overflow: hidden;
+}
+/* hover 시 패널 다시 폭 320px + opacity 1 (영상이 줄어듦) */
+.fs-vp-flex:has(.video-player-wrap.playing):hover .fs-vp-panel.open {
+    opacity: 1;
+    pointer-events: auto;
+    flex-basis: 320px;
+    width: 320px;
+    margin-left: 0;
+}
+/* video-player-wrap: 재생 중 폭 변경 시 부드러운 transition */
+.fs-vp-flex .video-player-wrap {
+    transition: flex-basis 0.25s ease;
+}
+/* 전체화면 idle 시: 토글 버튼도 같이 숨김 (배지와 동일 패턴) */
+:fullscreen .video-player-wrap.fs-idle .fs-vp-toggle,
+.video-player-wrap.fs-idle:fullscreen .fs-vp-toggle {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* 모바일: 1024px 이하 — flex column으로 전환 (영상 위, 패널 아래) */
+@media (max-width: 1024px) {
+    .fs-vp-flex {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    .fs-vp-panel {
+        flex: 0 0 auto;
+        width: 100%;
+        max-width: 100%;
+        max-height: 35vh;
+    }
+    .fs-vp-flex .video-player-wrap {
+        flex: 1 1 auto;
+    }
+    /* ★ 모바일: 사이드 패널 토글 버튼 + 패널 자체 완전 숨김 (펜닐님 요청 — 모바일 UX 단순화) */
+    .fs-vp-toggle {
+        display: none !important;
+    }
+    .fs-vp-panel {
+        display: none !important;
     }
 }

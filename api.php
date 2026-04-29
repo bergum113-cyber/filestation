@@ -341,6 +341,8 @@ $rateLimitExclude = [
     'thumbnail',
     // 오디오 커버 (플레이리스트 각 트랙당 1회씩 요청)
     'audio_cover',
+    // 오디오 가사 (LRC > USLT > TXT 우선순위)
+    'audio_lyrics',
     // 세션 keepalive (5분마다 호출되지만 여러 탭 동시 사용 시 겹칠 수 있음)
     'session_ping',
     // 클라이언트 상태 보고 (디버깅용 — session_debug.log 있을 때만 실제 기록)
@@ -436,6 +438,8 @@ $csrfExclude = [
     'thumbnail',
     // 오디오 커버 (GET 요청, ID3v2 APIC 추출)
     'audio_cover',
+    // 오디오 가사 (GET 요청, LRC > USLT > TXT)
+    'audio_lyrics',
     // 읽기 전용 즐겨찾기 목록
     'favorites',
     // E2E Vault (GET 요청 — 읽기/다운로드)
@@ -452,7 +456,11 @@ $csrfExclude = [
     // 미디어 재생 중 세션 유지용 heartbeat (세션 인증만 있음, 상태 변경 없음)
     'session_ping',
     // 클라이언트 상태 보고 (디버깅용 — 세션 인증만 있음, 상태 변경 없음)
-    'client_state'
+    'client_state',
+    // ★ HLS 진단 로그 (펜닐님 임시 진단용 — 세션 인증만 있음, 다음 디버깅 위해 보존)
+    'hls_diag_log',
+    // ★ 커버 진단 로그 (펜닐님 임시 진단용 — iOS 음악 썸네일 누락 디버깅)
+    'cover_diag_log'
 ];
 
 // _get으로 끝나는 읽기 전용 API — 명시적 목록 (자동 와일드카드 제거)
@@ -5703,6 +5711,74 @@ try {
             }
             break;
         
+        // ★ 펜닐님 진단용 (임시 — 멀티오디오 회귀 추적): 다음 디버깅 위해 보존
+        //    동영상 폴더 재생 + 음악 공유 폴더 + HLS + 멀티오디오 이벤트 모두 한 로그에 기록
+        //    클라이언트에서 `App._diagLog('event', {...})` 호출 시 서버 파일에 시간순 누적
+        //    diag_log_clear=1 GET 파라미터로 로그 비우기 가능
+        case 'hls_diag_log':
+            $auth->requireLogin();
+            $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
+            $logFile = $dataDir . '/hls_diag.log';
+            if (!empty($_GET['clear']) && $_GET['clear'] === '1') {
+                @file_put_contents($logFile, '');
+                $result = ['success' => true, 'cleared' => true]; break;
+            }
+            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                try {
+                    $event = $_POST['event'] ?? ($input['event'] ?? '');
+                    $data = $_POST['data'] ?? ($input['data'] ?? '');
+                    if ($event !== '') {
+                        // 로그 5MB 초과 시 자동 비움 (펜닐님 룰: 무한 누적 방지)
+                        if (is_file($logFile) && filesize($logFile) > 5242880) {
+                            @file_put_contents($logFile, '');
+                        }
+                        $line = '[' . date('Y-m-d H:i:s') . '] ' . $event;
+                        if ($data !== '') $line .= ' | ' . $data;
+                        @file_put_contents($logFile, $line . "\n", FILE_APPEND | LOCK_EX);
+                    }
+                } catch (Exception $e) {}
+                $result = ['success' => true]; break;
+            } else {
+                header('Content-Type: text/plain; charset=utf-8');
+                echo is_file($logFile) ? file_get_contents($logFile) : 'No diag log';
+                exit;
+            }
+            break;
+        
+        // ★ 커버 진단 로그 (펜닐님 임시 진단용 — iOS 음악 썸네일 누락 디버깅)
+        //   GET ?clear=1 : 로그 비우기
+        //   GET (기본): 로그 내용 반환 (text/plain)
+        //   POST: event + data 기록
+        case 'cover_diag_log':
+            $auth->requireLogin();
+            $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
+            $logFile = $dataDir . '/cover_diag.log';
+            if (!empty($_GET['clear']) && $_GET['clear'] === '1') {
+                @file_put_contents($logFile, '');
+                $result = ['success' => true, 'cleared' => true]; break;
+            }
+            if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                try {
+                    $event = $_POST['event'] ?? ($input['event'] ?? '');
+                    $data = $_POST['data'] ?? ($input['data'] ?? '');
+                    if ($event !== '') {
+                        // 로그 10MB 초과 시 자동 비움
+                        if (is_file($logFile) && filesize($logFile) > 10 * 1024 * 1024) {
+                            @file_put_contents($logFile, '');
+                        }
+                        $line = '[' . date('Y-m-d H:i:s.') . substr((string)microtime(true), -4) . '] ' . $event;
+                        if ($data !== '') $line .= ' | ' . $data;
+                        @file_put_contents($logFile, $line . "\n", FILE_APPEND | LOCK_EX);
+                    }
+                } catch (Exception $e) {}
+                $result = ['success' => true]; break;
+            } else {
+                header('Content-Type: text/plain; charset=utf-8');
+                echo is_file($logFile) ? file_get_contents($logFile) : 'No cover diag log';
+                exit;
+            }
+            break;
+        
         case 'thumbnail':
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제 (그리드 뷰 썸네일 병렬 로딩)
@@ -5795,6 +5871,56 @@ try {
                 $coverPath
             );
             break;
+            
+        case 'audio_lyrics':
+            // 오디오 가사 (LRC > USLT > TXT 우선순위)
+            $auth->requireLogin();
+            session_write_close(); // 세션 락 해제 (병렬 트랙 로딩 시)
+            
+            // Base64 인코딩된 경로 디코딩 (audio_cover 패턴 동일)
+            $lyricsPath = $_GET['path'] ?? '';
+            if (isset($_GET['enc']) && $_GET['enc'] === 'b64') {
+                $lyricsPath = base64_decode($lyricsPath);
+                if ($lyricsPath === false) {
+                    http_response_code(400);
+                    exit;
+                }
+            }
+            
+            // 폴더별 권한 체크
+            $lyricsDir = dirname($lyricsPath);
+            if ($lyricsDir === '.') $lyricsDir = '';
+            if (!$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $lyricsDir ?: $lyricsPath)) {
+                http_response_code(403);
+                exit;
+            }
+            
+            $lyricsResult = $fileManager->getAudioLyrics(
+                (int)($_GET['storage_id'] ?? 0),
+                $lyricsPath
+            );
+            
+            // 출력 버퍼 정리 + 캐시 헤더 제거
+            while (ob_get_level()) ob_end_clean();
+            header_remove('Cache-Control');
+            header_remove('Expires');
+            header_remove('Pragma');
+            
+            if (!$lyricsResult) {
+                http_response_code(204);  // 가사 없음 (조용히 fallback)
+                header('Cache-Control: public, max-age=300');
+                exit;
+            }
+            
+            header('Content-Type: application/json; charset=utf-8');
+            header('Cache-Control: public, max-age=3600');
+            echo json_encode([
+                'source' => $lyricsResult['source'],
+                'synced' => $lyricsResult['synced'],
+                'text' => $lyricsResult['text'],
+                'language' => $lyricsResult['language'] ?? null,
+            ], JSON_UNESCAPED_UNICODE);
+            exit;
             
         case 'mkdir':
             $auth->requireLogin();

@@ -5,7 +5,7 @@ require_once __DIR__ . '/php_version_check.php';
  * 
  * Rust + WebAssembly (rhwp) 기반 고품질 HWP/HWPX 렌더링
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.7.3
+ * @rhwp_version 0.7.8
  */
 
 require_once __DIR__ . '/config.php';

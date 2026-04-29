@@ -160,6 +160,207 @@
     window._fsReportNow = () => report('manual');
 })();
 
+// === [HLS_DIAG] 멀티오디오 회귀 진단 모듈 (펜닐님 진단용 — 임시) ===
+// 다음 디버깅 위해 보존. 진단 끝나면 window._hlsDiag = false로 비활성.
+//
+// 사용법:
+//   1. F12 콘솔에서: window._hlsDiag = true (진단 시작)
+//   2. 음악 폴더 공유 재생 → 동영상 폴더 재생 → 멀티오디오 영상 → 증상 재현
+//   3. 서버 GET 요청: /api.php?action=hls_diag_log → 로그 텍스트 다운로드
+//   4. 비울 때: /api.php?action=hls_diag_log&clear=1
+//
+// 클라이언트 호출:
+//   App._diagLog('event_name', { key: value })  → 서버 data/hls_diag.log에 시간순 누적
+//
+// 기록 대상:
+//   - 동영상 폴더 진입 / 트랜스코딩 시작 / segment fetch / append / bufferStalledError
+//   - 음악 공유 폴더 진입 / 트랙 재생 / cover 요청 / lyrics 요청
+//   - HLS 인스턴스 생성 / destroy / 모달 cleanup
+//   - 멀티오디오 info API 응답 / audio_tracks 검출
+(function() {
+    // 진단 토글 (기본 false — 명시적으로 켜야 활성)
+    if (typeof window._hlsDiag === 'undefined') window._hlsDiag = false;
+    
+    let logQueue = [];
+    let flushTimer = null;
+    
+    // 큐에 쌓인 로그를 서버에 일괄 전송 (네트워크 오버헤드 최소화)
+    function flushQueue() {
+        if (logQueue.length === 0) return;
+        const items = logQueue.slice();
+        logQueue.length = 0;
+        items.forEach(item => {
+            try {
+                const fd = new FormData();
+                fd.append('event', item.event);
+                fd.append('data', item.data);
+                fetch('api.php?action=hls_diag_log', {
+                    method: 'POST',
+                    body: fd,
+                    credentials: 'same-origin',
+                    keepalive: true  // 페이지 종료 시에도 전송 시도
+                }).catch(() => {});
+            } catch(e) {}
+        });
+    }
+    
+    // 외부 노출 — 로그 호출 (window.App._diagLog 또는 window._diagLog)
+    window._diagLog = function(event, data) {
+        if (!window._hlsDiag) return;
+        try {
+            const dataStr = (typeof data === 'object' && data !== null)
+                ? JSON.stringify(data)
+                : String(data || '');
+            // 클라이언트 시간 추가 (밀리초 단위 — 서버 시간보다 정밀)
+            const ts = (performance.now() / 1000).toFixed(3);
+            logQueue.push({ event: '[' + ts + 's] ' + event, data: dataStr });
+            // 100ms 디바운싱 — 빠른 연속 호출 모아서 전송
+            if (flushTimer) clearTimeout(flushTimer);
+            flushTimer = setTimeout(() => { flushTimer = null; flushQueue(); }, 100);
+        } catch(e) {}
+    };
+})();
+
+// === [COVER_DIAG] iOS 음악 썸네일 누락 진단 모듈 (펜닐님 진단용 — 임시) ===
+// 다음 디버깅 위해 보존. 진단 끝나면 window._coverDiagEnabled = false로 비활성.
+//
+// 사용법:
+//   1. iPhone Safari로 사이트 접속 → URL 끝에 #coverdiag 추가하면 자동 활성화
+//      또는 F12 콘솔에서: window._coverDiagEnabled = true (PC 진단 시)
+//   2. 음악 폴더 진입 → 큰 mp3 폴더 → 플레이리스트 스크롤
+//   3. 모든 트랙 표시 시도 (누락 발생할 때까지)
+//   4. PC에서 서버 GET 요청: /api.php?action=cover_diag_log → 로그 텍스트 다운로드
+//   5. 비울 때: /api.php?action=cover_diag_log&clear=1
+//
+// 클라이언트 호출:
+//   window._coverDiagLog('event_name', 'data_string')  → 서버 data/cover_diag.log에 시간순 누적
+//
+// 기록 대상:
+//   - FETCH_START / FETCH_OK / FETCH_NOT_OK / FETCH_CATCH (cover URL fetch)
+//   - IDB_HIT / BLOB_URL_CREATED / DESTROYED (캐시 흐름)
+//   - IMG_DISCONNECTED / IMG_LOAD_OK / IMG_LOAD_ERR (DOM 연결 + 이미지 로드)
+/* === [COVER_DIAG] 진단 시스템 비활성 (펜닐님 결정 2026-04-30) — IDB iOS 비활성화로 본질 해결 ===
+   다시 활성 필요 시: 이 블록 주석 제거 + window._coverDiagEnabled = location.hash 트리거 활성
+(function() {
+    // 진단 토글 (기본 false)
+    //   - PC: F12 콘솔에서 window._coverDiagEnabled = true 설정
+    //   - iOS: URL hash에 #coverdiag 추가 시 자동 활성 (sessionStorage 저장 → 앱이 hash 지워도 유지)
+    // ★ 펜닐님 본질 발견 완료 (2026-04-30): IMG_DISCONNECTED 폭증 → _vsRender 다중 호출이 원인
+    //   해결: duration 갱신 시 _vsRender 강제 호출 제거 (라인 746~749 주석)
+    //   디버그 비활성. 다음 디버깅 시 아래 한 줄 트리거 활성:
+    //     window._coverDiagEnabled = (location.hash || '').indexOf('coverdiag') >= 0;
+    if (typeof window._coverDiagEnabled === 'undefined') {
+        window._coverDiagEnabled = false;
+    }
+    
+    let coverLogQueue = [];
+    let coverFlushTimer = null;
+    
+    // ★ 화면 콘솔 (iOS 디버깅용 — fixed div, 펜닐님 요청)
+    //   진단 활성 시 자동 표시. 우측 상단 토글 버튼으로 접기/펼치기
+    let _screenConsole = null;
+    function _ensureScreenConsole() {
+        if (_screenConsole || !window._coverDiagEnabled) return _screenConsole;
+        _screenConsole = document.createElement('div');
+        _screenConsole.id = 'cover-diag-console';
+        _screenConsole.style.cssText = 'position:fixed;left:5px;right:5px;bottom:5px;max-height:35vh;background:rgba(0,0,0,0.92);color:#0f0;font:11px/1.3 Menlo,monospace;padding:8px;border-radius:6px;overflow-y:auto;z-index:999999;border:1px solid #0f0;box-sizing:border-box;';
+        const _hdr = document.createElement('div');
+        _hdr.style.cssText = 'display:flex;gap:6px;margin-bottom:5px;border-bottom:1px solid #0a0;padding-bottom:4px;';
+        _hdr.innerHTML = '<span style="color:#ff0;flex:1;">📋 COVER DIAG</span>'
+            + '<button id="cdc-min" style="background:#222;color:#fff;border:1px solid #555;border-radius:3px;padding:2px 8px;font-size:11px;cursor:pointer;">접기</button>'
+            + '<button id="cdc-clr" style="background:#222;color:#fff;border:1px solid #555;border-radius:3px;padding:2px 8px;font-size:11px;cursor:pointer;">비우기</button>'
+            + '<button id="cdc-cls" style="background:#222;color:#fff;border:1px solid #f55;border-radius:3px;padding:2px 8px;font-size:11px;cursor:pointer;">닫기</button>';
+        _screenConsole.appendChild(_hdr);
+        const _body = document.createElement('div');
+        _body.id = 'cdc-body';
+        _body.style.cssText = 'overflow-y:auto;max-height:calc(35vh - 30px);word-break:break-all;';
+        _screenConsole.appendChild(_body);
+        if (document.body) document.body.appendChild(_screenConsole);
+        else document.addEventListener('DOMContentLoaded', () => document.body.appendChild(_screenConsole));
+        // 토글
+        _hdr.querySelector('#cdc-min').onclick = () => {
+            _body.style.display = _body.style.display === 'none' ? '' : 'none';
+            _hdr.querySelector('#cdc-min').textContent = _body.style.display === 'none' ? '펴기' : '접기';
+        };
+        _hdr.querySelector('#cdc-clr').onclick = () => { _body.innerHTML = ''; };
+        _hdr.querySelector('#cdc-cls').onclick = () => {
+            _screenConsole.remove();
+            _screenConsole = null;
+            window._coverDiagEnabled = false;
+            try { sessionStorage.removeItem('_coverDiagEnabled'); } catch(e) {}
+        };
+        return _screenConsole;
+    }
+    function _appendScreenLog(event, data) {
+        if (!window._coverDiagEnabled) return;
+        const con = _ensureScreenConsole();
+        if (!con) return;
+        const body = con.querySelector('#cdc-body');
+        if (!body) return;
+        const line = document.createElement('div');
+        // 이벤트 타입에 따라 색 (가독성)
+        let color = '#0f0';
+        if (event.indexOf('ERR') >= 0 || event.indexOf('CATCH') >= 0 || event.indexOf('DISCONNECT') >= 0) color = '#f44';
+        else if (event.indexOf('OK') >= 0 || event.indexOf('HIT') >= 0) color = '#0ff';
+        else if (event.indexOf('FETCH_START') >= 0) color = '#ff0';
+        line.style.cssText = 'color:' + color + ';margin:2px 0;';
+        line.textContent = event + ' | ' + data;
+        body.appendChild(line);
+        // 스크롤 자동 하단 (마지막 50개만 유지)
+        while (body.children.length > 200) body.removeChild(body.firstChild);
+        body.scrollTop = body.scrollHeight;
+    }
+    
+    function coverFlushQueue() {
+        if (coverLogQueue.length === 0) return;
+        const items = coverLogQueue.slice();
+        coverLogQueue.length = 0;
+        items.forEach(item => {
+            try {
+                const fd = new FormData();
+                fd.append('event', item.event);
+                fd.append('data', item.data);
+                fetch('api.php?action=cover_diag_log', {
+                    method: 'POST',
+                    body: fd,
+                    credentials: 'same-origin',
+                    keepalive: true
+                }).catch(() => {});
+            } catch(e) {}
+        });
+    }
+    
+    // 외부 노출 — 로그 호출
+    window._coverDiagLog = function(event, data) {
+        if (!window._coverDiagEnabled) return;
+        try {
+            const dataStr = (typeof data === 'object' && data !== null)
+                ? JSON.stringify(data)
+                : String(data || '');
+            // 클라이언트 시간 (밀리초 정밀)
+            const ts = (performance.now() / 1000).toFixed(3);
+            const formattedEvent = '[' + ts + 's] ' + event;
+            // 화면 로그 (iOS 디버깅 — 즉시 표시)
+            _appendScreenLog(formattedEvent, dataStr);
+            // 서버 로그 (디바운스 송신)
+            coverLogQueue.push({ event: formattedEvent, data: dataStr });
+            // 200ms 디바운싱 (cover는 다수 동시 호출 가능 → 약간 더 길게)
+            if (coverFlushTimer) clearTimeout(coverFlushTimer);
+            coverFlushTimer = setTimeout(() => { coverFlushTimer = null; coverFlushQueue(); }, 200);
+        } catch(e) {}
+    };
+    
+    // 진단 활성 시 환경 정보 자동 기록 (한 번만)
+    if (window._coverDiagEnabled) {
+        const ua = navigator.userAgent || '';
+        const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        const env = `iOS=${isIOS} platform=${navigator.platform} memory=${navigator.deviceMemory || 'unknown'}GB hwc=${navigator.hardwareConcurrency || 'unknown'} ua=${ua.substring(0, 120)}`;
+        // 페이지 로드 후 약간 대기 (FormData 등 준비)
+        setTimeout(() => window._coverDiagLog('ENV_INIT', env), 100);
+    }
+})();
+*/
+
 // === FSCoverCacheDB — MP3 앨범 커버 IndexedDB 영구 캐시 ===
 // 목적: 모달 닫혀도 blob 데이터 유지 → 재열기 시 즉시 표시
 // 사용자 환경 (Apache Cache-Control 강제 덮어쓰기 등)에 무관하게 작동
@@ -185,6 +386,18 @@ const FSCoverCacheDB = (function() {
     let _db = null;
     let _dbPromise = null;
     let _disabled = false;
+    
+    // ★ iOS 환경에서 IDB 영구 비활성 (펜닐님 결정 2026-04-30)
+    //   본질: iOS Safari/Chrome에서 IDB blob 직렬화/역직렬화 후 손상 케이스 발생
+    //         (시크릿 모드 + 공유 페이지에서 정상 = IDB 우회하면 정상 = IDB 손상 확정)
+    //   결과: iOS는 메모리 캐시만 사용 (같은 세션 내 hit, 새로고침 시 재 fetch)
+    //         PC는 그대로 30일 IDB 영구 캐시 유지 → 데이터 절감
+    //   감지: 표준 iOS UA + iPadOS (MacIntel + touch) — 라인 354/619와 동일 패턴
+    const _isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent || '') 
+        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (_isIOS) {
+        _disabled = true;
+    }
     
     function _openDB() {
         if (_disabled) return Promise.resolve(null);
@@ -345,10 +558,43 @@ const FSCoverCacheDB = (function() {
         }, 5000);
     }
     
-    return { get, set, cleanup, maybeCleanup };
+    // ★ 펜닐님 진단 (2026-04-30): 손상된 캐시 항목 개별 삭제
+    //   IDB blob의 size=0 또는 type가 image/* 아닌 케이스 → IDB에서 즉시 제거
+    async function deleteEntry(url) {
+        const db = await _openDB();
+        if (!db) return;
+        return new Promise((resolve) => {
+            try {
+                const tx = db.transaction(STORE_NAME, 'readwrite');
+                const store = tx.objectStore(STORE_NAME);
+                const req = store.delete(url);
+                req.onsuccess = () => resolve();
+                req.onerror = () => resolve();
+            } catch (e) {
+                resolve();
+            }
+        });
+    }
+    
+    return { get, set, cleanup, maybeCleanup, delete: deleteEntry };
 })();
 
-// === FSAudioPlayer — 순수 JS/CSS 커스텀 오디오 플레이어 ===
+// ============================================================================
+// 🏠 [메인 MP3 플레이어] FSAudioPlayer — 순수 JS/CSS 커스텀 오디오 플레이어
+// ============================================================================
+// 
+// ⚠️ 주의: 이 클래스는 *메인 페이지(index.php) 전용*입니다.
+// 
+// - 사용처: 메인 페이지 미리보기 모달 (audio 케이스, _showPreviewImpl)
+// - 짝 파일: assets/js/fs-audio-player.js (공유 스트리밍 share.php 전용)
+// - 두 곳 모두 같은 클래스명(FSAudioPlayer)이지만 ★독립★ 입니다.
+//   하나 수정하면 다른 쪽도 수정해야 일관성 유지됩니다.
+// 
+// ⚠️ 이 클래스를 수정하면 *메인 미리보기*만 영향받습니다.
+//    공유 스트리밍 플레이어를 수정하려면 → assets/js/fs-audio-player.js
+// 
+// CSS: assets/css/style.css (fap-* 클래스, 가사 영역 포함)
+// ============================================================================
 class FSAudioPlayer {
     constructor(opts) {
         this.container = opts.container;
@@ -522,10 +768,14 @@ class FSAudioPlayer {
             this._pendingSave = this._pendingSave.filter(p => !cachedFullNames.has(p.fullName));
         }
         
-        if (changed && this._vsRender) {
-            this._vsRenderedRange = { start: -1, end: -1 };
-            this._vsRender();
-        }
+        // ★ 펜닐님 진단 (2026-04-30): duration 갱신은 라인 716~720에서 li.querySelector로 직접 처리됨
+        //   여기서 _vsRender 강제 호출하면 모든 li 재생성 → 진행 중인 비동기 cover fetch가
+        //   IMG_DISCONNECTED 떼로 발생 → 일부 트랙 썸네일 누락 (펜닐님 보고 본질)
+        //   따라서 _vsRender 강제 호출 제거. duration 만 갱신되면 충분.
+        // if (changed && this._vsRender) {
+        //     this._vsRenderedRange = { start: -1, end: -1 };
+        //     this._vsRender();
+        // }
         this._updateTrackMeta();
     }
 
@@ -542,6 +792,11 @@ class FSAudioPlayer {
                 </div>
             </div>
             <canvas class="fap-visualizer" width="600" height="40"></canvas>
+            <div class="fap-lyrics-wrap" style="display:none;">
+                <div class="fap-lyrics-scroll">
+                    <div class="fap-lyrics-content"></div>
+                </div>
+            </div>
             <div class="fap-seek">
                 <span class="fap-time fap-time-cur">0:00</span>
                 <div class="fap-seek-bar" title="${isKo ? '←/→로 5초 이동' : '←/→ to seek 5s'}">
@@ -614,6 +869,9 @@ class FSAudioPlayer {
             volThumb: this.container.querySelector('.fap-vol-thumb'),
             plList: this.container.querySelector('.fap-playlist-list'),
             visualizer: this.container.querySelector('.fap-visualizer'),
+            lyricsWrap: this.container.querySelector('.fap-lyrics-wrap'),
+            lyricsScroll: this.container.querySelector('.fap-lyrics-scroll'),
+            lyricsContent: this.container.querySelector('.fap-lyrics-content'),
         };
         // ★ iOS: 시스템 정책상 audio.volume 변경 불가 (Apple 공식 정책)
         //   YouTube iOS 웹 등과 동일하게 볼륨 영역 전체 숨김
@@ -1004,6 +1262,9 @@ class FSAudioPlayer {
             this.$.seekPlayed.style.width = (pct * 100) + '%';
             this.$.seekThumb.style.left = (pct * 100) + '%';
             this.$.curTime.textContent = this._fmt(a.currentTime);
+            // 동기화 가사 활성 라인 갱신
+            // 가사 갱신: synced=true → 활성 라인 변경 / synced=false → 자동 스크롤만
+            if (this._lyrics) this._updateLyricsActiveLine();
         });
         a.addEventListener('loadedmetadata', () => {
             this.$.durTime.textContent = this._fmt(a.duration);
@@ -1263,6 +1524,233 @@ class FSAudioPlayer {
         // artwork는 이 시점에 이전 트랙 artwork가 남을 수 있지만,
         // _updateTrackCover의 비동기 콜백에서 다시 호출되어 확정됨 (iOS Safari 대응)
         this._updateMediaSession(track);
+        // 가사 로드 (LRC > USLT > TXT) — 비동기, 실패해도 무시
+        this._loadLyrics(track);
+    }
+    
+    // ── 가사 (LRC + USLT + TXT) ──
+    
+    /**
+     * 트랙의 가사 로드 — track.lyricsApiUrl이 있으면 fetch
+     * 응답 형식: { source: 'lrc'|'uslt'|'txt', synced: bool, text: string, language?: string }
+     */
+    async _loadLyrics(track) {
+        if (this._destroyed) return;
+        // 이전 가사 초기화
+        this._lyrics = null;       // [{time: 0.0, text: '...'}, ...] (synced 시) 또는 [{text:...}] (정적)
+        this._lyricsSynced = false;
+        this._lyricsActiveLine = -1;
+        if (this.$.lyricsWrap) this.$.lyricsWrap.style.display = 'none';
+        if (this.$.lyricsContent) this.$.lyricsContent.innerHTML = '';
+        
+        // API URL 없으면 종료
+        if (!track || !track.lyricsApiUrl) return;
+        
+        // 토큰: 빠른 트랙 전환 시 이전 fetch 결과 무시
+        if (this._lyricsLoadToken === undefined) this._lyricsLoadToken = 0;
+        this._lyricsLoadToken += 1;
+        const token = this._lyricsLoadToken;
+        
+        try {
+            const res = await fetch(track.lyricsApiUrl, { credentials: 'same-origin' });
+            if (this._destroyed || token !== this._lyricsLoadToken) return;
+            if (res.status === 204) return;  // 가사 없음 (정상)
+            if (!res.ok) return;
+            
+            const data = await res.json();
+            if (this._destroyed || token !== this._lyricsLoadToken) return;
+            if (!data || !data.text) return;
+            
+            // 가사 파싱
+            this._lyricsSynced = !!data.synced;
+            if (this._lyricsSynced) {
+                this._lyrics = this._parseLrc(data.text);
+            } else {
+                this._lyrics = this._parsePlainLyrics(data.text);
+            }
+            
+            if (!this._lyrics || this._lyrics.length === 0) return;
+            
+            this._renderLyrics();
+        } catch (e) {
+            // 가사 로드 실패는 조용히 무시
+        }
+    }
+    
+    /**
+     * LRC 파서 — [mm:ss.xx]가사 패턴
+     * 같은 가사가 여러 시간에 반복: [00:12.50][01:30.00]후렴 → 두 항목으로 분리
+     * 메타데이터 ([ti:], [ar:] 등)는 무시
+     * 반환: [{time: 12.5, text: '가사'}, ...] (시간 오름차순 정렬)
+     */
+    _parseLrc(text) {
+        const lines = text.split(/\r?\n/);
+        const result = [];
+        const timeTagRe = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+        
+        for (const line of lines) {
+            // 메타데이터 라인 (시간 태그 없는 [ti:], [ar:] 등) 건너뜀
+            if (/^\s*\[[a-z]+:/i.test(line) && !/\[\d{1,3}:\d{1,2}/.test(line)) continue;
+            
+            // 시간 태그 모두 추출
+            const matches = [...line.matchAll(timeTagRe)];
+            if (matches.length === 0) continue;
+            
+            // 가사 텍스트 = 마지막 시간 태그 이후
+            const lastMatch = matches[matches.length - 1];
+            const lyricText = line.substring(lastMatch.index + lastMatch[0].length).trim();
+            if (!lyricText) continue;  // 빈 라인 (간주 표시 등)
+            
+            // 같은 가사를 여러 시간에 등록
+            for (const m of matches) {
+                const min = parseInt(m[1], 10);
+                const sec = parseInt(m[2], 10);
+                const ms = m[3] ? parseInt(m[3].padEnd(3, '0').substring(0, 3), 10) : 0;
+                const time = min * 60 + sec + ms / 1000;
+                if (time >= 0 && time < 36000) {  // 10시간 미만
+                    result.push({ time, text: lyricText });
+                }
+            }
+        }
+        
+        // 시간 오름차순 정렬
+        result.sort((a, b) => a.time - b.time);
+        return result;
+    }
+    
+    /**
+     * 정적 가사 파서 — 줄바꿈으로만 분리
+     */
+    _parsePlainLyrics(text) {
+        const lines = text.split(/\r?\n/);
+        const result = [];
+        for (const line of lines) {
+            const trimmed = line.trim();
+            // 빈 줄도 포함 (가독성 위해)
+            result.push({ time: -1, text: trimmed });
+        }
+        // 마지막 빈 줄 trim
+        while (result.length > 0 && result[result.length - 1].text === '') {
+            result.pop();
+        }
+        return result;
+    }
+    
+    /**
+     * 가사 렌더 — DOM 구성
+     */
+    _renderLyrics() {
+        if (!this.$.lyricsContent || !this.$.lyricsWrap || !this._lyrics) return;
+        
+        const html = this._lyrics.map((line, idx) => {
+            const text = this._esc(line.text || '');
+            const empty = !text;
+            return `<div class="fap-lyrics-line${empty ? ' fap-lyrics-empty' : ''}" data-idx="${idx}">${text || '&nbsp;'}</div>`;
+        }).join('');
+        
+        this.$.lyricsContent.innerHTML = html;
+        // ★ data-synced 속성: 한 줄 가사 CSS가 동기화/정적 가사 구분 (CSS 선택자에서 사용)
+        this.$.lyricsContent.setAttribute('data-synced', this._lyricsSynced ? 'true' : 'false');
+        // ★ 정적 가사(USLT/TXT)면 wrap에 백업 클래스 추가 (:has() 미지원 브라우저 대비)
+        if (this._lyricsSynced) {
+            this.$.lyricsWrap.classList.remove('fap-lyrics-static');
+        } else {
+            this.$.lyricsWrap.classList.add('fap-lyrics-static');
+        }
+        this.$.lyricsWrap.style.display = '';
+        
+        // ★ 수동 스크롤 이벤트 — 한 번만 등록 (중복 방지 플래그)
+        if (!this._lyricsScrollHandlerBound && this.$.lyricsScroll) {
+            this._lyricsScrollHandlerBound = true;
+            const onManual = () => this._onLyricsManualScroll();
+            this.$.lyricsScroll.addEventListener('wheel', onManual, { passive: true });
+            this.$.lyricsScroll.addEventListener('touchmove', onManual, { passive: true });
+        }
+        
+        // 새 트랙 로드 시 자동 스크롤 일시 중지 해제 + 스크롤 위치 리셋
+        this._lyricsManualScrollUntil = 0;
+        if (this.$.lyricsScroll) this.$.lyricsScroll.scrollTop = 0;
+    }
+    
+    /**
+     * 시간 동기화된 LRC/SYLT/TXT(synced): 활성 라인 + 이전/다음 라인 표시 (3줄 고정)
+     * USLT/TXT(plain): 사용자 수동 스크롤 중이 아니면 시간 비례 자동 스크롤
+     * 
+     * timeupdate 이벤트에서 매번 호출됨
+     */
+    _updateLyricsActiveLine() {
+        if (!this._lyrics || this._destroyed) return;
+        if (!this.$.lyricsContent || !this.$.lyricsScroll) return;
+        
+        const currentTime = this.audio.currentTime || 0;
+        
+        // ── synced=true (LRC/SYLT/TXT synced): 3줄 고정 표시 ──
+        if (this._lyricsSynced) {
+            // 이진 탐색으로 현재 라인 찾기 (마지막으로 currentTime 이하인 라인)
+            let activeIdx = -1;
+            let lo = 0, hi = this._lyrics.length - 1;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                if (this._lyrics[mid].time <= currentTime) {
+                    activeIdx = mid;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            
+            if (activeIdx === this._lyricsActiveLine) return;
+            this._lyricsActiveLine = activeIdx;
+            
+            // 모든 라인의 prev/active/next 클래스 제거
+            const allLines = this.$.lyricsContent.querySelectorAll('.fap-lyrics-line');
+            allLines.forEach(el => {
+                el.classList.remove('fap-lyrics-active', 'fap-lyrics-prev', 'fap-lyrics-next');
+            });
+            
+            if (activeIdx >= 0 && allLines[activeIdx]) {
+                // 현재 라인 = active
+                allLines[activeIdx].classList.add('fap-lyrics-active');
+                // 이전 라인 (있으면) = prev
+                if (activeIdx > 0 && allLines[activeIdx - 1]) {
+                    allLines[activeIdx - 1].classList.add('fap-lyrics-prev');
+                }
+                // 다음 라인 (있으면) = next
+                if (activeIdx + 1 < allLines.length && allLines[activeIdx + 1]) {
+                    allLines[activeIdx + 1].classList.add('fap-lyrics-next');
+                }
+            }
+            return;
+        }
+        
+        // ── synced=false (USLT/TXT plain): 시간 비례 자동 스크롤 ──
+        // 사용자가 수동 스크롤 중이면 자동 스크롤 일시 중지
+        if (this._lyricsManualScrollUntil && Date.now() < this._lyricsManualScrollUntil) return;
+        
+        const dur = this.audio.duration;
+        if (!dur || !isFinite(dur) || dur <= 0) return;
+        
+        // 노래 진행 비율로 스크롤 위치 계산
+        const scrollEl = this.$.lyricsScroll;
+        const contentEl = this.$.lyricsContent;
+        const maxScroll = contentEl.scrollHeight - scrollEl.clientHeight;
+        if (maxScroll <= 0) return;  // 가사가 박스보다 작으면 스크롤 불필요
+        
+        const progress = Math.max(0, Math.min(1, currentTime / dur));
+        const targetScrollTop = maxScroll * progress;
+        
+        // 너무 자주 호출되지 않도록 10px 이상 차이날 때만 스크롤
+        if (Math.abs(scrollEl.scrollTop - targetScrollTop) < 10) return;
+        scrollEl.scrollTop = targetScrollTop;
+    }
+    
+    /**
+     * 사용자 수동 스크롤 감지 — 자동 스크롤 5초간 일시 중지
+     * (USLT/TXT plain 가사에서 wheel/touch 이벤트로 호출됨)
+     */
+    _onLyricsManualScroll() {
+        // 5초 후 자동 스크롤 재개 (다른 트랙 시작하면 자동 리셋)
+        this._lyricsManualScrollUntil = Date.now() + 5000;
     }
     
     // ★ 커버 이미지 메모리 캐시 헬퍼
@@ -1300,6 +1788,13 @@ class FSAudioPlayer {
                 try {
                     blob = await FSCoverCacheDB.get(originalUrl);
                 } catch (e) { blob = null; }
+                
+                // ★ IDB 검증 코드 주석 (펜닐님 결정 2026-04-30): iOS IDB 비활성화로 본질 해결됨
+                //   다시 활성 필요 시 아래 주석 제거
+                // if (blob && (blob.size === 0 || (blob.type && !blob.type.startsWith('image/')))) {
+                //     try { FSCoverCacheDB.delete(originalUrl); } catch (e) {}
+                //     blob = null;  // miss로 처리 → fetch
+                // }
                 
                 if (!blob) {
                     // 3-B. IDB miss → 서버에서 fetch
@@ -15448,11 +15943,12 @@ const App = {
         if (shareTypeGroup) {
             const isDir = item.is_dir || item.isDir;
             if (isDir) {
-                // 폴더: 다운로드 + 파일드롭 옵션
+                // 폴더: 다운로드 + 파일드롭 + 스트리밍 (폴더 안 음악 플레이리스트)
                 shareTypeGroup.style.display = '';
                 shareTypeGroup.innerHTML = `
                     <label style="font-weight:600;margin-bottom:8px;display:block;">${t('share_type_label','공유 유형')}</label>
                     <label style="display:inline-flex;align-items:center;margin-right:20px;margin-bottom:0;font-weight:400;cursor:pointer;"><input type="radio" name="share-type" value="download" checked style="width:auto;margin-right:6px;"> 📥 ${t('download_mode','다운로드')}</label>
+                    <label style="display:inline-flex;align-items:center;margin-right:20px;margin-bottom:0;font-weight:400;cursor:pointer;"><input type="radio" name="share-type" value="stream" style="width:auto;margin-right:6px;"> ▶️ ${t('streaming','스트리밍')}</label>
                     <label style="display:inline-flex;align-items:center;margin-bottom:0;font-weight:400;cursor:pointer;"><input type="radio" name="share-type" value="filedrop" style="width:auto;margin-right:6px;"> 📤 ${t('filedrop_mode','파일 드롭 (업로드 전용)')}</label>
                 `;
             } else if (mediaExts.includes(ext)) {
@@ -15485,7 +15981,7 @@ const App = {
             const sType = s.share_type === 'stream' ? `▶️ ${t('streaming','스트리밍')}` : s.share_type === 'filedrop' ? `📤 ${t('filedrop_mode','파일 드롭')}` : `📥 ${t('download_mode','다운로드')}`;
             const sExpire = s.expire_at ? s.expire_at.substring(0, 16).replace('T', ' ') : t('unlimited','무제한');
             const sDl = s.max_downloads ? `${s.download_count || 0}/${s.max_downloads}` : `${s.download_count || 0}`;
-            const sPw = s.password ? '🔒' : '🔓';
+            const sPw = s.has_password ? '🔒' : t('none','없음');
             const newType = s.share_type === 'stream' ? 'download' : 'stream';
             const switchLabel = s.share_type === 'stream' ? t('switch_to_download','다운로드로 변경') : t('switch_to_stream','스트리밍으로 변경');
             
@@ -18487,6 +18983,7 @@ const App = {
                             <span>📅 ${this.formatDate(s.created_at)}</span>
                             <span class="${expireClass}">${expireIcon} ${expireText}</span>
                             <span>📥 ${downloadText}${t('times','회')}</span>
+                            <span>${t('password','비밀번호')}: ${s.has_password ? '🔒' : t('none','없음')}</span>
                         </div>
                     </div>
                 </div>
@@ -26909,6 +27406,72 @@ const App = {
         $('#new-password').val('');
         $('#confirm-password').val('');
         
+        // ★ PC 가로 휠 + 드래그 스크롤 핸들러 (펜닐님 요청 — 모바일은 터치로 가능, PC는 휠 변환 + 드래그)
+        //   1번만 등록 (window 플래그 가드)
+        if (!window._settingsTabsWheelBound) {
+            window._settingsTabsWheelBound = true;
+            const _settingsTabs = document.querySelector('.settings-tabs');
+            if (_settingsTabs) {
+                // 휠 → 가로 스크롤 변환
+                _settingsTabs.addEventListener('wheel', function(e) {
+                    // 수직 휠을 가로 스크롤로 변환 (deltaY → scrollLeft)
+                    if (e.deltaY !== 0 && Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+                        e.preventDefault();
+                        this.scrollLeft += e.deltaY;
+                    }
+                }, { passive: false });
+                
+                // 마우스 드래그 → 가로 스크롤 (펜닐님 추가 요청)
+                //   - 클릭과 구분: 5px 이상 이동해야 드래그로 인식
+                //   - 드래그 중에는 탭 클릭 이벤트 차단 (실수 클릭 방지)
+                let _isDragging = false;
+                let _dragStartX = 0;
+                let _scrollStartX = 0;
+                let _dragMoved = false;
+                
+                _settingsTabs.addEventListener('mousedown', function(e) {
+                    // 좌클릭만 처리
+                    if (e.button !== 0) return;
+                    _isDragging = true;
+                    _dragMoved = false;
+                    _dragStartX = e.pageX;
+                    _scrollStartX = this.scrollLeft;
+                    // 드래그 중 텍스트 선택 방지
+                    this.style.userSelect = 'none';
+                    this.style.cursor = 'grabbing';
+                });
+                
+                _settingsTabs.addEventListener('mousemove', function(e) {
+                    if (!_isDragging) return;
+                    e.preventDefault();
+                    const dx = e.pageX - _dragStartX;
+                    if (Math.abs(dx) > 5) {
+                        _dragMoved = true;
+                    }
+                    this.scrollLeft = _scrollStartX - dx;
+                });
+                
+                const _endDrag = function() {
+                    if (!_isDragging) return;
+                    _isDragging = false;
+                    _settingsTabs.style.userSelect = '';
+                    _settingsTabs.style.cursor = '';
+                };
+                _settingsTabs.addEventListener('mouseup', _endDrag);
+                _settingsTabs.addEventListener('mouseleave', _endDrag);
+                
+                // 드래그 직후 클릭 차단 (5px 이상 이동했으면 탭 클릭 무시)
+                //   capture phase로 click 이벤트 가로채서 stopPropagation
+                _settingsTabs.addEventListener('click', function(e) {
+                    if (_dragMoved) {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        _dragMoved = false;
+                    }
+                }, true);
+            }
+        }
+        
         // 내 정보 로드
         this.loadMyAccountInfo();
         
@@ -28217,24 +28780,40 @@ const App = {
         document.body.style.overflow = 'hidden';
         document.body.style.touchAction = 'none';
         document.body.classList.add('modal-open');
-        // 모든 모달 숨기기
-        document.querySelectorAll('.modal').forEach(m => m.style.display = 'none');
+        // ★ 대상 모달이 이미 표시 중인지 확인 (펜닐님 결정 — 깜빡임 방지)
+        //   사이드 패널에서 트랙 전환 시 hideModal({keepOpen}) + showPreview 패턴
+        //   이 경우 모달은 이미 열려있어서 display 토글 시 깜빡임 발생
+        //   → 이미 표시 중이면 display 변경 스킵 (다른 모달은 정상적으로 숨김)
+        const _targetModalEl = document.getElementById(id);
+        const _targetAlreadyShown = _targetModalEl && _targetModalEl.style.display && _targetModalEl.style.display !== 'none';
+        // 모든 모달 숨기기 (대상 모달은 이미 표시 중이면 건드리지 않음)
+        document.querySelectorAll('.modal').forEach(m => {
+            if (m.id === id && _targetAlreadyShown) return;  // 깜빡임 방지: 그대로 유지
+            m.style.display = 'none';
+        });
         // 대상 모달 표시 (flex 레이아웃 유지)
-        const targetModal = document.getElementById(id);
+        const targetModal = _targetModalEl;
         if (targetModal) {
-            targetModal.style.display = 'flex';
-            // 모달 내 스크롤 영역 상단으로 리셋
-            const body = targetModal.querySelector('.modal-body');
-            if (body) body.scrollTop = 0;
+            // 이미 표시 중이면 display 재설정 스킵 (깜빡임 방지)
+            if (!_targetAlreadyShown) {
+                targetModal.style.display = 'flex';
+            }
+            // 모달 내 스크롤 영역 상단으로 리셋 (이미 표시 중이면 사용자 스크롤 위치 보존)
+            if (!_targetAlreadyShown) {
+                const body = targetModal.querySelector('.modal-body');
+                if (body) body.scrollTop = 0;
+            }
             
-            // 미리보기 모달: 모바일 가로모드 immersive 설정
-            if (id === 'modal-preview') {
+            // 미리보기 모달: 모바일 가로모드 immersive 설정 (이미 표시 중이면 재설정 스킵)
+            if (id === 'modal-preview' && !_targetAlreadyShown) {
                 this._setupPreviewImmersive(targetModal);
             }
         }
-        // 오버레이 스크롤도 상단으로
-        const overlay = document.getElementById('modal-overlay');
-        if (overlay) overlay.scrollTop = 0;
+        // 오버레이 스크롤도 상단으로 (이미 표시 중이면 보존)
+        if (!_targetAlreadyShown) {
+            const overlay = document.getElementById('modal-overlay');
+            if (overlay) overlay.scrollTop = 0;
+        }
     },
     
     /** 미리보기 immersive 모드 (모바일 가로모드: 헤더/푸터 자동 숨김, 터치 토글) */
@@ -28407,15 +28986,33 @@ const App = {
         }
     },
     
-    hideModal(id) {
-        // immersive 정리
-        if (this._immersiveCleanup) { this._immersiveCleanup(); this._immersiveCleanup = null; }
-        // overlay 배경 강제 초기화 (immersive에서 #000 잔류 방지)
-        const _overlay = document.getElementById('modal-overlay');
-        if (_overlay) _overlay.style.background = '';
+    hideModal(id, options) {
+        // ★ 옵션: keepOpen=true면 모달 display 유지 (트랙 전환 깜빡임 방지, 펜닐님 결정)
+        //   사이드 패널에서 다른 트랙 선택 시: hideModal({keepOpen:true}) → 정리만, 화면 유지
+        //   즉시 showPreview 호출 시 모달이 그대로 열려있어 깜빡임 0
+        const _keepOpen = !!(options && options.keepOpen);
+        // ★ immersive 정리 — keepOpen 시는 보존 (showModal이 재설정 안 하므로)
+        //   keepOpen=false 시만 정리 → 다음 showModal에서 재설정됨
+        if (!_keepOpen && this._immersiveCleanup) { this._immersiveCleanup(); this._immersiveCleanup = null; }
+        // ★ overlay 배경 강제 초기화 — keepOpen 시는 보존 (immersive 어두운 배경 유지)
+        //   keepOpen=false 시만 초기화 → immersive #000 잔류 방지
+        if (!_keepOpen) {
+            const _overlay = document.getElementById('modal-overlay');
+            if (_overlay) _overlay.style.background = '';
+        }
         
         // 미리보기 모달이면 미디어 정지 및 정리
         if (id === 'modal-preview') {
+            // ★ [HLS_DIAG] modal-preview 닫기 시작 (정리 누수 진단)
+            if (window._diagLog) {
+                const _vids = document.querySelectorAll('#preview-content video');
+                window._diagLog('hideModal_start', {
+                    videosCount: _vids.length,
+                    hasHls: Array.from(_vids).map(v => !!v._hlsInstance),
+                    hasMms: Array.from(_vids).map(v => !!v._mmsCleanup),
+                    paused: Array.from(_vids).map(v => v.paused)
+                });
+            }
             // ★ 디바운싱 중인 pending showPreview 취소
             // (빠른 연속 클릭 후 모달 닫았는데 대기 중이던 미리보기가 다시 열리는 것 방지)
             if (this._showPreviewTimer) {
@@ -28423,6 +29020,42 @@ const App = {
                 this._showPreviewTimer = null;
             }
             this._pendingPreviewItem = null;
+
+            // ★ 폴더 동영상 플레이리스트 패널 핸들러 정리 (메모리 누수 방지)
+            if (this._fsVpEscHandler) {
+                document.removeEventListener('keydown', this._fsVpEscHandler, true);
+                this._fsVpEscHandler = null;
+            }
+            if (this._fsVpResizeBound) {
+                window.removeEventListener('resize', this._fsVpResizeBound);
+                this._fsVpResizeBound = null;
+            }
+            // 마퀴 play/pause 글로벌 캡처 핸들러 정리
+            if (this._fsVpPlayHandler) {
+                document.removeEventListener('play', this._fsVpPlayHandler, true);
+                document.removeEventListener('pause', this._fsVpPlayHandler, true);
+                this._fsVpPlayHandler = null;
+            }
+            // ★ 동영상 키보드 단축키 핸들러 정리 (펜닐님 결정 — document에 등록되어 명시적 정리 필요)
+            if (this._previewVideoKeyHandler) {
+                document.removeEventListener('keydown', this._previewVideoKeyHandler);
+                this._previewVideoKeyHandler = null;
+                const _modal = document.getElementById('modal-preview');
+                if (_modal) _modal._keyHandlerBound = false;  // 다음 모달 오픈 시 재등록
+            }
+            // ★ 음악 키보드 단축키 핸들러 정리 (동영상과 일관성)
+            if (this._previewAudioKeyHandler) {
+                document.removeEventListener('keydown', this._previewAudioKeyHandler);
+                this._previewAudioKeyHandler = null;
+            }
+            this._fsVpFolderVideos = null;
+            this._fsVpCurrentPath = null;
+            this._fsVpClose = null;
+            // ★ 모달 완전 닫힐 때 (keepOpen=false) 스크롤 위치 키 정리
+            //   다음 모달 진입 시 첫 진입으로 처리 (가운데 스크롤)
+            if (!_keepOpen) {
+                try { sessionStorage.removeItem('fs_vp_panel_scroll'); } catch (e) {}
+            }
             
             // ★ ResizeObserver 정리 (메모리 누수 방지)
             if (window._previewResizeObs) {
@@ -28513,6 +29146,9 @@ const App = {
                 if (window._videoDebug) console.warn('[VideoDebug] hideModal CLEANUP, _startTranscodeTimer:', !!window._startTranscodeTimer, '_transcodeAbort:', !!window._transcodeAbort, '_mediaInfoAbort:', !!this._mediaInfoAbort);
                 if (window._startTranscodeTimer) { clearTimeout(window._startTranscodeTimer); window._startTranscodeTimer = null; }
                 if (window._transcodeAbort) { window._transcodeAbort.abort(); window._transcodeAbort = null; }
+                // ★ _startTranscode 가드 플래그 정리 (모달 닫기 시 다음 영상 위해 리셋)
+                window._lastStartTranscodeUrl = null;
+                window._lastStartTranscodeTime = 0;
                 if (this._mediaInfoAbort) { this._mediaInfoAbort.abort(); this._mediaInfoAbort = null; }
                 // ★ 자막 wrapper 안의 video까지 모두 포함해서 강력 정리
                 const videos = previewContent.querySelectorAll('video');
@@ -28717,28 +29353,35 @@ const App = {
             }
             
             // 모달 위치/크기 인라인 스타일 초기화 (저장된 값은 localStorage에 유지됨)
-            const modal = document.getElementById(id);
-            if (modal) {
-                modal.classList.remove('draggable');
-                modal.style.left = '';
-                modal.style.top = '';
-                modal.style.width = '';
-                modal.style.height = '';
-                const mbody = modal.querySelector('.modal-body');
-                if (mbody) mbody.style.height = '';
-                // preview-content 인라인 스타일 초기화 (리사이즈 시 설정된 것)
-                const pc = modal.querySelector('#preview-content');
-                if (pc) {
-                    pc.style.width = '';
-                    pc.style.height = '';
-                    pc.style.alignItems = '';
-                    pc.style.justifyContent = '';
+            // ★ keepOpen=true 시는 보존 (사용자가 리사이즈한 크기 유지, 트랙 전환 깜빡임 방지)
+            if (!_keepOpen) {
+                const modal = document.getElementById(id);
+                if (modal) {
+                    modal.classList.remove('draggable');
+                    modal.style.left = '';
+                    modal.style.top = '';
+                    modal.style.width = '';
+                    modal.style.height = '';
+                    const mbody = modal.querySelector('.modal-body');
+                    if (mbody) mbody.style.height = '';
+                    // preview-content 인라인 스타일 초기화 (리사이즈 시 설정된 것)
+                    const pc = modal.querySelector('#preview-content');
+                    if (pc) {
+                        pc.style.width = '';
+                        pc.style.height = '';
+                        pc.style.alignItems = '';
+                        pc.style.justifyContent = '';
+                    }
                 }
             }
         }
         
         if (!id) return;
-        $(`#${id}`).hide();
+        // ★ keepOpen 시 display 변경 안 함 (트랙 전환 깜빡임 방지, 펜닐님 결정)
+        //   다음 showPreview에서 콘텐츠만 채우고 모달은 그대로 유지
+        if (!_keepOpen) {
+            $(`#${id}`).hide();
+        }
         
         // vault-create 모달이 닫힐 때 변환 모드 초기화
         if (id === 'modal-vault-create' && this._pendingConvertPath) {
@@ -28746,6 +29389,8 @@ const App = {
             $('#vault-create-name').prop('disabled', false);
         }
         
+        // ★ keepOpen 시 모달 스택/오버레이 처리 스킵 (모달 그대로 유지)
+        if (_keepOpen) return;
         // 스택에서 이전 모달 복원
         if (this.modalStack.length > 0) {
             const prevModalId = this.modalStack.pop();
@@ -29676,11 +30321,20 @@ const App = {
             const terminateBtn = session.is_current ? '' : 
                 `<button class="btn btn-danger btn-sm btn-terminate" data-session="${session.session_id}">${t('il_logout', '로그아웃')}</button>`;
             
+            // ★ 로그인 기록과 동일 패턴 — parseUserAgentDetails로 OS+브라우저+아이콘+디바이스 구분 (펜닐님 요청)
+            //   이전: 서버에서 가공된 "Chrome / Mac" 텍스트 받음 → iPhone이 Mac으로 잘못 표시
+            //   변경: raw user_agent → 클라이언트 parseUserAgentDetails → 정확한 OS/브라우저/PC/모바일 구분
+            const uaDetails = this.parseUserAgentDetails(session.user_agent);
+            const deviceTypeLabel = uaDetails.device === 'mobile' ? t('mobile', '모바일')
+                : uaDetails.device === 'tablet' ? t('tablet', '태블릿')
+                : t('desktop', 'PC');
+            const deviceStr = `${uaDetails.os} / ${uaDetails.browser}`;
+            
             html += `
                 <div class="session-item ${session.is_current ? 'current' : ''}">
                     <div class="session-info">
                         <div class="session-device">
-                            ${this.getDeviceIcon(session.user_agent)} ${this.escapeHtml(session.user_agent)} ${currentBadge}
+                            ${uaDetails.icon} ${this.escapeHtml(deviceStr)} <span style="color:#999;font-size:0.85em;">[${this.escapeHtml(deviceTypeLabel)}]</span> ${currentBadge}
                         </div>
                         <div class="session-details">
                             <span>IP: ${this.escapeHtml(session.ip)}</span>
@@ -30669,6 +31323,19 @@ const App = {
         // 이전 미디어 체크 플래그 초기화
         this._checkMediaInfo = false;
         
+        // ★ [HLS_DIAG] 미리보기 시작 (window._hlsDiag = true 시 활성)
+        if (window._diagLog) {
+            const _ext = (item?.name || '').split('.').pop().toLowerCase();
+            window._diagLog('preview_start', {
+                name: item?.name,
+                ext: _ext,
+                isDir: item?.isDir,
+                storageId: item?.storageId,
+                hasFolderVideos: !!this._fsVpFolderVideos,
+                folderVideosCount: this._fsVpFolderVideos?.length || 0
+            });
+        }
+        
         // ★ [VideoDebug] 비디오 상태 추적 시작 (window._videoDebug = true 시 활성)
         if (window._videoDebug) {
             const _vdStart = performance.now();
@@ -30981,14 +31648,72 @@ const App = {
                     ? `<div class="video-audio-select" id="video-audio-select"></div>`
                     : '';
                 
-                content = `<div class="video-player-wrap" style="max-width:100%;max-height:100%;">
+                // ★ 메인 인덱스 폴더 동영상 플레이리스트 — 같은 폴더의 동영상 2개 이상이면 사이드 패널 활성화
+                //   펜닐님 결정: 2개 이상일 때만 표시 / 하이브리드 방식 (트랙 클릭 시 모달 닫고 재오픈)
+                const videoExts = this.previewExtensions?.video || ['mp4', 'webm', 'ogg', 'mkv', 'avi', 'mov', 'flv', 'wmv', '3gp', 'm4v', 'ts'];
+                const folderVideos = (this.files || []).filter(f => {
+                    if (!f || f.is_dir) return false;
+                    if (f._vault) return false;  // vault는 제외 (별도 처리)
+                    const fext = (f.extension || (f.name || '').split('.').pop() || '').toLowerCase();
+                    return videoExts.includes(fext);
+                });
+                const hasVideoPlaylist = folderVideos.length >= 2;
+                this._fsVpFolderVideos = hasVideoPlaylist ? folderVideos : null;
+                this._fsVpCurrentPath = hasVideoPlaylist ? item.path : null;
+
+                let playlistHtml = '';
+                let toggleBtnHtml = '';
+                if (hasVideoPlaylist) {
+                    const curIdx = folderVideos.findIndex(f => f.path === item.path);
+                    const itemsHtml = folderVideos.map((f, i) => {
+                        const isCurrent = (i === curIdx);
+                        const fname = this.escapeHtml(f.name);
+                        const fext = this.escapeHtml((f.extension || (f.name || '').split('.').pop() || '').toUpperCase());
+                        const fsize = this.formatSize(f.size || 0);
+                        return `<div class="fs-vp-item${isCurrent ? ' current' : ''}" data-path="${this.escapeHtml(f.path)}" data-index="${i}">
+                            <span class="fs-vp-num">${i + 1}.</span>
+                            <span class="fs-vp-name" title="${fname}"><span class="fs-vp-name-inner">${fname}</span></span>
+                            <span class="fs-vp-meta">${fext} · ${fsize}</span>
+                            <span class="fs-vp-play-icon">${isCurrent ? '▶' : '·'}</span>
+                        </div>`;
+                    }).join('');
+                    playlistHtml = `<aside class="fs-vp-panel" id="fs-vp-panel" aria-hidden="true">
+                        <div class="fs-vp-header">
+                            <span class="fs-vp-icon">🎬</span>
+                            <span class="fs-vp-title">${t('share_video_folder', '동영상 폴더')}</span>
+                            <span class="fs-vp-count">${folderVideos.length}${t('tracks_unit', '개 트랙')}</span>
+                            <button type="button" class="fs-vp-close" id="fs-vp-close" title="${t('close', '닫기')}">✕</button>
+                        </div>
+                        <div class="fs-vp-body" id="fs-vp-body">${itemsHtml}</div>
+                    </aside>`;
+                    toggleBtnHtml = `<button type="button" class="fs-vp-toggle" id="fs-vp-toggle" title="${t('playlist_toggle', '목록 열기/닫기')}">📋 ${t('playlist', '목록')}</button>`;
+                }
+
+                // ★ flex 레이아웃: 영상 + 패널을 fs-vp-flex로 감싸기 (패널 열림 시만 옆에 표시)
+                //   펜닐님 결정 옵션 A: 영상 폭 자동 조정 (조금 흔들림 허용)
+                
+                // ★ 깜빡임 방지: HTML 생성 시점부터 video-not-ready 클래스 미리 적용
+                //   기존 setTimeout(0) 갭 제거 — DOM 삽입 즉시 not-ready 상태
+                //   _checkMediaInfo (네이티브 코덱 체크) 또는 needsTranscode (트랜스코딩) 시 적용
+                //   네이티브 재생 가능 확정 후 라인 32007에서 video-not-ready 제거됨
+                const _initialNotReady = (needsTranscode || (!needsTranscode && !item._vaultBlobUrl)) ? ' video-not-ready' : '';
+                const _initialControlsAttr = _initialNotReady ? '' : 'controls ';
+                
+                const videoInnerHtml = `<div class="video-player-wrap${_initialNotReady}" style="max-width:100%;max-height:100%;">
                     ${streamBadge}
                     ${audioSelectHtml}
-                    <video controls playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
+                    ${toggleBtnHtml}
+                    <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
                     <div class="video-play-overlay" id="video-play-overlay"><svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></div>
                     <div class="video-seek-overlay video-seek-left">-5</div>
                     <div class="video-seek-overlay video-seek-right">+5</div>
                 </div>`;
+                if (hasVideoPlaylist) {
+                    // flex wrapper로 감싸기 — 패널이 video-player-wrap의 형제로 배치
+                    content = `<div class="fs-vp-flex">${videoInnerHtml}${playlistHtml}</div>`;
+                } else {
+                    content = videoInnerHtml;
+                }
                 
                 // 트랜스코딩 비디오: 스트리밍 시작
                 if (needsTranscode) {
@@ -31009,15 +31734,20 @@ const App = {
                 
                 // ★ needsTranscode 또는 checkMediaInfo 중이면 비디오 삽입 직후 즉시 재생 차단
                 // (HLS init 코드는 media_info 응답 후에야 실행되므로 그 사이 1~2초 구간 뚫림 방지)
+                // ★ HTML에서 이미 video-not-ready 클래스 + controls 미적용 → _hadControls 강제 true 설정
+                //   (HTML 생성 시점에 controls 안 들어가므로 hasAttribute 체크는 false 반환)
+                //   _hadControls=true → 나중에 ready 되면 controls 복원됨 (라인 31999 _nativeVid._hadControls)
                 if (needsTranscode || this._checkMediaInfo) {
                     setTimeout(() => {
                         const _v = document.querySelector('#preview-content .preview-video');
                         if (_v) {
                             _v._isReady = false;
-                            _v._hadControls = _v.hasAttribute('controls');
+                            _v._hadControls = true;  // HTML에서 controls 미적용이므로 강제 true (복원 시 추가됨)
+                            // controls 속성 보장 제거 (혹시 남아있으면)
                             try { _v.removeAttribute('controls'); } catch(e) {}
+                            // video-not-ready 클래스 보장 (HTML에서 이미 적용됐지만 안전망)
                             const _w = _v.closest('.video-player-wrap');
-                            if (_w) _w.classList.add('video-not-ready');
+                            if (_w && !_w.classList.contains('video-not-ready')) _w.classList.add('video-not-ready');
                             // play 가드
                             _v.addEventListener('play', function _preCodecPlayGuard() {
                                 if (_v._isReady === false) {
@@ -31039,8 +31769,86 @@ const App = {
                     setTimeout(() => this._loadSubtitles(storageId, subtitleTracks), 300);
                 }
                 
+                // ★ 네이티브 재생 video.error → 트랜스코딩 자동 전환 (펜닐님 결정)
+                //   PC 동영상 플레이어 (팟플레이어/곰플레이어) 수준 호환성:
+                //   네이티브 재생이 실패하면 자동으로 트랜스코딩으로 전환
+                //   - DECODE 에러 (코덱 라이브러리 차이/부분 손상)
+                //   - SRC_NOT_SUPPORTED (mp4 컨테이너 + 비표준 코덱)
+                //   - 손상 파일은 트랜스코딩도 실패해서 결국 종료됨
+                if (!needsTranscode && !item._vaultBlobUrl) {
+                    setTimeout(() => {
+                        const _v = document.querySelector('#preview-content .preview-video');
+                        if (_v && !_v._nativeErrorHandlerBound) {
+                            _v._nativeErrorHandlerBound = true;
+                            _v.addEventListener('error', () => {
+                                const e = _v.error;
+                                if (!e) return;
+                                // 모달 닫기/src 제거로 인한 에러 무시
+                                if (e.message && e.message.includes('Empty src')) return;
+                                // ABORTED는 사용자 의도일 수 있음 (제외)
+                                if (e.code === 1) return;
+                                // 이미 트랜스코딩 모드면 무시
+                                if (_v._switchingToTranscode) return;
+                                if (_v.getAttribute('data-transcode-base')) return;
+                                
+                                // DECODE/NETWORK/SRC_NOT_SUPPORTED → 트랜스코딩 자동 전환
+                                _v._switchingToTranscode = true;
+                                const codes = {1:'ABORTED', 2:'NETWORK', 3:'DECODE', 4:'SRC_NOT_SUPPORTED'};
+                                if (window._diagLog) {
+                                    window._diagLog('native_play_error_to_transcode', {
+                                        code: e.code,
+                                        codeName: codes[e.code] || ('ERR' + e.code),
+                                        message: e.message,
+                                        path: item.path,
+                                        ext: ext
+                                    });
+                                }
+                                
+                                const badge = document.querySelector('.video-stream-badge');
+                                if (badge) {
+                                    badge.className = 'video-stream-badge';
+                                    badge.innerHTML = '⚡ ' + t('native_failed_transcode', '네이티브 재생 실패 — 트랜스코딩 전환 중...');
+                                }
+                                
+                                // ★ 깜빡임 방지: wrapper에 video-not-ready 즉시 추가
+                                //   네이티브 재생 OK 판단됐을 때 라인 32008에서 클래스 제거됐을 수 있음
+                                //   → video.error로 트랜스코딩 전환 시 wrapper 상태 복원
+                                const _eVidWrap = _v.closest('.video-player-wrap');
+                                if (_eVidWrap && !_eVidWrap.classList.contains('video-not-ready')) {
+                                    _eVidWrap.classList.add('video-not-ready');
+                                }
+                                _v._isReady = false;
+                                _v._hadControls = _v.hasAttribute('controls');
+                                try { _v.removeAttribute('controls'); } catch(err) {}
+                                
+                                // 트랜스코딩 URL 만들기 (mp4/webm/ogg도 강제 트랜스코딩)
+                                const _transcodeUrl = `api.php?action=transcode&storage_id=${storageId}&path=${encodeURIComponent(item.path)}`;
+                                _v.setAttribute('data-transcode-base', _transcodeUrl);
+                                
+                                // 이전 src 정리 + 새 비디오 요소 교체 (안정성)
+                                try {
+                                    _v.pause();
+                                    _v.removeAttribute('src');
+                                    _v.querySelectorAll('source').forEach(s => s.remove());
+                                    _v.load();
+                                } catch(err) {}
+                                
+                                // 트랜스코딩 시작
+                                setTimeout(() => {
+                                    this._startTranscode(_transcodeUrl, storageId, item.path);
+                                }, 100);
+                            });
+                        }
+                    }, 100);
+                }
+                
                 // 배속/PIP 컨트롤 바인딩
                 setTimeout(() => this._bindVideoExtraControls(), 100);
+
+                // ★ 폴더 동영상 플레이리스트 사이드 패널 셋업 (펜닐님 결정: 2개 이상일 때만)
+                if (hasVideoPlaylist) {
+                    setTimeout(() => this._setupVideoPlaylistPanel(), 150);
+                }
                 break;
             }
             case 'audio':
@@ -31071,6 +31879,7 @@ const App = {
                     // ★ IDB 캐시 키 무효화용 mtime (파일 변경 시 새 URL → IDB miss → 새 fetch)
                     //   서버 캐시 키도 mtime 포함이므로 클라/서버 일관성 유지
                     const _fMtime = f.modified ? Math.floor(new Date(f.modified).getTime() / 1000) : 0;
+                    
                     return {
                         name: f.name.replace(/\.[^.]+$/, ''),
                         fullName: f.name,  // 확장자 포함 파일명 (서버 매칭용)
@@ -31082,6 +31891,11 @@ const App = {
                         // ★ &v=mtime: 파일 변경 시 URL 달라져 IDB 캐시 자동 무효화 (서버는 v 파라미터 무시)
                         coverApiUrl: (isMp3 && _isLocalStorage && !f._vaultBlobUrl)
                             ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(f.path)}&enc=b64&v=${_fMtime}`
+                            : null,
+                        // 가사 URL (오디오 + 로컬 스토리지만, LRC > USLT > TXT 우선순위)
+                        // Vault는 같은 폴더 LRC/TXT 접근 가능하지만 USLT는 불가 (복호화된 blob에서 추출 불가)
+                        lyricsApiUrl: (_isLocalStorage && !f._vaultBlobUrl && ['mp3','m4a','flac','ogg','wav','aac','opus','ape','alac','aiff'].includes(fExt))
+                            ? `api.php?action=audio_lyrics&storage_id=${storageId}&path=${_encodePath(f.path)}&enc=b64&v=${_fMtime}`
                             : null,
                     };
                 });
@@ -31121,6 +31935,10 @@ const App = {
                         // ★ &v=mtime: 파일 변경 시 URL 달라져 IDB 캐시 자동 무효화
                         coverApiUrl: (_singleIsMp3 && _isLocalStorage && !item._vaultBlobUrl)
                             ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(item.path)}&enc=b64&v=${_itemMtime}`
+                            : null,
+                        // 가사 URL (오디오 + 로컬 스토리지만)
+                        lyricsApiUrl: (_isLocalStorage && !item._vaultBlobUrl && ['mp3','m4a','flac','ogg','wav','aac','opus','ape','alac','aiff'].includes(_singleExt))
+                            ? `api.php?action=audio_lyrics&storage_id=${storageId}&path=${_encodePath(item.path)}&enc=b64&v=${_itemMtime}`
                             : null,
                     });
                     fsAudioIndex = 0;
@@ -31235,6 +32053,125 @@ const App = {
                                 if (this._fsAudioPlayer._updateTrackMeta) this._fsAudioPlayer._updateTrackMeta();
                             }
                         }, 5000);
+                        
+                        // ★ 음악 키보드 단축키 (모달 포커스 무관 작동 — 동영상과 일관성, 펜닐님 결정)
+                        //   button title에 명시된 단축키 모두 구현 (펜닐님 의도 반영)
+                        //   - Space: 재생/일시정지
+                        //   - Shift+←/→: 이전/다음 곡
+                        //   - ←/→: 5초 이동
+                        //   - ↑/↓: 볼륨 5% 조절
+                        //   - M: 음소거
+                        //   - L: 반복 모드
+                        //   - S: 셔플
+                        //   - Esc: 모달 닫기
+                        if (this._previewAudioKeyHandler) {
+                            document.removeEventListener('keydown', this._previewAudioKeyHandler);
+                            this._previewAudioKeyHandler = null;
+                        }
+                        const _previewModalAudio = document.getElementById('modal-preview');
+                        this._previewAudioKeyHandler = (e) => {
+                            // 모달이 열려있을 때만 처리
+                            if (!_previewModalAudio || getComputedStyle(_previewModalAudio).display === 'none') return;
+                            // input/textarea 안에서는 무시
+                            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                            if (e.target.isContentEditable) return;
+                            
+                            const player = this._fsAudioPlayer;
+                            if (!player || player._destroyed) return;
+                            
+                            // Esc: 모달 닫기
+                            if (e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                App.hideModal('modal-preview');
+                                return;
+                            }
+                            
+                            // Shift+← : 이전 곡
+                            if (e.shiftKey && e.key === 'ArrowLeft') {
+                                if (player.prev) player.prev();
+                                e.preventDefault();
+                                return;
+                            }
+                            // Shift+→ : 다음 곡
+                            if (e.shiftKey && e.key === 'ArrowRight') {
+                                if (player.next) player.next();
+                                e.preventDefault();
+                                return;
+                            }
+                            
+                            // Space: 재생/일시정지
+                            if (e.key === ' ' || e.code === 'Space') {
+                                if (player.togglePlay) player.togglePlay();
+                                e.preventDefault();
+                                return;
+                            }
+                            
+                            // ←→: 5초 이동
+                            if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                                const audio = player.audio;
+                                if (audio) {
+                                    const seekAmount = e.key === 'ArrowLeft' ? -5 : 5;
+                                    audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + seekAmount));
+                                    e.preventDefault();
+                                }
+                                return;
+                            }
+                            
+                            // ↑/↓: 볼륨 5% 조절
+                            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                                if (player._getVolume && player._setVolume) {
+                                    const delta = e.key === 'ArrowUp' ? 0.05 : -0.05;
+                                    player._setVolume(player._getVolume() + delta);
+                                    if (player._updateVolUI) player._updateVolUI();
+                                    if (player._showVolumeToast) player._showVolumeToast();
+                                    if (player._saveVolumePref) player._saveVolumePref();
+                                    e.preventDefault();
+                                }
+                                return;
+                            }
+                            
+                            // M: 음소거 토글 (버튼 클릭 핸들러 패턴 그대로)
+                            if (e.key === 'm' || e.key === 'M') {
+                                if (player._getVolume && player._setVolume) {
+                                    if (player._getVolume() > 0) {
+                                        player._prevVolume = player._getVolume();
+                                        player._setVolume(0);
+                                    } else {
+                                        player._setVolume(player._prevVolume || 0.8);
+                                    }
+                                    if (player._updateVolUI) player._updateVolUI();
+                                    if (player._showVolumeToast) player._showVolumeToast();
+                                    if (player._saveVolumePref) player._saveVolumePref();
+                                    e.preventDefault();
+                                }
+                                return;
+                            }
+                            
+                            // L: 반복 모드 (버튼 클릭 핸들러 패턴 그대로 — all → one → none → all)
+                            if (e.key === 'l' || e.key === 'L') {
+                                if (player.loop === 'all') player.loop = 'one';
+                                else if (player.loop === 'one') player.loop = 'none';
+                                else player.loop = 'all';
+                                if (player._updateLoopUI) player._updateLoopUI();
+                                if (player._saveLoopPref) player._saveLoopPref();
+                                e.preventDefault();
+                                return;
+                            }
+                            
+                            // S: 셔플 토글
+                            if (e.key === 's' || e.key === 'S') {
+                                player.shuffle = !player.shuffle;
+                                if (player.$ && player.$.btnShuffle) {
+                                    player.$.btnShuffle.classList.toggle('active', player.shuffle);
+                                }
+                                if (player.shuffle && player._buildShuffleOrder) player._buildShuffleOrder();
+                                if (player._saveShufflePref) player._saveShufflePref();
+                                e.preventDefault();
+                                return;
+                            }
+                        };
+                        document.addEventListener('keydown', this._previewAudioKeyHandler);
                     } catch (e) {
                         console.warn('FSAudioPlayer init error:', e);
                     }
@@ -31552,6 +32489,13 @@ const App = {
                     oldVid.pause();
                     oldVid.removeAttribute('src');
                     oldVid.querySelectorAll('source').forEach(s => s.remove());
+                    // ★ 깜빡임 방지: replaceChild 전에 wrapper에 video-not-ready 미리 추가
+                    //   라인 31999~32008에서 네이티브 재생 OK 판단 시 video-not-ready 제거됐을 수 있음
+                    //   → 트랜스코딩 전환 결정 직후 wrapper 클래스 복원 (replaceChild 갭 제거)
+                    const _oldWrap = oldVid.closest('.video-player-wrap');
+                    if (_oldWrap && !_oldWrap.classList.contains('video-not-ready')) {
+                        _oldWrap.classList.add('video-not-ready');
+                    }
                     // 새 비디오 요소 생성
                     const newVid = document.createElement('video');
                     newVid.controls = true;
@@ -31572,9 +32516,11 @@ const App = {
                         }
                     });
                     oldVid.parentNode.replaceChild(newVid, oldVid);
-                    // wrapper에 not-ready 클래스도 추가
+                    // wrapper에 not-ready 클래스도 추가 (안전망 — replaceChild 후 wrapper가 바뀌었을 경우 대비)
                     const _newWrap = newVid.closest('.video-player-wrap');
-                    if (_newWrap) _newWrap.classList.add('video-not-ready');
+                    if (_newWrap && !_newWrap.classList.contains('video-not-ready')) {
+                        _newWrap.classList.add('video-not-ready');
+                    }
                     if (window._videoDebug) console.log('[VD PRE-SET] newVid _isReady=false (post-transcode-switch)');
                 }
                 if (badgeParent) {
@@ -32099,17 +33045,26 @@ const App = {
                 });
             });
             
-            // 모달 키 핸들러 (한번만 등록) - ESC + 좌우 화살표 (비디오용)
+            // 모달 키 핸들러 (한번만 등록) - ESC + 좌우 화살표 + 스페이스
+            // ★ document에 등록 — 모달 포커스 무관 작동 (공유 페이지와 동일 패턴, 펜닐님 결정)
+            //   이전엔 previewModal에 등록되어 모달 포커스 시에만 작동 → 일관성 깨짐
             if (!previewModal._keyHandlerBound) {
-                previewModal.addEventListener('keydown', (e) => {
+                this._previewVideoKeyHandler = (e) => {
+                    // 모달이 열려있을 때만 처리 (다른 모달과 충돌 방지)
+                    if (!previewModal.classList.contains('show') && previewModal.style.display === 'none') return;
+                    if (!previewModal.classList.contains('show') && getComputedStyle(previewModal).display === 'none') return;
+                    
+                    // input/textarea 안에서는 무시
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                    if (e.target.isContentEditable) return;
+                    
                     if (e.key === 'Escape') {
                         e.preventDefault();
                         e.stopPropagation();
                         App.hideModal('modal-preview');
+                        return;
                     }
-                    // 좌우 화살표로 5초 앞/뒤 이동 (유튜브 스타일) - 비디오 전용
-                    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-                    
+                    // 좌우 화살표로 5초 앞/뒤 이동 (유튜브 스타일)
                     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                         const video = document.querySelector('#preview-content .preview-video');
                         if (video) {
@@ -32126,133 +33081,17 @@ const App = {
                             e.preventDefault();
                         }
                     }
-                    // 스페이스바 재생/일시정지 (비디오 전용)
-                    if (e.key === ' ') {
+                    // 스페이스바 재생/일시정지
+                    if (e.key === ' ' || e.code === 'Space') {
                         const video = document.querySelector('#preview-content .preview-video');
                         if (video) {
-                            video.paused ? video.play() : video.pause();
+                            video.paused ? video.play().catch(() => {}) : video.pause();
                             e.preventDefault();
                         }
                     }
-                });
+                };
+                document.addEventListener('keydown', this._previewVideoKeyHandler);
                 previewModal._keyHandlerBound = true;
-            }
-            
-            // ★ MP3 플레이어 키보드 단축키 — 글로벌 캡처 핸들러
-            //   기존 모달 핸들러는 모달이 포커스 받아야 동작 (재생 전엔 포커스 안 받음)
-            //   → document 캡처 단계에서 처리 = 모달 포커스 무관, 다른 핸들러보다 먼저 발동
-            //   → 스토리지 탐색기 키 충돌 방지
-            //
-            //   동작 조건:
-            //   1. 미리보기 모달이 열려있음
-            //   2. audio 플레이어 인스턴스 존재
-            //   3. 비디오 요소 없음 (있으면 비디오 단축키 우선)
-            //   4. input/textarea 포커스 아님
-            if (!document._fsAudioKeyHandlerBound) {
-                document.addEventListener('keydown', (e) => {
-                    // input/textarea 포커스 시는 입력 우선
-                    if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT') return;
-                    if (e.target.isContentEditable) return;
-                    
-                    // 미리보기 모달 닫혀있으면 무시
-                    const pm = document.getElementById('modal-preview');
-                    if (!pm || pm.style.display === 'none') return;
-                    
-                    // audio 플레이어 인스턴스 체크
-                    const audioPlayer = App._fsAudioPlayer;
-                    if (!audioPlayer || audioPlayer._destroyed) return;
-                    
-                    // 비디오 요소 있으면 비디오 단축키 우선 (모달 핸들러가 처리)
-                    const hasVideo = !!document.querySelector('#preview-content .preview-video');
-                    if (hasVideo) return;
-                    
-                    // Space: 재생/일시정지
-                    if (e.key === ' ') {
-                        audioPlayer.togglePlay();
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    // Shift + ArrowLeft/Right: 이전/다음 곡
-                    if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-                        if (e.key === 'ArrowLeft') audioPlayer.prev();
-                        else audioPlayer.next();
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    // ArrowLeft/Right: 5초 뒤/앞으로
-                    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-                        const audio = audioPlayer.audio;
-                        if (audio) {
-                            const seekAmount = e.key === 'ArrowLeft' ? -5 : 5;
-                            audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + seekAmount));
-                        }
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    // ArrowUp/Down: 볼륨 +/- 5%
-                    //   iOS는 audio.volume 변경 불가 (Apple 정책) → 키보드 볼륨 조작도 무시
-                    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                        if (audioPlayer._isIOS) {
-                            // iOS: 볼륨 조작 자체가 불가하므로 키 처리 안 함 (스토리지 탐색기로 양보)
-                            return;
-                        }
-                        const delta = e.key === 'ArrowUp' ? 0.05 : -0.05;
-                        const newVol = Math.max(0, Math.min(1, (audioPlayer._volume || 0) + delta));
-                        audioPlayer._setVolume(newVol);
-                        audioPlayer._updateVolUI();
-                        if (typeof audioPlayer._showVolumeToast === 'function') audioPlayer._showVolumeToast();
-                        if (typeof audioPlayer._saveVolumePref === 'function') audioPlayer._saveVolumePref();
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    // M: 음소거 토글
-                    //   iOS도 동일 (volume 변경 불가)
-                    if (e.key === 'm' || e.key === 'M') {
-                        if (audioPlayer._isIOS) return;
-                        if (audioPlayer._volume > 0) {
-                            audioPlayer._prevVolume = audioPlayer._volume;
-                            audioPlayer._setVolume(0);
-                        } else {
-                            audioPlayer._setVolume(audioPlayer._prevVolume || 0.8);
-                        }
-                        audioPlayer._updateVolUI();
-                        if (typeof audioPlayer._showVolumeToast === 'function') audioPlayer._showVolumeToast();
-                        if (typeof audioPlayer._saveVolumePref === 'function') audioPlayer._saveVolumePref();
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    // L: 반복 모드 토글 (all → one → none → all)
-                    if (e.key === 'l' || e.key === 'L') {
-                        if (audioPlayer.loop === 'all') audioPlayer.loop = 'one';
-                        else if (audioPlayer.loop === 'one') audioPlayer.loop = 'none';
-                        else audioPlayer.loop = 'all';
-                        if (typeof audioPlayer._updateLoopUI === 'function') audioPlayer._updateLoopUI();
-                        if (typeof audioPlayer._saveLoopPref === 'function') audioPlayer._saveLoopPref();
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    // S: 셔플 토글
-                    if (e.key === 's' || e.key === 'S') {
-                        audioPlayer.shuffle = !audioPlayer.shuffle;
-                        if (audioPlayer.$ && audioPlayer.$.btnShuffle) {
-                            audioPlayer.$.btnShuffle.classList.toggle('active', audioPlayer.shuffle);
-                        }
-                        if (audioPlayer.shuffle && typeof audioPlayer._buildShuffleOrder === 'function') {
-                            audioPlayer._buildShuffleOrder();
-                        }
-                        if (typeof audioPlayer._saveShufflePref === 'function') audioPlayer._saveShufflePref();
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                }, true);  // ★ capture phase = 다른 핸들러보다 먼저 발동
-                document._fsAudioKeyHandlerBound = true;
             }
         }
     },
@@ -32262,9 +33101,28 @@ const App = {
         const video = document.querySelector('#preview-content .preview-video');
         if (!video) { /* console.log('[EncoderDebug] _startTranscode: no video element'); */ return; }
         
+        // ★ 이중 호출 가드 (펜닐님 진단: PC만 두 번 호출되어 폴더 두 개 생성)
+        //   같은 transcodeBaseUrl로 짧은 시간(2초) 안에 재호출되면 블록
+        //   audio 변경 시는 transcodeBaseUrl이 다름 (audio=N 파라미터) → 통과
+        //   새 영상 시는 path가 다름 → 통과
+        const _now = Date.now();
+        if (window._lastStartTranscodeUrl === transcodeBaseUrl 
+            && window._lastStartTranscodeTime
+            && (_now - window._lastStartTranscodeTime) < 2000) {
+            if (window._diagLog) {
+                window._diagLog('start_transcode_blocked_duplicate', {
+                    transcodeBaseUrl: (transcodeBaseUrl || '').substring(0, 150),
+                    msSinceLast: _now - window._lastStartTranscodeTime
+                });
+            }
+            return;
+        }
+        window._lastStartTranscodeUrl = transcodeBaseUrl;
+        window._lastStartTranscodeTime = _now;
+        
         // 이전 _startTranscode 인스턴스 즉시 취소
         if (window._transcodeAbort) {
-            window._transcodeAbort.abort();
+            try { window._transcodeAbort.abort(); } catch(e) {}
         }
         window._hlsStarting = false; // lock 해제
         const transcodeAbort = new AbortController();
@@ -32345,6 +33203,13 @@ const App = {
             //   (이전 파일이 fallback 탔으면 플래그 남아있어서 이번 파일이 안 탐)
             window._hlsSwRetried = false;
             
+            // ★ 멀티오디오 자동 SW 강제 플래그 (info API 응답에 따라 설정)
+            //   PC/iOS 공통: 멀티오디오 영상은 처음부터 force_sw=1로 시작
+            //   - HW 인코더가 EAC3 5.1 같은 코덱 호환 못 함
+            //   - iOS Safari는 HW segment 디코딩 실패 시 video.error 이벤트 발동 안 함
+            //   - PC는 hls.js ERROR 핸들러로 fallback 가능하지만, 멀티오디오는 처음부터 SW가 안정적
+            let _multiAudioSwForced = false;
+            
             // info 조회 (encoder, audio tracks) — 5초 타임아웃
             // console.log('[EncoderDebug] checking info API, storageId:', storageId, 'path set:', !!path);
             if (storageId && path) {
@@ -32366,6 +33231,22 @@ const App = {
                     }
                     if (aborted()) return;
                     const infoData = await infoResp.json();
+                    
+                    // ★ [HLS_DIAG] info API 응답 (멀티오디오 검출 + 인코더 정보)
+                    if (window._diagLog) {
+                        window._diagLog('info_response', {
+                            encoder: infoData.encoder,
+                            video_codec: infoData.video_codec,
+                            audio_tracks_count: (infoData.audio_tracks || []).length,
+                            audio_tracks: (infoData.audio_tracks || []).map(t => ({
+                                index: t.index,
+                                codec: t.codec,
+                                channels: t.channels,
+                                lang: t.language
+                            })),
+                            duration: infoData.duration
+                        });
+                    }
                     
                     // ★ 디버그: transcode info 응답 확인
                     /* [EncoderDebug] transcode info response 디버그 - 필요 시 주석 해제
@@ -32403,6 +33284,30 @@ const App = {
                     // 오디오 트랙 UI
                     if (infoData.audio_tracks && infoData.audio_tracks.length > 1) {
                         this._buildAudioTrackUI(infoData.audio_tracks, transcodeBaseUrl);
+                        
+                        // ★ 멀티오디오 검출 → 자동 SW 강제 (PC + iOS 모두)
+                        //   - HW 인코더 + EAC3 5.1 같은 코덱 호환 문제 (PC/iOS 공통)
+                        //   - iOS Safari는 video.error 이벤트 발동 안 함 (HW segment 디코딩 실패해도 fallback 트리거 불가)
+                        //   - PC는 hls.js ERROR 핸들러 작동하지만, 멀티오디오에서는 처음부터 SW가 안정적
+                        //   → 처음부터 SW(libx264 + AAC) 사용 = 배지/실제 인코더 일치 + 첫 시도부터 성공
+                        _multiAudioSwForced = true;
+                        
+                        // ★ 배지 즉시 SW 표시로 갱신 (위 라인 33078에서 HW로 표시됐으면 덮어쓰기)
+                        //   순서 문제: info.encoder 기반 배지(HW Intel) → 멀티오디오 검출 → SW 강제
+                        //   → 배지가 실제 인코더(libx264)와 일치하도록 즉시 갱신
+                        if (badge) {
+                            const _method = video._streamMethod || 'HLS';
+                            badge.innerHTML = `⏳ ${t('realtime_converting', '실시간 변환 중...')} <span class="encoder-info">SW : CPU</span>`;
+                        }
+                        
+                        if (window._diagLog) {
+                            window._diagLog('multiaudio_sw_forced', {
+                                audioTracksCount: infoData.audio_tracks.length,
+                                audioCodecs: infoData.audio_tracks.map(t => t.codec).filter(Boolean),
+                                isIOS: /iPhone|iPad|iPod/i.test(navigator.userAgent),
+                                originalInfoEncoder: infoData.encoder
+                            });
+                        }
                     }
                     
                     // 총 재생 시간 설정 (트랜스코딩 스트리밍은 브라우저가 duration을 모름)
@@ -32474,7 +33379,17 @@ const App = {
                     
                     const hlsStartUrl = 'api.php?action=hls_stream&storage_id=' + storageId + '&path=' + encodeURIComponent(path) + '&hls_action=start'
                         + (transcodeBaseUrl.includes('seek=') ? '&seek=' + new URL(transcodeBaseUrl, location.href).searchParams.get('seek') : '')
-                        + (transcodeBaseUrl.includes('audio=') ? '&audio=' + new URL(transcodeBaseUrl, location.href).searchParams.get('audio') : '');
+                        + (transcodeBaseUrl.includes('audio=') ? '&audio=' + new URL(transcodeBaseUrl, location.href).searchParams.get('audio') : '')
+                        + (_multiAudioSwForced ? '&force_sw=1' : '');
+                    
+                    // ★ [HLS_DIAG] hlsStartUrl 생성 결과 (멀티오디오 SW 강제 여부 진단)
+                    if (window._diagLog) {
+                        window._diagLog('hls_start_url_built', {
+                            multiAudioSwForced: _multiAudioSwForced,
+                            hasForceSw: hlsStartUrl.includes('force_sw=1'),
+                            startUrl: hlsStartUrl.substring(0, 200)
+                        });
+                    }
                     
                     // ★ 디버그: HLS 시작 타이밍
                     window._hlsTimings = { startFetch: performance.now() };
@@ -32491,7 +33406,31 @@ const App = {
                     window._hlsTimings.startResponse = performance.now();
                     // console.log('[HLSDebug] START response:', (window._hlsTimings.startResponse - window._hlsTimings.startFetch).toFixed(0) + 'ms');
                     window._hlsStarting = false;
-                    if (aborted()) return;
+                    
+                    // ★ 응답 받았는데 사용자가 이미 모달 닫음 (abort) — race 방어
+                    //   서버는 이미 새 세션 폴더 + ffmpeg 실행 중 → stop 호출해야 정리됨
+                    //   stop 안 부르면 폴더/프로세스 잔재 (펜닐님 진단)
+                    if (aborted()) {
+                        try {
+                            const _abortHlsData = await hlsResp.json();
+                            if (_abortHlsData && _abortHlsData.session) {
+                                const _abortStopUrl = 'api.php?action=hls_stream&hls_action=stop&session=' + _abortHlsData.session
+                                    + '&storage_id=' + storageId + '&path=' + encodeURIComponent(path);
+                                if (window._diagLog) {
+                                    window._diagLog('hls_aborted_after_response', {
+                                        sessionId: _abortHlsData.session,
+                                        stopUrl: _abortStopUrl.substring(0, 200)
+                                    });
+                                }
+                                // 이중 안전망: sendBeacon + fetch keepalive
+                                try {
+                                    if (navigator.sendBeacon) navigator.sendBeacon(_abortStopUrl);
+                                    fetch(_abortStopUrl, { keepalive: true, method: 'GET' }).catch(() => {});
+                                } catch(e) {}
+                            }
+                        } catch(e) {}
+                        return;
+                    }
                     const hlsData = await hlsResp.json();
                     
                     if (hlsData.success && hlsData.playlist) {
@@ -32508,12 +33447,14 @@ const App = {
                                 video._hlsInstance = null;
                             }
                             // 2. 서버에 stop 전달 — 비동기 (UI 블로킹 방지)
+                            //   ★ 이중 안전망: sendBeacon + fetch keepalive 둘 다 시도
+                            //     sendBeacon은 브라우저 정책상 일부 환경에서 무시될 수 있음 (특히 sync stop 시)
+                            //     모달 닫기 시 페이지는 살아있으므로 fetch keepalive가 더 확실
                             try {
                                 if (navigator.sendBeacon) {
                                     navigator.sendBeacon(hlsStopUrl);
-                                } else {
-                                    fetch(hlsStopUrl, { keepalive: true }).catch(() => {});
                                 }
+                                fetch(hlsStopUrl, { keepalive: true, method: 'GET' }).catch(() => {});
                             } catch(e) {}
                         };
                         video._hlsStopSession = hlsStopSession;
@@ -32527,6 +33468,13 @@ const App = {
                             }
                             // ★ blob 추적 시작 (hls.js가 내부에서 MediaSource blob 생성하기 전)
                             if (window._startBlobTracking) window._startBlobTracking();
+                            // ★ [HLS_DIAG] HLS 인스턴스 생성 직전
+                            if (window._diagLog) {
+                                window._diagLog('hls_create', {
+                                    playlistUrl: (playlistUrl || '').substring(0, 80),
+                                    transcodeBaseUrl: (transcodeBaseUrl || '').substring(0, 80)
+                                });
+                            }
                             let hlsFfmpegDead = false;
                             const hls = new Hls({
                                 enableWorker: true,
@@ -32609,6 +33557,15 @@ const App = {
                                 hlsLastFrag = d.frag.sn;
                                 hlsFatalRetries = 0; // 성공하면 재시도 카운터 리셋
                                 if (hlsFragCount % 10 === 0) { /* [HLS] frag loaded */ }
+                                // ★ [HLS_DIAG] segment 다운로드 (첫 5개 + 매 10번째)
+                                if (window._diagLog && (hlsFragCount <= 5 || hlsFragCount % 10 === 0)) {
+                                    window._diagLog('hls_frag_loaded', {
+                                        sn: d.frag.sn,
+                                        count: hlsFragCount,
+                                        url: (d.frag.url || '').substring(d.frag.url.lastIndexOf('/') + 1),
+                                        size: d.payload?.byteLength || d.frag.byteLength || 0
+                                    });
+                                }
                             });
                             
                             hls.on(Hls.Events.LEVEL_LOADED, (e, d) => {
@@ -32617,14 +33574,32 @@ const App = {
                                 const live = d.details.live;
                                 const ended = d.details.endList;
                                 // console.log('[HLS] playlist #' + hlsPlaylistLoads + ': ' + frags + ' frags, live=' + live + ', endList=' + ended);
+                                // ★ [HLS_DIAG] playlist 응답 (첫 3개 + 매 10번째)
+                                if (window._diagLog && (hlsPlaylistLoads <= 3 || hlsPlaylistLoads % 10 === 0)) {
+                                    window._diagLog('hls_playlist_loaded', {
+                                        loads: hlsPlaylistLoads,
+                                        frags: frags,
+                                        live: live,
+                                        endList: ended
+                                    });
+                                }
                             });
                             
                             // 버퍼 부족 / stall 감지
                             hls.on(Hls.Events.BUFFER_EOS, () => {
                                 // console.warn('[HLS] BUFFER_EOS — 버퍼 끝 도달');
+                                if (window._diagLog) window._diagLog('hls_buffer_eos', {});
                             });
                             hls.on(Hls.Events.FRAG_BUFFERED, (e, d) => {
                                 if (d.frag.sn % 20 === 0) { /* [HLS] frag buffered */ }
+                                // ★ [HLS_DIAG] segment append 성공 (첫 5개)
+                                if (window._diagLog && d.frag.sn <= 5) {
+                                    window._diagLog('hls_frag_buffered', {
+                                        sn: d.frag.sn,
+                                        currentTime: video.currentTime?.toFixed(2),
+                                        bufferEnd: video.buffered.length > 0 ? video.buffered.end(video.buffered.length - 1).toFixed(2) : null
+                                    });
+                                }
                             });
                             
                             // video 이벤트
@@ -32800,6 +33775,19 @@ const App = {
                             hls.on(Hls.Events.ERROR, (event, data) => {
                                 const msg = data.details + (data.fatal ? ' FATAL' : '');
                                 hlsErrors.push(msg);
+                                // ★ [HLS_DIAG] 모든 HLS 에러 기록 (bufferStalledError 등)
+                                if (window._diagLog) {
+                                    window._diagLog('hls_error', {
+                                        type: data.type,
+                                        details: data.details,
+                                        fatal: !!data.fatal,
+                                        url: (data.url || '').substring(0, 80),
+                                        responseCode: data.response?.code,
+                                        currentTime: video.currentTime?.toFixed(2),
+                                        bufferEnd: video.buffered.length > 0 ? video.buffered.end(video.buffered.length - 1).toFixed(2) : null,
+                                        bufferAhead: video.buffered.length > 0 ? (video.buffered.end(video.buffered.length - 1) - video.currentTime).toFixed(2) : null
+                                    });
+                                }
                                 // console.error('[HLS ERROR]', data.type, data.details, 'fatal:', data.fatal, 'url:', data.url?.substring(0, 80));
                                 if (data.fatal) {
                                     // ffmpeg 종료 감지 시 즉시 중단 (410 응답)
@@ -32814,9 +33802,15 @@ const App = {
                                     //   HW 인코딩이 특정 파일(WMV, VC-1 등)을 처리 못하는 경우
                                     //   - 서버 측 자동 fallback이 동작하지 않았거나 m3u8 빈껍데기 생성된 경우
                                     //   - 이 세션 stop 후 force_sw=1로 재시작
+                                    //
+                                    // ★ bufferAppendError FATAL → SW fallback 트리거 (멀티오디오 영상 회귀 대응)
+                                    //   HW 인코더가 m3u8/segment는 정상 생성했지만 클라이언트 디코더에서 실패하는 경우
+                                    //   - 멀티오디오 영상 (EAC3 등 일부 audio 코덱 + HW 인코더 조합)
+                                    //   - SourceBuffer.appendBuffer() 실패 → 분석 기반 SW 재시도
                                     const isManifestErr = (data.details === 'manifestLoadError' || data.details === 'manifestLoadTimeOut' || data.details === 'manifestParsingError');
+                                    const isBufferAppendErr = (data.details === 'bufferAppendError');
                                     const is404 = data.response && (data.response.code === 404 || data.response.code === 410);
-                                    if ((isManifestErr || is404) && !transcodeBaseUrl.includes('force_sw=1') && !window._hlsSwRetried) {
+                                    if ((isManifestErr || isBufferAppendErr || is404) && !transcodeBaseUrl.includes('force_sw=1') && !window._hlsSwRetried) {
                                         window._hlsSwRetried = true;
                                         hls.destroy();
                                         if (video._hlsInstance === hls) video._hlsInstance = null;
@@ -32827,7 +33821,24 @@ const App = {
                                         (async () => {
                                             if (aborted()) return;
                                             try {
-                                                const swHlsUrl = hlsStartUrl + '&force_sw=1';
+                                                // ★ SW fallback 시 최신 audio 파라미터 유지 (사용자 트랙 선택 보존)
+                                                //   hlsStartUrl 클로저는 첫 시작 시점 값 → audio 변경 후엔 stale
+                                                //   → video.dataset.transcodeBase 또는 data-transcode-base에서 현재 audio 추출
+                                                const _liveBase = video.getAttribute('data-transcode-base') || transcodeBaseUrl;
+                                                const _liveAudio = new URL(_liveBase, location.href).searchParams.get('audio');
+                                                let _swHlsUrl = hlsStartUrl;
+                                                if (_liveAudio && !hlsStartUrl.includes('audio=' + _liveAudio)) {
+                                                    // 기존 audio 파라미터 제거 후 새 audio 추가
+                                                    _swHlsUrl = hlsStartUrl.replace(/&audio=\d+/g, '') + '&audio=' + _liveAudio;
+                                                }
+                                                const swHlsUrl = _swHlsUrl + '&force_sw=1';
+                                                if (window._diagLog) {
+                                                    window._diagLog('sw_fallback_url', {
+                                                        original: hlsStartUrl.substring(0, 120),
+                                                        liveAudio: _liveAudio,
+                                                        finalUrl: swHlsUrl.substring(0, 150)
+                                                    });
+                                                }
                                                 const swResp = await fetch(swHlsUrl, { signal: transcodeAbort.signal });
                                                 if (aborted()) return;
                                                 const swData = await swResp.json();
@@ -32853,7 +33864,15 @@ const App = {
                                                         video._streamMethod = 'HLS';
                                                     });
                                                     swHls.on(Hls.Events.ERROR, (e, d) => {
-                                                        if (d.fatal) { try { swHls.destroy(); } catch(e){} }
+                                                        if (d.fatal) {
+                                                            try { swHls.destroy(); } catch(e){}
+                                                            if (video._hlsInstance === swHls) video._hlsInstance = null;
+                                                            // ★ SW HLS도 fatal → MMS/MediaSource fallback (공유 페이지와 일관성)
+                                                            if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                                            try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(err) {
+                                                                if (badge) badge.textContent = '❌ 재생 실패';
+                                                            }
+                                                        }
                                                     });
                                                     video._hlsInstance = swHls;
                                                     transcodeAbort.signal.addEventListener('abort', () => {
@@ -32864,7 +33883,11 @@ const App = {
                                                     video.src = swPlaylistUrl;
                                                 }
                                             } catch(swErr) {
-                                                if (badge) badge.textContent = '❌ SW 재시작 실패';
+                                                if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                                // ★ SW도 실패 → MMS/MediaSource fallback (공유 페이지와 일관성)
+                                                try { this._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(e) {
+                                                    if (badge) badge.textContent = '❌ 재생 실패';
+                                                }
                                             }
                                         })();
                                         return;
@@ -32903,6 +33926,107 @@ const App = {
                                 const enc = badge.querySelector('.encoder-info');
                                 badge.innerHTML = '⚡ HLS ' + t('streaming', '스트리밍') + (enc ? ' ' + enc.outerHTML : '');
                             }
+                            
+                            // ★ iOS 네이티브 HLS — video.error 이벤트로 SW fallback 트리거
+                            //   PC hls.js의 ERROR 이벤트와 동등 메커니즘
+                            //   - 멀티오디오 영상 (EAC3 5.1 등)에서 HW 인코더 segment 디코딩 실패 시 발생
+                            //   - fragLoadError에 해당하는 video.error는 MEDIA_ERR_DECODE 또는 MEDIA_ERR_SRC_NOT_SUPPORTED
+                            video.addEventListener('error', async function _iosHlsErrorHandler() {
+                                // 한 번만 실행 (이중 트리거 방지)
+                                video.removeEventListener('error', _iosHlsErrorHandler);
+                                
+                                if (window._diagLog) {
+                                    window._diagLog('ios_native_hls_error', {
+                                        errorCode: video.error?.code,
+                                        errorMessage: video.error?.message,
+                                        currentTime: video.currentTime?.toFixed(2),
+                                        readyState: video.readyState,
+                                        networkState: video.networkState,
+                                        swRetried: !!window._hlsSwRetried
+                                    });
+                                }
+                                
+                                // 이미 SW 재시도했거나 force_sw 상태면 종료
+                                //   - transcodeBaseUrl 또는 hlsStartUrl에 force_sw=1 있음
+                                //   - _multiAudioSwForced: 멀티오디오 자동 SW 시작 케이스
+                                if (transcodeBaseUrl.includes('force_sw=1') || hlsStartUrl.includes('force_sw=1') || _multiAudioSwForced || window._hlsSwRetried) {
+                                    if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                    try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(err) {
+                                        if (badge) badge.textContent = '❌ 재생 실패';
+                                    }
+                                    return;
+                                }
+                                if (aborted()) return;
+                                
+                                window._hlsSwRetried = true;
+                                if (badge) badge.textContent = '⚡ HW 실패 — SW 재시도 중...';
+                                
+                                // 기존 native HLS 정리 (hls.js 인스턴스 없음 — src 제거만)
+                                try { video.pause(); } catch(e) {}
+                                video.removeAttribute('src');
+                                video.load();
+                                
+                                // 기존 HW 세션 stop
+                                try { if (video._hlsStopSession) video._hlsStopSession(); } catch(e) {}
+                                
+                                // SW 재시작
+                                try {
+                                    // ★ 최신 audio 파라미터 유지 (PC 로직과 동일 — 사용자 트랙 선택 보존)
+                                    const _liveBase = video.getAttribute('data-transcode-base') || transcodeBaseUrl;
+                                    const _liveAudio = new URL(_liveBase, location.href).searchParams.get('audio');
+                                    let _swHlsUrl = hlsStartUrl;
+                                    if (_liveAudio && !hlsStartUrl.includes('audio=' + _liveAudio)) {
+                                        _swHlsUrl = hlsStartUrl.replace(/&audio=\d+/g, '') + '&audio=' + _liveAudio;
+                                    }
+                                    const swHlsUrl = _swHlsUrl + '&force_sw=1';
+                                    
+                                    if (window._diagLog) {
+                                        window._diagLog('ios_sw_fallback_url', {
+                                            original: hlsStartUrl.substring(0, 120),
+                                            liveAudio: _liveAudio,
+                                            finalUrl: swHlsUrl.substring(0, 150)
+                                        });
+                                    }
+                                    
+                                    const swResp = await fetch(swHlsUrl, { signal: transcodeAbort.signal });
+                                    if (aborted()) return;
+                                    const swData = await swResp.json();
+                                    if (!swData.success || !swData.playlist) {
+                                        if (badge) badge.textContent = '❌ SW 재시작 실패';
+                                        return;
+                                    }
+                                    const swPlaylistUrl = swData.playlist;
+                                    const swSessionId = swData.session;
+                                    const swStopUrl = 'api.php?action=hls_stream&hls_action=stop&session=' + swSessionId
+                                        + '&storage_id=' + storageId + '&path=' + encodeURIComponent(path);
+                                    video._hlsStopSession = () => {
+                                        try { if (navigator.sendBeacon) navigator.sendBeacon(swStopUrl); else fetch(swStopUrl, { keepalive: true }).catch(() => {}); } catch(e) {}
+                                    };
+                                    
+                                    // SW 재시작 — iOS 네이티브 HLS로 다시 재생
+                                    video.src = swPlaylistUrl;
+                                    video._streamMethod = 'HLS';
+                                    if (badge) badge.innerHTML = '⚡ HLS ' + t('streaming', '스트리밍') + ' <span class="encoder-info">SW : CPU</span>';
+                                    
+                                    // ★ SW도 실패 시 MMS fallback (PC와 일관성)
+                                    video.addEventListener('error', function _iosSwErrorHandler() {
+                                        video.removeEventListener('error', _iosSwErrorHandler);
+                                        if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                        try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(err) {
+                                            if (badge) badge.textContent = '❌ 재생 실패';
+                                        }
+                                    }, { once: true });
+                                    
+                                    transcodeAbort.signal.addEventListener('abort', () => {
+                                        try { video.pause(); video.removeAttribute('src'); video.load(); } catch(e) {}
+                                    });
+                                } catch(swErr) {
+                                    if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                    try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(e) {
+                                        if (badge) badge.textContent = '❌ 재생 실패';
+                                    }
+                                }
+                            }, { once: false });
                         }
                         
                         return; // HLS 성공 — 아래 pipe 코드 스킵
@@ -33349,6 +34473,16 @@ const App = {
         // 현재 선택된 오디오 인덱스 확인
         const currentAudio = new URL(baseUrl, location.href).searchParams.get('audio');
         
+        // ★ [HLS_DIAG] 오디오 트랙 UI 빌드 시점 (펜닐님 진단용 — 임시)
+        if (window._diagLog) {
+            window._diagLog('audio_ui_build', {
+                tracksCount: audioTracks.length,
+                tracks: audioTracks.map(t => ({ index: t.index, lang: t.language, codec: t.codec })),
+                currentAudio: currentAudio,
+                baseUrl: (baseUrl || '').substring(0, 120)
+            });
+        }
+        
         let html = `<label class="audio-track-label">🔊 ${t('audio_track', '오디오')}:</label>`;
         html += '<select class="audio-track-select" id="audio-track-picker">';
         audioTracks.forEach((track, i) => {
@@ -33357,7 +34491,10 @@ const App = {
             const label = title || lang || `Track ${i + 1}`;
             const info = [label, track.codec, track.channels].filter(Boolean).join(' · ');
             const isSelected = currentAudio ? (String(track.index) === String(currentAudio)) : (i === 0);
-            html += `<option value="${track.index}" ${isSelected ? 'selected' : ''}>${info}</option>`;
+            // ★ XSS escape 추가 (펜닐님 결정 — 메인+공유 일관 강화)
+            //   본질: 영상 메타데이터 title이 악의적일 가능성 (외부 영상)
+            //   공유 페이지(share.php)와 동일 패턴으로 통일
+            html += `<option value="${track.index}" ${isSelected ? 'selected' : ''}>${this.escapeHtml(info)}</option>`;
         });
         html += '</select>';
         
@@ -33370,6 +34507,8 @@ const App = {
         
         document.getElementById('audio-track-picker').addEventListener('change', (e) => {
             if (!audioUIReady) {
+                // ★ [HLS_DIAG] audio UI 준비 전 변경 무시
+                if (window._diagLog) window._diagLog('audio_change_blocked_ui_not_ready', { audioIdx: e.target.value });
                 return;
             }
             const audioIdx = e.target.value;
@@ -33381,6 +34520,26 @@ const App = {
             const currentAudioParam = new URL(liveBaseUrl, location.href).searchParams.get('audio');
             const defaultIdx = audioTracks[0]?.index;
             const effectiveCurrent = currentAudioParam || String(defaultIdx || 0);
+            
+            // ★ [HLS_DIAG] 사용자 audio 트랙 변경 시작 (URL/시간/상태 모두 기록)
+            if (window._diagLog) {
+                window._diagLog('audio_change_request', {
+                    requestedIdx: audioIdx,
+                    currentAudioParam: currentAudioParam,
+                    defaultIdx: defaultIdx,
+                    effectiveCurrent: effectiveCurrent,
+                    isSame: String(audioIdx) === String(effectiveCurrent),
+                    liveBaseUrl: (liveBaseUrl || '').substring(0, 150),
+                    videoCurrentTime: video.currentTime?.toFixed(2),
+                    videoPaused: video.paused,
+                    videoSrc: (video.src || '').substring(0, 150),
+                    hasHls: !!video._hlsInstance,
+                    hasMms: !!video._mmsCleanup,
+                    swRetried: !!window._hlsSwRetried,
+                    streamMethod: video._streamMethod
+                });
+            }
+            
             if (String(audioIdx) === String(effectiveCurrent)) {
                 return;
             }
@@ -33390,6 +34549,39 @@ const App = {
             const newBaseUrl = cleanBase + '&audio=' + audioIdx;
             video.setAttribute('data-transcode-base', newBaseUrl);
             
+            // ★ [HLS_DIAG] newBaseUrl 생성 결과
+            if (window._diagLog) {
+                window._diagLog('audio_change_url_built', {
+                    newBaseUrl: (newBaseUrl || '').substring(0, 200),
+                    cleanBase: (cleanBase || '').substring(0, 150),
+                    selectedAudioIdx: audioIdx
+                });
+            }
+            
+            // ★ HLS 인스턴스 정리 (audio 변경 시 기존 HLS 세션 완전 종료 — 펜닐님 진단 결과)
+            //   기존 HLS가 남아있으면 segment 계속 다운로드 → SourceBuffer 충돌 → bufferAppendError 발생
+            //   → SW fallback 시 audio 파라미터 손실로 첫 트랙으로 돌아가는 문제
+            if (video._hlsInstance) {
+                try { video._hlsInstance.destroy(); } catch(e) {}
+                video._hlsInstance = null;
+            }
+            if (video._hlsStopSession) {
+                try { video._hlsStopSession(); } catch(e) {}
+                video._hlsStopSession = null;
+            }
+            // _hlsSwRetried 플래그 리셋 — 새 audio 트랙은 새 세션이므로 SW fallback 다시 시도 가능
+            window._hlsSwRetried = false;
+            
+            // ★ audio 변경 시 _startTranscode 재호출 보장 — 이전 transcodeAbort 정리
+            //   _startTranscode 가드를 audio 변경의 의도된 재호출을 막지 않도록 리셋
+            //   audio 파라미터 다르므로 transcodeBaseUrl도 다름 → 가드 통과 자연스러움
+            //   하지만 안전망으로 명시적 리셋
+            if (window._transcodeAbort) {
+                try { window._transcodeAbort.abort(); } catch(e) {}
+            }
+            window._lastStartTranscodeUrl = null;
+            window._lastStartTranscodeTime = 0;
+            
             // 이전 MMS 정리
             if (video._mmsCleanup) {
                 video._mmsCleanup();
@@ -33398,14 +34590,64 @@ const App = {
                 video._mmsAbort.abort();
             }
             
-            // PC: 직접 src 변경
+            // PC: iOS와 동일 메커니즘 (펜닐님 결정 — iOS 정상이므로 그대로 PC 적용)
+            //   iOS 정답 흐름: video 완전 정리 → _startTranscode 재호출 → 폴더 B 생성
+            //   이전 PC 분기는 video.src 직접 변경 (MMS 모드) → 잔재 발생
             const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
             if (!isIOS) {
+                // ★ 멀티오디오 영상: iOS와 100% 동일 흐름
+                const _isMultiAudio = !!document.getElementById('audio-track-picker');
+                if (_isMultiAudio) {
+                    // iOS와 동일 정리 단계
+                    if (video._mmsCleanup) video._mmsCleanup();
+                    video.pause();
+                    video.removeAttribute('src');
+                    video.load();
+                    
+                    const _storageId = new URL(liveBaseUrl, location.href).searchParams.get('storage_id');
+                    const _path = new URL(liveBaseUrl, location.href).searchParams.get('path');
+                    
+                    if (window._diagLog) {
+                        window._diagLog('audio_change_pc_hls_restart', {
+                            newBaseUrl: (newBaseUrl || '').substring(0, 150),
+                            storageId: _storageId,
+                            path: (_path || '').substring(0, 100)
+                        });
+                    }
+                    
+                    this._startTranscode(newBaseUrl, _storageId, _path);
+                    return;
+                }
+                
+                // 단일 오디오: 기존 PC 분기 (MMS 모드)
                 const currentTime = video.currentTime;
                 const wasPlaying = !video.paused;
+                
+                // ★ [HLS_DIAG] PC src 변경 직전 (transcode 액션 = MMS 모드)
+                if (window._diagLog) {
+                    window._diagLog('audio_change_pc_src_set', {
+                        oldSrc: (video.src || '').substring(0, 150),
+                        newSrc: (newBaseUrl || '').substring(0, 150),
+                        currentTime: currentTime?.toFixed(2),
+                        wasPlaying: wasPlaying,
+                        urlContainsAudio: newBaseUrl.includes('audio='),
+                        urlContainsAction: (new URL(newBaseUrl, location.href).searchParams.get('action'))
+                    });
+                }
+                
                 video.src = newBaseUrl;
                 video.load();
                 video.addEventListener('loadeddata', () => {
+                    // ★ [HLS_DIAG] loadeddata — 새 audio 로드 완료
+                    if (window._diagLog) {
+                        window._diagLog('audio_change_loadeddata', {
+                            currentTime: video.currentTime?.toFixed(2),
+                            duration: video.duration?.toFixed(2),
+                            videoWidth: video.videoWidth,
+                            videoHeight: video.videoHeight,
+                            wasPlaying: wasPlaying
+                        });
+                    }
                     if (wasPlaying) video.play().catch(() => {});
                 }, {once: true});
                 return;
@@ -33419,6 +34661,16 @@ const App = {
             video.load();
             const storageId = new URL(liveBaseUrl, location.href).searchParams.get('storage_id');
             const path = new URL(liveBaseUrl, location.href).searchParams.get('path');
+            
+            // ★ [HLS_DIAG] iOS _startTranscode 재호출 직전
+            if (window._diagLog) {
+                window._diagLog('audio_change_ios_restart', {
+                    newBaseUrl: (newBaseUrl || '').substring(0, 150),
+                    storageId: storageId,
+                    path: (path || '').substring(0, 100)
+                });
+            }
+            
             this._startTranscode(newBaseUrl, storageId, path);
         });
     },
@@ -33586,6 +34838,324 @@ const App = {
         }
     },
     
+    // ★ 폴더 동영상 플레이리스트 사이드 패널 셋업
+    //   펜닐님 결정 (메인 인덱스):
+    //   - 2개 이상 동영상 있을 때만 패널 표시 (조건은 HTML 빌드 시점에 처리됨)
+    //   - 트랙 클릭 시 모달 닫고 새 트랙으로 showPreview 재호출 (하이브리드)
+    //   - 자동 다음 재생 (트랙 끝나면 다음 트랙으로 이동)
+    //   - share.php 패턴 모방 (sessionStorage 패널 상태 유지, 마퀴, 툴팁, ESC 닫기)
+    _setupVideoPlaylistPanel() {
+        const panel = document.getElementById('fs-vp-panel');
+        const toggleBtn = document.getElementById('fs-vp-toggle');
+        const closeBtn = document.getElementById('fs-vp-close');
+        const body = document.getElementById('fs-vp-body');
+        if (!panel || !toggleBtn || !body) return;
+        
+        const folderVideos = this._fsVpFolderVideos || [];
+        if (folderVideos.length < 2) return;
+        
+        // ★ 첫 진입 vs 트랙 전환 구분 (펜닐님 결정 옵션 B)
+        //   첫 진입: 재생 중 트랙 가운데 스크롤
+        //   트랙 전환: sessionStorage 위치 복원 (스크롤 위치 유지)
+        //   사용 후 즉시 삭제 → 모달 닫고 다시 열기 시 첫 진입으로 처리
+        //   SCROLL_POS_KEY는 _fsVpApplyScrollPosition 내부에서 직접 사용
+        const PANEL_KEY = 'fs_vp_panel_open';
+        const wasOpen = sessionStorage.getItem(PANEL_KEY) === '1';
+        if (wasOpen) {
+            panel.classList.add('open');
+            panel.setAttribute('aria-hidden', 'false');
+            // ★ 스크롤 위치 적용 (sessionStorage 우선, 없으면 가운데)
+            this._fsVpApplyScrollPosition();
+            // transition (0.25s) 끝난 후 측정 보장
+            requestAnimationFrame(() => this._fsVpCheckOverflow());
+            setTimeout(() => this._fsVpCheckOverflow(), 300);
+        }
+        
+        // 토글 버튼
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = panel.classList.toggle('open');
+            panel.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+            sessionStorage.setItem(PANEL_KEY, isOpen ? '1' : '0');
+            if (isOpen) {
+                // ★ 패널 토글 = DOM 그대로 유지 → body.scrollTop 자동 보존
+                //   → 스크롤 위치 처리 안 함 (가운데 강제 이동 방지, 펜닐님 의도 보존)
+                requestAnimationFrame(() => this._fsVpCheckOverflow());
+                setTimeout(() => this._fsVpCheckOverflow(), 300);
+            }
+        });
+        
+        // 닫기 버튼
+        if (closeBtn) {
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                panel.classList.remove('open');
+                panel.setAttribute('aria-hidden', 'true');
+                sessionStorage.setItem(PANEL_KEY, '0');
+            });
+        }
+        
+        // 트랙 클릭 (모달 유지 + 콘텐츠만 교체 — 깜빡임 0, 펜닐님 결정)
+        body.addEventListener('click', (e) => {
+            const item = e.target.closest('.fs-vp-item');
+            if (!item) return;
+            const idx = parseInt(item.dataset.index, 10);
+            if (isNaN(idx) || idx < 0 || idx >= folderVideos.length) return;
+            const targetFile = folderVideos[idx];
+            if (!targetFile) return;
+            // ★ 스크롤 위치 저장 (펜닐님 결정 옵션 B — 새 패널 생성 후 복원)
+            //   showPreview가 #preview-content.html(content) 호출하면 사이드 패널 DOM 새로 생성됨
+            //   → 클릭 시점의 스크롤 위치 저장 → 새 패널의 _fsVpApplyScrollPosition에서 복원
+            try { sessionStorage.setItem('fs_vp_panel_scroll', String(body.scrollTop)); } catch (e) {}
+            // ★ keepOpen=true: 모달 display 유지 (정리만), setTimeout 없이 즉시 showPreview
+            //   showModal에서도 이미 표시 중이면 display 변경 스킵 → 깜빡임 0
+            App.hideModal('modal-preview', { keepOpen: true });
+            App.showPreview(targetFile);
+        });
+        
+        // 자동 다음 재생
+        const video = document.querySelector('#preview-content .preview-video');
+        if (video && !video._fsVpAutoNextBound) {
+            video._fsVpAutoNextBound = true;
+            const curIdx = folderVideos.findIndex(f => f.path === this._fsVpCurrentPath);
+            video.addEventListener('ended', () => {
+                if (curIdx >= 0 && curIdx < folderVideos.length - 1) {
+                    const nextFile = folderVideos[curIdx + 1];
+                    if (nextFile) {
+                        // ★ 자동 다음 재생도 스크롤 위치 보존
+                        try { sessionStorage.setItem('fs_vp_panel_scroll', String(body.scrollTop)); } catch (e) {}
+                        // ★ 자동 다음 재생도 동일 패턴 — 모달 유지 + 즉시 전환
+                        App.hideModal('modal-preview', { keepOpen: true });
+                        App.showPreview(nextFile);
+                    }
+                }
+            });
+        }
+        
+        // ★ 재생 시작/정지 이벤트 — 글로벌 캡처 핸들러 (video 교체/트랜스코딩 전환에도 작동)
+        //   #preview-content 내부의 모든 video 요소 play/pause를 캡처
+        if (this._fsVpPlayHandler) {
+            document.removeEventListener('play', this._fsVpPlayHandler, true);
+            document.removeEventListener('pause', this._fsVpPlayHandler, true);
+        }
+        this._fsVpPlayHandler = (e) => {
+            const target = e.target;
+            if (!target || target.tagName !== 'VIDEO') return;
+            if (!target.closest('#preview-content')) return;
+            
+            if (e.type === 'play') {
+                // 폭 측정 위해 여러번 시도 (DOM 안정화 대기)
+                requestAnimationFrame(() => this._fsVpCheckOverflow());
+                setTimeout(() => this._fsVpCheckOverflow(), 200);
+                setTimeout(() => this._fsVpCheckOverflow(), 800);
+            } else if (e.type === 'pause') {
+                const body = document.getElementById('fs-vp-body');
+                if (!body) return;
+                const cur = body.querySelector('.fs-vp-item.current');
+                const innerEl = cur && cur.querySelector('.fs-vp-name-inner');
+                if (innerEl) {
+                    innerEl.classList.remove('is-overflow');
+                    innerEl.style.animationDuration = '';
+                }
+            }
+        };
+        document.addEventListener('play', this._fsVpPlayHandler, true);
+        document.addEventListener('pause', this._fsVpPlayHandler, true);
+        
+        // ESC 닫기 (글로벌 캡처)
+        if (this._fsVpEscHandler) {
+            document.removeEventListener('keydown', this._fsVpEscHandler, true);
+        }
+        this._fsVpEscHandler = (e) => {
+            if (e.key !== 'Escape') return;
+            const _panel = document.getElementById('fs-vp-panel');
+            if (_panel && _panel.classList.contains('open')) {
+                _panel.classList.remove('open');
+                _panel.setAttribute('aria-hidden', 'true');
+                sessionStorage.setItem(PANEL_KEY, '0');
+                e.stopPropagation();
+            }
+        };
+        document.addEventListener('keydown', this._fsVpEscHandler, true);
+        
+        // resize 시 마퀴 오버플로 재검사
+        if (this._fsVpResizeBound) {
+            window.removeEventListener('resize', this._fsVpResizeBound);
+        }
+        this._fsVpResizeBound = () => {
+            const panel = document.getElementById('fs-vp-panel');
+            if (panel && panel.classList.contains('open')) this._fsVpCheckOverflow();
+        };
+        window.addEventListener('resize', this._fsVpResizeBound);
+        
+        // ★ 재생 중 패널이 자동 숨겨졌다가 hover로 다시 펼쳐질 때 마퀴 재측정 (펜닐님 통찰)
+        //   재생 시작 → CSS .fs-vp-flex:has(.playing) → 패널 width:0 → 측정 시 폭 0
+        //   → mouseenter (hover로 패널 펼침) 시 transition 끝난 후 폭 정상 → 마퀴 측정 가능
+        const flexEl = panel.closest('.fs-vp-flex');
+        if (flexEl && !flexEl._fsVpHoverBound) {
+            flexEl._fsVpHoverBound = true;
+            flexEl.addEventListener('mouseenter', () => {
+                // CSS transition (0.25s) 끝난 후 측정
+                setTimeout(() => this._fsVpCheckOverflow(), 280);
+            });
+        }
+    },
+    
+    _fsVpScrollToCurrent() {
+        const body = document.getElementById('fs-vp-body');
+        const cur = body && body.querySelector('.fs-vp-item.current');
+        if (cur && body) {
+            const offset = cur.offsetTop - body.clientHeight / 2 + cur.clientHeight / 2;
+            body.scrollTop = Math.max(0, offset);
+        }
+    },
+    
+    // ★ 사이드 패널 스크롤 위치 적용 (펜닐님 결정 옵션 B)
+    //   sessionStorage에 저장 위치 있음 → 복원 (트랙 전환 후) + 즉시 삭제 (1회용)
+    //   없음 → 가운데 스크롤 (첫 진입)
+    _fsVpApplyScrollPosition() {
+        const body = document.getElementById('fs-vp-body');
+        if (!body) return;
+        try {
+            const SCROLL_POS_KEY = 'fs_vp_panel_scroll';
+            const savedScroll = sessionStorage.getItem(SCROLL_POS_KEY);
+            if (savedScroll !== null) {
+                // 트랙 전환으로 새 패널 생성 → 이전 스크롤 위치 복원
+                body.scrollTop = parseInt(savedScroll, 10) || 0;
+                sessionStorage.removeItem(SCROLL_POS_KEY);  // 1회용 — 다음 첫 진입 시 가운데
+            } else {
+                // 첫 진입 → 재생 중 트랙 가운데 스크롤
+                this._fsVpScrollToCurrent();
+            }
+        } catch (e) {}
+    },
+    
+    _fsVpCheckOverflow() {
+        // 현재 트랙만 마퀴 적용 (텍스트가 컨테이너 폭 초과 시) — 이전 정상 패턴 복원
+        try {
+            const body = document.getElementById('fs-vp-body');
+            if (!body) return;
+            const cur = body.querySelector('.fs-vp-item.current');
+            if (!cur) return;
+            const nameEl = cur.querySelector('.fs-vp-name');
+            const innerEl = cur.querySelector('.fs-vp-name-inner');
+            if (!nameEl || !innerEl) return;
+            
+            // 측정 전: is-overflow 제거하고 자연 폭 측정 (마퀴 적용 시 padding-left:100%로 폭 변형됨)
+            innerEl.classList.remove('is-overflow');
+            // ★ 모든 animation 속성 리셋 (개별 속성 사용 패턴)
+            innerEl.style.removeProperty('animation');
+            innerEl.style.removeProperty('animation-name');
+            innerEl.style.removeProperty('animation-duration');
+            innerEl.style.removeProperty('animation-timing-function');
+            innerEl.style.removeProperty('animation-iteration-count');
+            
+            // scrollWidth = 텍스트 자연 폭, clientWidth = 컨테이너 가용 폭
+            const textW = innerEl.scrollWidth;
+            const boxW = nameEl.clientWidth;
+            
+            if (textW > boxW + 1) {
+                // 마퀴 시간: 텍스트 폭 + 컨테이너 폭(=padding-left:100%) 기준 — 픽셀당 ~25ms (대략 40px/sec)
+                const totalPx = textW + boxW;
+                const dur = Math.max(8, Math.min(30, Math.round(totalPx / 40)));
+                // ★ 개별 속성으로 !important 설정 — shorthand 사용 시 :hover의 animation-play-state:paused가 안 먹힘
+                //   (shorthand는 animation-play-state도 running으로 강제 → CSS :hover paused 무시)
+                innerEl.style.setProperty('animation-name', 'fs-vp-marquee', 'important');
+                innerEl.style.setProperty('animation-duration', dur + 's', 'important');
+                innerEl.style.setProperty('animation-timing-function', 'linear', 'important');
+                innerEl.style.setProperty('animation-iteration-count', 'infinite', 'important');
+                innerEl.classList.add('is-overflow');
+            }
+        } catch (e) {}
+    },
+
+    // ★ HLS 모두 실패 시 MMS/MediaSource fallback (공유 페이지 _fallbackToMMS 패턴 복제)
+    //   펜닐님 결정: HW 실패 → SW 실패 → MMS fallback 추가 (공유와 일관성 확보)
+    //   - PC/안드로이드: window.MediaSource 사용
+    //   - iOS: window.ManagedMediaSource 사용
+    //   - MediaSource 실패 시: 직접 video.src = transcodeUrl (Pipe 스트리밍)
+    _fallbackToMMSMain(transcodeUrl, video, badge) {
+        if (!video) video = document.querySelector('#preview-content .preview-video');
+        if (!video) return;
+        if (!badge) badge = document.querySelector('.video-stream-badge');
+        
+        const MSApi = window.ManagedMediaSource || window.MediaSource;
+        const mimeType = 'video/mp4; codecs="avc1.640029,mp4a.40.2"';
+        
+        if (MSApi && typeof MSApi.isTypeSupported === 'function' && MSApi.isTypeSupported(mimeType)) {
+            try {
+                const mediaSource = new MSApi();
+                if (window.ManagedMediaSource) {
+                    video.disableRemotePlayback = true;
+                    video.srcObject = mediaSource;
+                } else {
+                    video.src = URL.createObjectURL(mediaSource);
+                }
+                
+                mediaSource.addEventListener('sourceopen', async () => {
+                    const sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+                    if (badge) badge.innerHTML = '⚡ MMS ' + t('streaming', '스트리밍');
+                    video._streamMethod = 'MMS';
+                    const queue = [];
+                    let appending = false;
+                    let userPaused = false;
+                    video.addEventListener('pause', () => { userPaused = true; });
+                    video.addEventListener('play', () => { userPaused = false; });
+                    
+                    function appendNext() {
+                        if (appending || queue.length === 0 || sourceBuffer.updating) return;
+                        appending = true;
+                        try { sourceBuffer.appendBuffer(queue.shift()); } catch(e) { appending = false; }
+                    }
+                    sourceBuffer.addEventListener('updateend', () => {
+                        appending = false;
+                        appendNext();
+                        if (!userPaused && video.paused && sourceBuffer.buffered.length > 0) {
+                            video.play().catch(() => {});
+                        }
+                    });
+                    
+                    try {
+                        const resp = await fetch(transcodeUrl);
+                        if (!resp.ok || !resp.body) throw new Error('fetch failed');
+                        const reader = resp.body.getReader();
+                        while (true) {
+                            const {done, value} = await reader.read();
+                            if (done) break;
+                            queue.push(value);
+                            appendNext();
+                        }
+                        const waitUpdate = () => new Promise(r => { if (!sourceBuffer.updating) return r(); sourceBuffer.addEventListener('updateend', r, {once:true}); });
+                        await waitUpdate();
+                        if (mediaSource.readyState === 'open') mediaSource.endOfStream();
+                    } catch(e) {
+                        // MediaSource 도중 실패 → Pipe 스트리밍 (직접 src)
+                        video.srcObject = null;
+                        video.src = transcodeUrl;
+                        video.load();
+                        video.play().catch(() => {});
+                        if (badge) badge.innerHTML = '⚡ Pipe ' + t('streaming', '스트리밍');
+                        video._streamMethod = 'Pipe';
+                    }
+                }, {once: true});
+            } catch(e) {
+                // MediaSource 자체 생성 실패 → Pipe 스트리밍
+                video.src = transcodeUrl;
+                video.load();
+                video.play().catch(() => {});
+                if (badge) badge.innerHTML = '⚡ Pipe ' + t('streaming', '스트리밍');
+                video._streamMethod = 'Pipe';
+            }
+        } else {
+            // MediaSource API 미지원 → Pipe 스트리밍
+            video.src = transcodeUrl;
+            video.load();
+            video.play().catch(() => {});
+            if (badge) badge.innerHTML = '⚡ Pipe ' + t('streaming', '스트리밍');
+            video._streamMethod = 'Pipe';
+        }
+    },
+
     // 배속/PIP 컨트롤 바인딩 (미리보기 footer에 추가)
     _bindVideoExtraControls() {
         const video = document.querySelector('#preview-content .preview-video');
@@ -33847,7 +35417,12 @@ const App = {
                     trackEl.label = sub.label || (t('subtitle','자막') + ' ' + (i+1));
                     trackEl.srclang = 'ko';
                     trackEl.src = trackUrl;
-                    trackEl.default = false;  // default=true면 브라우저가 자동 showing → 이중 표시
+                    // ★ iOS 한정 default=true — iOS Safari가 webkitEnterFullscreen 시 자막 자동 활성화 보장
+                    //   (PC는 default=false 유지: 모달 재생 시 커스텀 오버레이만 사용 → 이중 표시 방지)
+                    //   PC 전체화면 진입은 onFullscreenChange에서 setTrackMode('showing')으로 처리됨
+                    const _isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                                         (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+                    trackEl.default = _isIOSDevice;
                     video.appendChild(trackEl);
                     
                     // 모달 재생 중에는 네이티브 트랙 완전 비활성 (커스텀 오버레이만 사용)
@@ -33895,11 +35470,26 @@ const App = {
                     document.addEventListener('webkitfullscreenchange', onFullscreenChange);
                     
                     // iOS 네이티브 전체화면
+                    //   ★ iOS Safari는 textTracks.mode 변경이 일관되지 않은 알려진 이슈
+                    //     (Apple Discussions/video.js GitHub 2021~2025년 미해결 보고)
+                    //   해결: setTrackMode('showing') 여러 시점에 호출하여 보장
+                    //   추가: trackEl.mode 직접 설정 + showing 후에도 한번 더 강제
                     video.addEventListener('webkitbeginfullscreen', () => {
                         overlay._fsActive = true;
                         setTrackMode('showing');
                         overlay.style.display = 'none';
                         overlay._fsHidden = true;
+                        // 즉시 + 50ms + 200ms + 500ms — iOS Safari가 자체 자막 처리로 덮어쓰는 경우 방어
+                        setTimeout(() => setTrackMode('showing'), 50);
+                        setTimeout(() => setTrackMode('showing'), 200);
+                        setTimeout(() => setTrackMode('showing'), 500);
+                        // track 요소 직접 모드 설정 (textTracks 컬렉션과 별개로)
+                        try {
+                            const tracks = video.querySelectorAll('track');
+                            tracks.forEach(t => {
+                                if (t.track) t.track.mode = 'showing';
+                            });
+                        } catch(e) {}
                     });
                     video.addEventListener('webkitendfullscreen', () => {
                         overlay._fsActive = false;
@@ -34288,7 +35878,10 @@ const App = {
                         trackEl.label = t('subtitle', '자막');
                         trackEl.srclang = 'ko';
                         trackEl.src = trackUrl;
-                        trackEl.default = false;
+                        // ★ iOS 한정 default=true (메인 분기와 동일 패턴)
+                        const _isIOSDevice2 = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                                              (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+                        trackEl.default = _isIOSDevice2;
                         video.appendChild(trackEl);
                         
                         // 네이티브 트랙 비활성 (커스텀 오버레이 사용)
@@ -34304,7 +35897,19 @@ const App = {
                         };
                         document.addEventListener('fullscreenchange', onFS);
                         document.addEventListener('webkitfullscreenchange', onFS);
-                        video.addEventListener('webkitbeginfullscreen', () => { overlay._fsActive = true; setTrackMode('showing'); overlay.style.display = 'none'; overlay._fsHidden = true; });
+                        // iOS 네이티브 전체화면 — setTrackMode 여러 시점 강제 (iOS Safari 자막 표시 보장)
+                        video.addEventListener('webkitbeginfullscreen', () => {
+                            overlay._fsActive = true;
+                            setTrackMode('showing');
+                            overlay.style.display = 'none';
+                            overlay._fsHidden = true;
+                            setTimeout(() => setTrackMode('showing'), 50);
+                            setTimeout(() => setTrackMode('showing'), 200);
+                            setTimeout(() => setTrackMode('showing'), 500);
+                            try {
+                                video.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; });
+                            } catch(e) {}
+                        });
                         video.addEventListener('webkitendfullscreen', () => { overlay._fsActive = false; setTrackMode('disabled'); overlay._fsHidden = false; });
                         
                         if (video.textTracks) {

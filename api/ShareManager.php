@@ -31,6 +31,7 @@ class ShareManager {
                 
                 // 만료 확인 - 만료된 공유는 삭제
                 if (!empty($share['expire_at']) && strtotime($share['expire_at']) < time()) {
+                    $this->_cleanShareCache($share);  // ★ 캐시 정리
                     $this->db->delete('shares', ['id' => $share['id']]);
                     continue;
                 }
@@ -38,9 +39,14 @@ class ShareManager {
                 // 다운로드 횟수 초과 확인 - 초과한 공유는 삭제
                 if (!empty($share['max_downloads']) && 
                     ($share['download_count'] ?? 0) >= $share['max_downloads']) {
+                    $this->_cleanShareCache($share);  // ★ 캐시 정리
                     $this->db->delete('shares', ['id' => $share['id']]);
                     continue;
                 }
+                
+                // ★ 보안: 비번 해시는 클라이언트에 노출하지 않음 (has_password 플래그만)
+                $share['has_password'] = !empty($share['password']);
+                unset($share['password']);
                 
                 return ['success' => true, 'share' => $share];
             }
@@ -174,6 +180,10 @@ class ShareManager {
                     break;
                 }
             }
+            
+            // ★ 보안: 비번 해시는 클라이언트에 노출하지 않음 (has_password 플래그만)
+            $share['has_password'] = !empty($share['password']);
+            unset($share['password']);
             
             $result[] = $share;
         }
@@ -318,6 +328,7 @@ class ShareManager {
             }
             
             if ($shouldDelete) {
+                $this->_cleanShareCache($share);  // ★ 캐시 정리 (자동 정리 함수 — 일관성)
                 $this->db->delete('shares', ['id' => $share['id']]);
                 $deletedCount++;
             }
@@ -338,8 +349,124 @@ class ShareManager {
             return ['success' => false, 'error' => __('api_err_no_permission', '권한이 없습니다.')];
         }
         
+        // ★ 캐시 정리 (DB 삭제 전에 — share 정보 필요)
+        $this->_cleanShareCache($share);
+        
         $this->db->delete('shares', ['id' => $id]);
         return ['success' => true];
+    }
+    
+    /**
+     * ★ 공유 캐시 정리 (외부 호출용 public 래퍼 — 펜닐님 결정 이슈 #19)
+     * 
+     * 사용처: FileManager::cleanupSharesForPath (파일/폴더 삭제 시 자동 공유 삭제)
+     * 캡슐화 유지를 위해 _cleanShareCache는 private으로 두고 이 래퍼로 외부 노출
+     * 
+     * @param array $share shares 테이블 row (token, is_dir, file_path, storage_id 등)
+     */
+    public function cleanShareCacheByShare(array $share): void {
+        $this->_cleanShareCache($share);
+    }
+    
+    /**
+     * ★ 공유 캐시 정리 (펜닐님 결정 옵션 C: deleteShare + 만료 자동 정리)
+     * 
+     * 정리 대상:
+     *  1. data/cache/folder_tracks/{md5(token)}.json (폴더 트랙 캐시)
+     *  2. data/thumbcache/share_audio/{sha1(token+'|'+subFile)}.bin/.meta/.nocover (폴더 cover)
+     *  3. data/thumbcache/share_audio/{md5(token+'/'+filePath+'/'+mtime)}.img/.meta/.nocover (단일 파일 cover)
+     * 
+     * 폴더 cover의 subFile 목록 추출 우선순위:
+     *  1. folder_tracks 캐시에서 추출 (캐시 살아있으면 가장 정확)
+     *  2. 캐시 만료/없음 → 실제 폴더 직접 스캔 (음악 확장자 파일 목록)
+     *  3. 폴더 자체가 삭제됐으면 정리 불가 (stale 캐시 누적 — 미미한 수준)
+     */
+    private function _cleanShareCache(array $share): void {
+        $token = $share['token'] ?? '';
+        if ($token === '') return;
+        
+        $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
+        
+        // 1. folder_tracks 캐시 정리 + subFile 목록 추출 (cover 정리에 활용)
+        $folderTracksFile = $dataDir . '/cache/folder_tracks/' . md5($token) . '.json';
+        $subFiles = [];
+        if (is_file($folderTracksFile)) {
+            $cacheData = @file_get_contents($folderTracksFile);
+            if ($cacheData !== false) {
+                $cached = @json_decode($cacheData, true);
+                if (is_array($cached) && isset($cached['tracks']) && is_array($cached['tracks'])) {
+                    foreach ($cached['tracks'] as $t) {
+                        if (isset($t['file'])) $subFiles[] = $t['file'];
+                    }
+                }
+            }
+            @unlink($folderTracksFile);
+        }
+        
+        // 2. share_audio 캐시 디렉토리
+        $shareAudioDir = $dataDir . '/thumbcache/share_audio';
+        if (!is_dir($shareAudioDir)) return;
+        
+        // 3-A. 폴더 공유 cover (subFile별 sha1 키)
+        if (!empty($share['is_dir'])) {
+            // ★ subFiles가 비어있으면 (folder_tracks 캐시 만료/없음) — 실제 폴더 직접 스캔
+            //   getSharedFolderTracks와 동일한 음악 확장자 화이트리스트 적용
+            if (empty($subFiles) && !empty($share['file_path']) && !empty($share['storage_id'])) {
+                $basePath = $this->storage->getRealPath($share['storage_id']);
+                if ($basePath) {
+                    $folderPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+                    if (is_dir($folderPath)) {
+                        $audioExts = ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma', 'ape', 'alac', 'aiff'];
+                        $items = @scandir($folderPath);
+                        if ($items !== false) {
+                            foreach ($items as $item) {
+                                if ($item === '.' || $item === '..') continue;
+                                if (substr($item, 0, 1) === '.') continue;  // 숨김 파일 skip
+                                $itemPath = $folderPath . DIRECTORY_SEPARATOR . $item;
+                                if (!is_file($itemPath)) continue;
+                                $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+                                // mp3만 cover 캐시 대상 (getShareCover에서 mp3만 처리)
+                                if ($ext === 'mp3') {
+                                    $subFiles[] = $item;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // 트랙별 cover 캐시 삭제
+            foreach ($subFiles as $subFile) {
+                $key = sha1($token . '|' . $subFile);
+                @unlink($shareAudioDir . '/' . $key . '.bin');
+                @unlink($shareAudioDir . '/' . $key . '.meta');
+                @unlink($shareAudioDir . '/' . $key . '.nocover');
+            }
+        }
+        
+        // 3-B. 단일 파일 공유 cover (token + file_path + mtime)
+        //   mtime을 모를 수 있으므로 best-effort로 현재 mtime 시도
+        if (empty($share['is_dir']) && !empty($share['file_path'])) {
+            // 실제 파일 mtime 시도 (best-effort)
+            if (!empty($share['storage_id'])) {
+                $basePath = $this->storage->getRealPath($share['storage_id']);
+                if ($basePath) {
+                    $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+                    if (is_file($fullPath)) {
+                        $mtime = @filemtime($fullPath);
+                        if ($mtime !== false) {
+                            $key = md5($token . '/' . $share['file_path'] . '/' . $mtime);
+                            @unlink($shareAudioDir . '/' . $key . '.img');
+                            @unlink($shareAudioDir . '/' . $key . '.meta');
+                            @unlink($shareAudioDir . '/' . $key . '.nocover');
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 참고: stale 캐시 파일 (파일 변경/이름변경 등으로 키가 바뀐 옛 캐시)은 남을 수 있음
+        // → TTL 기반 정리는 펜닐님 결정 (옵션 C)에서 제외 → 누적은 미미한 수준이라 무시
     }
     
     // 공유 링크로 접근
@@ -360,6 +487,7 @@ class ShareManager {
         // 만료 확인
         if ($share['expire_at'] && strtotime($share['expire_at']) < time()) {
             // 만료된 공유 삭제
+            $this->_cleanShareCache($share);  // ★ 캐시 정리
             $this->db->delete('shares', ['id' => $share['id']]);
             return ['success' => false, 'error' => __('api_err_share_expired', '만료된 공유 링크입니다.')];
         }
@@ -367,6 +495,7 @@ class ShareManager {
         // 다운로드 횟수 확인
         if ($share['max_downloads'] && $share['download_count'] >= $share['max_downloads']) {
             // 횟수 초과 공유 삭제
+            $this->_cleanShareCache($share);  // ★ 캐시 정리
             $this->db->delete('shares', ['id' => $share['id']]);
             return ['success' => false, 'error' => __('api_err_share_download_limit', '다운로드 횟수를 초과했습니다.')];
         }
@@ -449,12 +578,46 @@ class ShareManager {
             exit(__('api_err_storage_path_not_found', '스토리지 경로를 찾을 수 없습니다.'));
         }
         
-        $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+        // 폴더 stream 공유 + sub-file: 트랙별 라우팅 (보안 검증 후 파일 경로 교체)
+        $shareType = $share['share_type'] ?? 'download';
+        $isFolderStream = ($access['share']['is_dir'] ?? false) && $shareType === 'stream';
+        $subFile = isset($_GET['file']) ? (string)$_GET['file'] : null;
         
-        // 경로 안전성 검증
-        if (!$this->isSharePathSafe($basePath, $fullPath)) {
-            http_response_code(403);
-            exit(__('api_err_invalid_path', '잘못된 경로입니다.'));
+        // ★ HLS playlist/segment 액션은 세션 ID로 처리 (sub-file 무관, segment 파일명이 file에 들어옴)
+        $hlsAction = $_GET['hls_action'] ?? '';
+        $isHlsPlaylistOrSegment = isset($_GET['hls']) && in_array($hlsAction, ['playlist', 'segment'], true);
+        
+        if ($isHlsPlaylistOrSegment) {
+            // HLS playlist/segment 요청: file 파라미터는 segment 파일명이거나 무시 — sub-file 검증 스킵
+            // (실제 fullPath는 hlsShareStream가 세션 디렉토리에서 처리하므로 폴더 경로 그대로 ok)
+            $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+            // ★ 보안: 단일 파일 공유와 동일한 경로 안전성 검증 (방어선 유지)
+            if (!$this->isSharePathSafe($basePath, $fullPath)) {
+                http_response_code(403);
+                exit(__('api_err_invalid_path', '잘못된 경로입니다.'));
+            }
+            // ★ HLS 액션은 즉시 처리 (is_dir/ZIP 분기 우회 — 폴더 경로라도 hlsShareStream가 세션으로 처리)
+            require_once __DIR__ . '/FileManager.php';
+            $fileManager = new FileManager();
+            $fileManager->hlsShareStream($fullPath);
+            exit;
+        } elseif ($isFolderStream && $subFile !== null && $subFile !== '') {
+            // 보안 검증 (basename + 화이트리스트 + realpath)
+            $validatedPath = $this->validateSharedFolderSubPath($token, $password, $subFile);
+            if ($validatedPath === null) {
+                http_response_code(403);
+                exit(__('api_err_invalid_path', '잘못된 경로입니다.'));
+            }
+            $fullPath = $validatedPath;
+        } else {
+            // 단일 파일 공유 (기존 로직)
+            $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+            
+            // 경로 안전성 검증
+            if (!$this->isSharePathSafe($basePath, $fullPath)) {
+                http_response_code(403);
+                exit(__('api_err_invalid_path', '잘못된 경로입니다.'));
+            }
         }
         
         // 다운로드 횟수 증가 (스트리밍은 제외)
@@ -1369,6 +1532,7 @@ class ShareManager {
         
         // 만료 확인
         if (!empty($share['expire_at']) && strtotime($share['expire_at']) < time()) {
+            $this->_cleanShareCache($share);  // ★ 캐시 정리
             $this->db->delete('shares', ['id' => $share['id']]);
             return ['success' => false, 'error' => __('api_err_share_expired', '만료된 공유 링크입니다.')];
         }
@@ -1471,5 +1635,1004 @@ class ShareManager {
         ]);
         
         return ['success' => true, 'filename' => $filename];
+    }
+    
+    /**
+     * 공유 MP3 파일의 ID3v2 APIC 커버 이미지 추출
+     * 
+     * 동작:
+     * 1. 토큰/비밀번호 검증 (accessShare 동일 패턴)
+     * 2. 파일이 mp3인지 확인
+     * 3. ID3v2 APIC 프레임에서 커버 추출
+     * 4. data/thumbcache/share_audio/ 캐시 (토큰별 분리)
+     * 5. 이미지 바이트 배열 반환 (HTTP 응답은 호출자 책임)
+     * 
+     * 보안:
+     * - 토큰 + 비밀번호 동일 검증 (accessShare 패턴)
+     * - 캐시 키에 토큰 포함 (다른 공유와 격리)
+     * - 캐시 파일명은 hash라 외부에서 추측 불가
+     * 
+     * @return array|null ['mime' => 'image/jpeg', 'data' => binary, 'cached' => bool]
+     *                    실패 시 null
+     */
+    public function getShareCover(string $token, ?string $password = null, ?string $subFile = null): ?array {
+        // 폴더 공유 + sub-path 모드
+        if ($subFile !== null && $subFile !== '') {
+            // sub-path 보안 검증 (basename + 화이트리스트 + realpath)
+            $fullPath = $this->validateSharedFolderSubPath($token, $password, $subFile);
+            if ($fullPath === null) return null;
+            
+            // mp3만 ID3 커버 추출 가능
+            $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
+            if ($ext !== 'mp3') return null;
+            
+            // 캐시 (sub-file 포함된 토큰별 격리 키)
+            $cacheKey = sha1($token . '|' . $subFile);
+            $cacheDir = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/thumbcache/share_audio';
+            if (!is_dir($cacheDir)) @mkdir($cacheDir, 0755, true);
+            $cacheFile = $cacheDir . '/' . $cacheKey . '.bin';
+            $cacheMeta = $cacheDir . '/' . $cacheKey . '.meta';
+            // ★ 네거티브 캐시 마커 (커버 없는 mp3 — 메인 audioCover 패턴 동일)
+            //   첫 ID3 파싱에서 커버 없음 확인 시 마커 저장 → 재요청 시 즉시 null 반환 (파싱 스킵)
+            $cacheNoCover = $cacheDir . '/' . $cacheKey . '.nocover';
+            
+            // 캐시 hit
+            if (file_exists($cacheFile) && file_exists($cacheMeta)) {
+                $cacheMtime = @filemtime($cacheFile);
+                $fileMtime = @filemtime($fullPath);
+                if ($cacheMtime !== false && $fileMtime !== false && $cacheMtime >= $fileMtime) {
+                    $mime = @file_get_contents($cacheMeta);
+                    $data = @file_get_contents($cacheFile);
+                    if ($mime !== false && $data !== false && strlen($data) > 100) {
+                        return ['mime' => $mime, 'data' => $data, 'cached' => true, 'cache_key' => $cacheKey];
+                    }
+                }
+            }
+            
+            // ★ 네거티브 캐시 hit — 커버 없는 mp3로 기록된 경우 ID3 파싱 스킵 (즉시 null)
+            //   파일 mtime 비교로 stale 감지 (파일 변경 시 마커 무효화)
+            if (file_exists($cacheNoCover)) {
+                $markerMtime = @filemtime($cacheNoCover);
+                $fileMtime = @filemtime($fullPath);
+                if ($markerMtime !== false && $fileMtime !== false && $markerMtime >= $fileMtime) {
+                    return null;  // 커버 없음 (캐시된 결과)
+                }
+            }
+            
+            // 캐시 miss → ID3 추출
+            $cover = $this->extractID3v2Cover($fullPath);
+            if (!$cover) {
+                // 커버 없음 → 네거티브 캐시 마커 저장 (다음 요청 시 ID3 파싱 스킵)
+                @file_put_contents($cacheNoCover, '1');
+                return null;
+            }
+            
+            // 캐시 저장
+            @file_put_contents($cacheFile, $cover['data']);
+            @file_put_contents($cacheMeta, $cover['mime']);
+            
+            return ['mime' => $cover['mime'], 'data' => $cover['data'], 'cached' => false, 'cache_key' => $cacheKey];
+        }
+        
+        // 단일 파일 공유 (기존 로직)
+        // accessShare 검증 (만료/비밀번호/파일 존재 등 일관)
+        $access = $this->accessShare($token, $password);
+        if (!$access['success']) {
+            return null;
+        }
+        
+        // 폴더 공유는 미지원
+        if ($access['share']['is_dir']) {
+            return null;
+        }
+        
+        // mp3 확장자 체크
+        $filename = $access['share']['filename'];
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        if ($ext !== 'mp3') {
+            return null;
+        }
+        
+        // 실제 파일 경로 계산 (accessShare 내부와 동일 로직)
+        $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
+        if (!$share) return null;
+        
+        $basePath = $this->storage->getRealPath($share['storage_id']);
+        if (!$basePath) return null;
+        
+        $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+        if (!$this->isSharePathSafe($basePath, $fullPath) || !is_file($fullPath)) {
+            return null;
+        }
+        
+        // 파일 크기 제한 (audioCover와 동일: 0 또는 500MB 초과는 스킵)
+        $fileSize = @filesize($fullPath);
+        if ($fileSize === false || $fileSize <= 0 || $fileSize > 500 * 1024 * 1024) {
+            return null;
+        }
+        
+        // 캐시 경로 (토큰별 분리)
+        $mtime = @filemtime($fullPath) ?: 0;
+        $cacheKey = md5($token . '/' . $share['file_path'] . '/' . $mtime);
+        $dataDir = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'data';
+        $cacheDir = $dataDir . DIRECTORY_SEPARATOR . 'thumbcache' . DIRECTORY_SEPARATOR . 'share_audio';
+        if (!is_dir($cacheDir)) {
+            @mkdir($cacheDir, 0755, true);
+        }
+        
+        $cacheMetaFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.meta';
+        $cacheImgFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.img';
+        $cacheNoCoverFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.nocover';
+        
+        // 캐시 히트
+        if (is_file($cacheMetaFile) && is_file($cacheImgFile)) {
+            $imgFileSize = @filesize($cacheImgFile);
+            if ($imgFileSize !== false && $imgFileSize > 0) {
+                $mime = trim(@file_get_contents($cacheMetaFile));
+                if ($mime && preg_match('/^image\/[a-z0-9+-]+$/i', $mime)) {
+                    return [
+                        'mime' => $mime,
+                        'data' => @file_get_contents($cacheImgFile),
+                        'cached' => true,
+                        'cache_key' => $cacheKey,
+                    ];
+                }
+            }
+            @unlink($cacheMetaFile);
+            @unlink($cacheImgFile);
+        }
+        
+        // 네거티브 캐시 (커버 없음 기록)
+        if (is_file($cacheNoCoverFile)) {
+            return null;
+        }
+        
+        // FileManager의 ID3v2 추출 로직과 동일 (프라이빗 메서드 복제 — 결합도 낮춤)
+        $cover = $this->extractID3v2Cover($fullPath);
+        if (!$cover) {
+            @file_put_contents($cacheNoCoverFile, '1');
+            return null;
+        }
+        
+        // 캐시 저장
+        @file_put_contents($cacheMetaFile, $cover['mime']);
+        @file_put_contents($cacheImgFile, $cover['data']);
+        
+        return [
+            'mime' => $cover['mime'],
+            'data' => $cover['data'],
+            'cached' => false,
+            'cache_key' => $cacheKey,
+        ];
+    }
+    
+    /**
+     * MP3 파일의 ID3v2 태그에서 APIC 프레임(커버 이미지) 추출
+     * 
+     * FileManager::extractID3v2Cover의 로직을 복제 (결합도 낮춤).
+     * 외부 라이브러리 의존 없이 ID3v2.3/2.4 표준만 파싱.
+     * 
+     * @return array|null ['mime' => 'image/jpeg', 'data' => binary]
+     */
+    private function extractID3v2Cover(string $file): ?array {
+        $fp = @fopen($file, 'rb');
+        if (!$fp) return null;
+        
+        try {
+            // ID3v2 헤더 (10바이트): "ID3" + version(2) + flags(1) + size(4, syncsafe)
+            $header = fread($fp, 10);
+            if (strlen($header) < 10 || substr($header, 0, 3) !== 'ID3') {
+                return null;
+            }
+            
+            // syncsafe integer (각 바이트 7비트만 사용)
+            $sizeBytes = substr($header, 6, 4);
+            $tagSize = 0;
+            for ($i = 0; $i < 4; $i++) {
+                $tagSize = ($tagSize << 7) | (ord($sizeBytes[$i]) & 0x7F);
+            }
+            
+            // 태그 크기 제한 (최대 10MB — 이상치 방지)
+            if ($tagSize <= 0 || $tagSize > 10 * 1024 * 1024) {
+                return null;
+            }
+            
+            $tagData = fread($fp, $tagSize);
+            if (strlen($tagData) < $tagSize) {
+                // 파일이 짧아도 가능한 만큼 시도
+            }
+            
+            // APIC 프레임 검색
+            $offset = 0;
+            $tagDataLen = strlen($tagData);
+            
+            while ($offset + 10 <= $tagDataLen) {
+                $frameId = substr($tagData, $offset, 4);
+                
+                // 프레임 끝 (null 패딩) 또는 ID 형식 깨짐
+                if ($frameId === "\x00\x00\x00\x00" || !preg_match('/^[A-Z0-9]{4}$/', $frameId)) {
+                    break;
+                }
+                
+                // 프레임 크기 (4바이트, ID3v2.3는 일반 정수, 2.4는 syncsafe)
+                $frameSize = unpack('Nsize', substr($tagData, $offset + 4, 4))['size'];
+                
+                // ID3v2.4의 syncsafe 크기 처리 (대부분 2.3이라 일반 정수가 맞음, 폴백)
+                if ($frameSize > $tagDataLen - $offset || $frameSize < 0) {
+                    // syncsafe로 재시도
+                    $sb = substr($tagData, $offset + 4, 4);
+                    $frameSize = ((ord($sb[0]) & 0x7F) << 21) | ((ord($sb[1]) & 0x7F) << 14)
+                               | ((ord($sb[2]) & 0x7F) << 7)  | (ord($sb[3]) & 0x7F);
+                    if ($frameSize > $tagDataLen - $offset || $frameSize <= 0) {
+                        break;
+                    }
+                }
+                
+                if ($frameId === 'APIC') {
+                    // APIC 본문: encoding(1) + mime(null term) + picture_type(1) + description(null term) + image
+                    $frameBody = substr($tagData, $offset + 10, $frameSize);
+                    if (strlen($frameBody) < 4) { $offset += 10 + $frameSize; continue; }
+                    
+                    $textEncoding = ord($frameBody[0]);
+                    
+                    // MIME (null-terminated, ASCII)
+                    $mimeEnd = strpos($frameBody, "\x00", 1);
+                    if ($mimeEnd === false || $mimeEnd === 1) {
+                        $offset += 10 + $frameSize; continue;
+                    }
+                    $mime = substr($frameBody, 1, $mimeEnd - 1);
+                    
+                    // MIME 정규화 (image/ 접두어 보장)
+                    if (strpos($mime, '/') === false) {
+                        $mime = 'image/' . strtolower($mime);
+                    }
+                    if (!preg_match('/^image\/[a-z0-9+-]+$/i', $mime)) {
+                        $offset += 10 + $frameSize; continue;
+                    }
+                    
+                    // picture_type 1바이트
+                    $pos = $mimeEnd + 1 + 1;
+                    
+                    // description (null-terminated, encoding에 따라 1 또는 2바이트 단위)
+                    if ($textEncoding === 1 || $textEncoding === 2) {
+                        // UTF-16 BOM 또는 UTF-16BE: 2바이트 단위 null
+                        $descEnd = $pos;
+                        while ($descEnd + 1 < strlen($frameBody)) {
+                            if ($frameBody[$descEnd] === "\x00" && $frameBody[$descEnd + 1] === "\x00") {
+                                $pos = $descEnd + 2;
+                                break;
+                            }
+                            $descEnd += 2;
+                        }
+                        if ($descEnd + 1 >= strlen($frameBody)) {
+                            $offset += 10 + $frameSize; continue;
+                        }
+                    } else {
+                        // ISO-8859-1 또는 UTF-8: 1바이트 단위 null
+                        $descEnd = strpos($frameBody, "\x00", $pos);
+                        if ($descEnd === false) { $offset += 10 + $frameSize; continue; }
+                        $pos = $descEnd + 1;
+                    }
+                    
+                    $imageData = substr($frameBody, $pos);
+                    if (strlen($imageData) < 100) { // 너무 작으면 무효
+                        $offset += 10 + $frameSize; continue;
+                    }
+                    
+                    return ['mime' => $mime, 'data' => $imageData];
+                }
+                
+                $offset += 10 + $frameSize;
+            }
+            
+            return null;
+        } finally {
+            @fclose($fp);
+        }
+    }
+    
+    /**
+     * MP3 파일의 ID3v2 USLT 프레임에서 정적 가사 추출
+     * 
+     * 1. ID3v2 헤더 검사
+     * 2. USLT (Unsynchronized Lyrics) 프레임 검색
+     * 3. 인코딩에 맞춰 가사 본문 디코드 (UTF-16 BOM, UTF-16BE, UTF-8, ISO-8859-1)
+     * 
+     * 반환: ['language' => 'kor'/'eng'/..., 'text' => '가사 본문'] 또는 null
+     */
+    private function extractID3v2Lyrics(string $file): ?array {
+        $fp = @fopen($file, 'rb');
+        if (!$fp) return null;
+        
+        try {
+            // ID3v2 헤더 (10바이트)
+            $header = fread($fp, 10);
+            if (strlen($header) < 10 || substr($header, 0, 3) !== 'ID3') {
+                return null;
+            }
+            
+            // syncsafe integer
+            $sizeBytes = substr($header, 6, 4);
+            $tagSize = 0;
+            for ($i = 0; $i < 4; $i++) {
+                $tagSize = ($tagSize << 7) | (ord($sizeBytes[$i]) & 0x7F);
+            }
+            
+            if ($tagSize <= 0 || $tagSize > 10 * 1024 * 1024) {
+                return null;
+            }
+            
+            $tagData = fread($fp, $tagSize);
+            
+            // USLT 프레임 검색
+            $offset = 0;
+            $tagDataLen = strlen($tagData);
+            
+            while ($offset + 10 <= $tagDataLen) {
+                $frameId = substr($tagData, $offset, 4);
+                
+                // 프레임 ID는 [A-Z0-9]{4} 패턴 — 패딩이면 종료
+                if (!preg_match('/^[A-Z0-9]{4}$/', $frameId)) {
+                    break;
+                }
+                
+                // 프레임 크기 (4바이트, 빅엔디안 — ID3v2.3는 정수, v2.4는 syncsafe)
+                $frameSizeBytes = substr($tagData, $offset + 4, 4);
+                $frameSize = 0;
+                $majorVersion = ord($header[3]);
+                if ($majorVersion >= 4) {
+                    // ID3v2.4: syncsafe
+                    for ($i = 0; $i < 4; $i++) {
+                        $frameSize = ($frameSize << 7) | (ord($frameSizeBytes[$i]) & 0x7F);
+                    }
+                } else {
+                    // ID3v2.3: 일반 정수
+                    $frameSize = (ord($frameSizeBytes[0]) << 24)
+                               | (ord($frameSizeBytes[1]) << 16)
+                               | (ord($frameSizeBytes[2]) << 8)
+                               |  ord($frameSizeBytes[3]);
+                }
+                
+                if ($frameSize <= 0 || $offset + 10 + $frameSize > $tagDataLen) {
+                    break;
+                }
+                
+                if ($frameId === 'USLT') {
+                    // USLT 프레임 본문
+                    $frameBody = substr($tagData, $offset + 10, $frameSize);
+                    if (strlen($frameBody) < 5) {
+                        $offset += 10 + $frameSize; continue;
+                    }
+                    
+                    $textEncoding = ord($frameBody[0]);
+                    $language = substr($frameBody, 1, 3);
+                    
+                    // description (null-terminated, encoding에 따라 1 또는 2바이트 단위)
+                    $pos = 4;
+                    $descEnd = -1;
+                    if ($textEncoding === 1 || $textEncoding === 2) {
+                        // UTF-16 BOM 또는 UTF-16BE: 2바이트 단위 null
+                        $descEnd = $pos;
+                        while ($descEnd + 1 < strlen($frameBody)) {
+                            if ($frameBody[$descEnd] === "\x00" && $frameBody[$descEnd + 1] === "\x00") {
+                                break;
+                            }
+                            $descEnd += 2;
+                        }
+                        if ($descEnd + 1 >= strlen($frameBody)) {
+                            $offset += 10 + $frameSize; continue;
+                        }
+                        $pos = $descEnd + 2;
+                    } else {
+                        // ISO-8859-1 또는 UTF-8: 1바이트 단위 null
+                        $descEnd = strpos($frameBody, "\x00", $pos);
+                        if ($descEnd === false) { $offset += 10 + $frameSize; continue; }
+                        $pos = $descEnd + 1;
+                    }
+                    
+                    // 가사 본문 추출
+                    $lyricsBytes = substr($frameBody, $pos);
+                    if (strlen($lyricsBytes) < 1) {
+                        $offset += 10 + $frameSize; continue;
+                    }
+                    
+                    // 인코딩별 디코드
+                    $lyricsText = '';
+                    if ($textEncoding === 0) {
+                        // ISO-8859-1
+                        $lyricsText = @mb_convert_encoding($lyricsBytes, 'UTF-8', 'ISO-8859-1');
+                    } elseif ($textEncoding === 1) {
+                        // UTF-16 with BOM
+                        if (strlen($lyricsBytes) >= 2) {
+                            $bom = substr($lyricsBytes, 0, 2);
+                            if ($bom === "\xFF\xFE") {
+                                $lyricsText = @mb_convert_encoding(substr($lyricsBytes, 2), 'UTF-8', 'UTF-16LE');
+                            } elseif ($bom === "\xFE\xFF") {
+                                $lyricsText = @mb_convert_encoding(substr($lyricsBytes, 2), 'UTF-8', 'UTF-16BE');
+                            } else {
+                                // BOM 없으면 UTF-16LE 가정
+                                $lyricsText = @mb_convert_encoding($lyricsBytes, 'UTF-8', 'UTF-16LE');
+                            }
+                        }
+                    } elseif ($textEncoding === 2) {
+                        // UTF-16BE
+                        $lyricsText = @mb_convert_encoding($lyricsBytes, 'UTF-8', 'UTF-16BE');
+                    } elseif ($textEncoding === 3) {
+                        // UTF-8
+                        $lyricsText = $lyricsBytes;
+                    }
+                    
+                    // null 바이트 제거 + trim
+                    $lyricsText = rtrim(str_replace("\x00", '', $lyricsText));
+                    
+                    if (strlen($lyricsText) > 0) {
+                        return ['language' => trim($language), 'text' => $lyricsText];
+                    }
+                }
+                
+                $offset += 10 + $frameSize;
+            }
+            
+            return null;
+        } finally {
+            @fclose($fp);
+        }
+    }
+    
+    /**
+     * 🌐 [공유 스트리밍] MP3 파일의 ID3v2 SYLT 프레임 추출 (시간 동기화 가사)
+     * FileManager::extractID3v2SyncedLyrics 동일 로직 — 결합도 낮춤
+     * 
+     * 반환: ['text' => 'LRC 형식 변환된 가사', 'language' => 'kor'] 또는 null
+     */
+    private function extractID3v2SyncedLyrics(string $file): ?array {
+        $fp = @fopen($file, 'rb');
+        if (!$fp) return null;
+        
+        try {
+            $header = fread($fp, 10);
+            if (strlen($header) < 10 || substr($header, 0, 3) !== 'ID3') return null;
+            
+            $sizeBytes = substr($header, 6, 4);
+            $tagSize = 0;
+            for ($i = 0; $i < 4; $i++) {
+                $tagSize = ($tagSize << 7) | (ord($sizeBytes[$i]) & 0x7F);
+            }
+            if ($tagSize <= 0 || $tagSize > 10 * 1024 * 1024) return null;
+            
+            $tagData = fread($fp, $tagSize);
+            $offset = 0;
+            $tagDataLen = strlen($tagData);
+            $majorVersion = ord($header[3]);
+            
+            while ($offset + 10 <= $tagDataLen) {
+                $frameId = substr($tagData, $offset, 4);
+                if (!preg_match('/^[A-Z0-9]{4}$/', $frameId)) break;
+                
+                $frameSizeBytes = substr($tagData, $offset + 4, 4);
+                $frameSize = 0;
+                if ($majorVersion >= 4) {
+                    for ($i = 0; $i < 4; $i++) {
+                        $frameSize = ($frameSize << 7) | (ord($frameSizeBytes[$i]) & 0x7F);
+                    }
+                } else {
+                    $frameSize = (ord($frameSizeBytes[0]) << 24)
+                               | (ord($frameSizeBytes[1]) << 16)
+                               | (ord($frameSizeBytes[2]) << 8)
+                               |  ord($frameSizeBytes[3]);
+                }
+                if ($frameSize <= 0 || $offset + 10 + $frameSize > $tagDataLen) break;
+                
+                if ($frameId === 'SYLT') {
+                    $frameBody = substr($tagData, $offset + 10, $frameSize);
+                    if (strlen($frameBody) < 6) { $offset += 10 + $frameSize; continue; }
+                    
+                    $textEncoding = ord($frameBody[0]);
+                    $language = substr($frameBody, 1, 3);
+                    $timeFormat = ord($frameBody[4]);
+                    $contentType = ord($frameBody[5]);
+                    
+                    if ($contentType !== 0x01) { $offset += 10 + $frameSize; continue; }
+                    
+                    $pos = 6;
+                    if ($textEncoding === 1 || $textEncoding === 2) {
+                        $descEnd = $pos;
+                        while ($descEnd + 1 < strlen($frameBody)) {
+                            if ($frameBody[$descEnd] === "\x00" && $frameBody[$descEnd + 1] === "\x00") break;
+                            $descEnd += 2;
+                        }
+                        if ($descEnd + 1 >= strlen($frameBody)) { $offset += 10 + $frameSize; continue; }
+                        $pos = $descEnd + 2;
+                    } else {
+                        $descEnd = strpos($frameBody, "\x00", $pos);
+                        if ($descEnd === false) { $offset += 10 + $frameSize; continue; }
+                        $pos = $descEnd + 1;
+                    }
+                    
+                    $lrcLines = [];
+                    while ($pos + 4 < strlen($frameBody)) {
+                        $textEnd = $pos;
+                        if ($textEncoding === 1 || $textEncoding === 2) {
+                            while ($textEnd + 1 < strlen($frameBody)) {
+                                if ($frameBody[$textEnd] === "\x00" && $frameBody[$textEnd + 1] === "\x00") break;
+                                $textEnd += 2;
+                            }
+                            if ($textEnd + 1 >= strlen($frameBody)) break;
+                            $textBytes = substr($frameBody, $pos, $textEnd - $pos);
+                            $pos = $textEnd + 2;
+                        } else {
+                            $textEnd = strpos($frameBody, "\x00", $pos);
+                            if ($textEnd === false) break;
+                            $textBytes = substr($frameBody, $pos, $textEnd - $pos);
+                            $pos = $textEnd + 1;
+                        }
+                        
+                        if ($pos + 4 > strlen($frameBody)) break;
+                        $timestamp = (ord($frameBody[$pos]) << 24)
+                                   | (ord($frameBody[$pos + 1]) << 16)
+                                   | (ord($frameBody[$pos + 2]) << 8)
+                                   |  ord($frameBody[$pos + 3]);
+                        $pos += 4;
+                        
+                        $lyricText = '';
+                        if ($textEncoding === 0) {
+                            $lyricText = @mb_convert_encoding($textBytes, 'UTF-8', 'ISO-8859-1');
+                        } elseif ($textEncoding === 1) {
+                            if (strlen($textBytes) >= 2) {
+                                $bom = substr($textBytes, 0, 2);
+                                if ($bom === "\xFF\xFE") {
+                                    $lyricText = @mb_convert_encoding(substr($textBytes, 2), 'UTF-8', 'UTF-16LE');
+                                } elseif ($bom === "\xFE\xFF") {
+                                    $lyricText = @mb_convert_encoding(substr($textBytes, 2), 'UTF-8', 'UTF-16BE');
+                                } else {
+                                    $lyricText = @mb_convert_encoding($textBytes, 'UTF-8', 'UTF-16');
+                                }
+                            }
+                        } elseif ($textEncoding === 2) {
+                            $lyricText = @mb_convert_encoding($textBytes, 'UTF-8', 'UTF-16BE');
+                        } elseif ($textEncoding === 3) {
+                            $lyricText = $textBytes;
+                        }
+                        
+                        if ($lyricText === false || $lyricText === null) continue;
+                        $lyricText = trim($lyricText);
+                        if ($lyricText === '') continue;
+                        
+                        $totalSec = ($timeFormat === 0x02) ? $timestamp / 1000.0 : $timestamp / 1000.0;
+                        if ($totalSec < 0 || $totalSec > 36000) continue;
+                        
+                        $min = floor($totalSec / 60);
+                        $sec = floor($totalSec - $min * 60);
+                        $cs = floor(($totalSec - floor($totalSec)) * 100);
+                        $timeTag = sprintf('[%02d:%02d.%02d]', $min, $sec, $cs);
+                        
+                        $lrcLines[] = $timeTag . $lyricText;
+                    }
+                    
+                    if (count($lrcLines) === 0) { $offset += 10 + $frameSize; continue; }
+                    
+                    return [
+                        'text' => implode("\n", $lrcLines),
+                        'language' => trim($language) ?: null,
+                    ];
+                }
+                
+                $offset += 10 + $frameSize;
+            }
+            
+            return null;
+        } finally {
+            @fclose($fp);
+        }
+    }
+    
+    /**
+     * ============================================================================
+     * 🌐 [공유 스트리밍] MP3 파일의 가사 추출 (LRC 파일 → SYLT → USLT → TXT 우선순위)
+     * ============================================================================
+     * 
+     * ⚠️ 주의: 이 메서드는 *공유 페이지(share.php) 전용*입니다.
+     * 
+     * - 호출 위치: share.php?t=토큰&lyrics=1 (공유 스트리밍 모드)
+     * - 짝 메서드: FileManager::getAudioLyrics() (메인 페이지 전용)
+     *   메인 페이지 가사는 api.php?action=audio_lyrics → FileManager::getAudioLyrics
+     * 
+     * 반환: ['source' => 'lrc'|'uslt'|'txt', 'text' => '가사', 'synced' => bool] 또는 null
+     */
+    public function getShareLyrics(string $token, ?string $password = null, ?string $subFile = null): ?array {
+        // 폴더 공유 + sub-path 모드
+        if ($subFile !== null && $subFile !== '') {
+            // sub-path 보안 검증
+            $fullPath = $this->validateSharedFolderSubPath($token, $password, $subFile);
+            if ($fullPath === null) return null;
+            
+            $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
+            $audioExts = ['mp3', 'm4a', 'flac', 'ogg', 'wav', 'aac', 'opus', 'ape', 'alac', 'aiff'];
+            if (!in_array($ext, $audioExts)) return null;
+            
+            // 폴더 안 가사 검색 (LRC > USLT > TXT)
+            $dir = dirname($fullPath);
+            $baseName = pathinfo($fullPath, PATHINFO_FILENAME);
+            
+            // 1. LRC
+            $lrcPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.lrc';
+            if (file_exists($lrcPath) && is_readable($lrcPath)) {
+                $lrcSize = @filesize($lrcPath);
+                if ($lrcSize > 0 && $lrcSize < 1 * 1024 * 1024) {
+                    $lrcText = @file_get_contents($lrcPath);
+                    if ($lrcText !== false) {
+                        if (substr($lrcText, 0, 3) === "\xEF\xBB\xBF") $lrcText = substr($lrcText, 3);
+                        if (!mb_check_encoding($lrcText, 'UTF-8')) {
+                            $lrcText = @mb_convert_encoding($lrcText, 'UTF-8', 'CP949,EUC-KR,UTF-16LE,UTF-16BE,ISO-8859-1');
+                        }
+                        if ($lrcText !== false && strlen(trim($lrcText)) > 0) {
+                            return ['source' => 'lrc', 'text' => $lrcText, 'synced' => true];
+                        }
+                    }
+                }
+            }
+            
+            // 2. SYLT (mp3만, 시간 동기화 가사)
+            if ($ext === 'mp3') {
+                $sylt = $this->extractID3v2SyncedLyrics($fullPath);
+                if ($sylt && strlen(trim($sylt['text'])) > 0) {
+                    return ['source' => 'sylt', 'text' => $sylt['text'], 'synced' => true, 'language' => $sylt['language']];
+                }
+            }
+            
+            // 3. USLT (mp3만, 정적 가사)
+            if ($ext === 'mp3') {
+                $uslt = $this->extractID3v2Lyrics($fullPath);
+                if ($uslt && strlen(trim($uslt['text'])) > 0) {
+                    return ['source' => 'uslt', 'text' => $uslt['text'], 'synced' => false, 'language' => $uslt['language']];
+                }
+            }
+            
+            // 4. TXT
+            $txtPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.txt';
+            if (file_exists($txtPath) && is_readable($txtPath)) {
+                $txtSize = @filesize($txtPath);
+                if ($txtSize > 0 && $txtSize < 1 * 1024 * 1024) {
+                    $txtText = @file_get_contents($txtPath);
+                    if ($txtText !== false) {
+                        if (substr($txtText, 0, 3) === "\xEF\xBB\xBF") $txtText = substr($txtText, 3);
+                        if (!mb_check_encoding($txtText, 'UTF-8')) {
+                            $txtText = @mb_convert_encoding($txtText, 'UTF-8', 'CP949,EUC-KR,UTF-16LE,UTF-16BE,ISO-8859-1');
+                        }
+                        if ($txtText !== false && strlen(trim($txtText)) > 0) {
+                            $synced = preg_match('/^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/m', $txtText) === 1;
+                            return ['source' => 'txt', 'text' => $txtText, 'synced' => $synced];
+                        }
+                    }
+                }
+            }
+            
+            return null;
+        }
+        
+        // 단일 파일 공유 (기존 로직)
+        $access = $this->accessShare($token, $password);
+        if (!$access['success']) return null;
+        if ($access['share']['is_dir']) return null;
+        
+        $filename = $access['share']['filename'];
+        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        
+        // 오디오만 (mp3/m4a/flac 등 ID3 가능)
+        $audioExts = ['mp3', 'm4a', 'flac', 'ogg', 'wav', 'aac', 'opus', 'ape', 'alac', 'aiff'];
+        if (!in_array($ext, $audioExts)) return null;
+        
+        // 실제 파일 경로 계산 (accessShare 내부와 동일 로직)
+        $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
+        if (!$share) return null;
+        
+        $basePath = $this->storage->getRealPath($share['storage_id']);
+        if (!$basePath) return null;
+        
+        $fullPath = rtrim($basePath, '/\\') . DIRECTORY_SEPARATOR . ltrim($share['file_path'], '/\\');
+        if (!file_exists($fullPath) || !is_readable($fullPath)) return null;
+        
+        // 1. 같은 폴더의 LRC 파일 (정확 매칭)
+        $dir = dirname($fullPath);
+        $baseName = pathinfo($filename, PATHINFO_FILENAME);
+        $lrcPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.lrc';
+        if (file_exists($lrcPath) && is_readable($lrcPath)) {
+            $lrcSize = @filesize($lrcPath);
+            if ($lrcSize > 0 && $lrcSize < 1 * 1024 * 1024) { // 최대 1MB
+                $lrcText = @file_get_contents($lrcPath);
+                if ($lrcText !== false) {
+                    // BOM 제거
+                    if (substr($lrcText, 0, 3) === "\xEF\xBB\xBF") {
+                        $lrcText = substr($lrcText, 3);
+                    }
+                    // 인코딩 변환 (UTF-8이 아니면 시도)
+                    if (!mb_check_encoding($lrcText, 'UTF-8')) {
+                        $lrcText = @mb_convert_encoding($lrcText, 'UTF-8', 'CP949,EUC-KR,UTF-16LE,UTF-16BE,ISO-8859-1');
+                    }
+                    if ($lrcText !== false && strlen(trim($lrcText)) > 0) {
+                        return ['source' => 'lrc', 'text' => $lrcText, 'synced' => true];
+                    }
+                }
+            }
+        }
+        
+        // 2. ID3v2 SYLT 임베드 가사 (mp3만, 시간 동기화)
+        if ($ext === 'mp3') {
+            $sylt = $this->extractID3v2SyncedLyrics($fullPath);
+            if ($sylt && strlen(trim($sylt['text'])) > 0) {
+                return ['source' => 'sylt', 'text' => $sylt['text'], 'synced' => true, 'language' => $sylt['language']];
+            }
+        }
+        
+        // 3. ID3v2 USLT 임베드 가사 (mp3만, 정적)
+        if ($ext === 'mp3') {
+            $uslt = $this->extractID3v2Lyrics($fullPath);
+            if ($uslt && strlen(trim($uslt['text'])) > 0) {
+                return ['source' => 'uslt', 'text' => $uslt['text'], 'synced' => false, 'language' => $uslt['language']];
+            }
+        }
+        
+        // 4. 같은 폴더의 TXT 파일 (정확 매칭)
+        $txtPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.txt';
+        if (file_exists($txtPath) && is_readable($txtPath)) {
+            $txtSize = @filesize($txtPath);
+            if ($txtSize > 0 && $txtSize < 1 * 1024 * 1024) {
+                $txtText = @file_get_contents($txtPath);
+                if ($txtText !== false) {
+                    if (substr($txtText, 0, 3) === "\xEF\xBB\xBF") {
+                        $txtText = substr($txtText, 3);
+                    }
+                    if (!mb_check_encoding($txtText, 'UTF-8')) {
+                        $txtText = @mb_convert_encoding($txtText, 'UTF-8', 'CP949,EUC-KR,UTF-16LE,UTF-16BE,ISO-8859-1');
+                    }
+                    if ($txtText !== false && strlen(trim($txtText)) > 0) {
+                        // TXT 안에 LRC 시간 태그가 있으면 LRC로 처리
+                        $synced = preg_match('/^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/m', $txtText) === 1;
+                        return ['source' => 'txt', 'text' => $txtText, 'synced' => $synced];
+                    }
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    /**
+     * 공유 폴더 안 음악 트랙 목록 가져오기 (직속 파일만)
+     * 
+     * 보안:
+     *  - 폴더 공유 + stream 타입만 처리
+     *  - 직속 파일만 (재귀 X) → path traversal 위험 최소화
+     *  - 음악 확장자 화이트리스트 (mp3/wav/flac/m4a/aac/ogg/opus/wma/ape/alac/aiff)
+     *  - basename + realpath 이중 검증 (sub-path 공격 방어)
+     *  - 숨김 파일 제외 (.htaccess 등)
+     * 
+     * 반환: ['file' => 'song.mp3', 'name' => 'song', 'ext' => 'mp3', 'size' => 123456], ...
+     *       또는 빈 배열 (음악 파일 없음)
+     */
+    public function getSharedFolderTracks(string $token, ?string $password = null): ?array {
+        // ★ 디버그 로그 (펜닐님 동영상 폴더 stream 진단용 — 비활성화: 함수 본체만 주석, 호출은 no-op)
+        //   재활성 시 아래 본체 주석 해제하면 즉시 작동
+        $_gsftLog = function($msg) {
+            /*
+            $_logDir = __DIR__ . '/../data/debug';
+            if (!is_dir($_logDir)) @mkdir($_logDir, 0755, true);
+            @file_put_contents(
+                $_logDir . '/folder_stream_debug.log',
+                '[' . date('Y-m-d H:i:s') . '] [GSF-TRACKS] ' . $msg . "\n",
+                FILE_APPEND
+            );
+            */
+        };
+        $_gsftLog('=== getSharedFolderTracks 시작 ===');
+        $_gsftLog('token: ' . substr($token, 0, 16) . '...');
+        
+        // accessShare 검증 (만료/비밀번호/세션 인증 일관)
+        $access = $this->accessShare($token, $password);
+        $_gsftLog('accessShare result: ' . ($access['success'] ? 'success' : 'FAIL - ' . ($access['error'] ?? '')));
+        if (!$access['success']) return null;
+        
+        // 폴더 공유만
+        $_gsftLog('share is_dir: ' . ($access['share']['is_dir'] ? 'TRUE' : 'FALSE'));
+        if (!$access['share']['is_dir']) {
+            $_gsftLog('FAIL: not a directory share');
+            return null;
+        }
+        
+        // stream 타입만 (download 폴더 공유는 ZIP 다운로드 그대로)
+        $_gsftLog('share_type: ' . ($access['share']['share_type'] ?? 'NULL'));
+        if (($access['share']['share_type'] ?? '') !== 'stream') {
+            $_gsftLog('FAIL: share_type is not stream');
+            return null;
+        }
+        
+        // 실제 폴더 경로 계산
+        $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
+        if (!$share) {
+            $_gsftLog('FAIL: share record not in DB');
+            return null;
+        }
+        $_gsftLog('share record found - storage_id: ' . $share['storage_id'] . ', file_path: ' . $share['file_path']);
+        
+        $basePath = $this->storage->getRealPath($share['storage_id']);
+        $_gsftLog('basePath: ' . ($basePath ?: 'NULL'));
+        if (!$basePath) {
+            $_gsftLog('FAIL: basePath empty');
+            return null;
+        }
+        
+        $folderPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+        $_gsftLog('folderPath: ' . $folderPath);
+        $_gsftLog('is_dir($folderPath): ' . (is_dir($folderPath) ? 'TRUE' : 'FALSE'));
+        if (!is_dir($folderPath)) {
+            $_gsftLog('FAIL: folder does not exist');
+            return null;
+        }
+        
+        // 보안: realpath 검증 (스토리지 외부 차단)
+        $realFolder = realpath($folderPath);
+        $realBase = realpath($basePath);
+        $_gsftLog('realFolder: ' . ($realFolder ?: 'FALSE'));
+        $_gsftLog('realBase: ' . ($realBase ?: 'FALSE'));
+        if ($realFolder === false || $realBase === false) {
+            $_gsftLog('FAIL: realpath returned false');
+            return null;
+        }
+        if (strpos($realFolder, $realBase) !== 0) {
+            $_gsftLog('FAIL: realFolder NOT inside realBase (escape attempt?)');
+            return null;
+        }
+        
+        // ★ 펜닐님 결정 (옵션 D): PHP 파일 캐시 — 폴더 mtime + TTL 30s 기반
+        //   같은 token에 대한 cover/lyrics 등 다중 요청에서 디렉토리 스캔 1회로 줄임
+        //   - 캐시 키: token MD5 (보안: 토큰 자체 노출 X)
+        //   - 무효화: 폴더 mtime 변경 시 (파일 추가/삭제) + TTL 30s (내용 수정 커버)
+        $_cacheDir = __DIR__ . '/../data/cache/folder_tracks';
+        $_cacheKey = md5($token);
+        $_cacheFile = $_cacheDir . '/' . $_cacheKey . '.json';
+        $_folderMtime = @filemtime($realFolder) ?: 0;
+        $_now = time();
+        if (is_file($_cacheFile)) {
+            $_cacheAge = $_now - (@filemtime($_cacheFile) ?: 0);
+            if ($_cacheAge < 30) {
+                $_cacheData = @file_get_contents($_cacheFile);
+                if ($_cacheData !== false) {
+                    $_cached = @json_decode($_cacheData, true);
+                    if (is_array($_cached) && isset($_cached['folder_mtime'], $_cached['tracks'])) {
+                        // 폴더 mtime 일치 시 캐시 적중 (파일 추가/삭제 안 됨)
+                        if ((int)$_cached['folder_mtime'] === $_folderMtime) {
+                            $_gsftLog('CACHE HIT - returning cached tracks (count=' . count($_cached['tracks']) . ', age=' . $_cacheAge . 's)');
+                            return $_cached['tracks'];
+                        }
+                    }
+                }
+            }
+        }
+        
+        // 미디어 확장자 화이트리스트 (audio + video 통합)
+        $audioExts = ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma', 'ape', 'alac', 'aiff'];
+        $videoExts = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'ts', 'm2ts', 'mts', 'mpg', 'mpeg', 'm4v', '3gp'];
+        // 주의: 'ogg'는 video share.php에도 있으나 audio로 우선 처리 (대부분 ogg vorbis 음악)
+        
+        $tracks = [];
+        $items = @scandir($realFolder);
+        $_gsftLog('scandir count: ' . ($items === false ? 'FALSE' : count($items)));
+        if ($items === false) return [];
+        
+        $skippedReasons = ['hidden' => 0, 'not_file' => 0, 'is_link' => 0, 'wrong_ext' => 0];
+        $allExts = [];
+        
+        foreach ($items as $item) {
+            // 숨김 파일/시스템 파일 제외
+            if ($item === '.' || $item === '..') { $skippedReasons['hidden']++; continue; }
+            if (substr($item, 0, 1) === '.') { $skippedReasons['hidden']++; continue; }
+            
+            $itemPath = $realFolder . DIRECTORY_SEPARATOR . $item;
+            
+            // 직속 파일만 (디렉토리 X, 심볼릭 링크 X)
+            if (!is_file($itemPath)) { $skippedReasons['not_file']++; continue; }
+            if (is_link($itemPath)) { $skippedReasons['is_link']++; continue; }
+            
+            // 확장자 화이트리스트 (audio 또는 video)
+            $ext = strtolower(pathinfo($item, PATHINFO_EXTENSION));
+            $allExts[$ext] = ($allExts[$ext] ?? 0) + 1;
+            
+            // type 결정: audio 우선 검사 (ogg는 audio)
+            $type = null;
+            if (in_array($ext, $audioExts, true)) {
+                $type = 'audio';
+            } elseif (in_array($ext, $videoExts, true)) {
+                $type = 'video';
+            }
+            if ($type === null) { $skippedReasons['wrong_ext']++; continue; }
+            
+            $tracks[] = [
+                'file' => $item,
+                'name' => pathinfo($item, PATHINFO_FILENAME),
+                'ext' => $ext,
+                'size' => @filesize($itemPath) ?: 0,
+                'mtime' => @filemtime($itemPath) ?: 0,  // ★ HTTP 캐시 무효화용 (mtime 기반 URL)
+                'type' => $type,  // ★ 신규: 'audio' 또는 'video'
+            ];
+        }
+        
+        $_gsftLog('found tracks: ' . count($tracks));
+        $_gsftLog('skipped: ' . json_encode($skippedReasons));
+        $_gsftLog('all extensions found: ' . json_encode($allExts, JSON_UNESCAPED_UNICODE));
+        if (count($tracks) > 0) {
+            $_gsftLog('first 5 tracks: ' . json_encode(array_slice(array_column($tracks, 'file'), 0, 5), JSON_UNESCAPED_UNICODE));
+            $audioCount = count(array_filter($tracks, fn($t) => $t['type'] === 'audio'));
+            $videoCount = count(array_filter($tracks, fn($t) => $t['type'] === 'video'));
+            $_gsftLog("track types: audio={$audioCount}, video={$videoCount}");
+        }
+        
+        // 파일명 자연정렬 (트랙 1, 2, 3, ... 11, 12 순서)
+        usort($tracks, function($a, $b) {
+            return strnatcasecmp($a['file'], $b['file']);
+        });
+        
+        // ★ 캐시 저장 (다음 요청 시 재사용)
+        if (!is_dir($_cacheDir)) @mkdir($_cacheDir, 0755, true);
+        @file_put_contents($_cacheFile, json_encode([
+            'folder_mtime' => $_folderMtime,
+            'tracks' => $tracks,
+        ], JSON_UNESCAPED_UNICODE), LOCK_EX);
+        $_gsftLog('CACHE WRITE - tracks count=' . count($tracks));
+        
+        return $tracks;
+    }
+    
+    /**
+     * 공유 폴더의 sub-path 보안 검증
+     * 
+     * 외부에서 file= 파라미터로 받은 sub-path가:
+     *  1. basename만 사용 (디렉토리 분리자 차단)
+     *  2. 화이트리스트(getSharedFolderTracks)에 있는 파일인지 검증
+     *  3. realpath가 폴더 안에 있는지 재확인
+     * 
+     * 반환: 검증 통과 시 fullPath, 실패 시 null
+     */
+    public function validateSharedFolderSubPath(string $token, ?string $password, string $subFile): ?string {
+        // accessShare 통한 폴더 공유 검증
+        $access = $this->accessShare($token, $password);
+        if (!$access['success']) return null;
+        if (!$access['share']['is_dir']) return null;
+        if (($access['share']['share_type'] ?? '') !== 'stream') return null;
+        
+        // basename만 추출 (path traversal 차단: ../, /, \ 모두 제거됨)
+        $cleanFile = basename($subFile);
+        if ($cleanFile === '' || $cleanFile === '.' || $cleanFile === '..') return null;
+        if ($cleanFile !== $subFile) return null;  // 입력에 디렉토리 분리자 있었으면 거부
+        if (substr($cleanFile, 0, 1) === '.') return null;  // 숨김 파일 거부
+        
+        // 화이트리스트 검증 (트랙 목록에 있는 파일인지)
+        $tracks = $this->getSharedFolderTracks($token, $password);
+        if (!$tracks) return null;
+        
+        $found = false;
+        foreach ($tracks as $t) {
+            if ($t['file'] === $cleanFile) {
+                $found = true;
+                break;
+            }
+        }
+        if (!$found) return null;
+        
+        // 실제 경로 + realpath 재검증
+        $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
+        if (!$share) return null;
+        
+        $basePath = $this->storage->getRealPath($share['storage_id']);
+        if (!$basePath) return null;
+        
+        $folderPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+        $fullPath = $folderPath . DIRECTORY_SEPARATOR . $cleanFile;
+        
+        $realFull = realpath($fullPath);
+        $realFolder = realpath($folderPath);
+        if ($realFull === false || $realFolder === false) return null;
+        if (strpos($realFull, $realFolder) !== 0) return null;  // 폴더 외부 접근 차단
+        
+        return $realFull;
     }
 }

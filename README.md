@@ -1,4 +1,4 @@
-# FileStation v5.8.0a
+# FileStation v5.8.1
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -8,7 +8,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.3 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.8 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -193,7 +193,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.3 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.8 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -473,7 +473,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.3** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.8** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -485,7 +485,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.0a.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -571,7 +571,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.0a');
+define('APP_VERSION', '5.8.1');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -643,7 +643,7 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.3
+버전: 0.7.8
 파일: assets/rhwp/
 업그레이드: rhwp_업그레이드_가이드_v4.md 참조
 ```
@@ -663,9 +663,9 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **TUS 재개 업로드 미지원** — 청크 분할 업로드만 지원
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
-- ⚠ **rhwp 0.7.6 미적용** — PR #335 회귀 (이미지 비율 무시) 때문에 0.7.3 유지
+- ⚠ **rhwp 0.7.8 PR #335 회귀** — 가로로 긴 이미지가 비율 무시하고 늘어나는 증상 (0.7.6부터 잔존)
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.3의 베타 단계 제한, HWP 형식만 저장 가능
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.8의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -700,11 +700,96 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.0a (rhwp 0.7.3 기반)
+**현재 버전**: v5.8.1 (rhwp 0.7.8 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.0a (2026-04-26) ⭐ 현재
+#### v5.8.1 (2026-04-30) ⭐ 현재
+**rhwp 0.7.3 → 0.7.8 업그레이드**
+- 가이드 v5 표준 절차 진행 (사전 회귀 점검 → clone → npm @rhwp/core 0.7.8 → studio 빌드 → 패치 J1/P1/P2 자동 적용 → 검증 15/15 통과)
+- 빌드 결과: `index-Db8NVuPi.js` / `index-ro3nVBB2.css` / `rhwp_bg-BqZZZ9ls.wasm`
+- 0.7.7/0.7.8 새 기능 활용: 다단/페이지네이션 정밀화, 수식 렌더링, 표 분할 등
+- 패치 J1 (file:save 단축키 매핑 제거) 1개 매칭 → 제거 성공
+- 패치 P1 (절대경로) 0개 매칭, 패치 P2 (`../images/`) 1개 매칭 → 제거 성공
+- HWPX 차단 5중 방어 / save·save-as·notifyParentFileChanged·syncSuspended 모두 보존
+- ⚠ **PR #335 회귀 0.7.8에서도 미패치** — 회귀 인지하고 진행 결정 (새 기능 우선)
+  - svg.rs 9곳 모두 `preserveAspectRatio="none"` 그대로
+  - viewer/editor 모두 회귀 회피 후처리 없이 rhwp 원본에 맡김
+  - 0.7.9+ 출시 시 svg.rs 패치 재점검 권장
+- 가이드 v4 → v5 갱신 (0.7.8 실측 결과 반영, P1/P2 버전별 매칭 패턴 정정, STEP 9 버전 정책 명시)
+
+#### v5.8.0b (2026-04-28 ~ 2026-04-30)
+**메인 인덱스 동영상 미리보기 — 사이드 플레이리스트 패널**
+- 같은 폴더 동영상 2개 이상일 때 자동 활성화 (flex 방식)
+- 트랙 클릭 시 깜빡임 0 (`showPreview()` 직접 호출, 모달 유지)
+- 자동 다음 재생 + 마퀴/툴팁/자동 스크롤
+- 재생 중 토글 버튼 + 패널 자동 숨김 (배지 패턴, hover 시 표시)
+- 재생 중 영상 폭 자동 확장 (transition 0.25s)
+
+**공유 폴더 음악 스트리밍 — 캐싱 강화 (메인과 동등)**
+- `share.php` cover/lyrics 분기 `session_write_close()` (병렬 처리)
+- 가사 로딩 레이아웃 시프트 방지 (`_loadLyrics` 응답 시점 처리)
+- folder_tracks PHP 캐시 (30s TTL + 폴더 mtime 무효화)
+- 트랙 데이터 mtime 추가 + URL `&v=mtime` (HTTP 캐시 적중)
+- immutable 캐시 헤더 (lyrics, `v` 파라미터 있을 때 30일)
+- Cover 네거티브 캐시 (`.nocover` 마커, 커버 없는 mp3)
+
+**공유 캐시 자동 정리 (`_cleanShareCache`)**
+- deleteShare (수동 삭제)
+- 만료 자동 정리 (생성자/accessShare/cleanupExpiredShares/filedrop)
+- 횟수 초과 자동 정리
+- 파일/폴더 삭제 시 연관 공유 자동 삭제 (FileManager:cleanupSharesForPath)
+- 폴더 cover 정리: folder_tracks 캐시 만료 시 폴더 직접 스캔 fallback
+
+**멀티오디오 메인+공유 일관 (2026-04-29)**
+- 메인 audio_cover/audio_lyrics reuse 비교에 `audio` + `force_sw` + `client_session` 추가
+- `client_session` = PHP `session_id()` SHA-256 hash 16자 → 같은 사용자 다중 기기 폴더 공유 시 독립 재생
+- `force_sw=1` 케이스 reuse 건너뛰기 처리 → 폴더 두 개 동시 재생 가능
+- 공유 페이지 (share.php)도 동일 로직 적용 → 메인/공유 일관성
+
+**모바일 UX 개선 (2026-04-29)**
+- 메인 페이지 모바일 (≤1024px) 사이드 플레이리스트 토글+패널 숨김
+- 공유 페이지는 모바일에서 영상 하단 패널 표시 (요청 사항)
+- iOS 전체화면 자막 강제 표시: `trackEl.default = true` (iOS만) + `setTrackMode('showing')` 다중 시점 강제
+- 공유 페이지 영상 제목 `word-break: break-all` (긴 파일명 컨테이너 초과 방지)
+
+**설정 모달 개선 (2026-04-29)**
+- PC 설정 탭 가로 휠 + 드래그 스크롤 (`_settingsTabsWheelBound` 1번만 등록 가드)
+- 5px 임계값으로 클릭 vs 드래그 구분 → 탭 클릭 동작 보존
+- 드래그 중 `cursor: grabbing` + `userSelect: none` 시각 피드백
+
+**세션 관리 개선 (2026-04-29)**
+- `isLoggedIn`에서 `recordSession` 호출 추가 → Remember Me 자동 로그인 시 sessions DB 기록 보장
+- 매 API 요청 시 `last_activity` 갱신 → 24시간 비활성 정리 방어
+- `getSessions` raw user_agent 반환 → 클라이언트 `parseUserAgentDetails`로 정확 표시
+- 로그인 기록과 동일 패턴: PC/모바일/태블릿 구분 + 아이콘 표시
+
+**iOS 음악 썸네일 누락 본질 해결 (2026-04-30)**
+- 본질: iOS Safari/Chrome IndexedDB blob 직렬화/역직렬화 후 손상 (iOS 26 베타 가능성)
+- 해결 1: `FSCoverCacheDB._isIOS = true` → `_disabled = true` (iOS는 IDB 영구 비활성, 메모리 캐시만)
+- 해결 2: `_updateTrackMeta` duration 갱신 시 `_vsRender` 강제 호출 제거 (메인 app.js 라인 775~778 주석, 공유 fs-audio-player.js 라인 433~436 주석)
+  - 본질: VS_RENDER 다중 호출 → 모든 li 재생성 → 비동기 cover fetch 시점에 IMG_DISCONNECTED 폭증 → 일부 트랙 누락
+  - 메인+공유 일관 적용 (둘 다 같은 race condition)
+- PC는 그대로 30일 IDB 영구 캐시 유지 → 데이터 절감
+- 공유 페이지에도 FSCoverCacheDB 추가 (메인과 같은 DB_NAME → IDB 공유, PC만)
+
+**HLS 진단 서버 코드 정리 (2026-04-30)**
+- `api/FileManager.php` 라인 2636~2651, 3470~3488 HLS_DIAG 서버 로그 작성 코드 주석 처리 (`/* */`)
+- 본질: 가드 없이 매 영상 재생마다 `data/hls_diag.log` 작성 → 무한 증가 위험
+- 클라이언트 진단 (`window._hlsDiag = false`)은 비활성 가드로 안전했지만, 서버측은 가드 없음 발견
+- 다른 진단 코드 (cover_diag, share.php debug_log)와 동일 패턴: 다음 디버깅 위해 보존
+
+**공유 페이지 멀티오디오 중복 표시 본질 해결 (2026-04-30)**
+- 본질: `_fetchShareInfo`가 `startTranscode` 재호출 시 두 번 실행 → `appendChild` 누적으로 옵션 N×2개 표시
+- 시나리오: 네이티브 재생 실패 → `loaded = false` → `startTranscode` 재호출 → `_fetchShareInfo` 2차 호출 → 7개 + 7개 = 14개
+- 추가 본질: change 이벤트 리스너도 누적 등록 → 트랙 변경 시 HLS destroy/fetch 두 번 발생
+- 해결: 메인 `_buildAudioTrackUI` 패턴 적용 — `wrap.innerHTML` 통째 교체로 select 자체 새로 생성
+  - 이전 select DOM 제거 → 이전 change 리스너 자동 가비지 콜렉션
+  - 옵션 누적 0, change 리스너 누적 0 (메인+공유 일관)
+- 보안: `<>"'` HTML 이스케이프 적용 (영상 메타데이터 title XSS 방어)
+- 메인 `_buildAudioTrackUI`도 `this.escapeHtml(info)` 적용 (메인+공유 일관 강화)
+
+#### v5.8.0a (2026-04-26)
 - rhwp 0.7.6 시도 → PR #335 회귀(이미지 비율 무시) 발견
 - rhwp 0.7.3 + v5.8.0a로 롤백 결정
 - MP3 IDB 캐시 + mtime 기반 무효화
@@ -730,5 +815,5 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ---
 
-*FileStation v5.8.0a — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-04-26*
+*FileStation v5.8.1 — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-04-30*

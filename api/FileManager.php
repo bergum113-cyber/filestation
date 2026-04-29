@@ -2633,6 +2633,24 @@ class FileManager {
             $audioMap = ' -map 0:v:0 -map 0:a:0';
         }
         
+        // ★ [HLS_DIAG] transcode 액션 audio 매핑 결과 (펜닐님 진단용 — 임시) — 주석처리됨 (다음 디버깅 위해 보존)
+        //   다시 활성 필요 시 아래 블록 주석 제거
+        /*
+        $_diagFile = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/hls_diag.log';
+        $_diagDir = dirname($_diagFile);
+        if (is_dir($_diagDir) || @mkdir($_diagDir, 0755, true)) {
+            $_audioParam = $_GET['audio'] ?? '(none)';
+            $_diagLine = '[' . date('Y-m-d H:i:s') . '] [SERVER] transcode_audio_map | '
+                . json_encode([
+                    'audio_param' => $_audioParam,
+                    'audio_map' => trim($audioMap),
+                    'path' => basename($inputPath),
+                    'session' => $_GET['session'] ?? null
+                ]);
+            @file_put_contents($_diagFile, $_diagLine . "\n", FILE_APPEND | LOCK_EX);
+        }
+        */
+        
         // 하드웨어 인코더 자동 감지
         // iOS는 소프트웨어 인코더 강제
         $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
@@ -3343,18 +3361,33 @@ class FileManager {
         if (!is_dir($hlsDir)) @mkdir($hlsDir, 0755, true);
         
         // 같은 파일에 대한 기존 활성 세션 검색 (중복 방지)
-        // ★ force_sw=1 요청 시 reuse 건너뜀 — HW 실패 후 SW 재시도 경로
-        //   기존 HW 세션을 재사용하면 SW로 전환이 안 됨
-        $skipReuse = isset($_GET['force_sw']);
-        $existingDirs = $skipReuse ? [] : glob($hlsDir . '/*', GLOB_ONLYDIR);
+        // ★ force_sw=1 요청 시 기존 HW 세션 (force_sw 없음) 은 reuse 안 함 (HW→SW fallback 의도)
+        //   하지만 같은 force_sw=1 세션은 reuse — 펜닐님 진단: 서버 이중 실행 시 두 폴더 생성 방어
+        //   현재 코드는 force_sw=1이면 무조건 skipReuse → 두 번 호출 시 두 폴더
+        //   수정: force_sw 일치 + path + audio + client_session 같으면 reuse 가능
+        $reqForceSw = isset($_GET['force_sw']) ? '1' : '0';
+        $reqAudioIdx = isset($_GET['audio']) ? (int)$_GET['audio'] : null;
+        // ★ client_session — PHP 세션 ID hash로 기기별 분리 (같은 사용자 PC/모바일 동시 시청 시 폴더 공유 방지)
+        $reqClientSession = session_id() ? substr(hash('sha256', session_id()), 0, 16) : '';
+        $existingDirs = glob($hlsDir . '/*', GLOB_ONLYDIR);
         if ($existingDirs) {
             foreach ($existingDirs as $existDir) {
                 $existMeta = $existDir . '/meta.json';
                 if (!file_exists($existMeta)) continue;
                 $existMetaData = @json_decode(file_get_contents($existMeta), true);
                 if (!$existMetaData) continue;
-                // 같은 storage_id + path인지 확인
-                if (($existMetaData['storage_id'] ?? -1) == $storageId && ($existMetaData['path'] ?? '') === $path) {
+                // 같은 storage_id + path + audio + force_sw + client_session 인지 확인
+                //   audio 비교: 둘 다 null/없으면 같은 것으로 처리 (단일 오디오 영상)
+                //   force_sw 일치 — HW에서 SW fallback 시도 시 새 세션 강제
+                //   client_session 일치 — 기기별 분리 (같은 영상이라도 다른 기기는 다른 폴더)
+                $existAudioIdx = isset($existMetaData['audio']) ? (int)$existMetaData['audio'] : null;
+                $existIsSw = !empty($existMetaData['current_encoder']) && strpos($existMetaData['current_encoder'], 'libx264') !== false ? '1' : '0';
+                $existClientSession = $existMetaData['client_session'] ?? '';
+                if (($existMetaData['storage_id'] ?? -1) == $storageId 
+                    && ($existMetaData['path'] ?? '') === $path
+                    && $existAudioIdx === $reqAudioIdx
+                    && $existIsSw === $reqForceSw
+                    && $existClientSession === $reqClientSession) {
                     $existSessionId = basename($existDir);
                     $isActive = false;
                     $existCreated = $existMetaData['created'] ?? 0;
@@ -3384,14 +3417,17 @@ class FileManager {
                     }
                     if ($isActive) {
                         // reuse 시 meta.json 갱신 + touch (cleanup 보호)
-                        // ★ sw_cmd, stderr_log는 기존 값 보존 (HW 실패 시 libx264 자동 fallback에 필요)
+                        // ★ sw_cmd, stderr_log, audio, current_encoder, client_session은 기존 값 보존
                         $existMeta = $existDir . '/meta.json';
                         @file_put_contents($existMeta, json_encode([
                             'created' => time(),
                             'storage_id' => $storageId,
                             'path' => $path,
+                            'audio' => $existAudioIdx,
+                            'client_session' => $existClientSession,
                             'sw_cmd' => $existMetaData['sw_cmd'] ?? null,
                             'stderr_log' => $existMetaData['stderr_log'] ?? null,
+                            'current_encoder' => $existMetaData['current_encoder'] ?? null,
                         ]));
                         @touch($existDir);
                         
@@ -3431,6 +3467,29 @@ class FileManager {
             $audioIdx = (int)$_GET['audio'];
             $audioMap = ' -map 0:v:0 -map 0:' . $audioIdx;
         }
+        
+        // ★ [HLS_DIAG] HLS 액션 audio 매핑 결과 (펜닐님 진단용 — 임시) — 주석처리됨 (다음 디버깅 위해 보존)
+        //   다시 활성 필요 시 아래 블록 주석 제거
+        /*
+        $_diagFile = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/hls_diag.log';
+        $_diagDir = dirname($_diagFile);
+        if (is_dir($_diagDir) || @mkdir($_diagDir, 0755, true)) {
+            $_audioParam = $_GET['audio'] ?? '(none)';
+            $_forceSw = isset($_GET['force_sw']) ? '1' : '0';
+            $_clientSession = session_id() ? substr(hash('sha256', session_id()), 0, 8) : '(none)';
+            $_diagLine = '[' . date('Y-m-d H:i:s') . '] [SERVER] hls_audio_map | '
+                . json_encode([
+                    'audio_param' => $_audioParam,
+                    'audio_map' => trim($audioMap),
+                    'force_sw' => $_forceSw,
+                    'path' => basename($inputPath),
+                    'session' => $_GET['session'] ?? null,
+                    'hls_action' => $_GET['hls_action'] ?? null,
+                    'client_session' => $_clientSession
+                ]);
+            @file_put_contents($_diagFile, $_diagLine . "\n", FILE_APPEND | LOCK_EX);
+        }
+        */
         
         // 인코더 (QSV 등 HW 우선, force_sw=1이면 CPU 강제)
         // 소프트웨어(CPU) 인코더 인자 — HW 실패 시 playlist 요청 경로에서 폴백용
@@ -3500,10 +3559,20 @@ class FileManager {
         // current_encoder: 현재 실제 사용 중인 인코더 (SW fallback 시 'libx264'로 갱신됨)
         //   → 클라이언트 배지가 "HW : Intel" → "SW : CPU"로 실시간 변경되는 근거
         $currentEncoder = $this->extractEncoderFromArgs($videoCodecArgs);
+        // ★ meta.json에 audio 인덱스 저장 — reuse 비교 시 다른 audio면 새 세션 생성용
+        //   (없으면 storage_id+path만 비교 → audio 변경해도 기존 세션 재사용 → 영원히 같은 트랙)
+        $metaAudioIdx = isset($_GET['audio']) ? (int)$_GET['audio'] : null;
+        // ★ client_session: PHP 세션 ID hash — 기기별 분리 (같은 사용자 PC+모바일 동시 시청 시 폴더 공유 방지)
+        //   브라우저/기기마다 PHP session_id 다름 → 다른 client_session → 다른 폴더 사용
+        //   같은 브라우저 같은 영상 재생은 같은 session → 같은 폴더 reuse (효율적)
+        //   짧은 hash로 변환 (전체 session_id 노출 방지 + 키 단순화)
+        $metaClientSession = session_id() ? substr(hash('sha256', session_id()), 0, 16) : '';
         file_put_contents($sessionDir . '/meta.json', json_encode([
             'created' => time(),
             'storage_id' => $storageId,
             'path' => $path,
+            'audio' => $metaAudioIdx,
+            'client_session' => $metaClientSession,
             'sw_cmd' => $cmdSwBackup,
             'stderr_log' => $stderrLog,
             'current_encoder' => $currentEncoder,
@@ -3550,14 +3619,37 @@ class FileManager {
         // PID 저장 (약간 대기 후)
         usleep(500000); // 0.5초 대기 — ffmpeg 시작 보장 (응답은 이미 전송됨)
         if (PHP_OS_FAMILY === 'Windows') {
-            $wmic = shell_exec('wmic process where "name=\'ffmpeg.exe\'" get processid,commandline /format:csv 2>NUL');
+            $foundPid = null;
+            
+            // 방법 1: wmic 시도 (Windows 10/Server 2019 이하)
+            //   ⚠️ wmic은 Windows 11 23H2+ / Server 2025부터 deprecated/disabled 가능
+            $wmic = @shell_exec('wmic process where "name=\'ffmpeg.exe\'" get processid,commandline /format:csv 2>NUL');
             if ($wmic) {
                 foreach (explode("\n", $wmic) as $line) {
                     if (strpos($line, $sessionId) !== false && preg_match('/,(\d+)\s*$/', trim($line), $pm)) {
-                        file_put_contents($pidFile, $pm[1]);
+                        $foundPid = $pm[1];
                         break;
                     }
                 }
+            }
+            
+            // 방법 2: PowerShell fallback (wmic 없거나 실패 시 — Windows 11 24H2+ / Server 2022/2025 대응)
+            //   Get-CimInstance가 wmic 대체 표준 (Microsoft 공식 권장)
+            if (!$foundPid) {
+                // sessionId로 commandline 매칭 — escape 처리 (PowerShell single-quote)
+                $psSessionId = str_replace("'", "''", $sessionId);
+                $psCmd = 'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = \'ffmpeg.exe\'\\" | Where-Object { $_.CommandLine -like \'*' . $psSessionId . '*\' } | Select-Object -First 1 -ExpandProperty ProcessId"';
+                $psOut = @shell_exec($psCmd . ' 2>NUL');
+                if ($psOut) {
+                    $psPid = trim($psOut);
+                    if (preg_match('/^\d+$/', $psPid)) {
+                        $foundPid = $psPid;
+                    }
+                }
+            }
+            
+            if ($foundPid) {
+                file_put_contents($pidFile, $foundPid);
             }
         } else if (!file_exists($pidFile)) {
             // 쉘 래퍼에서 PID 저장 실패 시 pgrep fallback
@@ -3613,19 +3705,43 @@ class FileManager {
         
         // 방법 2: sessionId가 커맨드라인에 포함된 ffmpeg 프로세스 검색 후 kill
         if (PHP_OS_FAMILY === 'Windows') {
-            $wmic = shell_exec('wmic process where "name=\'ffmpeg.exe\'" get processid,commandline /format:csv 2>NUL');
             $killCount = 0;
+            $foundPids = [];
+            
+            // 방법 2-1: wmic 시도 (Windows 10/Server 2019 이하)
+            $wmic = @shell_exec('wmic process where "name=\'ffmpeg.exe\'" get processid,commandline /format:csv 2>NUL');
             if ($wmic) {
                 foreach (explode("\n", $wmic) as $line) {
                     if (strpos($line, $sessionId) !== false && preg_match('/,(\d+)\s*$/', trim($line), $m)) {
-                        $foundPid = (int)$m[1];
-                        $out = shell_exec('taskkill /F /PID ' . $foundPid . ' /T 2>&1');
-                        $killCount++;
-                        $_debugLog("wmic_kill pid=$foundPid result=" . trim(str_replace(["\r","\n"], ' | ', (string)$out)));
+                        $foundPids[] = (int)$m[1];
                     }
                 }
             }
-            $_debugLog("wmic_total_killed=$killCount");
+            
+            // 방법 2-2: PowerShell fallback (wmic deprecated 환경 — Windows 11 24H2+ / Server 2022/2025)
+            if (empty($foundPids)) {
+                $psSessionId = str_replace("'", "''", $sessionId);
+                $psCmd = 'powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = \'ffmpeg.exe\'\\" | Where-Object { $_.CommandLine -like \'*' . $psSessionId . '*\' } | Select-Object -ExpandProperty ProcessId"';
+                $psOut = @shell_exec($psCmd . ' 2>NUL');
+                if ($psOut) {
+                    foreach (explode("\n", $psOut) as $line) {
+                        $line = trim($line);
+                        if (preg_match('/^\d+$/', $line)) {
+                            $foundPids[] = (int)$line;
+                        }
+                    }
+                }
+                if (!empty($foundPids)) {
+                    $_debugLog("ps_fallback_found pids=" . implode(',', $foundPids));
+                }
+            }
+            
+            foreach ($foundPids as $foundPid) {
+                $out = @shell_exec('taskkill /F /PID ' . $foundPid . ' /T 2>&1');
+                $killCount++;
+                $_debugLog("kill pid=$foundPid result=" . trim(str_replace(["\r","\n"], ' | ', (string)$out)));
+            }
+            $_debugLog("total_killed=$killCount");
         }
         
         // ffmpeg 종료 대기
@@ -7675,6 +7791,7 @@ class FileManager {
             // 1) 외부 공유 링크 정리
             $shares = $this->db->load('shares');
             $toDelete = [];
+            $toDeleteShares = [];  // ★ 캐시 정리용 — share 객체 보관 (이슈 #19)
             foreach ($shares as $share) {
                 if ((int)($share['storage_id'] ?? 0) !== $storageId) continue;
                 $sharePath = $share['file_path'] ?? '';
@@ -7682,11 +7799,26 @@ class FileManager {
                     // 폴더 삭제: 해당 폴더 및 하위 경로 공유 모두 삭제
                     if ($sharePath === $relativePath || strpos($sharePath, $relativePath . '/') === 0) {
                         $toDelete[] = $share['id'];
+                        $toDeleteShares[] = $share;
                     }
                 } else {
                     if ($sharePath === $relativePath) {
                         $toDelete[] = $share['id'];
+                        $toDeleteShares[] = $share;
                     }
+                }
+            }
+            // ★ 캐시 정리 (DB 삭제 전 — share 정보 필요, 펜닐님 결정 이슈 #19)
+            //   ShareManager는 autoload 됨 (config.php의 spl_autoload_register)
+            if (!empty($toDeleteShares)) {
+                try {
+                    $shareManager = new ShareManager();
+                    foreach ($toDeleteShares as $shareToClean) {
+                        $shareManager->cleanShareCacheByShare($shareToClean);
+                    }
+                } catch (\Exception $e) {
+                    // 캐시 정리 실패해도 공유 삭제는 계속 (안전 우선)
+                    error_log('[FileStation] cleanShareCacheByShare error: ' . $e->getMessage());
                 }
             }
             foreach ($toDelete as $id) {
@@ -10599,15 +10731,28 @@ class FileManager {
         if (!is_dir($hlsDir)) @mkdir($hlsDir, 0755, true);
         
         // 기존 세션 재사용 (같은 파일)
-        // ★ force_sw=1 요청 시 reuse 건너뜀 — HW 실패 후 SW 재시도 경로
-        $skipReuseShare = isset($_GET['force_sw']);
-        if (!$skipReuseShare && is_dir($hlsDir)) {
+        // ★ force_sw=1 요청 시 기존 HW 세션 (force_sw 없음) 은 reuse 안 함 (HW→SW fallback 의도)
+        //   하지만 같은 force_sw=1 세션은 reuse — 서버 이중 실행 시 두 폴더 생성 방어 (메인과 동일)
+        //   force_sw + audio + path + client_session 모두 일치 시 reuse
+        $reqForceSwShare = isset($_GET['force_sw']) ? '1' : '0';
+        // ★ 요청된 audio 인덱스 (reuse 비교용)
+        $reqAudioIdxShare = isset($_GET['audio']) ? (int)$_GET['audio'] : null;
+        // ★ client_session — PHP 세션 ID hash로 기기별 분리 (메인과 동일 패턴)
+        //   같은 사용자 PC/모바일 동시 시청 시 폴더 공유 방지
+        $reqClientSessionShare = session_id() ? substr(hash('sha256', session_id()), 0, 16) : '';
+        if (is_dir($hlsDir)) {
             foreach (new \DirectoryIterator($hlsDir) as $d) {
                 if ($d->isDot() || !$d->isDir()) continue;
                 $metaFile = $d->getPathname() . '/meta.json';
                 if (!file_exists($metaFile)) continue;
                 $meta = @json_decode(file_get_contents($metaFile), true);
-                if (($meta['share_path'] ?? '') === $fullPath) {
+                $existAudioIdxShare = isset($meta['audio']) ? (int)$meta['audio'] : null;
+                $existIsSwShare = !empty($meta['current_encoder']) && strpos($meta['current_encoder'], 'libx264') !== false ? '1' : '0';
+                $existClientSessionShare = $meta['client_session'] ?? '';
+                if (($meta['share_path'] ?? '') === $fullPath
+                    && $existAudioIdxShare === $reqAudioIdxShare
+                    && $existIsSwShare === $reqForceSwShare
+                    && $existClientSessionShare === $reqClientSessionShare) {
                     $existDir = $d->getPathname();
                     $existSessionId = $d->getFilename();
                     $existCreated = $meta['created'] ?? 0;
@@ -10622,10 +10767,12 @@ class FileManager {
                     }
                     if ($isActive) {
                         // reuse 시 meta.json 갱신 + touch (cleanup 보호)
-                        // ★ sw_cmd, stderr_log, current_encoder는 기존 값 보존 (HW 실패 시 libx264 자동 fallback에 필요)
+                        // ★ sw_cmd, stderr_log, current_encoder, audio, client_session는 기존 값 보존
                         @file_put_contents($metaFile, json_encode([
                             'created' => time(),
                             'share_path' => $fullPath,
+                            'audio' => $existAudioIdxShare,
+                            'client_session' => $existClientSessionShare,
                             'sw_cmd' => $meta['sw_cmd'] ?? null,
                             'stderr_log' => $meta['stderr_log'] ?? null,
                             'current_encoder' => $meta['current_encoder'] ?? null,
@@ -10714,11 +10861,16 @@ class FileManager {
             'playlist' => $playlistUrl,
         ]);
         
-        // 메타데이터 저장 — sw_cmd, stderr_log, current_encoder 포함 (api.php 경로와 동일)
+        // 메타데이터 저장 — sw_cmd, stderr_log, current_encoder, audio, client_session 포함 (api.php 경로와 동일)
         $stderrLog = $sessionDir . '/ffmpeg.log';
+        $metaAudioIdxShare = isset($_GET['audio']) ? (int)$_GET['audio'] : null;
+        // ★ client_session: 기기별 분리 (메인과 동일 패턴)
+        $metaClientSessionShare = session_id() ? substr(hash('sha256', session_id()), 0, 16) : '';
         file_put_contents($sessionDir . '/meta.json', json_encode([
             'created' => time(),
             'share_path' => $fullPath,
+            'audio' => $metaAudioIdxShare,
+            'client_session' => $metaClientSessionShare,
             'sw_cmd' => $cmdSwBackup,
             'stderr_log' => $stderrLog,
             'current_encoder' => $this->extractEncoderFromArgs($videoCodecArgs),
@@ -11080,6 +11232,375 @@ class FileManager {
         } finally {
             @fclose($fp);
         }
+    }
+    
+    /**
+     * MP3 파일의 ID3v2 USLT 프레임에서 정적 가사 추출
+     * (ShareManager::extractID3v2Lyrics 동일 로직 — 결합도 낮춤)
+     * 
+     * 반환: ['language' => 'kor'/..., 'text' => '가사 본문'] 또는 null
+     */
+    private function extractID3v2Lyrics(string $file): ?array {
+        $fp = @fopen($file, 'rb');
+        if (!$fp) return null;
+        
+        try {
+            $header = fread($fp, 10);
+            if (strlen($header) < 10 || substr($header, 0, 3) !== 'ID3') return null;
+            
+            $sizeBytes = substr($header, 6, 4);
+            $tagSize = 0;
+            for ($i = 0; $i < 4; $i++) {
+                $tagSize = ($tagSize << 7) | (ord($sizeBytes[$i]) & 0x7F);
+            }
+            if ($tagSize <= 0 || $tagSize > 10 * 1024 * 1024) return null;
+            
+            $tagData = fread($fp, $tagSize);
+            $offset = 0;
+            $tagDataLen = strlen($tagData);
+            $majorVersion = ord($header[3]);
+            
+            while ($offset + 10 <= $tagDataLen) {
+                $frameId = substr($tagData, $offset, 4);
+                if (!preg_match('/^[A-Z0-9]{4}$/', $frameId)) break;
+                
+                $frameSizeBytes = substr($tagData, $offset + 4, 4);
+                $frameSize = 0;
+                if ($majorVersion >= 4) {
+                    for ($i = 0; $i < 4; $i++) {
+                        $frameSize = ($frameSize << 7) | (ord($frameSizeBytes[$i]) & 0x7F);
+                    }
+                } else {
+                    $frameSize = (ord($frameSizeBytes[0]) << 24)
+                               | (ord($frameSizeBytes[1]) << 16)
+                               | (ord($frameSizeBytes[2]) << 8)
+                               |  ord($frameSizeBytes[3]);
+                }
+                if ($frameSize <= 0 || $offset + 10 + $frameSize > $tagDataLen) break;
+                
+                if ($frameId === 'USLT') {
+                    $frameBody = substr($tagData, $offset + 10, $frameSize);
+                    if (strlen($frameBody) < 5) { $offset += 10 + $frameSize; continue; }
+                    
+                    $textEncoding = ord($frameBody[0]);
+                    $language = substr($frameBody, 1, 3);
+                    
+                    $pos = 4;
+                    if ($textEncoding === 1 || $textEncoding === 2) {
+                        $descEnd = $pos;
+                        while ($descEnd + 1 < strlen($frameBody)) {
+                            if ($frameBody[$descEnd] === "\x00" && $frameBody[$descEnd + 1] === "\x00") break;
+                            $descEnd += 2;
+                        }
+                        if ($descEnd + 1 >= strlen($frameBody)) { $offset += 10 + $frameSize; continue; }
+                        $pos = $descEnd + 2;
+                    } else {
+                        $descEnd = strpos($frameBody, "\x00", $pos);
+                        if ($descEnd === false) { $offset += 10 + $frameSize; continue; }
+                        $pos = $descEnd + 1;
+                    }
+                    
+                    $lyricsBytes = substr($frameBody, $pos);
+                    if (strlen($lyricsBytes) < 1) { $offset += 10 + $frameSize; continue; }
+                    
+                    $lyricsText = '';
+                    if ($textEncoding === 0) {
+                        $lyricsText = @mb_convert_encoding($lyricsBytes, 'UTF-8', 'ISO-8859-1');
+                    } elseif ($textEncoding === 1) {
+                        if (strlen($lyricsBytes) >= 2) {
+                            $bom = substr($lyricsBytes, 0, 2);
+                            if ($bom === "\xFF\xFE") {
+                                $lyricsText = @mb_convert_encoding(substr($lyricsBytes, 2), 'UTF-8', 'UTF-16LE');
+                            } elseif ($bom === "\xFE\xFF") {
+                                $lyricsText = @mb_convert_encoding(substr($lyricsBytes, 2), 'UTF-8', 'UTF-16BE');
+                            } else {
+                                $lyricsText = @mb_convert_encoding($lyricsBytes, 'UTF-8', 'UTF-16LE');
+                            }
+                        }
+                    } elseif ($textEncoding === 2) {
+                        $lyricsText = @mb_convert_encoding($lyricsBytes, 'UTF-8', 'UTF-16BE');
+                    } elseif ($textEncoding === 3) {
+                        $lyricsText = $lyricsBytes;
+                    }
+                    
+                    $lyricsText = rtrim(str_replace("\x00", '', $lyricsText));
+                    if (strlen($lyricsText) > 0) {
+                        return ['language' => trim($language), 'text' => $lyricsText];
+                    }
+                }
+                
+                $offset += 10 + $frameSize;
+            }
+            
+            return null;
+        } finally {
+            @fclose($fp);
+        }
+    }
+    
+    /**
+     * MP3 파일의 ID3v2 SYLT 프레임에서 시간 동기화 가사 추출
+     * 
+     * SYLT 프레임 구조:
+     *   [Encoding 1byte][Language 3byte][Format 1byte][Type 1byte][Description...]\x00
+     *   [Text 1]\x00\x00 (UTF-16) or \x00 (단일 바이트)[Time stamp 1 — 4 bytes BE]
+     *   [Text 2]\x00...[Time stamp 2]
+     *   ...
+     * 
+     * Format: 0x01 = MPEG frames, 0x02 = milliseconds
+     * Type: 0x01 = lyrics (다른 값은 코드/이벤트 등 — 무시)
+     * 
+     * 반환: ['text' => 'LRC 형식 변환된 가사', 'language' => 'kor'] 또는 null
+     *       (텍스트는 [mm:ss.xx]가사 형식으로 변환되어 반환됨)
+     */
+    private function extractID3v2SyncedLyrics(string $file): ?array {
+        $fp = @fopen($file, 'rb');
+        if (!$fp) return null;
+        
+        try {
+            $header = fread($fp, 10);
+            if (strlen($header) < 10 || substr($header, 0, 3) !== 'ID3') return null;
+            
+            $sizeBytes = substr($header, 6, 4);
+            $tagSize = 0;
+            for ($i = 0; $i < 4; $i++) {
+                $tagSize = ($tagSize << 7) | (ord($sizeBytes[$i]) & 0x7F);
+            }
+            if ($tagSize <= 0 || $tagSize > 10 * 1024 * 1024) return null;
+            
+            $tagData = fread($fp, $tagSize);
+            $offset = 0;
+            $tagDataLen = strlen($tagData);
+            $majorVersion = ord($header[3]);
+            
+            while ($offset + 10 <= $tagDataLen) {
+                $frameId = substr($tagData, $offset, 4);
+                if (!preg_match('/^[A-Z0-9]{4}$/', $frameId)) break;
+                
+                $frameSizeBytes = substr($tagData, $offset + 4, 4);
+                $frameSize = 0;
+                if ($majorVersion >= 4) {
+                    for ($i = 0; $i < 4; $i++) {
+                        $frameSize = ($frameSize << 7) | (ord($frameSizeBytes[$i]) & 0x7F);
+                    }
+                } else {
+                    $frameSize = (ord($frameSizeBytes[0]) << 24)
+                               | (ord($frameSizeBytes[1]) << 16)
+                               | (ord($frameSizeBytes[2]) << 8)
+                               |  ord($frameSizeBytes[3]);
+                }
+                if ($frameSize <= 0 || $offset + 10 + $frameSize > $tagDataLen) break;
+                
+                if ($frameId === 'SYLT') {
+                    $frameBody = substr($tagData, $offset + 10, $frameSize);
+                    if (strlen($frameBody) < 6) { $offset += 10 + $frameSize; continue; }
+                    
+                    $textEncoding = ord($frameBody[0]);
+                    $language = substr($frameBody, 1, 3);
+                    $timeFormat = ord($frameBody[4]);
+                    $contentType = ord($frameBody[5]);
+                    
+                    // Type 0x01 (lyrics)만 처리, 다른 값은 무시
+                    if ($contentType !== 0x01) { $offset += 10 + $frameSize; continue; }
+                    
+                    // Description 건너뛰기 (null terminator)
+                    $pos = 6;
+                    if ($textEncoding === 1 || $textEncoding === 2) {
+                        $descEnd = $pos;
+                        while ($descEnd + 1 < strlen($frameBody)) {
+                            if ($frameBody[$descEnd] === "\x00" && $frameBody[$descEnd + 1] === "\x00") break;
+                            $descEnd += 2;
+                        }
+                        if ($descEnd + 1 >= strlen($frameBody)) { $offset += 10 + $frameSize; continue; }
+                        $pos = $descEnd + 2;
+                    } else {
+                        $descEnd = strpos($frameBody, "\x00", $pos);
+                        if ($descEnd === false) { $offset += 10 + $frameSize; continue; }
+                        $pos = $descEnd + 1;
+                    }
+                    
+                    // 가사 + 시간스탬프 쌍을 LRC 형식으로 변환
+                    $lrcLines = [];
+                    while ($pos + 4 < strlen($frameBody)) {
+                        // 텍스트 끝(null) 찾기
+                        $textEnd = $pos;
+                        if ($textEncoding === 1 || $textEncoding === 2) {
+                            while ($textEnd + 1 < strlen($frameBody)) {
+                                if ($frameBody[$textEnd] === "\x00" && $frameBody[$textEnd + 1] === "\x00") break;
+                                $textEnd += 2;
+                            }
+                            if ($textEnd + 1 >= strlen($frameBody)) break;
+                            $textBytes = substr($frameBody, $pos, $textEnd - $pos);
+                            $pos = $textEnd + 2;
+                        } else {
+                            $textEnd = strpos($frameBody, "\x00", $pos);
+                            if ($textEnd === false) break;
+                            $textBytes = substr($frameBody, $pos, $textEnd - $pos);
+                            $pos = $textEnd + 1;
+                        }
+                        
+                        // 시간스탬프 (4 bytes BE)
+                        if ($pos + 4 > strlen($frameBody)) break;
+                        $timestamp = (ord($frameBody[$pos]) << 24)
+                                   | (ord($frameBody[$pos + 1]) << 16)
+                                   | (ord($frameBody[$pos + 2]) << 8)
+                                   |  ord($frameBody[$pos + 3]);
+                        $pos += 4;
+                        
+                        // 텍스트 인코딩 변환
+                        $lyricText = '';
+                        if ($textEncoding === 0) {
+                            $lyricText = @mb_convert_encoding($textBytes, 'UTF-8', 'ISO-8859-1');
+                        } elseif ($textEncoding === 1) {
+                            if (strlen($textBytes) >= 2) {
+                                $bom = substr($textBytes, 0, 2);
+                                if ($bom === "\xFF\xFE") {
+                                    $lyricText = @mb_convert_encoding(substr($textBytes, 2), 'UTF-8', 'UTF-16LE');
+                                } elseif ($bom === "\xFE\xFF") {
+                                    $lyricText = @mb_convert_encoding(substr($textBytes, 2), 'UTF-8', 'UTF-16BE');
+                                } else {
+                                    $lyricText = @mb_convert_encoding($textBytes, 'UTF-8', 'UTF-16');
+                                }
+                            }
+                        } elseif ($textEncoding === 2) {
+                            $lyricText = @mb_convert_encoding($textBytes, 'UTF-8', 'UTF-16BE');
+                        } elseif ($textEncoding === 3) {
+                            $lyricText = $textBytes;
+                        }
+                        
+                        if ($lyricText === false || $lyricText === null) continue;
+                        $lyricText = trim($lyricText);
+                        if ($lyricText === '') continue;
+                        
+                        // 시간스탬프를 [mm:ss.xx] 형식으로 변환
+                        if ($timeFormat === 0x02) {
+                            // 밀리초 단위
+                            $totalSec = $timestamp / 1000.0;
+                        } else {
+                            // MPEG frames — 정확한 변환 어렵지만 추정 (44100Hz 가정)
+                            // 일반적으로 timestamp 자체가 ms로 들어오는 경우가 많음
+                            $totalSec = $timestamp / 1000.0;
+                        }
+                        
+                        if ($totalSec < 0 || $totalSec > 36000) continue;  // 10시간 미만
+                        
+                        $min = floor($totalSec / 60);
+                        $sec = floor($totalSec - $min * 60);
+                        $cs = floor(($totalSec - floor($totalSec)) * 100);
+                        $timeTag = sprintf('[%02d:%02d.%02d]', $min, $sec, $cs);
+                        
+                        $lrcLines[] = $timeTag . $lyricText;
+                    }
+                    
+                    if (count($lrcLines) === 0) { $offset += 10 + $frameSize; continue; }
+                    
+                    return [
+                        'text' => implode("\n", $lrcLines),
+                        'language' => trim($language) ?: null,
+                    ];
+                }
+                
+                $offset += 10 + $frameSize;
+            }
+            
+            return null;
+        } finally {
+            @fclose($fp);
+        }
+    }
+    
+    /**
+     * ============================================================================
+     * 🏠 [메인 페이지] 오디오 파일의 가사 가져오기 (LRC > SYLT > USLT > TXT 우선순위)
+     * ============================================================================
+     * 
+     * ⚠️ 주의: 이 메서드는 *메인 페이지(index.php) 전용*입니다.
+     * 
+     * - API 엔드포인트: api.php?action=audio_lyrics&storage_id=&path=
+     * - 호출 흐름: 메인 미리보기 → FSAudioPlayer._loadLyrics → audio_lyrics → 이 메서드
+     * - 짝 메서드: ShareManager::getShareLyrics() (공유 스트리밍 전용)
+     *   공유 페이지 가사는 share.php?t=토큰&lyrics=1 → ShareManager::getShareLyrics
+     * 
+     * 반환: ['source', 'text', 'synced', 'language'] 또는 null
+     */
+    public function getAudioLyrics(int $storageId, string $path): ?array {
+        // 권한 체크 (audioCover 패턴 동일)
+        if (!$this->storage->checkPermission($storageId, 'can_read')) return null;
+        
+        // 원격 스토리지는 미지원 (LRC 검색 시 매번 디렉토리 listing 필요해서 비효율)
+        if ($this->isRemoteStorage($storageId)) return null;
+        
+        $basePath = $this->storage->getRealPath($storageId);
+        if (!$basePath) return null;
+        
+        $fullPath = rtrim($basePath, '/\\') . DIRECTORY_SEPARATOR . ltrim($path, '/\\');
+        if (!file_exists($fullPath) || !is_readable($fullPath)) return null;
+        
+        $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
+        $audioExts = ['mp3', 'm4a', 'flac', 'ogg', 'wav', 'aac', 'opus', 'ape', 'alac', 'aiff'];
+        if (!in_array($ext, $audioExts)) return null;
+        
+        $dir = dirname($fullPath);
+        $baseName = pathinfo($fullPath, PATHINFO_FILENAME);
+        
+        // 1. LRC 파일 (정확 매칭)
+        $lrcPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.lrc';
+        if (file_exists($lrcPath) && is_readable($lrcPath)) {
+            $lrcSize = @filesize($lrcPath);
+            if ($lrcSize > 0 && $lrcSize < 1 * 1024 * 1024) {
+                $lrcText = @file_get_contents($lrcPath);
+                if ($lrcText !== false) {
+                    if (substr($lrcText, 0, 3) === "\xEF\xBB\xBF") {
+                        $lrcText = substr($lrcText, 3);
+                    }
+                    if (!mb_check_encoding($lrcText, 'UTF-8')) {
+                        $lrcText = @mb_convert_encoding($lrcText, 'UTF-8', 'CP949,EUC-KR,UTF-16LE,UTF-16BE,ISO-8859-1');
+                    }
+                    if ($lrcText !== false && strlen(trim($lrcText)) > 0) {
+                        return ['source' => 'lrc', 'text' => $lrcText, 'synced' => true];
+                    }
+                }
+            }
+        }
+        
+        // 2. ID3v2 SYLT (mp3만, 시간 동기화 가사)
+        if ($ext === 'mp3') {
+            $sylt = $this->extractID3v2SyncedLyrics($fullPath);
+            if ($sylt && strlen(trim($sylt['text'])) > 0) {
+                return ['source' => 'sylt', 'text' => $sylt['text'], 'synced' => true, 'language' => $sylt['language']];
+            }
+        }
+        
+        // 3. ID3v2 USLT (mp3만, 정적 가사)
+        if ($ext === 'mp3') {
+            $uslt = $this->extractID3v2Lyrics($fullPath);
+            if ($uslt && strlen(trim($uslt['text'])) > 0) {
+                return ['source' => 'uslt', 'text' => $uslt['text'], 'synced' => false, 'language' => $uslt['language']];
+            }
+        }
+        
+        // 4. TXT 파일 (정확 매칭)
+        $txtPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.txt';
+        if (file_exists($txtPath) && is_readable($txtPath)) {
+            $txtSize = @filesize($txtPath);
+            if ($txtSize > 0 && $txtSize < 1 * 1024 * 1024) {
+                $txtText = @file_get_contents($txtPath);
+                if ($txtText !== false) {
+                    if (substr($txtText, 0, 3) === "\xEF\xBB\xBF") {
+                        $txtText = substr($txtText, 3);
+                    }
+                    if (!mb_check_encoding($txtText, 'UTF-8')) {
+                        $txtText = @mb_convert_encoding($txtText, 'UTF-8', 'CP949,EUC-KR,UTF-16LE,UTF-16BE,ISO-8859-1');
+                    }
+                    if ($txtText !== false && strlen(trim($txtText)) > 0) {
+                        $synced = preg_match('/^\s*\[\d{1,2}:\d{2}(?:[.:]\d{1,3})?\]/m', $txtText) === 1;
+                        return ['source' => 'txt', 'text' => $txtText, 'synced' => $synced];
+                    }
+                }
+            }
+        }
+        
+        return null;
     }
     
     /**
