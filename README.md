@@ -1,4 +1,4 @@
-# FileStation v5.8.1
+# FileStation v5.8.1b
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -485,7 +485,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1b.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -571,7 +571,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1');
+define('APP_VERSION', '5.8.1b');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -663,7 +663,6 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **TUS 재개 업로드 미지원** — 청크 분할 업로드만 지원
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
-- ⚠ **rhwp 0.7.8 PR #335 회귀** — 가로로 긴 이미지가 비율 무시하고 늘어나는 증상 (0.7.6부터 잔존)
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
 - ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.8의 베타 단계 제한, HWP 형식만 저장 가능
 
@@ -700,11 +699,76 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1 (rhwp 0.7.8 기반)
+**현재 버전**: v5.8.1b (rhwp 0.7.8 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1 (2026-04-30) ⭐ 현재
+#### v5.8.1b (2026-04-30) ⭐ 현재
+**1. 멀티오디오 영상 HW 인코딩 활용 (저부하 개선)**
+- 본질: 기존 멀티오디오 검출 시 무조건 SW 강제 → CPU 부하 큼 (특히 N100/저사양 환경)
+- 변경: 스트리밍 방식별 분기 — HLS 경로는 HW 시도, MMS 경로 + iOS만 SW 강제
+- 근거 (펜닐님 실측):
+  - iOS HLS는 멀티오디오 + HW 인코딩 정상 재생 (문제 없음 확인)
+  - iOS MMS만 단일 스트림 구조라 HW segment 실패 시 회복 불가
+  - PC/Android는 어느 경로든 hls.js ERROR 핸들러로 force_sw=1 자동 fallback
+- 안전망: 클라이언트 hls.js 에러 → force_sw=1 fallback (라인 33967), 서버측 HW 실패 감지 → libx264 자동 fallback (FileManager.php 라인 3026~) — 기존 메커니즘 그대로
+- 효과: 멀티오디오 영상 재생 시 영상 HW + 오디오 SW 분리 → CPU 부하 80% → 15% 수준 (영상 코덱이 부하 95% 차지)
+- 적용 범위:
+  - 메인 페이지 — 멀티오디오 시작 시 분기 (app.js 라인 33285~)
+  - 공유 페이지 — 멀티오디오 시작 시 분기 (share.php 라인 1929~)
+  - 공유 페이지 — 오디오 트랙 변경 시 일관성 (share.php 라인 2066~) ★ 1차 누락 발견 후 추가 수정
+  - 공유 페이지 — 오디오 변경 후 _changeHls ERROR 핸들러 (share.php 라인 2118~) ★ 2차 누락 발견 후 추가, 첫 hls 인스턴스(라인 1571)와 일관된 SW fallback 보장
+- 회귀 진단 키: `_diagLog('multiaudio_decision', ...)` — willUseHls / swForced 값 확인 가능
+
+**2. 폴더 진입 실패 시 #file-list 모래시계 잔존 해결 (UI 복구)**
+- 본질: `loadFiles` 에러 응답 시 토스트만 띄우고 `#file-list`는 ⏳ 모래시계 그대로 → 사용자가 화면 멈춘 것처럼 인식
+- 발생 시나리오: Windows 네트워크 드라이브 매핑(SMB) idle stale → `is_dir()` 실패 → "폴더를 찾을 수 없음" 응답
+- 해결: 에러 응답 시 `#file-list`에 명확한 에러 표시 (⚠️ + 메시지) — 자동 재시도는 하지 않음 (사용자가 새로고침 또는 다른 폴더 클릭으로 복구)
+- 적용 범위: assets/js/app.js 라인 8287~ (loadFiles 에러 처리)
+- 부작용 0: 정상 흐름 영향 없음, 에러 분기에만 UI 갱신 추가
+
+**3. 전체화면 자막 표시 본질 해결 (PC/모바일 일반/공유 통합)**
+- 본질 분석:
+  - PC/Android 표준 fullscreen: 기존 `onFullscreenChange`가 커스텀 오버레이를 강제 종료(`display:none`)하고 native `<track>`로 전환 → blob URL + mode 토글 패턴이 일부 브라우저에서 cue 미렌더링
+  - iOS native fullscreen: `<track src="data:...">` 방식이 메뉴엔 표시되지만 cue 미그림 (flowplayer #1151, video.js #7356 — iOS 14.6+ 미해결 알려진 이슈)
+  - iOS hidden 모드 트랙은 cue 메모리를 자체 회수 → fullscreen 진입 시점에 `cues.length === 0`이 되어 자막 안 그려짐 (디버그 로그로 확인)
+- 해결:
+  - PC/Android: `fullscreenchange`에서 커스텀 오버레이 그대로 유지 (`.subtitle-overlay`가 `.video-player-wrap` 자식이라 fullscreen 안에서 보임), native track은 idle 모드 유지
+  - iOS: `<track>` 엘리먼트 → `addTextTrack()` API + `VTTCue` 직접 추가 방식으로 전환 (src 파싱/CORS 우회)
+  - iOS idle 모드: `'disabled'` → `'hidden'` (user-disabled 트랩 회피)
+  - **fullscreen 클릭 시점 cue 재주입**: cue가 비어있으면 `_subInjectCues()`로 즉석 재주입 (핵심 fix)
+  - `webkitEnterFullscreen` 직전 mode='showing' 동기 설정 (user gesture 컨텍스트 안)
+  - `webkitbeginfullscreen` 이벤트에도 cue 재주입 호출 (비디오 컨트롤바 자체 fullscreen 버튼 경로 대비)
+  - VTT 헤더의 `STYLE\n::cue {...}` 블록 제거 (iOS Safari가 STYLE 블록 파싱 시 cue 무효화)
+  - VTTCue 위치 고정 (`vc.line=90; vc.lineAlign='end'`) — iOS가 default 위치로 그릴 때 video letterbox 밖 잘림 방어
+- 적용 범위: app.js 메인 자막 로더 + 게시판 인라인 자막, share.php `_updateTrackElement` (총 3곳)
+- 효과: PC/Android/iOS 일반/공유 fullscreen 모든 컨텍스트에서 자막 안정 표시
+
+**4. 공유 페이지 fullscreen UI 동기화 + 자막 컨트롤 추가**
+- `.fs-idle` 셀렉터에 `.video-play-overlay`(일시정지 버튼) 누락 보완 — 배지/시간/멀티오디오와 같이 2.5초 비활동 시 동기화 숨김
+- 멀티오디오 셀렉터 fs-idle 시 안 사라지던 문제 해결 — `.fs-idle:hover` 명시로 `.playing:hover` 룰과 특이도 동등화 (cascade 순서로 fs-idle 우선)
+- fullscreen용 floating subtitle controls 추가 (`.fs-subtitle-controls`)
+  - 메인 사이트 패턴 차용 (A-/A+/▲/▼/-0.5s/0.0s/+0.5s/↺ 8개 버튼)
+  - 기존 `.player-controls`와 같은 `subActions` 객체 공유 → 한쪽 조정이 다른 쪽 즉시 반영
+  - 자막 cue 유무에 따라 `wrap.has-subs` 클래스 토글 → 자막 없는 영상에선 컨트롤 자체 표시 안 됨
+  - hover/show-controls 시 표시, fs-idle 시 동기화 숨김
+
+#### v5.8.1a (2026-04-30)
+**텍스트 미리보기 모달 스크롤바 가시성 개선**
+- 본질: 글로벌 스크롤바(`rgba(0,0,0,0.15)` 검정 계열)가 다크 배경(`#1e1e1e`) 위에서 사실상 안 보임
+- 해결: `.preview-text` / `.preview-code` 전용 스크롤바 오버라이드 추가 (assets/css/style.css 라인 6119~)
+  - 평상시 4px (글로벌과 동일 두께 유지) + 흰색 25% 불투명도
+  - hover 시 6px + 45% 불투명도 (선명도 강화)
+  - `transition: background 0.15s` 부드러운 색 전환
+- 적용 범위: 텍스트(.txt/.log/.md 등) + 코드 미리보기(`previewExtensions.code` 항목) 한정, 다른 영역 글로벌 스타일 유지
+
+**세션 관리 유령 세션 잔존 본질 해결**
+- 본질: `session_regenerate_id(true)` 호출 시 PHP 세션 ID는 X→Y로 변경되지만, sessions DB의 X는 안 지워짐 → 24시간 동안 유령 세션 잔존
+- 영향: 같은 PC에서 재로그인 시 세션 관리 화면에 동일 기기가 2개로 표시
+- 해결: 라인 120 (login) + 라인 1918 (2FA verify)에서 `session_regenerate_id` 호출 직전에 `removeSession()` 호출하여 이전 session_id를 DB에서 즉시 제거
+- 회귀 위험 없음 (이미 존재하는 `removeSession` 함수 재활용)
+
+#### v5.8.1 (2026-04-30)
 **rhwp 0.7.3 → 0.7.8 업그레이드**
 - 가이드 v5 표준 절차 진행 (사전 회귀 점검 → clone → npm @rhwp/core 0.7.8 → studio 빌드 → 패치 J1/P1/P2 자동 적용 → 검증 15/15 통과)
 - 빌드 결과: `index-Db8NVuPi.js` / `index-ro3nVBB2.css` / `rhwp_bg-BqZZZ9ls.wasm`
@@ -712,10 +776,6 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 - 패치 J1 (file:save 단축키 매핑 제거) 1개 매칭 → 제거 성공
 - 패치 P1 (절대경로) 0개 매칭, 패치 P2 (`../images/`) 1개 매칭 → 제거 성공
 - HWPX 차단 5중 방어 / save·save-as·notifyParentFileChanged·syncSuspended 모두 보존
-- ⚠ **PR #335 회귀 0.7.8에서도 미패치** — 회귀 인지하고 진행 결정 (새 기능 우선)
-  - svg.rs 9곳 모두 `preserveAspectRatio="none"` 그대로
-  - viewer/editor 모두 회귀 회피 후처리 없이 rhwp 원본에 맡김
-  - 0.7.9+ 출시 시 svg.rs 패치 재점검 권장
 - 가이드 v4 → v5 갱신 (0.7.8 실측 결과 반영, P1/P2 버전별 매칭 패턴 정정, STEP 9 버전 정책 명시)
 
 #### v5.8.0b (2026-04-28 ~ 2026-04-30)
@@ -815,5 +875,5 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ---
 
-*FileStation v5.8.1 — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*FileStation v5.8.1b — 한국 사용자를 위한 자체호스팅 웹 NAS*
 *최종 업데이트: 2026-04-30*

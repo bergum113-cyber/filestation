@@ -604,7 +604,12 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         .player-wrap.playing.show-controls #share-audio-track-wrap { opacity: 1 !important; }
         .player-wrap.fs-idle .stream-badge,
         .player-wrap.fs-idle .transcode-duration,
-        .player-wrap.fs-idle #share-audio-track-wrap { opacity: 0 !important; }
+        .player-wrap.fs-idle #share-audio-track-wrap,
+        .player-wrap.fs-idle .video-play-overlay,
+        .player-wrap.fs-idle:hover .stream-badge,
+        .player-wrap.fs-idle:hover .transcode-duration,
+        .player-wrap.fs-idle:hover #share-audio-track-wrap,
+        .player-wrap.fs-idle:hover .video-play-overlay { opacity: 0 !important; pointer-events: none !important; }
         .player-wrap.fs-idle { cursor: none; }
         /* 트랜스코딩 전체 길이 표시 */
         .transcode-duration { position:absolute;bottom:65px;left:8px;background:rgba(0,0,0,0.65);color:#ff9800;padding:3px 10px;border-radius:4px;font-size:13px;font-weight:600;z-index:10;pointer-events:none;font-family:monospace;opacity:0;transition:opacity 0.3s; }
@@ -612,6 +617,17 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         .player-wrap.playing .transcode-duration { opacity: 0; }
         .player-wrap.playing:hover .transcode-duration { opacity: 1; }
         .player-wrap.playing.show-controls .transcode-duration { opacity: 1; }
+        
+        /* ★ 모바일: iOS Safari sticky hover 방지 (메인 페이지 style.css 라인 10195~ 패턴 동일) */
+        /*   iOS는 터치 후 :hover 상태가 유지되어 .playing:hover .stream-badge { opacity: 0.9 } 룰이 계속 적용됨 */
+        /*   → 재생 중 배지/오디오 셀렉터/시간 표시가 안 사라지는 문제 해결 */
+        /*   show-controls 클래스(터치로 명시적 표시)일 때는 영향 없음 */
+        @media (max-width: 1024px) {
+            .player-wrap.playing:not(.show-controls):hover .stream-badge { opacity: 0; }
+            .player-wrap.playing:not(.show-controls):hover #share-audio-track-wrap { opacity: 0 !important; }
+            .player-wrap.playing:not(.show-controls):hover .transcode-duration { opacity: 0; }
+            .player-wrap.playing:not(.show-controls):hover .fs-subtitle-controls { opacity: 0; pointer-events: none; }
+        }
         .player-wrap:fullscreen .transcode-duration,
         .player-wrap:-webkit-full-screen .transcode-duration { bottom: 75px; }
         .player-wrap:fullscreen { background: #000; display: flex; align-items: center; justify-content: center; overflow: visible; }
@@ -629,6 +645,90 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         .subtitle-overlay { position: absolute; bottom: 8%; left: 5%; right: 5%; text-align: center; color: #fff; font-size: 1.1em; font-weight: 500; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 6px rgba(0,0,0,0.9); pointer-events: none; z-index: 10; line-height: 1.5; word-wrap: break-word; overflow-wrap: break-word; }
         .sub-file-label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
         .sub-file-label input { display: none; }
+        
+        /* ===== Fullscreen용 floating subtitle controls ===== */
+        /*   wrap 안에 absolute → fullscreen에서도 보임 */
+        /*   기본은 hover/터치(.show-controls)로만 표시, .fs-idle 시엔 동기화 숨김 */
+        /*   자막이 없는 영상에선 표시 안 됨 (.has-subs 게이트) */
+        .fs-subtitle-controls { display: none; }
+        .player-wrap.has-subs .fs-subtitle-controls {
+            display: flex;
+            position: absolute;
+            bottom: 70px;     /* iOS native fullscreen 컨트롤바 위로 올림 */
+            right: 12px;
+            z-index: 14;
+            gap: 4px;
+            opacity: 0;
+            transition: opacity 0.2s;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            max-width: 70%;
+            pointer-events: none;
+        }
+        .fs-subtitle-controls .fs-sub-btn,
+        .fs-subtitle-controls .fs-sub-sync {
+            background: rgba(0,0,0,0.6);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 4px;
+            padding: 4px 9px;
+            font-size: 12px;
+            line-height: 1.4;
+            cursor: pointer;
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        .fs-subtitle-controls .fs-sub-btn:hover,
+        .fs-subtitle-controls .fs-sub-btn:active { background: rgba(0,0,0,0.85); }
+        .fs-subtitle-controls .fs-sub-sync {
+            cursor: default;
+            min-width: 42px;
+            text-align: center;
+            font-family: monospace;
+            font-size: 11px;
+            color: rgba(255,255,255,0.85);
+        }
+        .fs-subtitle-controls .fs-sub-sep {
+            width: 1px;
+            background: rgba(255,255,255,0.2);
+            margin: 0 2px;
+            align-self: stretch;
+        }
+        /* 표시 조건: hover 또는 .show-controls (터치로 명시 표시) */
+        .player-wrap:hover .fs-subtitle-controls,
+        .player-wrap.show-controls .fs-subtitle-controls {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        /* 재생 중 hover 안 한 상태: 숨김 (배지/시간 표시와 동일 패턴) */
+        .player-wrap.playing .fs-subtitle-controls { opacity: 0; pointer-events: none; }
+        .player-wrap.playing:hover .fs-subtitle-controls,
+        .player-wrap.playing.show-controls .fs-subtitle-controls {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        /* 재생 중 비활동(.fs-idle): 숨김 동기화 — 일시정지 버튼/배지/오디오와 같이 사라짐 */
+        /*   .playing:hover와의 특이도 동등화를 위해 :hover 케이스도 명시 */
+        .player-wrap.fs-idle .fs-subtitle-controls,
+        .player-wrap.fs-idle:hover .fs-subtitle-controls {
+            opacity: 0 !important;
+            pointer-events: none !important;
+        }
+        /* 모바일: 작은 패딩/폰트 */
+        @media (max-width: 1024px) {
+            .fs-subtitle-controls {
+                bottom: 120px;    /* iOS 컨트롤바 + 여유 — 자막과 더 멀리 */
+                right: 8px;
+                gap: 3px;
+            }
+            .fs-subtitle-controls .fs-sub-btn,
+            .fs-subtitle-controls .fs-sub-sync {
+                padding: 6px 9px;
+                font-size: 13px;
+            }
+        }
         @media (max-width: 480px) {
             body { padding: 15px; }
             .container { padding: 25px 20px; border-radius: 12px; }
@@ -1927,12 +2027,24 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 
                 // 오디오 트랙
                 if (info.audio_tracks && info.audio_tracks.length > 1) {
-                    // ★ 멀티오디오 자동 SW 강제 (메인 페이지와 동일 패턴 — 펜닐님 결정)
-                    //   - HW 인코더 + EAC3 5.1 호환 문제 (EAC3 5.1 등 멀티오디오 코덱)
-                    //   - 메인 페이지는 info → multiAudioSwForced 결정 후 hlsStartUrl 호출
-                    //   - 공유 페이지는 hlsStartUrl 먼저 발송 후 info 호출 → 이미 HW 세션 시작됨
-                    //   - 해결: 멀티오디오 검출 + 현재 HW 세션이면 stop 후 force_sw=1로 재시작
-                    if (!window._shareMultiAudioSwForced && _shareHlsSession && !window._shareHlsSwRetried) {
+                    // ★ 멀티오디오 자동 SW 강제 — 스트리밍 방식별 분기 (v5.8.1b 변경)
+                    //   - 이전: 무조건 SW 강제 (PC/iOS 모두)
+                    //   - 변경: HLS 경로는 HW 유지, MMS 경로 + iOS만 SW 강제
+                    //
+                    //   근거 (펜닐님 실측 2026-04-30):
+                    //   - iOS HLS는 멀티오디오 + HW 인코딩 정상 재생
+                    //   - iOS MMS만 단일 스트림이라 HW 실패 시 회복 불가
+                    //   - PC/Android는 hls.js ERROR 핸들러로 force_sw=1 자동 fallback
+                    //
+                    //   공유 페이지 특성: hlsStartUrl 먼저 발송 후 info 호출 → 이미 HW 세션 시작됨
+                    //   → MMS+iOS만 stop 후 force_sw=1로 재시작
+                    const _shareIsIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+                    const _shareHlsSupported = (typeof Hls !== 'undefined' && Hls.isSupported());
+                    const _shareNativeHls = player.canPlayType('application/vnd.apple.mpegurl') !== '';
+                    const _shareWillUseHls = _shareHlsSupported || _shareNativeHls;
+                    const _needSwForce = _shareIsIOS && !_shareWillUseHls;
+                    
+                    if (_needSwForce && !window._shareMultiAudioSwForced && _shareHlsSession && !window._shareHlsSwRetried) {
                         window._shareMultiAudioSwForced = true;
                         // 현재 HW 세션이면 SW로 재시작 (배지가 SW 아님 = HW 사용 중)
                         const _curBadge = document.getElementById('stream-badge');
@@ -2000,6 +2112,13 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     const wrap = document.getElementById('share-audio-track-wrap');
                     if (wrap) {
                         wrap.style.display = '';
+                        // ★ inline opacity:0 제거 — 재생 시 셀렉터 보이게 (v5.8.1b 항목 1)
+                        //   본질: HTML 라인 1173에 inline style="opacity:0"이 박혀있어서
+                        //         _fetchShareInfo에서 display만 풀어줘도 opacity 0 그대로 → 안 보임
+                        //   _fetchShareInfo는 startTranscode 2초 후만 호출됨 (재생 시작 후) → 자동 재생 회귀 없음
+                        //   재생 중: CSS .player-wrap.playing #share-audio-track-wrap { opacity:0 } 으로 자동 숨김 (변경 없음)
+                        //   재생 중 hover/터치: CSS .playing:hover/.playing.show-controls { opacity:1 } 으로 보임 (변경 없음)
+                        wrap.style.opacity = '';
                         // ★ 메인 _buildAudioTrackUI와 동일 패턴 (펜닐님 결정 — 메인+공유 일관)
                         //   본질: _fetchShareInfo가 startTranscode 재호출 시 두 번 실행 → appendChild 누적으로 옵션 2배
                         //   해결: select 통째 innerHTML 교체 → 이전 옵션/change 리스너 모두 제거
@@ -2051,26 +2170,35 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                             // SW retry 플래그 리셋 — 새 트랙도 SW fallback 가능하게
                             window._shareHlsSwRetried = false;
                             
-                            // ★ 멀티오디오 audio 변경: HLS 흐름 유지 (메인 PC 분기와 동일 — 펜닐님 결정)
-                            //   - 이전: player.src = newUrl (MMS 모드 변경) → HLS 폴더 안 씀
-                            //   - 변경: 새 hlsStartUrl + audio=N + force_sw=1 → 새 HLS 세션
-                            //   - 이유: 멀티오디오는 SW 인코딩 필요 (EAC3 5.1 호환 문제)
+                            // ★ 멀티오디오 audio 변경: 스트리밍 방식별 분기 (v5.8.1b 결정 일관 적용)
+                            //   - 이전: 무조건 force_sw=1 추가 + 배지 강제 SW (PC도 SW로 떨어뜨림)
+                            //   - 변경: HLS 경로는 HW 시도, MMS 경로 + iOS만 SW 강제
+                            //   - 메인 페이지(app.js 라인 34577)와 동일 동작 — 펜닐님 결정
+                            //   - 안전망: hls.js 에러 시 라인 1571에서 force_sw=1 자동 fallback (기존 메커니즘)
                             const _origHlsUrl = player.dataset.hlsUrl;
                             const _cleanHlsUrl = _origHlsUrl.replace(/&audio=\d+/g, '').replace(/&force_sw=1/g, '');
-                            const _newHlsStartUrl = _cleanHlsUrl + '&audio=' + sel.value + '&force_sw=1';
+                            
+                            // MMS+iOS만 SW 강제, 그 외(PC/Android/iOS HLS)는 HW 시도
+                            const _audioChangeIsIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+                            const _audioChangeHlsSupported = (typeof Hls !== 'undefined' && Hls.isSupported());
+                            const _audioChangeNativeHls = player.canPlayType('application/vnd.apple.mpegurl') !== '';
+                            const _audioChangeWillUseHls = _audioChangeHlsSupported || _audioChangeNativeHls;
+                            const _audioChangeNeedSw = _audioChangeIsIOS && !_audioChangeWillUseHls;
+                            
+                            const _newHlsStartUrl = _cleanHlsUrl + '&audio=' + sel.value + (_audioChangeNeedSw ? '&force_sw=1' : '');
                             
                             // 비디오 정리
                             try { player.pause(); } catch(e) {}
                             player.removeAttribute('src');
                             player.load();
                             
-                            // 배지 즉시 SW로
+                            // 배지: SW 경로만 즉시 SW로 표시. HW 경로는 그대로 두고 playlist/info 응답이 자동 갱신
                             const _changeBadge = document.getElementById('stream-badge');
-                            if (_changeBadge) {
+                            if (_changeBadge && _audioChangeNeedSw) {
                                 _changeBadge.innerHTML = `⏳ <?= __('realtime_converting', '실시간 변환 중...') ?> <span class="encoder-info">SW : CPU</span>`;
                             }
                             
-                            // 새 HLS 세션 시작 (force_sw=1 + audio=N)
+                            // 새 HLS 세션 시작 (HW 시도 또는 force_sw=1 — 위에서 결정됨)
                             (async () => {
                                 try {
                                     const _newRes = await fetch(_newHlsStartUrl);
@@ -2088,14 +2216,123 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                                             _changeHls.attachMedia(player);
                                             _changeHls.on(Hls.Events.MANIFEST_PARSED, () => {
                                                 player.play().catch(() => {});
-                                                if (_changeBadge) {
-                                                    _changeBadge.innerHTML = `⚡ HLS <?= __('streaming', '스트리밍') ?> <span class="encoder-info">SW : CPU</span>`;
+                                                // ★ 배지 갱신은 xhrSetup(라인 1535)에서 X-Current-Encoder 헤더 기반으로 자동 처리됨
+                                                //   여기서 SW로 강제 덮어쓰면 HW 인코딩 중인데도 SW로 표시되는 버그 발생 (v5.8.1b 수정)
+                                            });
+                                            // ★ HW 실패 시 SW fallback — 첫 hls 인스턴스(라인 1571)와 동일 패턴
+                                            //   v5.8.1b 변경으로 오디오 변경 시 HW 시도하게 됨 → fallback 안전망 필수
+                                            //   HW 시도(_newHlsStartUrl에 force_sw 없음)일 때만 의미 있음
+                                            _changeHls.on(Hls.Events.ERROR, (event, data) => {
+                                                if (!data.fatal) return;
+                                                const _isManifestErr = (data.details === 'manifestLoadError' || data.details === 'manifestLoadTimeOut' || data.details === 'manifestParsingError');
+                                                const _isBufferAppendErr = (data.details === 'bufferAppendError');
+                                                const _is404 = data.response && (data.response.code === 404 || data.response.code === 410);
+                                                if ((_isManifestErr || _isBufferAppendErr || _is404) && !_newHlsStartUrl.includes('force_sw=1') && !window._shareHlsSwRetried) {
+                                                    window._shareHlsSwRetried = true;
+                                                    _changeHls.destroy();
+                                                    _shareHlsInstance = null;
+                                                    // 기존 HW 세션 stop
+                                                    try {
+                                                        if (_shareHlsSession) {
+                                                            const _retryStopUrl = _newHlsStartUrl.replace('hls_action=start', 'hls_action=stop') + '&session=' + encodeURIComponent(_shareHlsSession);
+                                                            fetch(_retryStopUrl, { keepalive: true }).catch(() => {});
+                                                        }
+                                                    } catch(e) {}
+                                                    _shareHlsSession = null;
+                                                    const _retryBadge = document.getElementById('stream-badge');
+                                                    if (_retryBadge) _retryBadge.innerHTML = '⚡ HW <?= __('failed_sw_retry', '실패 — SW 재시도 중...') ?>';
+                                                    // SW 재시작
+                                                    (async () => {
+                                                        try {
+                                                            const _retrySwUrl = _newHlsStartUrl + '&force_sw=1';
+                                                            const _retrySwRes = await fetch(_retrySwUrl);
+                                                            const _retrySwData = await _retrySwRes.json();
+                                                            if (_retrySwData.success && _retrySwData.playlist) {
+                                                                _shareHlsSession = _retrySwData.session;
+                                                                if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                                                                    const _retryHls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
+                                                                    _retryHls.loadSource(_retrySwData.playlist);
+                                                                    _retryHls.attachMedia(player);
+                                                                    _retryHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                                                                        if (_retryBadge) _retryBadge.innerHTML = `⚡ HLS <?= __('streaming', '스트리밍') ?> <span class="encoder-info">SW : CPU</span>`;
+                                                                        player.play().catch(() => {});
+                                                                    });
+                                                                    _retryHls.on(Hls.Events.ERROR, (e2, d2) => {
+                                                                        if (d2.fatal) { _retryHls.destroy(); _shareHlsInstance = null; _shareHlsSession = null; _fallbackToMMS(transcodeUrl); }
+                                                                    });
+                                                                    _shareHlsInstance = _retryHls;
+                                                                }
+                                                            } else {
+                                                                _fallbackToMMS(transcodeUrl);
+                                                            }
+                                                        } catch(swErr) {
+                                                            _fallbackToMMS(transcodeUrl);
+                                                        }
+                                                    })();
+                                                    return;
                                                 }
+                                                // 그 외 fatal 에러 → MMS fallback (기존 첫 hls 인스턴스와 동일 동작)
+                                                _changeHls.destroy();
+                                                _shareHlsInstance = null;
+                                                _shareHlsSession = null;
+                                                _fallbackToMMS(transcodeUrl);
                                             });
                                             _shareHlsInstance = _changeHls;
                                         } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
                                             player.src = _newData.playlist;
                                             player.play().catch(() => {});
+                                            
+                                            // ★ iOS 네이티브 HLS — video.error → SW fallback (라인 1661 패턴과 일관)
+                                            //   v5.8.1b 변경으로 audio 변경 시 HW 시도하게 됨 → fallback 안전망 필수
+                                            //   HW 시도(_newHlsStartUrl에 force_sw 없음)일 때만 의미 있음
+                                            if (!_newHlsStartUrl.includes('force_sw=1')) {
+                                                player.addEventListener('error', async function _shareIosAudioChangeErrorHandler() {
+                                                    player.removeEventListener('error', _shareIosAudioChangeErrorHandler);
+                                                    if (window._shareHlsSwRetried) return;
+                                                    window._shareHlsSwRetried = true;
+                                                    
+                                                    const _iosRetryBadge = document.getElementById('stream-badge');
+                                                    if (_iosRetryBadge) _iosRetryBadge.innerHTML = '⚡ HW <?= __('failed_sw_retry', '실패 — SW 재시도 중...') ?>';
+                                                    
+                                                    try { player.pause(); } catch(e) {}
+                                                    player.removeAttribute('src');
+                                                    player.load();
+                                                    
+                                                    // 기존 HW 세션 stop
+                                                    try {
+                                                        if (_shareHlsSession) {
+                                                            const _iosStopUrl = _newHlsStartUrl.replace('hls_action=start', 'hls_action=stop') + '&session=' + encodeURIComponent(_shareHlsSession);
+                                                            fetch(_iosStopUrl, { keepalive: true }).catch(() => {});
+                                                        }
+                                                    } catch(e) {}
+                                                    _shareHlsSession = null;
+                                                    
+                                                    try {
+                                                        const _iosSwUrl = _newHlsStartUrl + '&force_sw=1';
+                                                        const _iosSwRes = await fetch(_iosSwUrl);
+                                                        const _iosSwData = await _iosSwRes.json();
+                                                        if (!_iosSwData.success || !_iosSwData.playlist) {
+                                                            if (_iosRetryBadge) _iosRetryBadge.textContent = '❌ SW 재시작 실패';
+                                                            _fallbackToMMS(transcodeUrl);
+                                                            return;
+                                                        }
+                                                        
+                                                        player.src = _iosSwData.playlist;
+                                                        player.load();
+                                                        if (_iosRetryBadge) _iosRetryBadge.innerHTML = `⚡ HLS <?= __('streaming', '스트리밍') ?> <span class="encoder-info">SW : CPU</span>`;
+                                                        player.play().catch(() => {});
+                                                        _shareHlsSession = _iosSwData.session;
+                                                        
+                                                        // SW도 실패 시 MMS fallback (라인 1696 패턴과 동일)
+                                                        player.addEventListener('error', function _shareIosAudioChangeSwErrorHandler() {
+                                                            player.removeEventListener('error', _shareIosAudioChangeSwErrorHandler);
+                                                            _fallbackToMMS(transcodeUrl);
+                                                        }, { once: true });
+                                                    } catch(_iosSwErr) {
+                                                        _fallbackToMMS(transcodeUrl);
+                                                    }
+                                                }, { once: false });
+                                            }
                                         }
                                     } else {
                                         // HLS 실패 시 MMS fallback (기존 동작)
@@ -2303,9 +2540,16 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 } else if (wrap.requestFullscreen || wrap.webkitRequestFullscreen) {
                     (wrap.requestFullscreen || wrap.webkitRequestFullscreen).call(wrap).catch(() => {});
                 } else if (player.webkitEnterFullscreen) {
-                    // iOS Safari 폴백: 네이티브 전체화면
+                    // iOS Safari (iPhone) 폴백 — cue 재주입 + mode='showing' 동기 설정 후 native 진입
+                    if (window._shareEnsureCues) window._shareEnsureCues();
+                    try {
+                        for (let i = 0; i < player.textTracks.length; i++) {
+                            player.textTracks[i].mode = 'showing';
+                        }
+                        player.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; });
+                    } catch(e2) {}
                     if (player.paused) player.play().catch(() => {});
-                    setTimeout(() => player.webkitEnterFullscreen(), 50);
+                    player.webkitEnterFullscreen();
                 }
             });
             // 전체화면 시 마우스/터치 비활동 → 배지/오디오 숨김
@@ -2641,9 +2885,19 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 } else if (wrap.requestFullscreen || wrap.webkitRequestFullscreen) {
                     (wrap.requestFullscreen || wrap.webkitRequestFullscreen).call(wrap).catch(() => {});
                 } else if (player.webkitEnterFullscreen) {
-                    // iOS Safari 폴백: 네이티브 전체화면
+                    // iOS Safari (iPhone) 폴백: 네이티브 전체화면
+                    //   ★ 핵심: cue가 비어있으면 재주입 (iOS가 hidden 모드에서 cue 메모리 회수하는 케이스 방어)
+                    //   ★ webkitEnterFullscreen 직전에 mode='showing' 동기 설정
+                    //   ★ user gesture 컨텍스트 유지 위해 setTimeout 없이 동기 호출
+                    if (window._shareEnsureCues) window._shareEnsureCues();
+                    try {
+                        for (let i = 0; i < player.textTracks.length; i++) {
+                            player.textTracks[i].mode = 'showing';
+                        }
+                        player.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; });
+                    } catch(e) {}
                     if (player.paused) player.play().catch(() => {});
-                    setTimeout(() => player.webkitEnterFullscreen(), 50);
+                    player.webkitEnterFullscreen();
                 }
             });
         }
@@ -2660,53 +2914,114 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             subOverlay.style.bottom = subBottom + '%';
         }
         
-        // 자막 크기 조절
+        // 자막 싱크 표시 갱신 (두 곳 — player-controls의 sub-sync-display + floating 패널)
+        let subSyncOffset = 0;
+        const syncDisplay = document.getElementById('sub-sync-display');
+        const updateSyncDisplay = () => {
+            const v = (subSyncOffset >= 0 ? '+' : '') + subSyncOffset.toFixed(1) + 's';
+            const color = subSyncOffset === 0 ? '' : '#ff9800';
+            if (syncDisplay) {
+                syncDisplay.textContent = v;
+                syncDisplay.style.color = color;
+            }
+            // floating 패널의 sync display도 같이 갱신
+            const fsSync = document.getElementById('fs-sub-sync-display');
+            if (fsSync) {
+                fsSync.textContent = v;
+                fsSync.style.color = color;
+            }
+        };
+        
+        // 자막 액션 함수들 (기존 ctrl-btn + floating 패널 공유)
+        const subActions = {
+            sizeDown: () => {
+                subSize = Math.max(0.6, subSize - 0.1);
+                if (subOverlay) subOverlay.style.fontSize = subSize + 'em';
+            },
+            sizeUp: () => {
+                subSize = Math.min(2.5, subSize + 0.1);
+                if (subOverlay) subOverlay.style.fontSize = subSize + 'em';
+            },
+            posUp: () => {
+                subBottom = Math.min(40, subBottom + 2);
+                if (subOverlay) subOverlay.style.bottom = subBottom + '%';
+            },
+            posDown: () => {
+                subBottom = Math.max(0, subBottom - 2);
+                if (subOverlay) subOverlay.style.bottom = subBottom + '%';
+            },
+            syncDown: () => {
+                subSyncOffset = Math.max(-30, subSyncOffset - 0.5);
+                updateSyncDisplay();
+            },
+            syncUp: () => {
+                subSyncOffset = Math.min(30, subSyncOffset + 0.5);
+                updateSyncDisplay();
+            },
+            syncReset: () => {
+                subSyncOffset = 0;
+                updateSyncDisplay();
+            }
+        };
+        
+        // 기존 player-controls 버튼 바인딩
         const btnSubDown = document.getElementById('btn-sub-down');
         const btnSubUp = document.getElementById('btn-sub-up');
         const btnSubPosUp = document.getElementById('btn-sub-pos-up');
         const btnSubPosDown = document.getElementById('btn-sub-pos-down');
+        if (btnSubDown) btnSubDown.addEventListener('click', subActions.sizeDown);
+        if (btnSubUp) btnSubUp.addEventListener('click', subActions.sizeUp);
+        if (btnSubPosUp) btnSubPosUp.addEventListener('click', subActions.posUp);
+        if (btnSubPosDown) btnSubPosDown.addEventListener('click', subActions.posDown);
         
-        if (btnSubDown) btnSubDown.addEventListener('click', () => {
-            subSize = Math.max(0.6, subSize - 0.1);
-            if (subOverlay) subOverlay.style.fontSize = subSize + 'em';
-        });
-        if (btnSubUp) btnSubUp.addEventListener('click', () => {
-            subSize = Math.min(2.5, subSize + 0.1);
-            if (subOverlay) subOverlay.style.fontSize = subSize + 'em';
-        });
-        if (btnSubPosUp) btnSubPosUp.addEventListener('click', () => {
-            subBottom = Math.min(40, subBottom + 2);
-            if (subOverlay) subOverlay.style.bottom = subBottom + '%';
-        });
-        if (btnSubPosDown) btnSubPosDown.addEventListener('click', () => {
-            subBottom = Math.max(0, subBottom - 2);
-            if (subOverlay) subOverlay.style.bottom = subBottom + '%';
-        });
-        
-        // 자막 싱크 조절
-        let subSyncOffset = 0;
-        const syncDisplay = document.getElementById('sub-sync-display');
-        const updateSyncDisplay = () => {
-            if (syncDisplay) {
-                syncDisplay.textContent = (subSyncOffset >= 0 ? '+' : '') + subSyncOffset.toFixed(1) + 's';
-                syncDisplay.style.color = subSyncOffset === 0 ? '' : '#ff9800';
-            }
-        };
         const btnSyncDown = document.getElementById('btn-sub-sync-down');
         const btnSyncUp = document.getElementById('btn-sub-sync-up');
         const btnSyncReset = document.getElementById('btn-sub-sync-reset');
-        if (btnSyncDown) btnSyncDown.addEventListener('click', () => {
-            subSyncOffset = Math.max(-30, subSyncOffset - 0.5);
-            updateSyncDisplay();
-        });
-        if (btnSyncUp) btnSyncUp.addEventListener('click', () => {
-            subSyncOffset = Math.min(30, subSyncOffset + 0.5);
-            updateSyncDisplay();
-        });
-        if (btnSyncReset) btnSyncReset.addEventListener('click', () => {
-            subSyncOffset = 0;
-            updateSyncDisplay();
-        });
+        if (btnSyncDown) btnSyncDown.addEventListener('click', subActions.syncDown);
+        if (btnSyncUp) btnSyncUp.addEventListener('click', subActions.syncUp);
+        if (btnSyncReset) btnSyncReset.addEventListener('click', subActions.syncReset);
+        
+        // ★ Fullscreen용 floating subtitle-controls — wrap 안에 절대 위치
+        //   player-wrap이 fullscreen 대상이므로 그 안에 두면 fullscreen에서도 보임
+        //   재생 중 + 비활동 (.fs-idle) 시엔 자동 숨김 (CSS에서 처리)
+        //   자막이 없는 영상에선 표시 안 됨 — wrap.has-subs 클래스로 게이트
+        if (wrap) {
+            const fsSubCtrl = document.createElement('div');
+            fsSubCtrl.className = 'fs-subtitle-controls';
+            fsSubCtrl.innerHTML = `
+                <button type="button" class="fs-sub-btn" data-act="sizeDown" title="<?= __('sub_size_down', '자막 축소') ?>">A-</button>
+                <button type="button" class="fs-sub-btn" data-act="sizeUp" title="<?= __('sub_size_up', '자막 확대') ?>">A+</button>
+                <button type="button" class="fs-sub-btn" data-act="posUp" title="<?= __('sub_pos_up', '자막 위로') ?>">▲</button>
+                <button type="button" class="fs-sub-btn" data-act="posDown" title="<?= __('sub_pos_down', '자막 아래로') ?>">▼</button>
+                <span class="fs-sub-sep"></span>
+                <button type="button" class="fs-sub-btn" data-act="syncDown" title="<?= __('sub_sync_back', '자막 싱크 -0.5초') ?>">-0.5s</button>
+                <span class="fs-sub-sync" id="fs-sub-sync-display">0.0s</span>
+                <button type="button" class="fs-sub-btn" data-act="syncUp" title="<?= __('sub_sync_forward', '자막 싱크 +0.5초') ?>">+0.5s</button>
+                <button type="button" class="fs-sub-btn" data-act="syncReset" title="<?= __('sub_sync_reset', '싱크 초기화') ?>">↺</button>
+            `;
+            wrap.appendChild(fsSubCtrl);
+            // 클릭 이벤트 위임
+            fsSubCtrl.addEventListener('click', (e) => {
+                const btn = e.target.closest('.fs-sub-btn');
+                if (!btn) return;
+                e.stopPropagation();
+                e.preventDefault();
+                const act = btn.dataset.act;
+                if (act && subActions[act]) subActions[act]();
+            });
+            // 더블클릭 fullscreen 토글 방지
+            fsSubCtrl.addEventListener('dblclick', (e) => { e.stopPropagation(); });
+        }
+        // 자막 cue가 채워지면 wrap에 has-subs 토글 (CSS에서 컨트롤 게이트)
+        const _toggleHasSubs = () => {
+            if (!wrap) return;
+            if (subCues && subCues.length > 0) wrap.classList.add('has-subs');
+            else wrap.classList.remove('has-subs');
+        };
+        // 초기 상태 반영 (이 시점엔 보통 비어있지만 자막 자동 로드가 동기로 끝나면 채워져있을 수도)
+        _toggleHasSubs();
+        // subCues가 외부에서 채워질 때마다 동기화하기 위해 글로벌 헬퍼 노출
+        window._shareToggleHasSubs = _toggleHasSubs;
         
         // 자막 파일 로딩
         if (subInput) subInput.addEventListener('change', async (e) => {
@@ -2723,49 +3038,101 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             _updateTrackElement();
         });
         
-        // iOS 전체화면용: subCues → VTT blob → <track> 엘리먼트
+        // iOS 전체화면용: subCues → addTextTrack API로 직접 cue 등록
         let _iosSubActive = false;
-        function _updateTrackElement() {
-            // 기존 track 제거
-            player.querySelectorAll('track').forEach(t => t.remove());
-            if (subCues.length === 0) return;
-            // cues → VTT 텍스트
-            let vtt = 'WEBVTT\n\n';
-            const pad = (n, d) => String(n).padStart(d, '0');
-            const fmt = (s) => {
-                const h = Math.floor(s / 3600);
-                const m = Math.floor((s % 3600) / 60);
-                const sec = Math.floor(s % 60);
-                const ms = Math.round((s % 1) * 1000);
-                return `${pad(h,2)}:${pad(m,2)}:${pad(sec,2)}.${pad(ms,3)}`;
-            };
-            for (const c of subCues) {
-                // cue.text에는 <br>이 들어있으므로 줄바꿈으로 변환
-                const txt = c.text.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
-                vtt += `${fmt(c.start)} --> ${fmt(c.end)}\n${txt}\n\n`;
+        let _shareNativeTrack = null;  // addTextTrack으로 만든 트랙 참조 (cue 갱신용)
+        
+        // cues 재주입 헬퍼 (fullscreen 진입 시 cue가 비어있으면 호출)
+        const _shareInjectCues = (track, cueArr) => {
+            let added = 0;
+            for (const c of cueArr) {
+                try {
+                    const txt = c.text.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
+                    const vc = new VTTCue(c.start, c.end, txt);
+                    // iOS가 default 위치로 그릴 때 화면 밖 잘림 방어 — line:90% (하단)
+                    vc.line = 90;
+                    vc.lineAlign = 'end';
+                    track.addCue(vc);
+                    added++;
+                } catch(eC) {}
             }
-            const blob = new Blob([vtt], { type: 'text/vtt' });
-            const trackUrl = URL.createObjectURL(blob);
-            const trackEl = document.createElement('track');
-            trackEl.kind = 'subtitles';
-            trackEl.label = '자막';
-            trackEl.srclang = 'ko';
-            trackEl.src = trackUrl;
-            trackEl.default = false;
-            player.appendChild(trackEl);
-            // 네이티브 트랙 비활성 (커스텀 오버레이 사용)
-            try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = 'disabled'; } catch(e) {}
+            return added;
+        };
+        // fullscreen 직전 cue 재주입 (cues가 사라진 경우 복원)
+        //   iOS Safari가 hidden 모드의 cue 메모리를 회수하거나
+        //   src 전환 등으로 textTrack의 cues가 비워지는 케이스 방어
+        const _shareEnsureCues = () => {
+            if (subCues.length === 0) return;
+            let track = _shareNativeTrack;
+            if (!track || ![...player.textTracks].includes(track)) {
+                try {
+                    track = player.addTextTrack('subtitles', '자막', 'ko');
+                    _shareNativeTrack = track;
+                } catch(eT) { return; }
+            }
+            if (!track.cues || track.cues.length === 0) {
+                _shareInjectCues(track, subCues);
+            }
+        };
+        window._shareEnsureCues = _shareEnsureCues;  // fullscreen 클릭 핸들러에서 호출
+        
+        function _updateTrackElement() {
+            // 기존 <track> 엘리먼트 제거
+            player.querySelectorAll('track').forEach(t => t.remove());
+            // 기존 addTextTrack으로 만든 트랙은 제거 불가 → 모드만 disabled로 + cue 비움
+            if (_shareNativeTrack) {
+                try { _shareNativeTrack.mode = 'disabled'; } catch(e) {}
+                try {
+                    while (_shareNativeTrack.cues && _shareNativeTrack.cues.length) {
+                        _shareNativeTrack.removeCue(_shareNativeTrack.cues[0]);
+                    }
+                } catch(e) {}
+                _shareNativeTrack = null;
+            }
+            // 자막 cue 유무에 따라 floating 컨트롤 표시 토글
+            if (window._shareToggleHasSubs) window._shareToggleHasSubs();
+            if (subCues.length === 0) return;
+            
+            const _isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                                 (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+            
+            // ★ <track src=...> 방식은 iOS Safari가 native fullscreen에서
+            //   메뉴엔 표시하지만 cue를 그리지 않는 알려진 이슈 (flowplayer #1151, video.js #7356)
+            //   → video.addTextTrack() + track.addCue() 직접 호출이 안정적
+            try {
+                _shareNativeTrack = player.addTextTrack('subtitles', '자막', 'ko');
+                _shareInjectCues(_shareNativeTrack, subCues);
+            } catch(eT) {}
+            
+            // ★ iOS는 'hidden' 사용 (cue 활성 + 네이티브 렌더링 OFF)
+            const _shareIdleMode = _isIOSDevice ? 'hidden' : 'disabled';
+            try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = _shareIdleMode; } catch(e) {}
+            setTimeout(() => { try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = _shareIdleMode; } catch(e) {} }, 300);
+            setTimeout(() => { try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = _shareIdleMode; } catch(e) {} }, 1000);
         }
         
         // iOS 전체화면 진입/종료 시 네이티브 ↔ 커스텀 자막 전환
+        const _isIOSDeviceShare = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
+                                  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        const _shareIdleModeFs = _isIOSDeviceShare ? 'hidden' : 'disabled';
         player.addEventListener('webkitbeginfullscreen', () => {
             _iosSubActive = true;
-            try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = 'showing'; } catch(e) {}
+            // 비디오 컨트롤바 자체 fullscreen 버튼으로 진입한 경우에도 cue 보장
+            //   (fsBtn/dblclick 경로는 이미 click 핸들러에서 호출했지만 멱등)
+            if (window._shareEnsureCues) window._shareEnsureCues();
+            const _setShowing = () => { try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = 'showing'; } catch(e) {} };
+            _setShowing();
+            // iOS Safari가 자체 자막 처리로 덮어쓰는 경우 방어 — 여러 시점에 강제 (메인 분기와 동일)
+            setTimeout(_setShowing, 50);
+            setTimeout(_setShowing, 200);
+            setTimeout(_setShowing, 500);
+            // track 요소 직접 모드 설정 (textTracks 컬렉션과 별개로)
+            try { player.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; }); } catch(e) {}
             if (subOverlay) subOverlay.style.display = 'none';
         });
         player.addEventListener('webkitendfullscreen', () => {
             _iosSubActive = false;
-            try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = 'disabled'; } catch(e) {}
+            try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = _shareIdleModeFs; } catch(e) {}
             if (subOverlay) subOverlay.style.display = '';
         });
         

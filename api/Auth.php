@@ -117,6 +117,11 @@ class Auth {
             $this->clearFailedAttempts($username, $ip);
             
             // Session Fixation 방지: 세션 ID 재생성
+            // ★ session_regenerate_id 전에 sessions DB에서 이전 session_id 제거
+            //   (PHP 세션 ID는 X→Y로 바뀌지만 sessions DB에는 X 잔존 → 유령 세션 방지)
+            if (isset($_SESSION['user_id'])) {
+                $this->removeSession((int)$_SESSION['user_id'], session_id());
+            }
             session_regenerate_id(true);
             
             $_SESSION['user_id'] = $user['id'];
@@ -1915,6 +1920,10 @@ class Auth {
         }
         
         // 로그인 완료 — Session Fixation 방지
+        // ★ session_regenerate_id 전에 sessions DB에서 이전 session_id 제거 (유령 세션 방지)
+        if (isset($_SESSION['user_id'])) {
+            $this->removeSession((int)$_SESSION['user_id'], session_id());
+        }
         session_regenerate_id(true);
         $_SESSION['user_id'] = $user['id'];
         $_SESSION['last_activity'] = time();

@@ -8286,6 +8286,19 @@ const App = {
         
         if (!res.success) {
             this.toast(res.error, 'error');
+            
+            // ★ 모래시계 잔존 방지 (v5.8.1b)
+            //   네트워크 드라이브(Windows SMB 매핑) idle stale 등으로 폴더 접근 실패 시
+            //   #file-list가 ⏳ 모래시계 상태로 멈추는 문제 해결
+            //   사용자는 토스트로 에러는 알지만 화면은 모래시계만 보였음
+            //   → 명확한 에러 표시로 변경 (자동 재시도는 하지 않음 — 사용자가 새로고침/다른 폴더 클릭으로 복구)
+            $('#file-list').html(
+                `<div class="empty-msg" style="padding:40px;text-align:center;opacity:0.7;">` +
+                `<div style="font-size:32px;margin-bottom:12px;">⚠️</div>` +
+                `<div>${this.escapeHtml(res.error || t('unknown_error', '알 수 없는 오류'))}</div>` +
+                `</div>`
+            );
+            
             return { success: false, error: res.error };
         }
         
@@ -32948,6 +32961,32 @@ const App = {
                     if (isIOS) {
                         // iOS: 재생 중에만 네이티브 전체화면 (동기 호출, 제스처 컨텍스트 유지)
                         if (!vid.paused && vid.webkitEnterFullscreen) {
+                            // ★ 핵심 fix: fullscreen 직전 cue가 비어있으면 재주입
+                            //   iOS Safari가 hidden 모드의 cue 메모리를 회수하거나
+                            //   HLS src 전환 등으로 textTrack의 cues가 비워지는 케이스 방어
+                            try {
+                                const _cues = vid._subCues;
+                                const _track = vid._subTextTrack;
+                                if (_cues && _cues.length > 0) {
+                                    let _t = _track;
+                                    // 트랙 자체가 사라졌으면 새로 생성
+                                    if (!_t || ![...vid.textTracks].includes(_t)) {
+                                        _t = vid.addTextTrack('subtitles', vid._subLabel || '자막', 'ko');
+                                        vid._subTextTrack = _t;
+                                    }
+                                    // cue가 비어있으면 재주입
+                                    if ((!_t.cues || _t.cues.length === 0) && vid._subInjectCues) {
+                                        vid._subInjectCues(_t, _cues);
+                                    }
+                                }
+                                // ★ webkitEnterFullscreen 직전에 자막 mode='showing' 동기 설정
+                                //   iOS는 native fullscreen 진입 시점의 textTracks 상태를 스냅샷처럼 사용 →
+                                //   webkitbeginfullscreen 이벤트(비동기) 후에 mode를 바꾸면 이미 늦은 케이스 방어
+                                for (let i = 0; i < vid.textTracks.length; i++) {
+                                    vid.textTracks[i].mode = 'showing';
+                                }
+                                vid.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; });
+                            } catch(e) {}
                             vid.webkitEnterFullscreen();
                         }
                         // 재생 전/일시정지면 무시
@@ -33285,26 +33324,41 @@ const App = {
                     if (infoData.audio_tracks && infoData.audio_tracks.length > 1) {
                         this._buildAudioTrackUI(infoData.audio_tracks, transcodeBaseUrl);
                         
-                        // ★ 멀티오디오 검출 → 자동 SW 강제 (PC + iOS 모두)
-                        //   - HW 인코더 + EAC3 5.1 같은 코덱 호환 문제 (PC/iOS 공통)
-                        //   - iOS Safari는 video.error 이벤트 발동 안 함 (HW segment 디코딩 실패해도 fallback 트리거 불가)
-                        //   - PC는 hls.js ERROR 핸들러 작동하지만, 멀티오디오에서는 처음부터 SW가 안정적
-                        //   → 처음부터 SW(libx264 + AAC) 사용 = 배지/실제 인코더 일치 + 첫 시도부터 성공
-                        _multiAudioSwForced = true;
+                        // ★ 멀티오디오 검출 → 스트리밍 방식별 분기 (v5.8.1b 변경)
+                        //   - 이전: 무조건 SW 강제 (PC/iOS 모두)
+                        //   - 변경: HLS 경로는 HW 시도, MMS 경로 + iOS만 SW 강제
+                        //
+                        //   근거 (펜닐님 실측 2026-04-30):
+                        //   - iOS HLS는 멀티오디오 + HW 인코딩 정상 재생 (문제 없음 확인)
+                        //   - iOS MMS만 단일 스트림 구조라 HW segment 실패 시 회복 불가
+                        //   - PC/Android는 어느 경로든 hls.js ERROR 핸들러로 force_sw=1 자동 fallback
+                        //   - 안전망: HW 실패 시 서버측에서도 libx264 자동 fallback (FileManager.php)
+                        //
+                        //   효과: 13700T 환경 멀티오디오 ffmpeg 부하 80% → 15% (영상 HW + 오디오 SW)
+                        const _isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+                        const _hlsSupported = (typeof Hls !== 'undefined' && Hls.isSupported());
+                        const _nativeHls = video.canPlayType('application/vnd.apple.mpegurl') !== '';
+                        const _willUseHls = _hlsSupported || _nativeHls;
                         
-                        // ★ 배지 즉시 SW 표시로 갱신 (위 라인 33078에서 HW로 표시됐으면 덮어쓰기)
-                        //   순서 문제: info.encoder 기반 배지(HW Intel) → 멀티오디오 검출 → SW 강제
-                        //   → 배지가 실제 인코더(libx264)와 일치하도록 즉시 갱신
-                        if (badge) {
-                            const _method = video._streamMethod || 'HLS';
-                            badge.innerHTML = `⏳ ${t('realtime_converting', '실시간 변환 중...')} <span class="encoder-info">SW : CPU</span>`;
+                        // MMS 경로(HLS 사용 불가) + iOS만 SW 강제
+                        if (_isIOS && !_willUseHls) {
+                            _multiAudioSwForced = true;
+                            
+                            // 배지 즉시 SW 표시로 갱신
+                            if (badge) {
+                                badge.innerHTML = `⏳ ${t('realtime_converting', '실시간 변환 중...')} <span class="encoder-info">SW : CPU</span>`;
+                            }
                         }
+                        // 그 외 (PC/Android, iOS HLS) = HW 시도 (배지 그대로 HW 유지)
+                        // hls.js 에러 또는 서버 HW 실패 시 자동 force_sw=1 fallback
                         
                         if (window._diagLog) {
-                            window._diagLog('multiaudio_sw_forced', {
+                            window._diagLog('multiaudio_decision', {
                                 audioTracksCount: infoData.audio_tracks.length,
                                 audioCodecs: infoData.audio_tracks.map(t => t.codec).filter(Boolean),
-                                isIOS: /iPhone|iPad|iPod/i.test(navigator.userAgent),
+                                isIOS: _isIOS,
+                                willUseHls: _willUseHls,
+                                swForced: _multiAudioSwForced,
                                 originalInfoEncoder: infoData.encoder
                             });
                         }
@@ -35408,22 +35462,44 @@ const App = {
                         };
                     }
                     
-                    // <track> 엘리먼트 추가 (PC 전체화면 + iOS 네이티브 전체화면용)
+                    // <track> 엘리먼트 제거 후 addTextTrack API로 트랙 추가
+                    //   ★ <track src=...> 방식은 iOS Safari가 native fullscreen에서
+                    //     메뉴엔 표시하지만 cue를 그리지 않는 알려진 이슈 (flowplayer #1151, video.js #7356)
+                    //   ★ video.addTextTrack() + track.addCue() 직접 호출은 안정적
+                    //     iOS가 메모리 상의 cue를 직접 사용하므로 src 파싱/CORS 문제 회피
                     video.querySelectorAll('track').forEach(t => t.remove());
-                    const trackBlob = new Blob([vttContent], {type: 'text/vtt'});
-                    const trackUrl = URL.createObjectURL(trackBlob);
-                    const trackEl = document.createElement('track');
-                    trackEl.kind = 'subtitles';
-                    trackEl.label = sub.label || (t('subtitle','자막') + ' ' + (i+1));
-                    trackEl.srclang = 'ko';
-                    trackEl.src = trackUrl;
-                    // ★ iOS 한정 default=true — iOS Safari가 webkitEnterFullscreen 시 자막 자동 활성화 보장
-                    //   (PC는 default=false 유지: 모달 재생 시 커스텀 오버레이만 사용 → 이중 표시 방지)
-                    //   PC 전체화면 진입은 onFullscreenChange에서 setTrackMode('showing')으로 처리됨
+                    
                     const _isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
                                          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-                    trackEl.default = _isIOSDevice;
-                    video.appendChild(trackEl);
+                    
+                    // cues + 트랙 정보를 video element에 보존
+                    //   → fullscreen 진입 시점에 cue가 비어있으면 즉석 재주입 (iOS 메모리 회수 방어)
+                    video._subCues = cues;
+                    video._subLabel = sub.label || (t('subtitle','자막') + ' ' + (i+1));
+                    
+                    // cues를 VTTCue로 추가하는 헬퍼 (재주입 시에도 사용)
+                    const _injectCues = (track, cueArr) => {
+                        let added = 0;
+                        for (const cue of cueArr) {
+                            try {
+                                const vc = new VTTCue(cue.startTime, cue.endTime, cue.text);
+                                // iOS가 default 위치로 그릴 때 화면 밖 잘림 방어 — line:90% (하단)
+                                vc.line = 90;
+                                vc.lineAlign = 'end';
+                                track.addCue(vc);
+                                added++;
+                            } catch(eC) {}
+                        }
+                        return added;
+                    };
+                    video._subInjectCues = _injectCues;  // fullscreen 클릭 핸들러에서 호출
+                    
+                    let nativeTrack = null;
+                    try {
+                        nativeTrack = video.addTextTrack('subtitles', video._subLabel, 'ko');
+                        video._subTextTrack = nativeTrack;  // 트랙 참조 보존
+                        _injectCues(nativeTrack, cues);
+                    } catch(eT) {}
                     
                     // 모달 재생 중에는 네이티브 트랙 완전 비활성 (커스텀 오버레이만 사용)
                     // 전체화면 진입 시 네이티브 트랙 활성화 + 커스텀 오버레이 숨김
@@ -35435,34 +35511,45 @@ const App = {
                         } catch(e) {}
                     };
                     
-                    // 초기: 네이티브 완전 비활성
-                    setTrackMode('disabled');
-                    // 브라우저가 로드 후 자동 활성화하는 것 방지
-                    setTimeout(() => setTrackMode('disabled'), 300);
-                    setTimeout(() => setTrackMode('disabled'), 1000);
+                    // ★ iOS는 'hidden' 기본값 사용 (cue 활성 + 네이티브 렌더링 OFF)
+                    //   - 'disabled'로 시작하면 iOS가 'user disabled' 상태로 간주해서
+                    //     webkitEnterFullscreen 시 setTrackMode('showing') 호출이 무시되는 케이스 발생
+                    //   - 'hidden' → 'showing' 전환은 user 선호 충돌 없음 → 일관된 자막 표시 보장
+                    //   - 모달에선 native cue 렌더링 안 되므로 이중 표시 없음 (커스텀 오버레이만 보임)
+                    const _idleMode = _isIOSDevice ? 'hidden' : 'disabled';
+                    
+                    // 초기: 모달용 비활성 모드 (iOS=hidden, 그 외=disabled)
+                    setTrackMode(_idleMode);
+                    // 브라우저가 로드 후 자동 showing으로 바꾸는 것 방지
+                    setTimeout(() => setTrackMode(_idleMode), 300);
+                    setTimeout(() => setTrackMode(_idleMode), 1000);
                     
                     // textTracks 변경 감시 (브라우저가 자동 showing으로 바꾸는 것 차단)
                     if (video.textTracks) {
                         video.textTracks.addEventListener('change', () => {
                             if (!overlay._fsActive) {
-                                setTrackMode('disabled');
+                                setTrackMode(_idleMode);
                             }
                         });
                     }
                     
                     // 전체화면 전환 감지
+                    //   PC/Android 표준 전체화면 대상은 .video-player-wrap이고
+                    //   .subtitle-overlay는 그 자식이므로 fullscreen 안에서 그대로 보임.
+                    //   네이티브 <track> showing은 Blob URL + mode 토글 시 일부 브라우저에서
+                    //   cue가 렌더링 안 되는 알려진 이슈 → 커스텀 오버레이를 그대로 유지.
+                    //   (iOS 네이티브 전체화면 webkitbeginfullscreen만 native track 사용)
                     const onFullscreenChange = () => {
                         const isFS = !!document.fullscreenElement || !!document.webkitFullscreenElement;
                         if (isFS) {
-                            // 전체화면: 네이티브 자막 ON, 커스텀 오버레이 OFF
-                            overlay._fsActive = true;
-                            setTrackMode('showing');
-                            overlay.style.display = 'none';
-                            overlay._fsHidden = true;
-                        } else {
-                            // 모달: 네이티브 비활성, 커스텀 복원
+                            // 표준 전체화면: 커스텀 오버레이 그대로 사용 (네이티브 track은 idle 모드 유지)
                             overlay._fsActive = false;
-                            setTrackMode('disabled');
+                            setTrackMode(_idleMode);
+                            overlay._fsHidden = false;
+                        } else {
+                            // 모달: 커스텀 오버레이 유지
+                            overlay._fsActive = false;
+                            setTrackMode(_idleMode);
                             overlay._fsHidden = false;
                         }
                     };
@@ -35475,6 +35562,21 @@ const App = {
                     //   해결: setTrackMode('showing') 여러 시점에 호출하여 보장
                     //   추가: trackEl.mode 직접 설정 + showing 후에도 한번 더 강제
                     video.addEventListener('webkitbeginfullscreen', () => {
+                        // 비디오 컨트롤바 자체 fullscreen 버튼으로 진입한 경우에도 cue 보장
+                        //   (fsBtn 클릭 경로는 이미 click 핸들러에서 호출했지만 멱등)
+                        try {
+                            const _cues = video._subCues;
+                            if (_cues && _cues.length > 0) {
+                                let _t = video._subTextTrack;
+                                if (!_t || ![...video.textTracks].includes(_t)) {
+                                    _t = video.addTextTrack('subtitles', video._subLabel || '자막', 'ko');
+                                    video._subTextTrack = _t;
+                                }
+                                if ((!_t.cues || _t.cues.length === 0) && video._subInjectCues) {
+                                    video._subInjectCues(_t, _cues);
+                                }
+                            }
+                        } catch(e) {}
                         overlay._fsActive = true;
                         setTrackMode('showing');
                         overlay.style.display = 'none';
@@ -35493,7 +35595,7 @@ const App = {
                     });
                     video.addEventListener('webkitendfullscreen', () => {
                         overlay._fsActive = false;
-                        setTrackMode('disabled');
+                        setTrackMode(_idleMode);
                         overlay._fsHidden = false;
                     });
                     
@@ -35531,7 +35633,9 @@ const App = {
     
     // SRT → WebVTT 변환
     _srtToVtt(srt) {
-        let vtt = 'WEBVTT\n\nSTYLE\n::cue {\n  background: transparent;\n  background-color: transparent;\n  color: #fff;\n  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 4px rgba(0,0,0,0.8);\n}\n\n';
+        // ★ STYLE 블록 제거: iOS Safari가 WebVTT STYLE 블록 파싱 시 cue 무효화하는 알려진 이슈
+        //   커스텀 오버레이는 별도 CSS 사용, native 자막은 video 자체 스타일에 맡김
+        let vtt = 'WEBVTT\n\n';
         // BOM 제거
         srt = srt.replace(/^\uFEFF/, '');
         // 줄바꿈 통일
@@ -35567,7 +35671,9 @@ const App = {
     
     // SMI/SAMI → WebVTT 변환
     _smiToVtt(smi) {
-        let vtt = 'WEBVTT\n\nSTYLE\n::cue {\n  background: transparent;\n  background-color: transparent;\n  color: #fff;\n  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 4px rgba(0,0,0,0.8);\n}\n\n';
+        // ★ STYLE 블록 제거: iOS Safari가 WebVTT STYLE 블록 파싱 시 cue 무효화하는 알려진 이슈
+        //   커스텀 오버레이는 별도 CSS 사용, native 자막은 video 자체 스타일에 맡김
+        let vtt = 'WEBVTT\n\n';
         // BOM 제거
         smi = smi.replace(/^\uFEFF/, '');
         // CRLF 정규화 (반드시 태그 파싱 전에)
@@ -35622,7 +35728,9 @@ const App = {
     
     // ASS/SSA → WebVTT 변환
     _assToVtt(ass) {
-        let vtt = 'WEBVTT\n\nSTYLE\n::cue {\n  background: transparent;\n  background-color: transparent;\n  color: #fff;\n  text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 4px rgba(0,0,0,0.8);\n}\n\n';
+        // ★ STYLE 블록 제거: iOS Safari가 WebVTT STYLE 블록 파싱 시 cue 무효화하는 알려진 이슈
+        //   커스텀 오버레이는 별도 CSS 사용, native 자막은 video 자체 스타일에 맡김
+        let vtt = 'WEBVTT\n\n';
         ass = ass.replace(/^\uFEFF/, '');
         ass = ass.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         
@@ -35870,30 +35978,38 @@ const App = {
                         overlay.className = 'subtitle-overlay';
                         wrapper.appendChild(overlay);
                         
-                        // track 엘리먼트 추가 (전체화면용)
-                        const trackBlob = new Blob([vttContent], { type: 'text/vtt' });
-                        const trackUrl = URL.createObjectURL(trackBlob);
-                        const trackEl = document.createElement('track');
-                        trackEl.kind = 'subtitles';
-                        trackEl.label = t('subtitle', '자막');
-                        trackEl.srclang = 'ko';
-                        trackEl.src = trackUrl;
-                        // ★ iOS 한정 default=true (메인 분기와 동일 패턴)
+                        // <track> 엘리먼트 제거 후 addTextTrack API로 트랙 추가 (메인 분기와 동일)
+                        video.querySelectorAll('track').forEach(t => t.remove());
                         const _isIOSDevice2 = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
                                               (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-                        trackEl.default = _isIOSDevice2;
-                        video.appendChild(trackEl);
+                        try {
+                            const _nt = video.addTextTrack('subtitles', t('subtitle','자막'), 'ko');
+                            for (const cue of cues) {
+                                try {
+                                    const vc = new VTTCue(cue.startTime, cue.endTime, cue.text);
+                                    vc.line = 90;
+                                    vc.lineAlign = 'end';
+                                    _nt.addCue(vc);
+                                } catch(eC) {}
+                            }
+                        } catch(eT) {}
                         
                         // 네이티브 트랙 비활성 (커스텀 오버레이 사용)
                         const setTrackMode = (mode) => { try { for (let i = 0; i < video.textTracks.length; i++) video.textTracks[i].mode = mode; } catch(e) {} };
-                        setTrackMode('disabled');
-                        setTimeout(() => setTrackMode('disabled'), 300);
+                        // ★ iOS는 'hidden' 사용 (메인 분기와 동일 — fullscreen 전환 안정성 위해)
+                        const _idleMode2 = _isIOSDevice2 ? 'hidden' : 'disabled';
+                        setTrackMode(_idleMode2);
+                        setTimeout(() => setTrackMode(_idleMode2), 300);
                         
                         // 전체화면 전환 감지
+                        //   PC/Android 표준 전체화면 대상은 wrapper의 조상이고
+                        //   .subtitle-overlay는 그 안에 있으므로 fullscreen에서 그대로 보임.
+                        //   네이티브 <track> showing 전환은 자막이 안 뜨는 이슈가 있어 커스텀 오버레이 유지.
+                        //   (iOS 네이티브 전체화면 webkitbeginfullscreen만 native track 사용)
                         const onFS = () => {
                             const isFS = !!document.fullscreenElement || !!document.webkitFullscreenElement;
-                            if (isFS) { overlay._fsActive = true; setTrackMode('showing'); overlay.style.display = 'none'; overlay._fsHidden = true; }
-                            else { overlay._fsActive = false; setTrackMode('disabled'); overlay._fsHidden = false; }
+                            if (isFS) { overlay._fsActive = false; setTrackMode(_idleMode2); overlay._fsHidden = false; }
+                            else { overlay._fsActive = false; setTrackMode(_idleMode2); overlay._fsHidden = false; }
                         };
                         document.addEventListener('fullscreenchange', onFS);
                         document.addEventListener('webkitfullscreenchange', onFS);
@@ -35910,10 +36026,10 @@ const App = {
                                 video.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; });
                             } catch(e) {}
                         });
-                        video.addEventListener('webkitendfullscreen', () => { overlay._fsActive = false; setTrackMode('disabled'); overlay._fsHidden = false; });
+                        video.addEventListener('webkitendfullscreen', () => { overlay._fsActive = false; setTrackMode(_idleMode2); overlay._fsHidden = false; });
                         
                         if (video.textTracks) {
-                            video.textTracks.addEventListener('change', () => { if (!overlay._fsActive) setTrackMode('disabled'); });
+                            video.textTracks.addEventListener('change', () => { if (!overlay._fsActive) setTrackMode(_idleMode2); });
                         }
                         
                         // 타이머로 자막 갱신
