@@ -660,15 +660,25 @@ class ShareManager {
         
         if ($isStream) {
             // 스트리밍: 올바른 MIME + inline
+            // ★ v5.8.1c: 메인 FileManager::getMimeType()와 동기화 (펜닐님 모바일 FLAC 재생 이슈 해결)
+            //   - opus는 'audio/ogg'로 통일 (Opus는 OGG 컨테이너 사용, 일부 모바일은 audio/opus 미인식)
+            //   - oga/aiff/aif 추가 (모바일 호환성 향상)
             $mimeMap = [
+                // 비디오
                 'mp4' => 'video/mp4', 'webm' => 'video/webm', 'ogg' => 'video/ogg',
                 'mov' => 'video/quicktime', 'avi' => 'video/x-msvideo', 'mkv' => 'video/x-matroska',
                 'wmv' => 'video/x-ms-wmv', 'flv' => 'video/x-flv', 'ts' => 'video/mp2t',
                 'm2ts' => 'video/mp2t', 'mts' => 'video/mp2t', 'mpg' => 'video/mpeg',
                 'mpeg' => 'video/mpeg', 'm4v' => 'video/x-m4v', '3gp' => 'video/3gpp',
-                'mp3' => 'audio/mpeg', 'wav' => 'audio/wav', 'flac' => 'audio/flac',
-                'm4a' => 'audio/mp4', 'aac' => 'audio/aac', 'wma' => 'audio/x-ms-wma',
-                'opus' => 'audio/opus'
+                // 오디오
+                'mp3' => 'audio/mpeg', 'wav' => 'audio/wav',
+                'flac' => 'audio/flac',          // 모바일에서 인식되려면 application/octet-stream 대신 이게 필요
+                'm4a' => 'audio/mp4',
+                'aac' => 'audio/aac',
+                'opus' => 'audio/ogg',           // ★ Opus는 OGG 컨테이너 — 일부 모바일은 audio/opus 인식 못함
+                'wma' => 'audio/x-ms-wma',
+                'oga' => 'audio/ogg',            // ★ 추가 (Vorbis/FLAC in OGG)
+                'aiff' => 'audio/aiff', 'aif' => 'audio/aiff',  // ★ 추가
             ];
             $mime = $mimeMap[$ext] ?? (mime_content_type($fullPath) ?: 'application/octet-stream');
             header('Content-Type: ' . $mime);

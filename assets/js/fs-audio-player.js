@@ -481,6 +481,9 @@ class FSAudioPlayer {
                 <button class="fap-btn fap-btn-loop" title="${isKo ? '반복 모드 (L)' : 'Repeat (L)'}">
                     <svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" fill="currentColor"/></svg>
                 </button>
+                <button class="fap-btn fap-btn-lyrics" title="${isKo ? '가사 보기 (Ctrl+L)' : 'Show lyrics (Ctrl+L)'}" style="display:none;">
+                    <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16v2H4V6zm0 4h12v2H4v-2zm0 4h16v2H4v-2zm0 4h12v2H4v-2z" fill="currentColor"/></svg>
+                </button>
             </div>
             <div class="fap-volume">
                 <button class="fap-btn fap-btn-vol" title="${isKo ? '음소거 (M) · ↑↓로 볼륨 조절' : 'Mute (M) · ↑↓ to adjust'}">
@@ -498,6 +501,26 @@ class FSAudioPlayer {
                     <span class="fap-playlist-count">${this.playlist.length}</span>
                 </div>
                 <ul class="fap-playlist-list"><div class="fap-pl-virtual-spacer"></div></ul>
+            </div>
+            <!-- ★ 가사 모달 (v5.8.1c — 옵션 A) -->
+            <!--   동기화 안 된 가사(USLT/TXT)는 모달에서만 정적 표시 — Apple Music 방식 -->
+            <!--   동기화된 가사(LRC)는 인라인 표시 + 모달도 가능 (둘 다 지원) -->
+            <div class="fap-lyrics-modal" style="display:none;">
+                <div class="fap-lyrics-modal-overlay"></div>
+                <div class="fap-lyrics-modal-content">
+                    <div class="fap-lyrics-modal-header">
+                        <div class="fap-lyrics-modal-title-wrap">
+                            <div class="fap-lyrics-modal-title">${isKo ? '가사' : 'Lyrics'}</div>
+                            <div class="fap-lyrics-modal-track"></div>
+                        </div>
+                        <button class="fap-lyrics-modal-close" title="${isKo ? '닫기 (Esc)' : 'Close (Esc)'}" aria-label="Close">
+                            <svg viewBox="0 0 24 24" width="22" height="22"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/></svg>
+                        </button>
+                    </div>
+                    <div class="fap-lyrics-modal-body">
+                        <div class="fap-lyrics-modal-text"></div>
+                    </div>
+                </div>
             </div>
         </div>`;
         // Cache DOM
@@ -530,6 +553,13 @@ class FSAudioPlayer {
             lyricsWrap: this.container.querySelector('.fap-lyrics-wrap'),
             lyricsScroll: this.container.querySelector('.fap-lyrics-scroll'),
             lyricsContent: this.container.querySelector('.fap-lyrics-content'),
+            // ★ 가사 모달 (v5.8.1c — 옵션 A)
+            btnLyrics: this.container.querySelector('.fap-btn-lyrics'),
+            lyricsModal: this.container.querySelector('.fap-lyrics-modal'),
+            lyricsModalOverlay: this.container.querySelector('.fap-lyrics-modal-overlay'),
+            lyricsModalClose: this.container.querySelector('.fap-lyrics-modal-close'),
+            lyricsModalTrack: this.container.querySelector('.fap-lyrics-modal-track'),
+            lyricsModalText: this.container.querySelector('.fap-lyrics-modal-text'),
         };
         // ★ iOS: 시스템 정책상 audio.volume 변경 불가 (Apple 공식 정책)
         //   YouTube iOS 웹 등과 동일하게 볼륨 영역 전체 숨김
@@ -880,6 +910,26 @@ class FSAudioPlayer {
             this._updateLoopUI();
             this._saveLoopPref();  // ★ localStorage 저장
         });
+        // ★ 가사 모달 (v5.8.1c — 옵션 A)
+        if (this.$.btnLyrics) {
+            this.$.btnLyrics.addEventListener('click', () => this._openLyricsModal());
+        }
+        if (this.$.lyricsModalClose) {
+            this.$.lyricsModalClose.addEventListener('click', () => this._closeLyricsModal());
+        }
+        // ★ overlay 클릭 시 가사 모달 안 닫힘 (펜닐님 결정 v5.8.1c)
+        //    다른 모달과 일관되게 외부 클릭으로 안 닫히도록 (X 버튼 또는 Esc로만 닫기)
+        if (this.$.lyricsModalOverlay) {
+            this.$.lyricsModalOverlay.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+        }
+        // 모달 콘텐츠 영역 클릭도 mp3 모달로 전파 차단
+        if (this.$.lyricsModal) {
+            this.$.lyricsModal.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+        }
         // Shuffle
         this.$.btnShuffle.addEventListener('click', () => {
             this.shuffle = !this.shuffle;
@@ -1200,6 +1250,181 @@ class FSAudioPlayer {
     // ── 가사 (LRC + USLT + TXT) ──
     
     /**
+     * 가사 모달 열기 (v5.8.1c — 옵션 A)
+     * - 정적 가사: 전체 텍스트 정적 표시 (사용자가 스크롤)
+     * - 동기화 가사: 활성 라인 표시 (LRC) — 모달에서도 동기화 표시
+     */
+    _openLyricsModal() {
+        if (!this.$.lyricsModal || !this._lyrics) return;
+        // ★ display = '' 먼저 (v5.8.1c) — _renderLyricsModalContent에서 scrollTop/clientHeight 계산하려면
+        //    모달이 보여야 정확한 값이 나옴. display: none 상태에선 clientHeight=0, scrollTop도 동작 불안정
+        this.$.lyricsModal.style.display = '';
+        // ★ 헤더 드래그 위치 초기화 (PC만, 매번 열 때 가운데로 복귀)
+        //    이전 드래그 시 position:fixed/margin:0 등이 남아있을 수 있어 모두 리셋
+        //    렌더 전에 위치 리셋해야 활성라인 scrollTop 계산 시 정확한 위치
+        const _content = this.$.lyricsModal.querySelector('.fap-lyrics-modal-content');
+        if (_content) {
+            _content.style.position = '';
+            _content.style.left = '';
+            _content.style.top = '';
+            _content.style.margin = '';
+            _content.style.transform = '';
+            _content.style.transition = '';
+        }
+        // 렌더 + 활성라인 표시 + 스크롤 위치 설정
+        this._renderLyricsModalContent();
+        // 다음 프레임에 보이는 클래스 추가 → CSS transition 작동
+        requestAnimationFrame(() => {
+            this.$.lyricsModal.classList.add('fap-lyrics-modal-open');
+        });
+        this._bindLyricsModalDrag();
+    }
+    
+    /**
+     * 가사 모달 헤더 드래그 (PC만, 모바일은 풀스크린이라 불필요)
+     */
+    _bindLyricsModalDrag() {
+        if (this._lyricsModalDragBound) return;
+        this._lyricsModalDragBound = true;
+        
+        const modal = this.$.lyricsModal;
+        const content = modal?.querySelector('.fap-lyrics-modal-content');
+        const header = modal?.querySelector('.fap-lyrics-modal-header');
+        if (!modal || !content || !header) return;
+        
+        let isDragging = false;
+        let startX = 0, startY = 0;
+        let startLeft = 0, startTop = 0;
+        
+        const onDown = (e) => {
+            // 모바일은 풀스크린이라 드래그 비활성화
+            if (window.innerWidth <= 768) return;
+            // 닫기 버튼 클릭 시는 드래그 안 함
+            if (e.target.closest('.fap-lyrics-modal-close')) return;
+            
+            isDragging = true;
+            const rect = content.getBoundingClientRect();
+            startLeft = rect.left;
+            startTop = rect.top;
+            startX = e.clientX;
+            startY = e.clientY;
+            
+            // 드래그 중 transition 비활성화 (부드럽지만 즉시 따라가게)
+            content.style.transition = 'none';
+            // fixed 위치로 전환 (.fap-lyrics-modal의 flex 가운데 정렬에서 분리)
+            content.style.position = 'fixed';
+            content.style.left = startLeft + 'px';
+            content.style.top = startTop + 'px';
+            content.style.margin = '0';
+            content.style.transform = 'none';
+            
+            e.preventDefault();
+        };
+        
+        const onMove = (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            let newLeft = startLeft + dx;
+            let newTop = startTop + dy;
+            // 화면 밖으로 너무 나가지 않게 (헤더 일부는 항상 보이게)
+            const minLeft = -content.offsetWidth + 100;  // 100px 보장
+            const maxLeft = window.innerWidth - 100;
+            const minTop = 0;
+            const maxTop = window.innerHeight - 60;       // 헤더만큼은 보이게
+            newLeft = Math.max(minLeft, Math.min(maxLeft, newLeft));
+            newTop = Math.max(minTop, Math.min(maxTop, newTop));
+            content.style.left = newLeft + 'px';
+            content.style.top = newTop + 'px';
+        };
+        
+        const onUp = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            content.style.transition = '';  // transition 복원
+        };
+        
+        header.addEventListener('mousedown', onDown);
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        
+        // 핸들러 참조 저장 (destroy 시 정리)
+        this._lyricsModalDragHandlers = { onMove, onUp };
+    }
+    
+    /**
+     * 가사 모달 닫기
+     */
+    _closeLyricsModal() {
+        if (!this.$.lyricsModal) return;
+        this.$.lyricsModal.classList.remove('fap-lyrics-modal-open');
+        // transition 끝나면 display:none
+        setTimeout(() => {
+            if (this.$.lyricsModal && !this.$.lyricsModal.classList.contains('fap-lyrics-modal-open')) {
+                this.$.lyricsModal.style.display = 'none';
+            }
+        }, 200);
+    }
+    
+    /**
+     * 가사 모달 내용 렌더 (트랙 변경 시 갱신)
+     */
+    _renderLyricsModalContent() {
+        if (!this.$.lyricsModalText || !this._lyrics) return;
+        
+        // 트랙 정보 표시 — 헤더 우측 상단에 노래 제목/아티스트
+        if (this.$.lyricsModalTrack) {
+            const track = this.playlist?.[this.currentIndex];
+            if (track) {
+                const title = track.title || track.name || '';
+                const artist = track.artist || '';
+                if (artist) {
+                    this.$.lyricsModalTrack.textContent = title + ' — ' + artist;
+                } else {
+                    this.$.lyricsModalTrack.textContent = title;
+                }
+            } else {
+                this.$.lyricsModalTrack.textContent = '';
+            }
+        }
+        
+        // 가사 라인 렌더 (인라인과 동일 클래스 → CSS 동기화 활성 라인 작동)
+        const html = this._lyrics.map((line, idx) => {
+            const text = this._esc(line.text || '');
+            const empty = !text;
+            return `<div class="fap-lyrics-modal-line${empty ? ' fap-lyrics-empty' : ''}" data-idx="${idx}">${text || '&nbsp;'}</div>`;
+        }).join('');
+        
+        this.$.lyricsModalText.innerHTML = html;
+        this.$.lyricsModalText.setAttribute('data-synced', this._lyricsSynced ? 'true' : 'false');
+        // 모달 스크롤 위치 리셋
+        this.$.lyricsModalText.scrollTop = 0;
+        
+        // ★ 모달 열 때 현재 활성라인 즉시 표시 (v5.8.1c — 다음 timeupdate 기다리지 않음)
+        //    이전엔 _updateLyricsActiveLine이 _lyricsActiveLine 변경 안 됐으면 early return해서
+        //    모달이 처음 열렸을 때 활성라인이 다음 줄 진행될 때까지 표시 안 됐음
+        if (this._lyricsSynced && this._lyricsActiveLine >= 0) {
+            const modalLines = this.$.lyricsModalText.querySelectorAll('.fap-lyrics-modal-line');
+            const activeIdx = this._lyricsActiveLine;
+            if (modalLines[activeIdx]) {
+                modalLines[activeIdx].classList.add('fap-lyrics-active');
+                if (activeIdx > 0 && modalLines[activeIdx - 1]) {
+                    modalLines[activeIdx - 1].classList.add('fap-lyrics-prev');
+                }
+                if (activeIdx + 1 < modalLines.length && modalLines[activeIdx + 1]) {
+                    modalLines[activeIdx + 1].classList.add('fap-lyrics-next');
+                }
+                // 활성 라인을 모달 가운데로 (수동 scrollTop — _updateLyricsActiveLine과 동일 패턴)
+                // ※ scrollIntoView는 페이지 ancestor도 스크롤시킬 위험 있어 사용 안 함
+                const modalEl = this.$.lyricsModalText;
+                const lineEl = modalLines[activeIdx];
+                const targetTop = lineEl.offsetTop - modalEl.clientHeight / 2 + lineEl.offsetHeight / 2;
+                modalEl.scrollTop = Math.max(0, targetTop);
+            }
+        }
+    }
+    
+    /**
      * 트랙의 가사 로드 — track.lyricsApiUrl이 있으면 fetch
      * 응답 형식: { source: 'lrc'|'uslt'|'txt', synced: bool, text: string, language?: string }
      */
@@ -1216,12 +1441,21 @@ class FSAudioPlayer {
         //   이전 동기화 활성 라인은 즉시 해제 (타임 시프트 따라 잘못된 라인 활성화 방지)
         this._lyricsActiveLine = -1;
         
+        // ★ 가사 버튼 초기화 (v5.8.1c — 옵션 A) — 새 트랙 로드 시 일단 숨김, 가사 있으면 _renderLyrics에서 보임
+        if (this.$.btnLyrics) this.$.btnLyrics.style.display = 'none';
+        // ★ 부모 root에 no-inline-lyrics 클래스 추가 — APlayer Fixed 등 grid 스킨에서 빈 row 압축용
+        if (this.$.root) this.$.root.classList.add('fap-no-inline-lyrics');
+        
         // API URL 없으면 즉시 가사 비우기 + wrap 숨김 (가사 없는 트랙)
         if (!track || !track.lyricsApiUrl) {
             this._lyrics = null;
             this._lyricsSynced = false;
             if (this.$.lyricsWrap) this.$.lyricsWrap.style.display = 'none';
             if (this.$.lyricsContent) this.$.lyricsContent.innerHTML = '';
+            // 모달이 열려있던 경우 닫기
+            if (this.$.lyricsModal && this.$.lyricsModal.style.display !== 'none') {
+                this._closeLyricsModal();
+            }
             return;
         }
         
@@ -1357,7 +1591,24 @@ class FSAudioPlayer {
         } else {
             this.$.lyricsWrap.classList.add('fap-lyrics-static');
         }
-        this.$.lyricsWrap.style.display = '';
+        // ★ 가사 표시 정책 (v5.8.1c — 펜닐님 결정 옵션 A):
+        //    - 동기화된 가사 (LRC, synced=true): 인라인 표시 + 가사 버튼 활성화 (모달 같이 가능)
+        //    - 정적 가사 (USLT/TXT, synced=false): 인라인 숨김 + 가사 버튼만 활성화 (모달에서만 표시)
+        if (this._lyricsSynced) {
+            this.$.lyricsWrap.style.display = '';
+            // ★ 인라인 가사 표시 → 부모 grid에서 자리 차지하도록 클래스 제거
+            if (this.$.root) this.$.root.classList.remove('fap-no-inline-lyrics');
+        } else {
+            this.$.lyricsWrap.style.display = 'none';
+            // ★ 정적 가사: 인라인 숨김 → 부모 grid에서 row 압축 위해 클래스 유지
+            if (this.$.root) this.$.root.classList.add('fap-no-inline-lyrics');
+        }
+        // ★ 가사 버튼 활성화 — 가사가 있으니 버튼 표시
+        if (this.$.btnLyrics) this.$.btnLyrics.style.display = '';
+        // ★ 모달이 열려있으면 새 트랙 가사로 갱신
+        if (this.$.lyricsModal && this.$.lyricsModal.style.display !== 'none') {
+            this._renderLyricsModalContent();
+        }
         
         // ★ 수동 스크롤 이벤트 — 한 번만 등록 (중복 방지 플래그)
         if (!this._lyricsScrollHandlerBound && this.$.lyricsScroll) {
@@ -1416,25 +1667,38 @@ class FSAudioPlayer {
                     allLines[activeIdx + 1].classList.add('fap-lyrics-next');
                 }
             }
+            
+            // ★ 모달도 동기화 활성라인 갱신 (v5.8.1c) — 모달 열려있을 때만
+            if (this.$.lyricsModalText && this.$.lyricsModal && this.$.lyricsModal.style.display !== 'none') {
+                const modalLines = this.$.lyricsModalText.querySelectorAll('.fap-lyrics-modal-line');
+                modalLines.forEach(el => {
+                    el.classList.remove('fap-lyrics-active', 'fap-lyrics-prev', 'fap-lyrics-next');
+                });
+                if (activeIdx >= 0 && modalLines[activeIdx]) {
+                    modalLines[activeIdx].classList.add('fap-lyrics-active');
+                    if (activeIdx > 0 && modalLines[activeIdx - 1]) {
+                        modalLines[activeIdx - 1].classList.add('fap-lyrics-prev');
+                    }
+                    if (activeIdx + 1 < modalLines.length && modalLines[activeIdx + 1]) {
+                        modalLines[activeIdx + 1].classList.add('fap-lyrics-next');
+                    }
+                    // 활성 라인을 모달 가운데로 부드럽게 스크롤 (수동 scrollTo — 메인 app.js와 동일 패턴)
+                    // ※ scrollIntoView는 페이지 ancestor도 스크롤시킬 위험 있어 사용 안 함 (v5.8.1c 일관성)
+                    const modalEl = this.$.lyricsModalText;
+                    const lineEl = modalLines[activeIdx];
+                    const targetTop = lineEl.offsetTop - modalEl.clientHeight / 2 + lineEl.offsetHeight / 2;
+                    if (Math.abs(modalEl.scrollTop - targetTop) > 10) {
+                        modalEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+                    }
+                }
+            }
             return;
         }
         
-        // ── synced=false (USLT/TXT plain): 시간 비례 자동 스크롤 ──
-        if (this._lyricsManualScrollUntil && Date.now() < this._lyricsManualScrollUntil) return;
-        
-        const dur = this.audio.duration;
-        if (!dur || !isFinite(dur) || dur <= 0) return;
-        
-        const scrollEl = this.$.lyricsScroll;
-        const contentEl = this.$.lyricsContent;
-        const maxScroll = contentEl.scrollHeight - scrollEl.clientHeight;
-        if (maxScroll <= 0) return;
-        
-        const progress = Math.max(0, Math.min(1, currentTime / dur));
-        const targetScrollTop = maxScroll * progress;
-        
-        if (Math.abs(scrollEl.scrollTop - targetScrollTop) < 10) return;
-        scrollEl.scrollTop = targetScrollTop;
+        // ★ synced=false (USLT/TXT plain): 자동 스크롤 비활성 (v5.8.1c — 펜닐님 결정 옵션 A)
+        //    이전엔 시간 비례 자동 스크롤이었으나, 정적 가사는 사용자가 자유롭게 스크롤하도록 변경
+        //    → 인라인은 어차피 _renderLyrics에서 숨김 (정적 가사는 모달에서만 보임)
+        return;
     }
     
     /**
@@ -2983,6 +3247,14 @@ class FSAudioPlayer {
             document.removeEventListener('click', this._skinMenuCloseHandler);
             this._skinMenuCloseHandler = null;
         }
+        // ★ 가사 모달 드래그 document 리스너 해제 (메모리 누수 방지 v5.8.1c)
+        //    _bindLyricsModalDrag에서 document에 등록한 mousemove/mouseup 정리
+        if (this._lyricsModalDragHandlers) {
+            try { document.removeEventListener('mousemove', this._lyricsModalDragHandlers.onMove); } catch(e) {}
+            try { document.removeEventListener('mouseup', this._lyricsModalDragHandlers.onUp); } catch(e) {}
+            this._lyricsModalDragHandlers = null;
+        }
+        this._lyricsModalDragBound = false;
         if (this._audioCtx) {
             try { this._audioCtx.close(); } catch(e) {}
             this._audioCtx = null;

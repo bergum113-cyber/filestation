@@ -602,13 +602,19 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         .player-wrap.playing #share-audio-track-wrap { opacity: 0 !important; transition: opacity 0.3s; }
         .player-wrap.playing:hover #share-audio-track-wrap { opacity: 1 !important; }
         .player-wrap.playing.show-controls #share-audio-track-wrap { opacity: 1 !important; }
+        /* ★ Quality wrap (v5.8.1c) — audio wrap과 동일 visibility 패턴 */
+        .player-wrap.playing #share-quality-wrap { opacity: 0 !important; transition: opacity 0.3s; }
+        .player-wrap.playing:hover #share-quality-wrap { opacity: 1 !important; }
+        .player-wrap.playing.show-controls #share-quality-wrap { opacity: 1 !important; }
         .player-wrap.fs-idle .stream-badge,
         .player-wrap.fs-idle .transcode-duration,
         .player-wrap.fs-idle #share-audio-track-wrap,
+        .player-wrap.fs-idle #share-quality-wrap,
         .player-wrap.fs-idle .video-play-overlay,
         .player-wrap.fs-idle:hover .stream-badge,
         .player-wrap.fs-idle:hover .transcode-duration,
         .player-wrap.fs-idle:hover #share-audio-track-wrap,
+        .player-wrap.fs-idle:hover #share-quality-wrap,
         .player-wrap.fs-idle:hover .video-play-overlay { opacity: 0 !important; pointer-events: none !important; }
         .player-wrap.fs-idle { cursor: none; }
         /* 트랜스코딩 전체 길이 표시 */
@@ -625,8 +631,28 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         @media (max-width: 1024px) {
             .player-wrap.playing:not(.show-controls):hover .stream-badge { opacity: 0; }
             .player-wrap.playing:not(.show-controls):hover #share-audio-track-wrap { opacity: 0 !important; }
+            .player-wrap.playing:not(.show-controls):hover #share-quality-wrap { opacity: 0 !important; }
             .player-wrap.playing:not(.show-controls):hover .transcode-duration { opacity: 0; }
             .player-wrap.playing:not(.show-controls):hover .fs-subtitle-controls { opacity: 0; pointer-events: none; }
+            
+            /* ★ 모바일 (v5.8.1c — 펜닐님 요청): audio wrap을 배지 아래로 이동 */
+            /*   배지(좌측 top:4px) + audio (우측 top:4px right:110px) → 좁은 화면에서 겹침 */
+            /*   해결: audio를 배지 아래(top:38px right:4px)로 이동, quality는 더 아래(top:72px) */
+            #share-audio-track-wrap {
+                top: 38px !important;
+                right: 4px !important;
+                left: auto !important;
+            }
+            /* quality는 audio 아래로 (audio가 배지 아래로 갔으니 quality는 audio 아래) */
+            #share-quality-wrap {
+                top: 72px !important;
+                right: 4px !important;
+                left: auto !important;
+            }
+            /* 단독 quality (audio wrap 비어있는 경우 = 단일오디오 영상)는 배지 아래(top:38px) */
+            .player-wrap:not(:has(#share-audio-track-wrap[style*="display:none"])) #share-quality-wrap {
+                /* audio 있을 때 — 위 룰 그대로 (top:72px) */
+            }
         }
         .player-wrap:fullscreen .transcode-duration,
         .player-wrap:-webkit-full-screen .transcode-duration { bottom: 75px; }
@@ -651,10 +677,16 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         /*   기본은 hover/터치(.show-controls)로만 표시, .fs-idle 시엔 동기화 숨김 */
         /*   자막이 없는 영상에선 표시 안 됨 (.has-subs 게이트) */
         .fs-subtitle-controls { display: none; }
-        .player-wrap.has-subs .fs-subtitle-controls {
+        /* ★ PC (v5.8.1c — 펜닐님 요청): 자막 컨트롤은 전체화면에서만 표시 */
+        /*   일반 영상 화면에서는 표시 안 함 (영상 위에 떠 있는 게 답답하다고 판단) */
+        /*   전체화면(:fullscreen / :-webkit-full-screen)일 때만 display:flex */
+        .player-wrap.has-subs:fullscreen .fs-subtitle-controls,
+        .player-wrap.has-subs:-webkit-full-screen .fs-subtitle-controls,
+        :fullscreen .player-wrap.has-subs .fs-subtitle-controls,
+        :-webkit-full-screen .player-wrap.has-subs .fs-subtitle-controls {
             display: flex;
             position: absolute;
-            bottom: 70px;     /* iOS native fullscreen 컨트롤바 위로 올림 */
+            bottom: 190px;     /* iOS native fullscreen 컨트롤바 위로 올림 (펜닐님 요청 v5.8.1c — 70→190) */
             right: 12px;
             z-index: 14;
             gap: 4px;
@@ -718,6 +750,15 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         }
         /* 모바일: 작은 패딩/폰트 */
         @media (max-width: 1024px) {
+            /* ★ 모바일 (v5.8.1c — 펜닐님 요청): 자막 컨트롤 전체화면에서도 숨김 */
+            /*   PC와 달리 모바일에선 화면이 좁아서 컨트롤이 거슬림 */
+            /*   네이티브 컨트롤바로 자막 sync 등은 별도 메뉴에서 가능 */
+            .player-wrap.has-subs:fullscreen .fs-subtitle-controls,
+            .player-wrap.has-subs:-webkit-full-screen .fs-subtitle-controls,
+            :fullscreen .player-wrap.has-subs .fs-subtitle-controls,
+            :-webkit-full-screen .player-wrap.has-subs .fs-subtitle-controls {
+                display: none !important;
+            }
             .fs-subtitle-controls {
                 bottom: 120px;    /* iOS 컨트롤바 + 여유 — 자막과 더 멀리 */
                 right: 8px;
@@ -1260,9 +1301,16 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     $sizeMB = round($fileSize / (1024 * 1024));
                 ?>
                 <div class="stream-badge transcode" id="stream-badge">⚡ <?= htmlspecialchars($codecLabel) ?><?php if ($videoResolution): ?> <?= htmlspecialchars($videoResolution) ?><?php endif; ?> → <?= __('realtime_converting', '실시간 변환 재생') ?></div>
-                <div id="share-audio-track-wrap" style="display:none;position:absolute;top:4px;right:4px;z-index:15;opacity:0;transition:opacity 0.3s;">
+                <!-- audio wrap: quality와 가로 배치 (v5.8.1c — quality는 right:4px, audio는 좌측 right:110px) -->
+                <div id="share-audio-track-wrap" style="display:none;position:absolute;top:4px;right:110px;z-index:15;opacity:0;transition:opacity 0.3s;">
                     <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;">🔊 <?= __('audio_label', '오디오') ?>:
                         <select id="share-audio-select" style="font-size:12px;max-width:220px;"></select>
+                    </label>
+                </div>
+                <!-- ★ Quality 셀렉터 (v5.8.1c) — 트랜스코딩 영상 / 위치 통일: top:4px right:4px -->
+                <div id="share-quality-wrap" style="display:none;position:absolute;top:4px;right:4px;z-index:14;opacity:0;transition:opacity 0.3s;">
+                    <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;">🎬 <?= __('quality_label', '화질') ?>:
+                        <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
                 <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" style="min-height:220px;background:#111;">
@@ -1279,6 +1327,12 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 </div>
                 <?php else: ?>
                 <div class="stream-badge native">▶ <?= __('native_playback', '일반 재생') ?><?php if ($videoCodec): ?> (<?= htmlspecialchars(strtoupper($videoCodec)) ?><?php if ($videoResolution): ?> <?= htmlspecialchars($videoResolution) ?><?php endif; ?>)<?php endif; ?></div>
+                <!-- ★ Quality 셀렉터 (v5.8.1c) — 네이티브 재생 영상에도 표시 -->
+                <div id="share-quality-wrap" style="display:none;position:absolute;top:4px;right:4px;z-index:14;opacity:0;transition:opacity 0.3s;">
+                    <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;">🎬 <?= __('quality_label', '화질') ?>:
+                        <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
+                    </label>
+                </div>
                 <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>">
                     <source src="<?= htmlspecialchars($streamUrl) ?>" type="video/mp4">
                 </video>
@@ -2176,7 +2230,17 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                             //   - 메인 페이지(app.js 라인 34577)와 동일 동작 — 펜닐님 결정
                             //   - 안전망: hls.js 에러 시 라인 1571에서 force_sw=1 자동 fallback (기존 메커니즘)
                             const _origHlsUrl = player.dataset.hlsUrl;
-                            const _cleanHlsUrl = _origHlsUrl.replace(/&audio=\d+/g, '').replace(/&force_sw=1/g, '');
+                            // ★ 절대 원본 시점 계산 (v5.8.1c — audio 변경에 quality offset 누적 보정)
+                            //   _qualitySeekOffset이 박혀있으면 currentTime은 상대시간
+                            //   audio만 변경하지만 새 세션이므로 새 seek=절대시점으로 빌드
+                            const _audioRelTime = player.currentTime || 0;
+                            const _audioOffset = player._qualitySeekOffset || 0;
+                            const _audioAbsTime = _audioRelTime + _audioOffset;
+                            // audio + force_sw + seek 제거 (quality는 유지)
+                            const _cleanHlsUrl = _origHlsUrl
+                                .replace(/&audio=\d+/g, '')
+                                .replace(/&force_sw=1/g, '')
+                                .replace(/&seek=[^&]*/g, '');
                             
                             // MMS+iOS만 SW 강제, 그 외(PC/Android/iOS HLS)는 HW 시도
                             const _audioChangeIsIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -2185,7 +2249,13 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                             const _audioChangeWillUseHls = _audioChangeHlsSupported || _audioChangeNativeHls;
                             const _audioChangeNeedSw = _audioChangeIsIOS && !_audioChangeWillUseHls;
                             
-                            const _newHlsStartUrl = _cleanHlsUrl + '&audio=' + sel.value + (_audioChangeNeedSw ? '&force_sw=1' : '');
+                            let _newHlsStartUrl = _cleanHlsUrl + '&audio=' + sel.value + (_audioChangeNeedSw ? '&force_sw=1' : '');
+                            if (_audioAbsTime > 0) {
+                                _newHlsStartUrl += '&seek=' + _audioAbsTime.toFixed(2);
+                            }
+                            // dataset 갱신 + offset 갱신 (새 세션의 stream0.ts = 절대시점)
+                            player.dataset.hlsUrl = _newHlsStartUrl;
+                            player._qualitySeekOffset = _audioAbsTime;
                             
                             // 비디오 정리
                             try { player.pause(); } catch(e) {}
@@ -2356,6 +2426,159 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     }
                 }
                 
+                // ★ Quality 셀렉터 (v5.8.1c) — 트랜스코딩 영상에서 항상 표시
+                //   audio 변경과 동일 패턴 — HLS 정리 + 새 URL로 재시작 + manifest_parsed 후 자동 재생
+                {
+                    const qWrap = document.getElementById('share-quality-wrap');
+                    const qSel = document.getElementById('share-quality-select');
+                    if (qWrap && qSel) {
+                        // ★ Quality 프리셋 (v5.8.1c — 펜닐님 요청 PC/모바일 공통 7단계)
+                        const _qPresets = ['original', '1080p', '720p', '480p', '360p', '240p', '144p'];
+                        const _qLabels = {
+                            'original': '<?= __('quality_original', '원본') ?>',
+                            '1080p': '1080p',
+                            '720p':  '720p',
+                            '480p':  '480p',
+                            '360p':  '360p',
+                            '240p':  '240p',
+                            '144p':  '144p',
+                        };
+                        // 현재 quality 파악 (data-hls-url 우선)
+                        const _qCurUrl = player.dataset.hlsUrl || '';
+                        let _qCur = (() => {
+                            try {
+                                const m = _qCurUrl.match(/[?&]quality=([^&]+)/);
+                                return m ? decodeURIComponent(m[1]) : 'original';
+                            } catch(e) { return 'original'; }
+                        })();
+                        if (!_qPresets.includes(_qCur)) _qCur = 'original';
+                        
+                        // option 빌드
+                        qSel.innerHTML = _qPresets.map(q => {
+                            const sel = (q === _qCur) ? ' selected' : '';
+                            const label = (_qLabels[q] || q).replace(/[<>"']/g, c => ({'<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+                            return `<option value="${q}"${sel}>${label}</option>`;
+                        }).join('');
+                        
+                        // wrap 표시 (initial opacity 풀고 visibility 룰 적용)
+                        qWrap.style.display = '';
+                        qWrap.style.opacity = '';
+                        
+                        // change 핸들러
+                        let qReady = false;
+                        setTimeout(() => { qReady = true; }, 1500);
+                        
+                        qSel.addEventListener('change', async () => {
+                            if (!qReady) return;
+                            qSel.blur();
+                            
+                            const newQuality = qSel.value;
+                            const curUrl = player.dataset.hlsUrl || '';
+                            const curQuality = (() => {
+                                const m = curUrl.match(/[?&]quality=([^&]+)/);
+                                return m ? decodeURIComponent(m[1]) : 'original';
+                            })();
+                            if (newQuality === curQuality) return;
+                            
+                            // ★ 절대 원본 시점 계산 (v5.8.1c — 누적 오프셋 보정)
+                            //   트랜스코딩은 항상 stream0.ts = 새 세션 시작 시점이므로
+                            //   currentTime은 상대시간임 → offset 더해서 절대시점 확보
+                            const relativeTime = player.currentTime || 0;
+                            const seekOffset = player._qualitySeekOffset || 0;
+                            const absoluteTime = relativeTime + seekOffset;
+                            const wasPaused = player.paused;
+                            
+                            // console.log('[ShareQualityChange]', curQuality, '→', newQuality, 'at', absoluteTime.toFixed(1) + 's (abs)');
+                            
+                            // 기존 HLS 인스턴스 정리 (fragment loader 큐 제거)
+                            if (_shareHlsInstance) {
+                                try { _shareHlsInstance.destroy(); } catch(e) {}
+                                _shareHlsInstance = null;
+                            }
+                            // 기존 HLS 서버 세션 stop
+                            if (_shareHlsSession) {
+                                const _qToken = <?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+                                const _qStopUrl = 'share.php?t=' + encodeURIComponent(_qToken) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + _shareHlsSession;
+                                try {
+                                    if (navigator.sendBeacon) navigator.sendBeacon(_qStopUrl);
+                                    else fetch(_qStopUrl, { keepalive: true }).catch(() => {});
+                                } catch(e) {}
+                                _shareHlsSession = null;
+                            }
+                            // SW retry 플래그 리셋
+                            window._shareHlsSwRetried = false;
+                            
+                            // 새 hlsUrl 빌드 (quality + 절대시점 seek)
+                            let _newHlsUrl = curUrl
+                                .replace(/&quality=[^&]*/g, '')
+                                .replace(/&seek=[^&]*/g, '');
+                            if (newQuality !== 'original') {
+                                _newHlsUrl += '&quality=' + encodeURIComponent(newQuality);
+                            }
+                            if (absoluteTime > 0) {
+                                _newHlsUrl += '&seek=' + absoluteTime.toFixed(2);
+                            }
+                            // dataset 갱신 — 이후 audio 변경/재시도가 새 URL 사용
+                            player.dataset.hlsUrl = _newHlsUrl;
+                            // ★ 절대 원본 시점 저장 — 다음 변경 시 누적 보정용
+                            player._qualitySeekOffset = absoluteTime;
+                            
+                            // 비디오 정리
+                            try { player.pause(); } catch(e) {}
+                            player.removeAttribute('src');
+                            try { player.load(); } catch(e) {}
+                            
+                            // 새 HLS 세션 시작
+                            try {
+                                const _qRes = await fetch(_newHlsUrl);
+                                const _qData = await _qRes.json();
+                                if (!_qData.success || !_qData.playlist) {
+                                    console.error('[ShareQualityChange] start failed:', _qData);
+                                    return;
+                                }
+                                _shareHlsSession = _qData.session;
+                                
+                                if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                                    const _qHls = new Hls({
+                                        manifestLoadingMaxRetry: 4,
+                                        manifestLoadingRetryDelay: 1000,
+                                        fragLoadingMaxRetry: 6,
+                                        fragLoadingRetryDelay: 500
+                                    });
+                                    _qHls.loadSource(_qData.playlist);
+                                    _qHls.attachMedia(player);
+                                    _qHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                                        // 서버에서 seek=N 적용 → 새 stream0.ts = 사용자가 본 시점
+                                        // 따라서 currentTime=0 그대로 두고 wasPaused 아니면 자동 재생
+                                        if (!wasPaused) {
+                                            setTimeout(() => {
+                                                player.play().catch(e => console.warn('[ShareQualityChange] play failed:', e?.message));
+                                            }, 100);
+                                        }
+                                    });
+                                    _qHls.on(Hls.Events.ERROR, (event, data) => {
+                                        if (!data.fatal) return;
+                                        // console.warn('[ShareQualityChange] HLS error:', data.details);
+                                        _qHls.destroy();
+                                        _shareHlsInstance = null;
+                                    });
+                                    _shareHlsInstance = _qHls;
+                                } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+                                    // iOS native HLS
+                                    player.src = _qData.playlist;
+                                    if (!wasPaused) {
+                                        player.addEventListener('loadedmetadata', () => {
+                                            setTimeout(() => player.play().catch(() => {}), 100);
+                                        }, { once: true });
+                                    }
+                                }
+                            } catch(e) {
+                                console.error('[ShareQualityChange] error:', e);
+                            }
+                        });
+                    }
+                }
+                
                 // duration 표시
                 if (info.duration && info.duration > 0) {
                     const realDur = info.duration;
@@ -2380,6 +2603,244 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         }
         <?php endif; ?>
         <?php if (empty($needsTranscode) && $isVideo): ?>
+        // === 네이티브 재생 영상도 Quality 셀렉터 활성화 (v5.8.1c) ===
+        // - 'original' 선택 시: 네이티브 재생 유지 (가장 빠름)
+        // - 비-original 선택 시: 트랜스코딩 모드 전환 + 해당 quality 적용
+        (function _shareNativeQualitySetup() {
+            const qWrap = document.getElementById('share-quality-wrap');
+            const qSel = document.getElementById('share-quality-select');
+            if (!qWrap || !qSel) return;
+            
+            const _qPresets = ['original', '1080p', '720p', '480p', '360p', '240p', '144p'];
+            const _qLabels = {
+                'original': '<?= __('quality_original', '원본') ?>',
+                '1080p': '1080p', '720p': '720p', '480p': '480p',
+                '360p': '360p', '240p': '240p', '144p': '144p',
+            };
+            
+            // 옵션 빌드
+            qSel.innerHTML = _qPresets.map(q => {
+                const sel = (q === 'original') ? ' selected' : '';
+                const label = (_qLabels[q] || q).replace(/[<>"']/g, c => ({'<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+                return `<option value="${q}"${sel}>${label}</option>`;
+            }).join('');
+            
+            // wrap 표시
+            qWrap.style.display = '';
+            qWrap.style.opacity = '';
+            
+            let qReady = false;
+            setTimeout(() => { qReady = true; }, 1500);
+            
+            qSel.addEventListener('change', async () => {
+                if (!qReady) return;
+                qSel.blur();
+                
+                const newQuality = qSel.value;
+                
+                // 현재 트랜스코딩 모드인지 확인 (data-transcode-base 또는 _shareNativeHls 존재)
+                const isTranscoding = !!(window._shareNativeHls || window._shareNativeHlsSession || player.dataset.qualityTranscoding);
+                
+                // CASE 1: original 유지 + 네이티브 모드 → 변화 없음
+                if (newQuality === 'original' && !isTranscoding) {
+                    return;
+                }
+                
+                // ★ 절대 원본 시점 계산 (v5.8.1c — 누적 오프셋 보정)
+                //   트랜스코딩 모드는 stream0.ts = 새 세션 시작 시점이라 currentTime이 상대시간임
+                //   절대시점 = currentTime + _qualitySeekOffset (네이티브 모드에선 offset=0)
+                const relativeTime = player.currentTime || 0;
+                const seekOffset = player._qualitySeekOffset || 0;
+                const absoluteTime = isTranscoding ? (relativeTime + seekOffset) : relativeTime;
+                const wasPaused = player.paused;
+                
+                // CASE 2: 네이티브 → 트랜스코딩 (비-original 선택)
+                if (newQuality !== 'original' && !isTranscoding) {
+                    // console.log('[ShareQualityChange] native → transcode at', absoluteTime.toFixed(1) + 's (abs), quality=' + newQuality);
+                    
+                    // 배지 갱신
+                    const badge = document.querySelector('.stream-badge');
+                    if (badge) {
+                        badge.className = 'stream-badge transcode';
+                        badge.textContent = '⚡ <?= __('realtime_streaming', '실시간 스트리밍') ?>';
+                    }
+                    
+                    // 상태 표시
+                    const status = document.getElementById('transcode-status');
+                    if (status) status.classList.add('active');
+                    const controls = document.getElementById('player-controls');
+                    if (controls) controls.style.display = '';
+                    
+                    // 네이티브 source 제거
+                    try { player.pause(); } catch(e) {}
+                    player.querySelectorAll('source').forEach(s => s.remove());
+                    player.removeAttribute('src');
+                    try { player.load(); } catch(e) {}
+                    
+                    // hlsUrl 빌드 (data-hls-url + quality + seek)
+                    let _newHlsUrl = player.dataset.hlsUrl || '';
+                    _newHlsUrl = _newHlsUrl.replace(/&quality=[^&]*/g, '').replace(/&seek=[^&]*/g, '');
+                    if (newQuality !== 'original') _newHlsUrl += '&quality=' + encodeURIComponent(newQuality);
+                    if (absoluteTime > 0) _newHlsUrl += '&seek=' + absoluteTime.toFixed(2);
+                    player.dataset.hlsUrl = _newHlsUrl;
+                    player.dataset.qualityTranscoding = '1';
+                    player._qualitySeekOffset = absoluteTime;
+                    
+                    // HLS 시작
+                    try {
+                        const _qRes = await fetch(_newHlsUrl);
+                        const _qData = await _qRes.json();
+                        if (!_qData.success || !_qData.playlist) {
+                            console.error('[ShareQualityChange] start failed:', _qData);
+                            if (status) status.classList.remove('active');
+                            return;
+                        }
+                        window._shareNativeHlsSession = _qData.session;
+                        
+                        if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                            const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, startLevel: -1 });
+                            hls.loadSource(_qData.playlist);
+                            hls.attachMedia(player);
+                            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                                if (status) status.classList.remove('active');
+                                if (!wasPaused) {
+                                    setTimeout(() => player.play().catch(() => {}), 100);
+                                }
+                            });
+                            hls.on(Hls.Events.ERROR, (ev, data) => {
+                                if (data.fatal) { try { hls.destroy(); } catch(e) {} }
+                            });
+                            window._shareNativeHls = hls;
+                        } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+                            player.src = _qData.playlist;
+                            try { player.load(); } catch(e) {}
+                            if (!wasPaused) {
+                                player.addEventListener('loadedmetadata', () => {
+                                    setTimeout(() => player.play().catch(() => {}), 100);
+                                }, { once: true });
+                            }
+                        }
+                    } catch(e) {
+                        console.error('[ShareQualityChange] error:', e);
+                        if (status) status.classList.remove('active');
+                    }
+                    return;
+                }
+                
+                // CASE 3: 트랜스코딩 → 네이티브 (original 선택)
+                if (newQuality === 'original' && isTranscoding) {
+                    // console.log('[ShareQualityChange] transcode → native at', absoluteTime.toFixed(1) + 's');
+                    
+                    // 기존 HLS 정리
+                    if (window._shareNativeHls) {
+                        try { window._shareNativeHls.destroy(); } catch(e) {}
+                        window._shareNativeHls = null;
+                    }
+                    if (window._shareNativeHlsSession) {
+                        const _qToken = <?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+                        const _qStopUrl = 'share.php?t=' + encodeURIComponent(_qToken) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + window._shareNativeHlsSession;
+                        try {
+                            if (navigator.sendBeacon) navigator.sendBeacon(_qStopUrl);
+                            else fetch(_qStopUrl, { keepalive: true }).catch(() => {});
+                        } catch(e) {}
+                        window._shareNativeHlsSession = null;
+                    }
+                    
+                    delete player.dataset.qualityTranscoding;
+                    player._qualitySeekOffset = 0;
+                    
+                    // 네이티브 src 복원
+                    try { player.pause(); } catch(e) {}
+                    player.removeAttribute('src');
+                    try { player.load(); } catch(e) {}
+                    
+                    const _origUrl = '<?= htmlspecialchars($streamUrl, ENT_QUOTES) ?>';
+                    const src = document.createElement('source');
+                    src.src = _origUrl;
+                    src.type = 'video/mp4';
+                    player.appendChild(src);
+                    try { player.load(); } catch(e) {}
+                    
+                    // 배지 복원
+                    const badge = document.querySelector('.stream-badge');
+                    if (badge) {
+                        badge.className = 'stream-badge native';
+                        badge.textContent = '▶ <?= __('native_playback', '일반 재생') ?>';
+                    }
+                    
+                    // 시점 복원 + 자동 재생
+                    player.addEventListener('loadedmetadata', () => {
+                        if (absoluteTime > 0) {
+                            try { player.currentTime = absoluteTime; } catch(e) {}
+                        }
+                        if (!wasPaused) {
+                            setTimeout(() => player.play().catch(() => {}), 100);
+                        }
+                    }, { once: true });
+                    return;
+                }
+                
+                // CASE 4: 트랜스코딩 → 다른 quality 트랜스코딩
+                // console.log('[ShareQualityChange] transcode → transcode (' + newQuality + ') at', absoluteTime.toFixed(1) + 's');
+                
+                // 기존 HLS 정리
+                if (window._shareNativeHls) {
+                    try { window._shareNativeHls.destroy(); } catch(e) {}
+                    window._shareNativeHls = null;
+                }
+                if (window._shareNativeHlsSession) {
+                    const _qToken = <?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+                    const _qStopUrl = 'share.php?t=' + encodeURIComponent(_qToken) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + window._shareNativeHlsSession;
+                    try {
+                        if (navigator.sendBeacon) navigator.sendBeacon(_qStopUrl);
+                        else fetch(_qStopUrl, { keepalive: true }).catch(() => {});
+                    } catch(e) {}
+                    window._shareNativeHlsSession = null;
+                }
+                
+                // 새 hlsUrl
+                let _newHlsUrl2 = player.dataset.hlsUrl || '';
+                _newHlsUrl2 = _newHlsUrl2.replace(/&quality=[^&]*/g, '').replace(/&seek=[^&]*/g, '');
+                if (newQuality !== 'original') _newHlsUrl2 += '&quality=' + encodeURIComponent(newQuality);
+                if (absoluteTime > 0) _newHlsUrl2 += '&seek=' + absoluteTime.toFixed(2);
+                player.dataset.hlsUrl = _newHlsUrl2;
+                player._qualitySeekOffset = absoluteTime;
+                
+                try { player.pause(); } catch(e) {}
+                player.removeAttribute('src');
+                try { player.load(); } catch(e) {}
+                
+                try {
+                    const _qRes2 = await fetch(_newHlsUrl2);
+                    const _qData2 = await _qRes2.json();
+                    if (!_qData2.success || !_qData2.playlist) return;
+                    window._shareNativeHlsSession = _qData2.session;
+                    
+                    if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                        const hls2 = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60, startLevel: -1 });
+                        hls2.loadSource(_qData2.playlist);
+                        hls2.attachMedia(player);
+                        hls2.on(Hls.Events.MANIFEST_PARSED, () => {
+                            if (!wasPaused) setTimeout(() => player.play().catch(() => {}), 100);
+                        });
+                        hls2.on(Hls.Events.ERROR, (ev, data) => {
+                            if (data.fatal) { try { hls2.destroy(); } catch(e) {} }
+                        });
+                        window._shareNativeHls = hls2;
+                    } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+                        player.src = _qData2.playlist;
+                        if (!wasPaused) {
+                            player.addEventListener('loadedmetadata', () => {
+                                setTimeout(() => player.play().catch(() => {}), 100);
+                            }, { once: true });
+                        }
+                    }
+                } catch(e) {
+                    console.error('[ShareQualityChange] transcode→transcode error:', e);
+                }
+            });
+        })();
+        
         // === 네이티브 재생 실패 → 트랜스코딩 자동 전환 ===
         (function() {
             let _nativeFallbackDone = false;
@@ -2773,6 +3234,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 
                 // === 키보드 단축키 (메인의 modal-preview 핸들러 패턴과 동일) ===
                 // Space: 재생/일시정지, M: 음소거, ←→: 5초 이동, ↑↓: 볼륨 ±5%, S: 셔플, L: 반복
+                // ★ Ctrl+L: 가사 모달 토글, Esc: 가사 모달 닫기 (v5.8.1c)
                 // 버튼 click() 시뮬레이션으로 FSAudioPlayer 내부 로직 그대로 활용 (안전)
                 const shareKeyHandler = (e) => {
                     // input/textarea 안에서는 무시
@@ -2782,6 +3244,36 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     
                     const audio = sharePlayer.audio;
                     if (!audio) return;
+                    
+                    // ★ 가사 모달이 열려있으면 Ctrl+L/Esc만 처리, 나머지 키 차단 (v5.8.1c)
+                    //    Space로 재생/일시정지하면 가사 모달이 의도치 않게 닫히는 것처럼 보일 수 있음 방지
+                    const _isLyricsOpen = sharePlayer.$ && sharePlayer.$.lyricsModal && 
+                                          sharePlayer.$.lyricsModal.style.display !== 'none';
+                    
+                    // ★ Esc: 가사 모달 닫기 (가사 모달 열려있을 때만 처리)
+                    if (e.key === 'Escape' && _isLyricsOpen) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (sharePlayer._closeLyricsModal) sharePlayer._closeLyricsModal();
+                        return;
+                    }
+                    
+                    // ★ Ctrl+L: 가사 모달 토글 (MusicBee/Apple Music 비공식 표준 단축키 v5.8.1c)
+                    //    L = Lyrics, Ctrl 조합으로 단독 L(반복 모드)와 차별화
+                    if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+                        e.preventDefault();
+                        if (sharePlayer.$ && sharePlayer.$.lyricsModal) {
+                            if (_isLyricsOpen) {
+                                if (sharePlayer._closeLyricsModal) sharePlayer._closeLyricsModal();
+                            } else if (sharePlayer._lyrics && sharePlayer._openLyricsModal) {
+                                sharePlayer._openLyricsModal();
+                            }
+                        }
+                        return;
+                    }
+                    
+                    // 가사 모달 열려있으면 다른 키 무시 (Ctrl+L, Esc만 위에서 처리됨)
+                    if (_isLyricsOpen) return;
                     
                     // Space: 재생/일시정지
                     if (e.key === ' ' || e.code === 'Space') {

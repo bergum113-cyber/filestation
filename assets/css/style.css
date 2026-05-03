@@ -4198,12 +4198,14 @@ body.board-mode #transfer-progress {
 /* 전체화면 비활동 시 모든 오버레이 숨김 + 커서 숨김 */
 :fullscreen .video-player-wrap.fs-idle .video-stream-badge,
 :fullscreen .video-player-wrap.fs-idle .video-audio-select,
+:fullscreen .video-player-wrap.fs-idle .video-quality-select,
 :fullscreen .video-player-wrap.fs-idle .subtitle-controls,
 :fullscreen .video-player-wrap.fs-idle .transcode-duration,
 :fullscreen .video-player-wrap.fs-idle .video-fullscreen-btn,
 :fullscreen .video-player-wrap.fs-idle .video-play-overlay,
 .video-player-wrap.fs-idle:fullscreen .video-stream-badge,
 .video-player-wrap.fs-idle:fullscreen .video-audio-select,
+.video-player-wrap.fs-idle:fullscreen .video-quality-select,
 .video-player-wrap.fs-idle:fullscreen .subtitle-controls,
 .video-player-wrap.fs-idle:fullscreen .transcode-duration,
 .video-player-wrap.fs-idle:fullscreen .video-fullscreen-btn,
@@ -4418,6 +4420,68 @@ body.board-mode #transfer-progress {
     font-size: 12px;
     cursor: pointer;
     max-width: 250px;
+}
+
+/* ★ Quality 셀렉터 (v5.8.1c) — audio 셀렉터와 동일 visibility 패턴 */
+/* ★ 위치 통일 (v5.8.1c 패치) — 네이티브/트랜스코딩 모두 동일 위치 (top:10px right:10px) */
+/*    audio + quality 동시 존재 시: JS가 .has-quality-sibling 클래스 audio에 추가 → audio가 좌측 이동 */
+.video-quality-select {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+/* audio 셀렉터에 quality 형제가 있으면 audio를 좌측으로 이동 (가로 배치) */
+.video-audio-select.has-quality-sibling {
+    right: 220px; /* quality select max-width 180px + gap 여백 */
+}
+/* ★ 목록 버튼(.fs-vp-toggle)이 있으면 화질 셀렉트를 좌측으로 이동 (펜닐님 요청 v5.8.1c) */
+/*   목록 버튼: top:8px right:8px → 화질 셀렉트는 right:80px로 회피 (펜닐님 미세조정 적용) */
+/*   메인은 :has() 사용, 폴백은 .has-toggle-sibling 클래스 (JS 동기화) */
+.video-player-wrap:has(.fs-vp-toggle) .video-quality-select {
+    right: 80px;
+}
+.video-quality-select.has-toggle-sibling {
+    right: 80px;
+}
+/* 목록 + audio + quality 모두 있을 때: audio는 더 왼쪽으로 (펜닐님 미세조정 적용) */
+.video-player-wrap:has(.fs-vp-toggle) .video-audio-select.has-quality-sibling {
+    right: 205px;
+}
+.video-audio-select.has-toggle-sibling.has-quality-sibling {
+    right: 205px;
+}
+.video-player-wrap:hover .video-quality-select {
+    opacity: 1;
+}
+.video-player-wrap.playing .video-quality-select {
+    opacity: 0;
+}
+.video-player-wrap.playing:hover .video-quality-select {
+    opacity: 1;
+}
+.video-player-wrap.playing.show-controls .video-quality-select {
+    opacity: 1;
+}
+.quality-label {
+    color: #fff;
+    font-size: 12px;
+    text-shadow: 0 0 4px rgba(0,0,0,0.8);
+}
+.quality-select {
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 12px;
+    cursor: pointer;
+    max-width: 180px;
 }
 
 .video-player-wrap {
@@ -4954,6 +5018,231 @@ video::cue {
     line-height: 1;
     pointer-events: none;
 }
+
+/* ★ 가사 버튼 (v5.8.1c — 옵션 A) */
+.fap-btn-lyrics:hover {
+    color: #7c6ef6;
+}
+.fap-btn-lyrics.active {
+    color: #7c6ef6;
+}
+
+/* ★ 가사 모달 (v5.8.1c — 옵션 A) */
+/*    PC: 일반 모달 스타일 (흰 배경, 카드형) — 사이트 다른 모달과 통일 */
+/*    모바일: 풀스크린 (Apple Music 스타일, 어두운 배경) */
+.fap-lyrics-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 100002;  /* mp3 audio 모달(10000)과 서브모달(100003) 사이 — mp3 모달 위에 보장 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+}
+.fap-lyrics-modal.fap-lyrics-modal-open {
+    opacity: 1;
+    pointer-events: auto;
+}
+.fap-lyrics-modal-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+/* ===== PC: 일반 모달 스타일 (사이트 .modal과 통일) ===== */
+.fap-lyrics-modal-content {
+    position: relative;
+    background: white;
+    border-radius: var(--radius, 8px);
+    width: 100%;
+    max-width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    overflow: hidden;
+    transform: translateY(20px);
+    transition: transform 0.25s ease;
+    margin: 20px;
+}
+.fap-lyrics-modal.fap-lyrics-modal-open .fap-lyrics-modal-content {
+    transform: translateY(0);
+}
+.fap-lyrics-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border, #e0e0e0);
+    background: var(--primary, #667eea);
+    color: var(--modal-header-text, white);
+    flex-shrink: 0;
+    cursor: move;          /* ★ PC: 헤더 드래그 가능 표시 (v5.8.1c) */
+    user-select: none;     /* 드래그 중 텍스트 선택 방지 */
+}
+.fap-lyrics-modal-title-wrap {
+    flex: 1;
+    min-width: 0;
+}
+/* ★ PC (v5.8.1c — 펜닐님 요청): "가사" 라벨 숨김, 노래 제목만 헤더에 표시 */
+.fap-lyrics-modal-title {
+    display: none;
+}
+/* 트랙 제목을 헤더 메인으로 (이전엔 보조였음) */
+.fap-lyrics-modal-track {
+    color: var(--modal-header-text, white);
+    font-size: 16px;
+    font-weight: 600;
+    margin-top: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fap-lyrics-modal-close {
+    background: rgba(255,255,255,0.15);
+    border: none;
+    color: var(--modal-header-text, white);
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s;
+    flex-shrink: 0;
+    margin-left: 16px;
+}
+.fap-lyrics-modal-close:hover {
+    background: rgba(255,255,255,0.28);
+}
+.fap-lyrics-modal-body {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: #fafafa;
+}
+.fap-lyrics-modal-text {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 24px 24px;
+    color: #333;
+    font-size: 15px;
+    line-height: 1.8;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.fap-lyrics-modal-line {
+    transition: color 0.25s ease, font-weight 0.25s ease;
+    padding: 4px 0;
+}
+.fap-lyrics-modal-line.fap-lyrics-empty {
+    height: 12px;
+}
+/* 동기화된 가사일 때 활성 라인 강조 (LRC 등) — PC 밝은 배경용 */
+.fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line {
+    color: rgba(0, 0, 0, 0.4);
+}
+.fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-active {
+    color: var(--primary, #667eea);
+    font-weight: 700;
+    font-size: 17px;
+}
+.fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-prev,
+.fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-next {
+    color: rgba(0, 0, 0, 0.6);
+}
+
+/* ===== 모바일: 풀스크린 (Apple Music 스타일 어두운 배경) ===== */
+@media (max-width: 768px) {
+    /* 모달 오버레이를 더 진하게 (풀스크린 느낌) */
+    .fap-lyrics-modal-overlay {
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+    }
+    .fap-lyrics-modal-content {
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;  /* iOS Safari/Chrome — 동적 viewport (주소창 고려) */
+        max-width: 100vw;
+        max-height: 100vh;
+        max-height: 100dvh;
+        border-radius: 0;
+        margin: 0;
+        background: #1a1a1a;  /* 어두운 배경 */
+    }
+    /* ★ 모바일 헤더 — 안전영역(노치/주소창) 위로 올려 패딩 (v5.8.1c) */
+    .fap-lyrics-modal-header {
+        padding-top: max(16px, env(safe-area-inset-top));
+        padding-left: max(20px, env(safe-area-inset-left));
+        padding-right: max(20px, env(safe-area-inset-right));
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #1a1a1a;  /* 모바일은 어두운 헤더로 통일 (PC primary 컬러 무효화) */
+        border-bottom-color: rgba(255,255,255,0.08);
+        cursor: default;  /* 모바일은 드래그 비활성 (풀스크린이라 불필요) */
+    }
+    .fap-lyrics-modal-title {
+        color: #fff;
+    }
+    .fap-lyrics-modal-close {
+        background: rgba(255,255,255,0.08);
+        color: #fff;
+        width: 36px;
+        height: 36px;
+    }
+    .fap-lyrics-modal-close:hover {
+        background: rgba(255,255,255,0.18);
+    }
+    .fap-lyrics-modal-body {
+        background: #1a1a1a;
+        padding-bottom: max(20px, env(safe-area-inset-bottom));
+    }
+    .fap-lyrics-modal-text {
+        color: rgba(255,255,255,0.85);
+        font-size: 15px;
+        padding: 24px 20px;
+        padding-bottom: max(60px, env(safe-area-inset-bottom));  /* 하단 컨트롤바/홈 인디케이터 회피 */
+    }
+    /* 동기화 라인 — 모바일 어두운 배경용 색상 오버라이드 */
+    .fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line {
+        color: rgba(255,255,255,0.4);
+    }
+    .fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-active {
+        color: #fff;
+        font-weight: 600;
+        font-size: 17px;
+    }
+    .fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-prev,
+    .fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-next {
+        color: rgba(255,255,255,0.65);
+    }
+    /* ★ 모바일 (v5.8.1c — 펜닐님 요청): "가사" 라벨 숨김, 노래 제목만 헤더에 표시 */
+    .fap-lyrics-modal-title {
+        display: none;
+    }
+    /* 트랙 제목을 헤더 메인으로 (이전엔 보조였음) */
+    .fap-lyrics-modal-track {
+        font-size: 16px;
+        font-weight: 600;
+        color: #fff;
+        margin-top: 0;
+    }
+    /* 트랙 제목/아티스트가 헤더 우측 X 버튼과 겹치지 않게 우측 여백 */
+    .fap-lyrics-modal-title-wrap {
+        padding-right: 8px;
+    }
+}
+
 /* 볼륨 */
 .fap-volume {
     display: flex;
@@ -5762,15 +6051,19 @@ video::cue {
     overflow: hidden;
     display: grid !important;
     grid-template-columns: 340px 1fr;
-    /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 */
-    grid-template-rows: 340px auto auto auto auto !important;
+    /* Row 1: 커버(고정) / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨(남은공간 흡수) */
+    /* ★ 마지막 행 1fr (펜닐님 결정 v5.8.1c): 모달 크기 변화 시 남는 공간을 마지막 볼륨 행이 흡수 */
+    /*    → 컨트롤/시킹바 사이는 콘텐츠 크기 그대로(auto), 빈 공간은 볼륨 아래(밑면)로 몰림 */
+    /*    이전엔 모든 행 auto라 brtype 사이에 빈 공간 분산됐음 */
+    grid-template-rows: 340px auto auto auto 1fr !important;
     gap: 0 !important;
     min-height: 460px;
     position: relative;
 }
 /* ★ iOS: 볼륨 영역 숨김 시 grid 마지막 행 제거 (좌측 column 빈 공간 방지) */
+/*    iOS도 마지막 행(컨트롤)을 1fr로 → 남는 공간을 컨트롤 아래로 몰아둠 */
 .fap.fap-skin-ap-fixed.fap-ios {
-    grid-template-rows: 340px auto auto auto !important;
+    grid-template-rows: 340px auto auto 1fr !important;
     min-height: auto;
 }
 /* 스킨 선택기: 우측 상단에 고정, 플레이리스트 영역 위에 오버레이 */
@@ -5890,7 +6183,9 @@ video::cue {
 .fap-skin-ap-fixed .fap-seek {
     grid-column: 1;
     grid-row: 3;  /* 가사 행(2) 추가로 한 칸 밀림 */
-    padding: 2px 16px 4px !important;
+    align-self: start;     /* 행 상단에 고정 (행 stretch 방지) */
+    /* ★ 위 여백 늘림: 썸네일과 시킹바 사이 시각적 분리 (펜닐님 요청 v5.8.1c) */
+    padding: 16px 16px 8px !important;
     background: #fff;
     margin: 0 !important;
 }
@@ -5908,7 +6203,9 @@ video::cue {
 .fap-skin-ap-fixed .fap-controls {
     grid-column: 1;
     grid-row: 4;
-    padding: 4px 16px !important;
+    align-self: start;     /* 행 상단에 고정 */
+    /* ★ 상하 여백 늘림: 시킹바/볼륨과 시각적 분리 (펜닐님 요청 v5.8.1c) */
+    padding: 16px 16px !important;
     background: #fff;
     justify-content: center !important;
     gap: 16px !important;
@@ -5947,11 +6244,16 @@ video::cue {
 }
 
 /* 5행: 볼륨 - 가사 행 추가로 한 칸 밀림 */
+/* ★ 볼륨 컨트롤 바로 아래 고정 (펜닐님 요청 v5.8.1c) */
+/*    grid 마지막 행(1fr)이 모달 크기에 따라 늘어나는데, align-self: start로 행 상단에 고정 */
+/*    → 컨트롤(4행) 바로 아래에 볼륨이 붙어 보임. 남는 공간은 볼륨 아래(모달 바닥)로 몰림 */
 .fap-skin-ap-fixed .fap-volume {
     grid-column: 1;
     grid-row: 5;
-    padding: 4px 16px 8px !important;
+    align-self: start;     /* 행 상단 = 컨트롤 바로 아래에 고정 */
+    padding: 12px 16px 16px !important;
     background: #fff;
+    margin: 0 !important;
 }
 .fap-skin-ap-fixed .fap-btn-vol { color: #3ac0ff !important; }
 .fap-skin-ap-fixed .fap-vol-bar::before { background: #eee !important; }
@@ -6055,8 +6357,8 @@ video::cue {
 @media (max-width: 768px) {
     .fap.fap-skin-ap-fixed {
         grid-template-columns: 1fr;
-        /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 / Row 6: 플레이리스트 */
-        grid-template-rows: 240px auto auto auto auto auto !important;
+        /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 / Row 6: 플레이리스트(1fr 남은공간 흡수) */
+        grid-template-rows: 240px auto auto auto auto 1fr !important;
         min-height: auto;
     }
     .fap-skin-ap-fixed .fap-now {
@@ -6076,7 +6378,7 @@ video::cue {
     }
     /* ★ iOS: 볼륨 영역 숨김 시 playlist를 row 5 자리로 이동 (빈 공간 방지) */
     .fap.fap-skin-ap-fixed.fap-ios {
-        grid-template-rows: 240px auto auto auto auto !important;
+        grid-template-rows: 240px auto auto auto 1fr !important;
     }
     .fap.fap-skin-ap-fixed.fap-ios .fap-playlist {
         grid-row: 5;
@@ -8750,36 +9052,93 @@ body.is-mobile #board-detail-search {
         color: #999;
     }
     
-    /* 모바일: 컬럼 헤더 */
-    #file-list-header {
-        padding: 0 10px;
-        gap: 10px;
+    /* ★ 모바일 list-view: 이름 아래 날짜·유형 메타 표시 (펜닐님 요청 v5.8.1c) */
+    /*    HTML 구조: [checkbox] [icon] [name-wrap] [date] [type] [size] */
+    /*    PC는 가로 1줄, 모바일은 grid로 2줄 배치 — 이름 가로폭 유지 + 정보 풍부 */
+    /*                                                                              */
+    /*    Grid 레이아웃 (모바일 list-view 한정):                                       */
+    /*       [check] [icon] [name (full width, 1행)              ]                    */
+    /*       [check] [icon] [date (좌)                  type (우) ]                   */
+    /*    ※ size는 hide                                                               */
+    .file-list.list-view .file-item {
+        display: grid !important;
+        grid-template-columns: auto auto 1fr 80px;  /* 4번째 컬럼(type) 80px 고정 보장 */
+        grid-template-rows: auto auto;
+        grid-template-areas:
+            "check icon name name"
+            "check icon date type";
+        column-gap: 8px;
+        row-gap: 2px;
+        align-items: center;
+        padding: 8px 10px !important;
+    }
+    /* 체크박스 wrapper (.file-check) */
+    .file-list.list-view .file-item > .file-check {
+        grid-area: check;
+        align-self: center;
+    }
+    /* 아이콘 */
+    .file-list.list-view .file-item > .file-icon {
+        grid-area: icon;
+        align-self: center;
+        font-size: 28px !important;
+        line-height: 1;
+        margin: 0 !important;
+    }
+    /* 이름 줄: 굵게 1줄 ellipsis (name name 으로 2칸 차지 → 가로 폭 최대) */
+    .file-list.list-view .file-item > .file-name-wrap {
+        grid-area: name;
+        align-self: end;
+        min-width: 0;  /* ellipsis 작동을 위해 필수 */
+        overflow: hidden;
+        font-weight: 500;
+    }
+    .file-list.list-view .file-item > .file-name-wrap .file-name {
+        font-size: 14px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    /* 날짜: 메타 줄 좌측 */
+    .file-list.list-view .file-item > .file-date {
+        display: block !important; /* 위 list-view .file-date {display:none} 무효화 */
+        grid-area: date;
+        align-self: start;
         font-size: 11px;
-        position: sticky;
-        z-index: 194;
-        background: var(--bg, #fff);
+        color: var(--secondary, #999);
+        line-height: 1.3;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        min-width: 0;
     }
-    #file-list-header .col-resize {
-        display: none;
-    }
-    #file-list-header .fh-icon {
-        width: 24px;
-    }
-    #file-list-header .fh-check {
-        width: 18px;
-        margin-right: 10px;
-    }
-    .file-list-header .col-header {
-        padding: 3px 0;
+    /* 유형: 메타 줄 우측 (grid 컬럼이 이미 80px 보장) */
+    .file-list.list-view .file-item > .file-type {
+        grid-area: type;
+        align-self: start;
         font-size: 11px;
-    }
-    .file-list-header .file-date-col,
-    .file-list-header .file-size-col {
-        display: none;
-    }
-    .file-list-header .file-type-col {
-        width: 70px;
+        color: var(--secondary, #999);
+        line-height: 1.3;
+        width: 100% !important;  /* grid 컬럼 80px을 꽉 채움 */
+        min-width: 0;
+        max-width: none;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         flex-shrink: 0;
+        text-align: right;
+        padding-left: 8px;
+    }
+    /* size는 모바일에서 숨김 유지 */
+    .file-list.list-view .file-item > .file-size {
+        display: none !important;
+    }
+    
+    /* ★ 모바일 (v5.8.1c — 펜닐님 결정 옵션 B): list-view 헤더 자체 숨김 */
+    /*    이유: 모바일은 이름 아래 메타 표시 방식으로 변경되어 가로 컬럼 헤더 불필요 */
+    /*    정렬은 별도 정렬 버튼(#btn-sort)에서 처리 — iOS Files / Android Files 표준 패턴 */
+    #file-list-header {
+        display: none !important;
     }
     
     /* 파일 목록 - 그리드 뷰 (모바일: 화면 너비에 맞게 자동 열 수) */
@@ -10175,6 +10534,67 @@ tr:hover,
     .video-audio-select:empty::before {
         display: none !important;
     }
+    
+    /* ★ 모바일 화질 셀렉트 (v5.8.1c — 펜닐님 요청) */
+    /*    PC와 달리 모바일은 화면이 좁아 audio + quality 가로 배치 불가 */
+    /*    → quality는 항상 audio 아래로 (top:44px) — has-quality-sibling 룰 무효화 */
+    /*    → 목록 버튼 회피용 right 80px 룰도 모바일에선 무효화 (세로 배치되니 좌우 충돌 없음) */
+    .video-quality-select {
+        top: 44px !important;
+        right: 6px !important;
+        bottom: auto !important;
+        left: auto !important;
+        opacity: 1 !important;
+        max-width: 55%;
+        flex-direction: row;
+        align-items: center;
+    }
+    /* PC용 has-toggle-sibling/has-quality-sibling 위치 룰을 모바일에서 무효화 */
+    .video-player-wrap:has(.fs-vp-toggle) .video-quality-select,
+    .video-quality-select.has-toggle-sibling {
+        right: 6px !important;
+    }
+    .video-audio-select.has-quality-sibling,
+    .video-player-wrap:has(.fs-vp-toggle) .video-audio-select.has-quality-sibling,
+    .video-audio-select.has-toggle-sibling.has-quality-sibling {
+        right: 6px !important; /* audio도 그대로 우측 — quality는 아래로 */
+    }
+    .quality-label {
+        display: none !important;
+    }
+    .quality-select {
+        font-size: 11px !important;
+        padding: 3px 8px !important;
+        max-width: 100% !important;
+        background: rgba(0, 0, 0, 0.7) !important;
+        border-radius: 14px !important;
+        border: 1px solid rgba(255,255,255,0.25) !important;
+    }
+    /* 모바일: 셀렉트 앞에 화질 아이콘 */
+    .video-quality-select::before {
+        content: '🎬';
+        font-size: 13px;
+        margin-right: 3px;
+        line-height: 1;
+    }
+    /* 빈 quality 셀렉트 숨김 */
+    .video-quality-select:empty {
+        display: none !important;
+    }
+    .video-quality-select:empty::before {
+        display: none !important;
+    }
+    /* ★ 모바일: 재생 중 화질 셀렉트 숨김 — 터치 시(.show-controls) 표시 */
+    .video-player-wrap.playing .video-quality-select {
+        opacity: 0 !important;
+        pointer-events: none;
+        transition: opacity 0.3s;
+    }
+    .video-player-wrap.playing.show-controls .video-quality-select {
+        opacity: 1 !important;
+        pointer-events: auto;
+    }
+    .video-player-wrap.playing:not(.show-controls):hover .video-quality-select { opacity: 0; pointer-events: none; }
     
     /* 모바일 스트림 뱃지 — 멀티오디오 있으면 아래로 이동 */
     .video-stream-badge {
@@ -15089,6 +15509,28 @@ body.video-pseudo-fs {
     margin: 0 !important;
     padding: 2px 16px 2px !important;
     background: #fff;
+}
+
+/* ★ 가사 인라인 표시 안 될 때(LRC 없음 또는 정적 가사) grid row 2 압축 (v5.8.1c — 펜닐님 요청) */
+/*    JS: _renderLyrics에서 _lyricsSynced=false 또는 가사 없을 때 root에 .fap-no-inline-lyrics 추가 */
+/*    APlayer Fixed 스킨은 grid 5행이라 row 2가 빈 채로 자리 차지 → 썸네일과 시킹바 사이 떨어짐 */
+/*    또한 마지막 행 1fr로 모달 크기 변화 시 남는 공간을 마지막 행이 흡수 (펜닐님 요청 v5.8.1c) */
+.fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
+    /* PC: row 1=커버(340px) / row 2=가사(0) / row 3=시킹바 / row 4=컨트롤 / row 5=볼륨(1fr) */
+    grid-template-rows: 340px 0 auto auto 1fr !important;
+}
+.fap.fap-skin-ap-fixed.fap-no-inline-lyrics.fap-ios {
+    /* iOS: 볼륨 영역 숨김 — row 1=커버 / row 2=0 / row 3=시킹바 / row 4=컨트롤(1fr) */
+    grid-template-rows: 340px 0 auto 1fr !important;
+}
+@media (max-width: 768px) {
+    /* 모바일: row 1=커버(240px) / row 2=가사(0) / row 3=시킹바 / row 4=컨트롤 / row 5=볼륨 / row 6=플레이리스트(1fr) */
+    .fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
+        grid-template-rows: 240px 0 auto auto auto 1fr !important;
+    }
+    .fap.fap-skin-ap-fixed.fap-no-inline-lyrics.fap-ios {
+        grid-template-rows: 240px 0 auto auto 1fr !important;
+    }
 }
 
 /* ============================================================

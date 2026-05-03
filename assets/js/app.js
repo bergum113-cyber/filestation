@@ -823,6 +823,9 @@ class FSAudioPlayer {
                 <button class="fap-btn fap-btn-loop" title="${isKo ? '반복 모드 (L)' : 'Repeat (L)'}">
                     <svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" fill="currentColor"/></svg>
                 </button>
+                <button class="fap-btn fap-btn-lyrics" title="${isKo ? '가사 보기 (Ctrl+L)' : 'Show lyrics (Ctrl+L)'}" style="display:none;">
+                    <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16v2H4V6zm0 4h12v2H4v-2zm0 4h16v2H4v-2zm0 4h12v2H4v-2z" fill="currentColor"/></svg>
+                </button>
             </div>
             <div class="fap-volume">
                 <button class="fap-btn fap-btn-vol" title="${isKo ? '음소거 (M) · ↑↓로 볼륨 조절' : 'Mute (M) · ↑↓ to adjust'}">
@@ -840,6 +843,26 @@ class FSAudioPlayer {
                     <span class="fap-playlist-count">${this.playlist.length}</span>
                 </div>
                 <ul class="fap-playlist-list"><div class="fap-pl-virtual-spacer"></div></ul>
+            </div>
+            <!-- ★ 가사 모달 (v5.8.1c — 펜닐님 결정 옵션 A) -->
+            <!--   동기화 안 된 가사(USLT/TXT)는 모달에서만 정적 표시 — Apple Music 방식 -->
+            <!--   동기화된 가사(LRC)는 인라인 표시 + 모달도 가능 (둘 다 지원) -->
+            <div class="fap-lyrics-modal" style="display:none;">
+                <div class="fap-lyrics-modal-overlay"></div>
+                <div class="fap-lyrics-modal-content">
+                    <div class="fap-lyrics-modal-header">
+                        <div class="fap-lyrics-modal-title-wrap">
+                            <div class="fap-lyrics-modal-title">${isKo ? '가사' : 'Lyrics'}</div>
+                            <div class="fap-lyrics-modal-track"></div>
+                        </div>
+                        <button class="fap-lyrics-modal-close" title="${isKo ? '닫기 (Esc)' : 'Close (Esc)'}" aria-label="Close">
+                            <svg viewBox="0 0 24 24" width="22" height="22"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" fill="currentColor"/></svg>
+                        </button>
+                    </div>
+                    <div class="fap-lyrics-modal-body">
+                        <div class="fap-lyrics-modal-text"></div>
+                    </div>
+                </div>
             </div>
         </div>`;
         // Cache DOM
@@ -872,6 +895,13 @@ class FSAudioPlayer {
             lyricsWrap: this.container.querySelector('.fap-lyrics-wrap'),
             lyricsScroll: this.container.querySelector('.fap-lyrics-scroll'),
             lyricsContent: this.container.querySelector('.fap-lyrics-content'),
+            // ★ 가사 모달 (v5.8.1c — 옵션 A)
+            btnLyrics: this.container.querySelector('.fap-btn-lyrics'),
+            lyricsModal: this.container.querySelector('.fap-lyrics-modal'),
+            lyricsModalOverlay: this.container.querySelector('.fap-lyrics-modal-overlay'),
+            lyricsModalClose: this.container.querySelector('.fap-lyrics-modal-close'),
+            lyricsModalTrack: this.container.querySelector('.fap-lyrics-modal-track'),
+            lyricsModalText: this.container.querySelector('.fap-lyrics-modal-text'),
         };
         // ★ iOS: 시스템 정책상 audio.volume 변경 불가 (Apple 공식 정책)
         //   YouTube iOS 웹 등과 동일하게 볼륨 영역 전체 숨김
@@ -1222,6 +1252,28 @@ class FSAudioPlayer {
             this._updateLoopUI();
             this._saveLoopPref();  // ★ localStorage 저장
         });
+        // ★ 가사 모달 (v5.8.1c — 옵션 A)
+        if (this.$.btnLyrics) {
+            this.$.btnLyrics.addEventListener('click', () => this._openLyricsModal());
+        }
+        if (this.$.lyricsModalClose) {
+            this.$.lyricsModalClose.addEventListener('click', () => this._closeLyricsModal());
+        }
+        // ★ overlay 클릭 시 가사 모달 안 닫힘 (v5.8.1c — 펜닐님 결정)
+        //    펜닐님 요구: 다른 모달과 일관되게 외부 클릭으로 안 닫히도록 (X 버튼 또는 Esc로만 닫기)
+        //    추가로 클릭 이벤트가 mp3 모달 영역으로 전파되어 mp3 모달이 영향받는 것도 방지
+        if (this.$.lyricsModalOverlay) {
+            this.$.lyricsModalOverlay.addEventListener('click', (e) => {
+                e.stopPropagation();
+                // 닫지 않음 — X 버튼이나 Esc 키로만 닫기
+            });
+        }
+        // 모달 콘텐츠 영역 클릭도 mp3 모달로 전파 차단
+        if (this.$.lyricsModal) {
+            this.$.lyricsModal.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+        }
         // Shuffle
         this.$.btnShuffle.addEventListener('click', () => {
             this.shuffle = !this.shuffle;
@@ -1542,9 +1594,20 @@ class FSAudioPlayer {
         this._lyricsActiveLine = -1;
         if (this.$.lyricsWrap) this.$.lyricsWrap.style.display = 'none';
         if (this.$.lyricsContent) this.$.lyricsContent.innerHTML = '';
+        // ★ 가사 버튼/모달 초기화 (v5.8.1c — 옵션 A)
+        if (this.$.btnLyrics) this.$.btnLyrics.style.display = 'none';
+        // ★ 부모에 no-inline-lyrics 클래스 추가 — APlayer Fixed 등 grid 스킨에서 빈 row 압축용 (v5.8.1c)
+        if (this.$.root) this.$.root.classList.add('fap-no-inline-lyrics');
+        // 모달이 열려있던 경우: 새 트랙 가사로 곧 갱신되거나, 가사 없으면 닫음
+        // (열린 채 두고 _renderLyrics에서 갱신 — 가사 없으면 아래 catch에서 닫음)
         
         // API URL 없으면 종료
-        if (!track || !track.lyricsApiUrl) return;
+        if (!track || !track.lyricsApiUrl) {
+            if (this.$.lyricsModal && this.$.lyricsModal.style.display !== 'none') {
+                this._closeLyricsModal();
+            }
+            return;
+        }
         
         // 토큰: 빠른 트랙 전환 시 이전 fetch 결과 무시
         if (this._lyricsLoadToken === undefined) this._lyricsLoadToken = 0;
@@ -1657,7 +1720,30 @@ class FSAudioPlayer {
         } else {
             this.$.lyricsWrap.classList.add('fap-lyrics-static');
         }
-        this.$.lyricsWrap.style.display = '';
+        
+        // ★ 가사 표시 정책 (v5.8.1c — 펜닐님 결정 옵션 A):
+        //    - 동기화된 가사 (LRC, synced=true): 인라인 표시 (현재처럼) + 가사 버튼도 활성화
+        //    - 정적 가사 (USLT/TXT, synced=false): 인라인 숨김 + 가사 버튼만 활성화 (모달에서만 표시)
+        //    => 이유: 정적 가사 자동 스크롤은 시간 동기 불가능해서 사용자에게 혼란
+        if (this._lyricsSynced) {
+            this.$.lyricsWrap.style.display = '';
+            // ★ 인라인 가사 표시 → 부모 grid에서 자리 차지하도록 클래스 제거 (v5.8.1c)
+            if (this.$.root) this.$.root.classList.remove('fap-no-inline-lyrics');
+        } else {
+            this.$.lyricsWrap.style.display = 'none';
+            // ★ 정적 가사: 인라인 숨김 → 부모 grid에서 row 압축 위해 클래스 유지
+            if (this.$.root) this.$.root.classList.add('fap-no-inline-lyrics');
+        }
+        
+        // ★ 가사 버튼 활성화 (가사가 로드되었으면 항상 표시)
+        if (this.$.btnLyrics) {
+            this.$.btnLyrics.style.display = '';
+        }
+        
+        // ★ 모달이 이미 열려있으면 새 가사로 즉시 갱신 (다음 곡 진행 시)
+        if (this.$.lyricsModal && this.$.lyricsModal.style.display !== 'none') {
+            this._renderLyricsModalContent();
+        }
         
         // ★ 수동 스크롤 이벤트 — 한 번만 등록 (중복 방지 플래그)
         if (!this._lyricsScrollHandlerBound && this.$.lyricsScroll) {
@@ -1670,6 +1756,181 @@ class FSAudioPlayer {
         // 새 트랙 로드 시 자동 스크롤 일시 중지 해제 + 스크롤 위치 리셋
         this._lyricsManualScrollUntil = 0;
         if (this.$.lyricsScroll) this.$.lyricsScroll.scrollTop = 0;
+    }
+    
+    /**
+     * 가사 모달 열기 (v5.8.1c — 옵션 A)
+     * - 정적 가사: 전체 텍스트 정적 표시 (사용자가 스크롤)
+     * - 동기화 가사: 활성 라인 표시 (LRC) — 모달에서도 동기화 표시
+     */
+    _openLyricsModal() {
+        if (!this.$.lyricsModal || !this._lyrics) return;
+        // ★ display = '' 먼저 (v5.8.1c) — _renderLyricsModalContent에서 scrollTop/clientHeight 계산하려면
+        //    모달이 보여야 정확한 값이 나옴. display: none 상태에선 clientHeight=0, scrollTop도 동작 불안정
+        this.$.lyricsModal.style.display = '';
+        // ★ 헤더 드래그 위치 초기화 (PC만, 매번 열 때 가운데로 복귀)
+        //    이전 드래그 시 position:fixed/margin:0 등이 남아있을 수 있어 모두 리셋
+        //    렌더 전에 위치 리셋해야 활성라인 scrollTop 계산 시 정확한 위치
+        const _content = this.$.lyricsModal.querySelector('.fap-lyrics-modal-content');
+        if (_content) {
+            _content.style.position = '';
+            _content.style.left = '';
+            _content.style.top = '';
+            _content.style.margin = '';
+            _content.style.transform = '';
+            _content.style.transition = '';
+        }
+        // 렌더 + 활성라인 표시 + 스크롤 위치 설정
+        this._renderLyricsModalContent();
+        // 다음 프레임에 보이는 클래스 추가 → CSS transition 작동
+        requestAnimationFrame(() => {
+            this.$.lyricsModal.classList.add('fap-lyrics-modal-open');
+        });
+        this._bindLyricsModalDrag();
+    }
+    
+    /**
+     * 가사 모달 헤더 드래그 (PC만, 모바일은 풀스크린이라 불필요)
+     */
+    _bindLyricsModalDrag() {
+        if (this._lyricsModalDragBound) return;
+        this._lyricsModalDragBound = true;
+        
+        const modal = this.$.lyricsModal;
+        const content = modal?.querySelector('.fap-lyrics-modal-content');
+        const header = modal?.querySelector('.fap-lyrics-modal-header');
+        if (!modal || !content || !header) return;
+        
+        let isDragging = false;
+        let startX = 0, startY = 0;
+        let startLeft = 0, startTop = 0;
+        
+        const onDown = (e) => {
+            // 모바일은 풀스크린이라 드래그 비활성화
+            if (window.innerWidth <= 768) return;
+            // 닫기 버튼 클릭 시는 드래그 안 함
+            if (e.target.closest('.fap-lyrics-modal-close')) return;
+            
+            isDragging = true;
+            const rect = content.getBoundingClientRect();
+            startLeft = rect.left;
+            startTop = rect.top;
+            startX = e.clientX;
+            startY = e.clientY;
+            
+            // 드래그 중 transition 비활성화 (부드럽지만 즉시 따라가게)
+            content.style.transition = 'none';
+            // fixed 위치로 전환 (.fap-lyrics-modal의 flex 가운데 정렬에서 분리)
+            content.style.position = 'fixed';
+            content.style.left = startLeft + 'px';
+            content.style.top = startTop + 'px';
+            content.style.margin = '0';
+            content.style.transform = 'none';
+            
+            e.preventDefault();
+        };
+        
+        const onMove = (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            let newLeft = startLeft + dx;
+            let newTop = startTop + dy;
+            // 화면 밖으로 너무 나가지 않게 (헤더 일부는 항상 보이게)
+            const minLeft = -content.offsetWidth + 100;  // 100px 보장
+            const maxLeft = window.innerWidth - 100;
+            const minTop = 0;
+            const maxTop = window.innerHeight - 60;       // 헤더만큼은 보이게
+            newLeft = Math.max(minLeft, Math.min(maxLeft, newLeft));
+            newTop = Math.max(minTop, Math.min(maxTop, newTop));
+            content.style.left = newLeft + 'px';
+            content.style.top = newTop + 'px';
+        };
+        
+        const onUp = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            content.style.transition = '';  // transition 복원
+        };
+        
+        header.addEventListener('mousedown', onDown);
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+        
+        // 핸들러 참조 저장 (destroy 시 정리)
+        this._lyricsModalDragHandlers = { onMove, onUp };
+    }
+    
+    /**
+     * 가사 모달 닫기
+     */
+    _closeLyricsModal() {
+        if (!this.$.lyricsModal) return;
+        this.$.lyricsModal.classList.remove('fap-lyrics-modal-open');
+        // transition 끝나면 display:none
+        setTimeout(() => {
+            if (this.$.lyricsModal && !this.$.lyricsModal.classList.contains('fap-lyrics-modal-open')) {
+                this.$.lyricsModal.style.display = 'none';
+            }
+        }, 200);
+    }
+    
+    /**
+     * 가사 모달 내용 렌더 (트랙 변경 시 갱신)
+     */
+    _renderLyricsModalContent() {
+        if (!this.$.lyricsModalText || !this._lyrics) return;
+        
+        // 트랙 정보 표시 — 헤더 우측 상단에 노래 제목/아티스트
+        if (this.$.lyricsModalTrack) {
+            const track = this.playlist?.[this.currentIndex];
+            if (track) {
+                const title = track.title || track.name || '';
+                const artist = track.artist || '';
+                if (artist) {
+                    this.$.lyricsModalTrack.textContent = title + ' — ' + artist;
+                } else {
+                    this.$.lyricsModalTrack.textContent = title;
+                }
+            } else {
+                this.$.lyricsModalTrack.textContent = '';
+            }
+        }
+        
+        // 가사 라인 렌더 (인라인과 동일 클래스 → CSS 동기화 활성 라인 작동)
+        const html = this._lyrics.map((line, idx) => {
+            const text = this._esc(line.text || '');
+            const empty = !text;
+            return `<div class="fap-lyrics-modal-line${empty ? ' fap-lyrics-empty' : ''}" data-idx="${idx}">${text || '&nbsp;'}</div>`;
+        }).join('');
+        
+        this.$.lyricsModalText.innerHTML = html;
+        this.$.lyricsModalText.setAttribute('data-synced', this._lyricsSynced ? 'true' : 'false');
+        // 모달 스크롤 위치 리셋
+        this.$.lyricsModalText.scrollTop = 0;
+        
+        // ★ 모달 열 때 현재 활성라인 즉시 표시 (v5.8.1c — 다음 timeupdate 기다리지 않음)
+        //    이전엔 _updateLyricsActiveLine이 _lyricsActiveLine 변경 안 됐으면 early return해서
+        //    모달이 처음 열렸을 때 활성라인이 다음 줄 진행될 때까지 표시 안 됐음
+        if (this._lyricsSynced && this._lyricsActiveLine >= 0) {
+            const modalLines = this.$.lyricsModalText.querySelectorAll('.fap-lyrics-modal-line');
+            const activeIdx = this._lyricsActiveLine;
+            if (modalLines[activeIdx]) {
+                modalLines[activeIdx].classList.add('fap-lyrics-active');
+                if (activeIdx > 0 && modalLines[activeIdx - 1]) {
+                    modalLines[activeIdx - 1].classList.add('fap-lyrics-prev');
+                }
+                if (activeIdx + 1 < modalLines.length && modalLines[activeIdx + 1]) {
+                    modalLines[activeIdx + 1].classList.add('fap-lyrics-next');
+                }
+                // 활성 라인을 모달 가운데로 (수동 scrollTop — _updateLyricsActiveLine과 동일 패턴)
+                // ※ scrollIntoView는 페이지 ancestor도 스크롤시킬 위험 있어 사용 안 함
+                const modalEl = this.$.lyricsModalText;
+                const lineEl = modalLines[activeIdx];
+                const targetTop = lineEl.offsetTop - modalEl.clientHeight / 2 + lineEl.offsetHeight / 2;
+                modalEl.scrollTop = Math.max(0, targetTop);
+            }
+        }
     }
     
     /**
@@ -1720,28 +1981,41 @@ class FSAudioPlayer {
                     allLines[activeIdx + 1].classList.add('fap-lyrics-next');
                 }
             }
+            
+            // ★ 모달이 열려있으면 모달의 활성 라인도 갱신 (v5.8.1c — 옵션 A 동기화)
+            if (this.$.lyricsModalText && this.$.lyricsModal && this.$.lyricsModal.style.display !== 'none') {
+                const modalLines = this.$.lyricsModalText.querySelectorAll('.fap-lyrics-modal-line');
+                modalLines.forEach(el => {
+                    el.classList.remove('fap-lyrics-active', 'fap-lyrics-prev', 'fap-lyrics-next');
+                });
+                if (activeIdx >= 0 && modalLines[activeIdx]) {
+                    modalLines[activeIdx].classList.add('fap-lyrics-active');
+                    if (activeIdx > 0 && modalLines[activeIdx - 1]) {
+                        modalLines[activeIdx - 1].classList.add('fap-lyrics-prev');
+                    }
+                    if (activeIdx + 1 < modalLines.length && modalLines[activeIdx + 1]) {
+                        modalLines[activeIdx + 1].classList.add('fap-lyrics-next');
+                    }
+                    // 활성 라인을 모달 중앙으로 자동 스크롤 (LRC 동기화 가사만)
+                    if (this._lyricsManualScrollUntil && Date.now() < this._lyricsManualScrollUntil) {
+                        // 사용자 수동 스크롤 중이면 자동 스크롤 일시 중지
+                    } else {
+                        const modalEl = this.$.lyricsModalText;
+                        const lineEl = modalLines[activeIdx];
+                        const targetTop = lineEl.offsetTop - modalEl.clientHeight / 2 + lineEl.offsetHeight / 2;
+                        if (Math.abs(modalEl.scrollTop - targetTop) > 10) {
+                            modalEl.scrollTo({ top: targetTop, behavior: 'smooth' });
+                        }
+                    }
+                }
+            }
             return;
         }
         
-        // ── synced=false (USLT/TXT plain): 시간 비례 자동 스크롤 ──
-        // 사용자가 수동 스크롤 중이면 자동 스크롤 일시 중지
-        if (this._lyricsManualScrollUntil && Date.now() < this._lyricsManualScrollUntil) return;
-        
-        const dur = this.audio.duration;
-        if (!dur || !isFinite(dur) || dur <= 0) return;
-        
-        // 노래 진행 비율로 스크롤 위치 계산
-        const scrollEl = this.$.lyricsScroll;
-        const contentEl = this.$.lyricsContent;
-        const maxScroll = contentEl.scrollHeight - scrollEl.clientHeight;
-        if (maxScroll <= 0) return;  // 가사가 박스보다 작으면 스크롤 불필요
-        
-        const progress = Math.max(0, Math.min(1, currentTime / dur));
-        const targetScrollTop = maxScroll * progress;
-        
-        // 너무 자주 호출되지 않도록 10px 이상 차이날 때만 스크롤
-        if (Math.abs(scrollEl.scrollTop - targetScrollTop) < 10) return;
-        scrollEl.scrollTop = targetScrollTop;
+        // ── synced=false (USLT/TXT plain): 자동 스크롤 제거 (v5.8.1c — 옵션 A) ──
+        // 정적 가사는 인라인에 표시 안 됨 (모달에서만 정적 표시) → 자동 스크롤 불필요
+        // 사용자가 모달에서 가사를 직접 스크롤하는 방식 (Apple Music 패턴)
+        return;
     }
     
     /**
@@ -3236,6 +3510,14 @@ class FSAudioPlayer {
             document.removeEventListener('click', this._skinMenuCloseHandler);
             this._skinMenuCloseHandler = null;
         }
+        // ★ 가사 모달 드래그 document 리스너 해제 (메모리 누수 방지 v5.8.1c)
+        //    _bindLyricsModalDrag에서 document에 등록한 mousemove/mouseup 정리
+        if (this._lyricsModalDragHandlers) {
+            try { document.removeEventListener('mousemove', this._lyricsModalDragHandlers.onMove); } catch(e) {}
+            try { document.removeEventListener('mouseup', this._lyricsModalDragHandlers.onUp); } catch(e) {}
+            this._lyricsModalDragHandlers = null;
+        }
+        this._lyricsModalDragBound = false;
         if (this._audioCtx) {
             try { this._audioCtx.close(); } catch(e) {}
             this._audioCtx = null;
@@ -5881,6 +6163,24 @@ const App = {
         window.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 _escConsumedByEditor = false;
+                // ★ 가사 모달 최우선 체크 (v5.8.1c — 펜닐님 결정)
+                //    capture phase에서 가장 먼저 가사 모달을 처리하여 다른 핸들러로 전파 차단
+                //    이전엔 jQuery bubble 핸들러에 추가했으나 이 capture 핸들러가 먼저 실행되어
+                //    _escDownForPreview = true가 되어 keyup에서 modal-preview를 닫아버렸음
+                const _lyricsModal = document.querySelector('.fap-lyrics-modal');
+                if (_lyricsModal && _lyricsModal.style.display !== 'none' && getComputedStyle(_lyricsModal).display !== 'none') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    e.stopImmediatePropagation();
+                    _escConsumedByEditor = true;  // keyup에서 modal-preview 닫기 막기
+                    if (this._fsAudioPlayer && this._fsAudioPlayer._closeLyricsModal) {
+                        this._fsAudioPlayer._closeLyricsModal();
+                    } else {
+                        _lyricsModal.classList.remove('fap-lyrics-modal-open');
+                        setTimeout(() => { _lyricsModal.style.display = 'none'; }, 200);
+                    }
+                    return;
+                }
                 const previewModal = document.getElementById('modal-preview');
                 if (previewModal && previewModal.style.display !== 'none') {
                     // 찾기/바꾸기 바가 열려있으면 여기서 닫고 소비
@@ -5947,6 +6247,25 @@ const App = {
         }, true); // 캡처 단계에서 먼저 처리
         
         $(document).on('keydown', e => {
+            // ★ 가사 모달 최우선 체크 (v5.8.1c 펜닐님 결정 — 다른 모든 모달 처리 전)
+            //    가사 모달은 mp3 미리보기 모달 위에 떠있는 서브 모달이므로 Esc 시 가사만 닫고 mp3는 유지
+            if (e.key === 'Escape') {
+                const _lyricsModal = document.querySelector('.fap-lyrics-modal');
+                if (_lyricsModal && _lyricsModal.style.display !== 'none' && getComputedStyle(_lyricsModal).display !== 'none') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+                    // FSAudioPlayer의 _closeLyricsModal 호출
+                    if (this._fsAudioPlayer && this._fsAudioPlayer._closeLyricsModal) {
+                        this._fsAudioPlayer._closeLyricsModal();
+                    } else {
+                        _lyricsModal.classList.remove('fap-lyrics-modal-open');
+                        setTimeout(() => { _lyricsModal.style.display = 'none'; }, 200);
+                    }
+                    return false;
+                }
+            }
+            
             // 모달이 열려있으면 모달 관련 키 처리
             const visibleModals = document.querySelectorAll('.modal');
             const hasVisibleModal = Array.from(visibleModals).some(m => {
@@ -31661,6 +31980,14 @@ const App = {
                     ? `<div class="video-audio-select" id="video-audio-select"></div>`
                     : '';
                 
+                // ★ Quality 셀렉터 컨테이너 (v5.8.1c) — 네이티브 재생 영상에도 표시
+                //   네이티브: original 유지 시 그대로 재생, 다른 quality 선택 시 트랜스코딩 전환
+                //   트랜스코딩: _startTranscode에서 _buildQualitySelectUI 호출 (이중 호출 방어 있음)
+                //   _vaultBlobUrl(암호화 vault)는 트랜스코딩 불가 → quality UI 미표시
+                const qualitySelectHtml = !item._vaultBlobUrl
+                    ? `<div class="video-quality-select" id="video-quality-select"></div>`
+                    : '';
+                
                 // ★ 메인 인덱스 폴더 동영상 플레이리스트 — 같은 폴더의 동영상 2개 이상이면 사이드 패널 활성화
                 //   펜닐님 결정: 2개 이상일 때만 표시 / 하이브리드 방식 (트랙 클릭 시 모달 닫고 재오픈)
                 const videoExts = this.previewExtensions?.video || ['mp4', 'webm', 'ogg', 'mkv', 'avi', 'mov', 'flv', 'wmv', '3gp', 'm4v', 'ts'];
@@ -31715,6 +32042,7 @@ const App = {
                 const videoInnerHtml = `<div class="video-player-wrap${_initialNotReady}" style="max-width:100%;max-height:100%;">
                     ${streamBadge}
                     ${audioSelectHtml}
+                    ${qualitySelectHtml}
                     ${toggleBtnHtml}
                     <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
                     <div class="video-play-overlay" id="video-play-overlay"><svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></div>
@@ -31780,6 +32108,21 @@ const App = {
                 // 자막 로드
                 if (subtitleTracks.length > 0) {
                     setTimeout(() => this._loadSubtitles(storageId, subtitleTracks), 300);
+                }
+                
+                // ★ Quality UI 빌드 (v5.8.1c) — 네이티브 재생 영상에서도 quality 셀렉터 활성화
+                //   네이티브 재생 + non-vault일 때만 — 트랜스코딩 영상은 _startTranscode에서 빌드함
+                //   _vaultBlobUrl: 암호화 vault는 트랜스코딩 불가 → quality UI 자체가 HTML에 없음 (위 qualitySelectHtml 분기)
+                //   네이티브 재생용 baseUrl: 트랜스코딩 전환 시 사용할 transcode URL
+                //   사용자가 'original' 외 quality 선택 → 네이티브 모드 → 트랜스코딩 모드 전환
+                if (!needsTranscode && !item._vaultBlobUrl) {
+                    const _nativeTranscodeBase = `api.php?action=transcode&storage_id=${storageId}&path=${encodeURIComponent(item.path)}`;
+                    setTimeout(() => {
+                        // DOM 삽입 후 빌드 (videoInnerHtml이 #preview-content에 들어간 다음)
+                        if (document.getElementById('video-quality-select')) {
+                            this._buildQualitySelectUI(_nativeTranscodeBase, /* nativeMode = */ true);
+                        }
+                    }, 50);
                 }
                 
                 // ★ 네이티브 재생 video.error → 트랜스코딩 자동 전환 (펜닐님 결정)
@@ -32092,10 +32435,27 @@ const App = {
                             const player = this._fsAudioPlayer;
                             if (!player || player._destroyed) return;
                             
-                            // Esc: 모달 닫기
+                            // ★ 가사 모달 열려있으면 Ctrl+L/Esc만 처리, 나머지 키 차단 (v5.8.1c)
+                            //    Space로 재생/일시정지하면 가사 모달 닫히는 것처럼 보일 수 있음 방지
+                            const _isLyricsOpen = player.$ && player.$.lyricsModal && player.$.lyricsModal.style.display !== 'none';
+                            if (_isLyricsOpen) {
+                                // Ctrl+L 토글만 허용 (Esc는 위 전역 핸들러에서 이미 처리)
+                                if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+                                    e.preventDefault();
+                                    if (player._closeLyricsModal) player._closeLyricsModal();
+                                }
+                                return;  // 다른 키는 모두 무시 (가사 모달 안에서는 음악 컨트롤 키 비활성)
+                            }
+                            
+                            // Esc: 모달 닫기 (가사 모달 열려있으면 가사 모달만 닫음 — v5.8.1c 옵션 A)
                             if (e.key === 'Escape') {
                                 e.preventDefault();
                                 e.stopPropagation();
+                                // 가사 모달이 열려있으면 가사 모달만 닫고 audio 모달은 유지
+                                if (player.$ && player.$.lyricsModal && player.$.lyricsModal.style.display !== 'none') {
+                                    if (player._closeLyricsModal) player._closeLyricsModal();
+                                    return;
+                                }
                                 App.hideModal('modal-preview');
                                 return;
                             }
@@ -32157,6 +32517,22 @@ const App = {
                                     if (player._showVolumeToast) player._showVolumeToast();
                                     if (player._saveVolumePref) player._saveVolumePref();
                                     e.preventDefault();
+                                }
+                                return;
+                            }
+                            
+                            // ★ Ctrl+L: 가사 모달 토글 (v5.8.1c — 펜닐님 요청)
+                            //   MusicBee/Apple Music 비공식 표준 단축키 (L = Lyrics)
+                            //   반복 모드는 단독 L (아래)로 유지 — Ctrl 조합으로 차별화
+                            if ((e.ctrlKey || e.metaKey) && (e.key === 'l' || e.key === 'L')) {
+                                e.preventDefault();
+                                if (player.$ && player.$.lyricsModal) {
+                                    if (player.$.lyricsModal.style.display !== 'none') {
+                                        if (player._closeLyricsModal) player._closeLyricsModal();
+                                    } else if (player._lyrics && player._openLyricsModal) {
+                                        // 가사 있을 때만 열기 (없으면 무시)
+                                        player._openLyricsModal();
+                                    }
                                 }
                                 return;
                             }
@@ -33097,9 +33473,22 @@ const App = {
                     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
                     if (e.target.isContentEditable) return;
                     
+                    // ★ 가사 모달이 열려있으면 모든 키 처리 차단 (Esc는 위 전역 핸들러에서 처리됨, v5.8.1c)
+                    //    Space, ←/→ 등으로 비디오 컨트롤이 영향받아 모달이 의도치 않게 닫히는 것 방지
+                    const _player = this._fsAudioPlayer;
+                    if (_player && _player.$ && _player.$.lyricsModal && _player.$.lyricsModal.style.display !== 'none') {
+                        return;  // 가사 모달이 열려있으면 비디오 컨트롤 무시
+                    }
+                    
                     if (e.key === 'Escape') {
                         e.preventDefault();
                         e.stopPropagation();
+                        // ★ 가사 모달 열려있으면 가사 모달만 닫고 audio/video 모달은 유지 (v5.8.1c)
+                        const _player = this._fsAudioPlayer;
+                        if (_player && _player.$ && _player.$.lyricsModal && _player.$.lyricsModal.style.display !== 'none') {
+                            if (_player._closeLyricsModal) _player._closeLyricsModal();
+                            return;
+                        }
                         App.hideModal('modal-preview');
                         return;
                     }
@@ -33364,6 +33753,12 @@ const App = {
                         }
                     }
                     
+                    // ★ Quality 셀렉터 빌드 (v5.8.1c)
+                    //   트랜스코딩 영상이면 audio_tracks 유무와 무관하게 항상 표시
+                    //   (단일 오디오 영상에서도 화질 변경 가능해야 함)
+                    //   nativeMode=false: 항상 트랜스코딩 모드로 변경됨 (네이티브 복귀 불가)
+                    this._buildQualitySelectUI(transcodeBaseUrl, /* nativeMode = */ false);
+                    
                     // 총 재생 시간 설정 (트랜스코딩 스트리밍은 브라우저가 duration을 모름)
                     if (infoData.duration && infoData.duration > 0) {
                         video._knownDuration = infoData.duration;
@@ -33434,6 +33829,7 @@ const App = {
                     const hlsStartUrl = 'api.php?action=hls_stream&storage_id=' + storageId + '&path=' + encodeURIComponent(path) + '&hls_action=start'
                         + (transcodeBaseUrl.includes('seek=') ? '&seek=' + new URL(transcodeBaseUrl, location.href).searchParams.get('seek') : '')
                         + (transcodeBaseUrl.includes('audio=') ? '&audio=' + new URL(transcodeBaseUrl, location.href).searchParams.get('audio') : '')
+                        + (transcodeBaseUrl.includes('quality=') ? '&quality=' + encodeURIComponent(new URL(transcodeBaseUrl, location.href).searchParams.get('quality')) : '')
                         + (_multiAudioSwForced ? '&force_sw=1' : '');
                     
                     // ★ [HLS_DIAG] hlsStartUrl 생성 결과 (멀티오디오 SW 강제 여부 진단)
@@ -33724,6 +34120,35 @@ const App = {
                                     window._hlsTimings.manifestParsed = performance.now();
                                     // console.log('[HLSDebug] MANIFEST_PARSED:', (window._hlsTimings.manifestParsed - window._hlsTimings.startFetch).toFixed(0) + 'ms (총 start 이후)');
                                 }
+                                // ★ Quality 변경 자동 재생 (v5.8.1c)
+                                //   _buildQualitySelectUI에서 변경 시 _pendingResumeAfterQuality 플래그 설정
+                                //   manifest_parsed 후 새 hls 인스턴스가 attach 완료된 시점에 재생 시작
+                                //   → 옛 MediaSource 잔재 시킹 위험 없음
+                                //   서버 seek=N 적용으로 새 stream0.ts = 사용자가 본 시점이라 currentTime=0 그대로 OK
+                                if (video._pendingResumeAfterQuality) {
+                                    video._pendingResumeAfterQuality = false;
+                                    // ★ race-safe play (v5.8.1c 패치)
+                                    //   MANIFEST_PARSED 직후엔 hls.js가 내부 buffering 중 →
+                                    //   바로 play() 호출하면 "interrupted by pause()" 경고 발생 (실제론 정상 재생)
+                                    //   canplay 이벤트 후 시도하면 깨끗함
+                                    const _onCanPlay = () => {
+                                        video.removeEventListener('canplay', _onCanPlay);
+                                        video.play().catch((e) => {
+                                            const msg = String(e?.message || '');
+                                            if (!msg.includes('interrupted') && !msg.includes('AbortError')) {
+                                                // console.warn('[QualityChange] auto-resume play failed:', msg);
+                                            }
+                                        });
+                                    };
+                                    video.addEventListener('canplay', _onCanPlay, { once: true });
+                                    // fallback: 2초 후에도 canplay 안 오면 강제 시도
+                                    setTimeout(() => {
+                                        if (video.paused) {
+                                            video.removeEventListener('canplay', _onCanPlay);
+                                            video.play().catch(() => {});
+                                        }
+                                    }, 2000);
+                                }
                             });
                             
                             // ★ HLS 자동재생 제거 (펜닐님 요청 — 모든 영상 수동 재생으로 통일)
@@ -33979,6 +34404,27 @@ const App = {
                             if (badge) {
                                 const enc = badge.querySelector('.encoder-info');
                                 badge.innerHTML = '⚡ HLS ' + t('streaming', '스트리밍') + (enc ? ' ' + enc.outerHTML : '');
+                            }
+                            
+                            // ★ Quality 변경 자동 재생 (v5.8.1c) — iOS native HLS, race-safe
+                            if (video._pendingResumeAfterQuality) {
+                                video._pendingResumeAfterQuality = false;
+                                const _onIosCanPlay = () => {
+                                    video.removeEventListener('canplay', _onIosCanPlay);
+                                    video.play().catch((e) => {
+                                        const msg = String(e?.message || '');
+                                        if (!msg.includes('interrupted') && !msg.includes('AbortError')) {
+                                            // console.warn('[QualityChange] iOS auto-resume failed:', msg);
+                                        }
+                                    });
+                                };
+                                video.addEventListener('canplay', _onIosCanPlay, { once: true });
+                                setTimeout(() => {
+                                    if (video.paused) {
+                                        video.removeEventListener('canplay', _onIosCanPlay);
+                                        video.play().catch(() => {});
+                                    }
+                                }, 2000);
                             }
                             
                             // ★ iOS 네이티브 HLS — video.error 이벤트로 SW fallback 트리거
@@ -34554,6 +35000,20 @@ const App = {
         
         container.innerHTML = html;
         
+        // ★ Quality 셀렉터가 함께 존재하면 audio를 좌측으로 배치 (v5.8.1c 위치 통일)
+        //   has-quality-sibling 클래스로 CSS가 right:220px 적용 → 가로 배치
+        if (document.getElementById('video-quality-select')) {
+            container.classList.add('has-quality-sibling');
+        }
+        
+        // ★ 목록 버튼 회피 (v5.8.1c — 펜닐님 요청)
+        //   audio 셀렉터도 quality와 함께 있을 때는 목록 버튼 회피용 좌측 이동 (right:305px)
+        //   container의 부모 wrap에서 .fs-vp-toggle 검색
+        const _audioWrap = container.closest('.video-player-wrap');
+        if (_audioWrap && _audioWrap.querySelector('.fs-vp-toggle')) {
+            container.classList.add('has-toggle-sibling');
+        }
+        
         // 오디오 트랙 변경 시 새 스트림으로 재생
         // 사용자 조작만 반응 (programmatic change 무시)
         let audioUIReady = false;
@@ -34598,10 +35058,27 @@ const App = {
                 return;
             }
             
-            // liveBaseUrl에서 기존 audio 파라미터 제거 후 새로 추가
-            const cleanBase = liveBaseUrl.replace(/&audio=\d+/g, '');
-            const newBaseUrl = cleanBase + '&audio=' + audioIdx;
+            // ★ 절대 원본 시점 계산 (v5.8.1c — audio 변경에도 누적 보정)
+            //   이전 quality 변경으로 _qualitySeekOffset이 박혀있으면 currentTime은 상대시간
+            //   audio만 바꾸지만 새 세션이므로 absoluteTime = currentTime + offset로 새 seek 빌드
+            const _audioRelTime = video.currentTime || 0;
+            const _audioOffset = video._qualitySeekOffset || 0;
+            const _audioAbsTime = _audioRelTime + _audioOffset;
+            
+            // liveBaseUrl에서 기존 audio + seek 제거 후 새로 추가
+            //   quality는 그대로 유지 (audio만 바꾸려는 의도)
+            //   seek은 절대시점으로 갱신 (사용자가 본 시점 보존)
+            const cleanBase = liveBaseUrl
+                .replace(/&audio=\d+/g, '')
+                .replace(/&seek=[^&]*/g, '');
+            let newBaseUrl = cleanBase + '&audio=' + audioIdx;
+            if (_audioAbsTime > 0) {
+                newBaseUrl += '&seek=' + _audioAbsTime.toFixed(2);
+            }
             video.setAttribute('data-transcode-base', newBaseUrl);
+            
+            // ★ 새 세션의 새 stream0.ts = 절대시점 → offset 갱신
+            video._qualitySeekOffset = _audioAbsTime;
             
             // ★ [HLS_DIAG] newBaseUrl 생성 결과
             if (window._diagLog) {
@@ -34726,6 +35203,299 @@ const App = {
             }
             
             this._startTranscode(newBaseUrl, storageId, path);
+        });
+    },
+    
+    /**
+     * Quality(화질) 셀렉터 UI 빌드 (v5.8.1c)
+     * - audio 변경 멀티오디오 분기와 100% 동일 패턴 사용 (검증된 흐름)
+     * - 변경 시 새 baseUrl + 새 _startTranscode → 새 세션 → 새 hls 인스턴스
+     * - currentTime은 _pendingResumeTime으로 보존 → MANIFEST_PARSED 후 자동 시킹
+     * - 명시적 video.play() 금지 (옛 MediaSource buffered 영역 시킹 방지)
+     * 
+     * @param baseUrl 트랜스코딩 baseUrl (네이티브 모드면 미래 트랜스코딩 전환용)
+     * @param nativeMode 네이티브 재생 영상에서 호출됐는지 여부
+     *                   - true: 'original' = 네이티브 재생 유지, 다른 값 = 트랜스코딩 전환
+     *                   - false: 항상 트랜스코딩 모드 (다른 quality 세션으로 재시작)
+     */
+    _buildQualitySelectUI(baseUrl, nativeMode = false) {
+        const wrap = document.querySelector('.video-player-wrap');
+        if (!wrap) return;
+        
+        // ★ Quality 프리셋 (v5.8.1c — 펜닐님 요청 PC/모바일 공통 7단계)
+        //   원본 / 1080p / 720p / 480p / 360p / 240p / 144p
+        const _qPresets = ['original', '1080p', '720p', '480p', '360p', '240p', '144p'];
+        const _qLabels = {
+            'original': t('quality_original', '원본'),
+            '1080p':    '1080p',
+            '720p':     '720p',
+            '480p':     '480p',
+            '360p':     '360p',
+            '240p':     '240p',
+            '144p':     '144p',
+        };
+        
+        // 현재 quality 파악 (URL 또는 video data attr)
+        const video = document.querySelector('#preview-content .preview-video');
+        let _curQuality = 'original';
+        if (video) {
+            const liveBase = video.getAttribute('data-transcode-base') || baseUrl || '';
+            try {
+                const u = new URL(liveBase, location.href);
+                const q = u.searchParams.get('quality');
+                if (q && _qPresets.includes(q)) _curQuality = q;
+            } catch(e) {}
+        }
+        
+        // 컨테이너 (HTML에서 미리 만들어진 #video-quality-select 사용)
+        let qDiv = document.getElementById('video-quality-select');
+        if (!qDiv) {
+            // fallback: 동적 생성
+            qDiv = document.createElement('div');
+            qDiv.className = 'video-quality-select';
+            qDiv.id = 'video-quality-select';
+            const audioDiv = wrap.querySelector('#video-audio-select');
+            if (audioDiv && audioDiv.parentNode) {
+                audioDiv.parentNode.insertBefore(qDiv, audioDiv.nextSibling);
+            } else {
+                wrap.insertBefore(qDiv, wrap.querySelector('video'));
+            }
+        }
+        // ★ 이중 빌드 방어: 이미 빌드되어있으면 스킵 (네이티브 → 트랜스코딩 전환 시 재호출 케이스)
+        if (qDiv.querySelector('select#quality-picker')) {
+            return;
+        }
+        
+        // HTML 빌드
+        let html = `<label class="quality-label">🎬 ${t('quality_label', '화질')}:</label>`;
+        html += '<select class="quality-select" id="quality-picker">';
+        _qPresets.forEach(q => {
+            const isSelected = (q === _curQuality);
+            html += `<option value="${q}"${isSelected ? ' selected' : ''}>${this.escapeHtml(_qLabels[q] || q)}</option>`;
+        });
+        html += '</select>';
+        qDiv.innerHTML = html;
+        
+        // ★ 위치 통일 (v5.8.1c) — audio 셀렉터가 이미 있으면 좌측 이동 클래스 부여
+        //   _buildAudioTrackUI가 먼저 실행됐어도, 여기서 다시 한 번 보장
+        const _audioSelEl = document.getElementById('video-audio-select');
+        if (_audioSelEl && _audioSelEl.children.length > 0) {
+            _audioSelEl.classList.add('has-quality-sibling');
+        }
+        
+        // ★ 목록 버튼(.fs-vp-toggle) 회피 — 펜닐님 요청 (네이티브/트랜스코딩 모두 적용)
+        //   :has() 폴백용 클래스 동기화 — 화질 셀렉트가 목록 버튼과 겹치지 않도록 좌측 이동
+        //   목록 버튼은 같은 wrap 자식이라 querySelector로 검사
+        const _toggleBtn = wrap.querySelector('.fs-vp-toggle');
+        if (_toggleBtn) {
+            qDiv.classList.add('has-toggle-sibling');
+            // audio 셀렉터도 함께 있으면 audio도 더 좌측으로
+            if (_audioSelEl && _audioSelEl.children.length > 0) {
+                _audioSelEl.classList.add('has-toggle-sibling');
+            }
+        }
+        
+        // change 핸들러 — UI 준비 가드 (audio와 동일 패턴)
+        let qUIReady = false;
+        setTimeout(() => { qUIReady = true; }, 1500);
+        
+        document.getElementById('quality-picker').addEventListener('change', (e) => {
+            if (!qUIReady) return;
+            const newQuality = e.target.value;
+            const video = document.querySelector('#preview-content .preview-video');
+            if (!video) return;
+            
+            // ★ 네이티브 모드 분기 (v5.8.1c)
+            //   - 'original' 선택 + 현재 네이티브 재생 → 변화 없음 (이미 원본 재생 중)
+            //   - 'original' 선택 + 현재 트랜스코딩 재생 → 트랜스코딩 종료, 네이티브 src로 복귀
+            //   - 비-original 선택 + 현재 네이티브 → 트랜스코딩 모드로 전환 (새 quality 세션 시작)
+            //   - 비-original 선택 + 현재 트랜스코딩 → 새 quality 세션으로 재시작
+            const isCurrentlyTranscoding = !!video.getAttribute('data-transcode-base');
+            
+            // CASE 1: 네이티브 → 네이티브 (original 유지) → 변화 없음
+            if (nativeMode && newQuality === 'original' && !isCurrentlyTranscoding) {
+                return;
+            }
+            
+            // ★ 절대 원본 시점 계산 (v5.8.1c — 누적 오프셋 보정)
+            //   문제: 트랜스코딩 모드는 stream0.ts = 새 세션 시작 시점이라
+            //         video.currentTime은 새 세션 기준 상대시간임
+            //   예: 23.5초에서 480p 변경 → 새 세션의 30초 재생 = 원본의 53.5초
+            //       이 때 video.currentTime = 30 (잘못된 절대값)
+            //   해결: 트랜스코딩 시작 시 _qualitySeekOffset 저장 → 절대시점 = currentTime + offset
+            const relativeTime = video.currentTime || 0;
+            const seekOffset = video._qualitySeekOffset || 0;
+            const absoluteTime = isCurrentlyTranscoding ? (relativeTime + seekOffset) : relativeTime;
+            const wasPaused = video.paused;
+            
+            // CASE 2: 네이티브에서 비-original 선택 → 트랜스코딩 모드 전환
+            if (nativeMode && !isCurrentlyTranscoding && newQuality !== 'original') {
+                // console.log('[QualityChange] native → transcode at', absoluteTime.toFixed(1) + 's (abs), quality=' + newQuality);
+                
+                let newBaseUrl = baseUrl;
+                if (newQuality !== 'original') {
+                    newBaseUrl += '&quality=' + encodeURIComponent(newQuality);
+                }
+                if (absoluteTime > 0) {
+                    newBaseUrl += '&seek=' + absoluteTime.toFixed(2);
+                }
+                video.setAttribute('data-transcode-base', newBaseUrl);
+                
+                // ★ 절대 원본 시점 저장 — 다음 변경 시 누적 보정용
+                video._qualitySeekOffset = absoluteTime;
+                
+                try { video.pause(); } catch(e) {}
+                while (video.firstChild) video.removeChild(video.firstChild);
+                video.removeAttribute('src');
+                try { video.load(); } catch(e) {}
+                
+                video._pendingResumeAfterQuality = !wasPaused;
+                
+                window._lastStartTranscodeUrl = null;
+                window._lastStartTranscodeTime = 0;
+                window._hlsStarting = false;
+                window._hlsSwRetried = false;
+                
+                const badge = document.querySelector('.video-stream-badge');
+                if (badge) {
+                    badge.className = 'video-stream-badge';
+                    badge.innerHTML = '⚡ ' + t('realtime_streaming', '실시간 스트리밍');
+                }
+                
+                const _storageId = new URL(baseUrl, location.href).searchParams.get('storage_id');
+                const _path = new URL(baseUrl, location.href).searchParams.get('path');
+                this._startTranscode(newBaseUrl, _storageId, _path);
+                return;
+            }
+            
+            // CASE 3: 트랜스코딩 → 네이티브 (original 선택 + 원래 네이티브였음)
+            if (nativeMode && newQuality === 'original' && isCurrentlyTranscoding) {
+                // console.log('[QualityChange] transcode → native at', absoluteTime.toFixed(1) + 's (abs)');
+                
+                if (video._hlsInstance) {
+                    try { video._hlsInstance.destroy(); } catch(e) {}
+                    video._hlsInstance = null;
+                }
+                if (video._hlsStopSession) {
+                    try { video._hlsStopSession(); } catch(e) {}
+                    video._hlsStopSession = null;
+                }
+                if (video._mmsCleanup) { try { video._mmsCleanup(); } catch(e) {} }
+                if (video._mmsAbort) { try { video._mmsAbort.abort(); } catch(e) {} }
+                
+                video.removeAttribute('data-transcode-base');
+                video._qualitySeekOffset = 0;
+                
+                try { video.pause(); } catch(e) {}
+                video.removeAttribute('src');
+                try { video.load(); } catch(e) {}
+                
+                const _u = new URL(baseUrl, location.href);
+                const _sid = _u.searchParams.get('storage_id');
+                const _p = _u.searchParams.get('path');
+                const nativeUrl = `api.php?action=download&storage_id=${_sid}&path=${encodeURIComponent(_p)}&inline=1`;
+                
+                const src = document.createElement('source');
+                src.src = nativeUrl;
+                src.type = 'video/mp4';
+                video.appendChild(src);
+                try { video.load(); } catch(e) {}
+                
+                // 시점 복원 + race-safe 자동 재생 (★ 절대 원본 시점 사용)
+                video.addEventListener('loadedmetadata', () => {
+                    if (absoluteTime > 0) {
+                        try { video.currentTime = absoluteTime; } catch(e) {}
+                    }
+                    if (!wasPaused) {
+                        // canplay 후 재생 (loadedmetadata만으로는 buffered 부족)
+                        const _onCanPlay = () => {
+                            video.removeEventListener('canplay', _onCanPlay);
+                            video.play().catch((e) => {
+                                if (!String(e?.message || '').includes('interrupted')) {
+                                    // console.warn('[QualityChange] native resume play failed:', e?.message);
+                                }
+                            });
+                        };
+                        video.addEventListener('canplay', _onCanPlay, { once: true });
+                        // fallback: 1.5초 후에도 canplay 안 오면 강제 시도
+                        setTimeout(() => {
+                            if (video.paused) {
+                                video.removeEventListener('canplay', _onCanPlay);
+                                video.play().catch(() => {});
+                            }
+                        }, 1500);
+                    }
+                }, { once: true });
+                
+                const badge = document.querySelector('.video-stream-badge');
+                if (badge) {
+                    badge.className = 'video-stream-badge native';
+                    badge.innerHTML = '▶ ' + t('native_playback', '일반 재생');
+                }
+                return;
+            }
+            
+            // CASE 4: 트랜스코딩 → 다른 quality 트랜스코딩
+            const liveBaseUrl = video.getAttribute('data-transcode-base') || baseUrl;
+            const curQualityParam = new URL(liveBaseUrl, location.href).searchParams.get('quality') || 'original';
+            
+            if (newQuality === curQualityParam) {
+                return;
+            }
+            
+            // console.log('[QualityChange]', curQualityParam, '→', newQuality, 'at', absoluteTime.toFixed(1) + 's (abs)');
+            
+            // ★ seek는 절대 원본 시점 사용 (누적 보정)
+            let cleanBase = liveBaseUrl
+                .replace(/&quality=[^&]*/g, '')
+                .replace(/&seek=[^&]*/g, '');
+            let newBaseUrl = cleanBase;
+            if (newQuality !== 'original') {
+                newBaseUrl += '&quality=' + encodeURIComponent(newQuality);
+            }
+            if (absoluteTime > 0) {
+                newBaseUrl += '&seek=' + absoluteTime.toFixed(2);
+            }
+            video.setAttribute('data-transcode-base', newBaseUrl);
+            
+            // ★ 절대 원본 시점 저장 — 다음 변경 시 누적 보정용
+            video._qualitySeekOffset = absoluteTime;
+            
+            // HLS 인스턴스 정리
+            if (video._hlsInstance) {
+                try { video._hlsInstance.destroy(); } catch(e) {}
+                video._hlsInstance = null;
+            }
+            if (video._hlsStopSession) {
+                try { video._hlsStopSession(); } catch(e) {}
+                video._hlsStopSession = null;
+            }
+            window._hlsSwRetried = false;
+            
+            if (window._transcodeAbort) {
+                try { window._transcodeAbort.abort(); } catch(e) {}
+            }
+            window._lastStartTranscodeUrl = null;
+            window._lastStartTranscodeTime = 0;
+            window._hlsStarting = false;
+            
+            if (video._mmsCleanup) {
+                video._mmsCleanup();
+            }
+            if (video._mmsAbort) {
+                try { video._mmsAbort.abort(); } catch(e) {}
+            }
+            
+            try { video.pause(); } catch(e) {}
+            video.removeAttribute('src');
+            try { video.load(); } catch(e) {}
+            
+            const _storageId = new URL(liveBaseUrl, location.href).searchParams.get('storage_id');
+            const _path = new URL(liveBaseUrl, location.href).searchParams.get('path');
+            
+            video._pendingResumeAfterQuality = !wasPaused;
+            
+            this._startTranscode(newBaseUrl, _storageId, _path);
         });
     },
     
@@ -34943,6 +35713,15 @@ const App = {
         if (closeBtn) {
             closeBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                // ★ aria-hidden 설정 전에 포커스 이동 (a11y 경고 방지)
+                //   "Blocked aria-hidden on an element because its descendant retained focus" 해결
+                if (closeBtn === document.activeElement) {
+                    closeBtn.blur();
+                    // 포커스 받을 수 있는 형제로 이동 (toggle 버튼 또는 body)
+                    const toggleBtn = document.getElementById('fs-vp-toggle');
+                    if (toggleBtn) toggleBtn.focus();
+                    else document.body.focus();
+                }
                 panel.classList.remove('open');
                 panel.setAttribute('aria-hidden', 'true');
                 sessionStorage.setItem(PANEL_KEY, '0');

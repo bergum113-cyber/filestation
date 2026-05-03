@@ -680,6 +680,29 @@ export class HwpDocument {
         }
     }
     /**
+     * @param {number} section_idx
+     * @param {number} para_idx
+     * @returns {string}
+     */
+    deleteParagraph(section_idx, para_idx) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_deleteParagraph(this.__wbg_ptr, section_idx, para_idx);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * 그림 컨트롤을 문단에서 삭제한다.
      *
      * 반환: JSON `{"ok":true}`
@@ -3542,6 +3565,29 @@ export class HwpDocument {
         }
     }
     /**
+     * @param {number} section_idx
+     * @param {number} para_idx
+     * @returns {string}
+     */
+    insertParagraph(section_idx, para_idx) {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            const ret = wasm.hwpdocument_insertParagraph(this.__wbg_ptr, section_idx, para_idx);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * 커서 위치에 그림을 삽입한다.
      *
      * image_data: 이미지 바이너리 데이터 (PNG/JPG/GIF/BMP 등)
@@ -4508,6 +4554,17 @@ export class HwpDocument {
         return ret[0] >>> 0;
     }
     /**
+     * @param {number} page_num
+     * @returns {number}
+     */
+    renderPageCanvasLegacy(page_num) {
+        const ret = wasm.hwpdocument_renderPageCanvasLegacy(this.__wbg_ptr, page_num);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] >>> 0;
+    }
+    /**
      * 특정 페이지를 HTML 문자열로 렌더링한다.
      * @param {number} page_num
      * @returns {string}
@@ -4564,6 +4621,18 @@ export class HwpDocument {
      */
     renderPageToCanvas(page_num, canvas, scale) {
         const ret = wasm.hwpdocument_renderPageToCanvas(this.__wbg_ptr, page_num, canvas, scale);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
+     * 특정 페이지를 기존 PageRenderTree 경로로 Canvas 2D에 직접 렌더링한다.
+     * @param {number} page_num
+     * @param {HTMLCanvasElement} canvas
+     * @param {number} scale
+     */
+    renderPageToCanvasLegacy(page_num, canvas, scale) {
+        const ret = wasm.hwpdocument_renderPageToCanvasLegacy(this.__wbg_ptr, page_num, canvas, scale);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
         }
@@ -5951,7 +6020,7 @@ function __wbg_get_imports() {
         __wbg_lineTo_fe5522fbbf79a59d: function(arg0, arg1, arg2) {
             arg0.lineTo(arg1, arg2);
         },
-        __wbg_measureTextWidth_3cd91d175f951e1d: function(arg0, arg1, arg2, arg3) {
+        __wbg_measureTextWidth_b2ff54f2bcc245dd: function(arg0, arg1, arg2, arg3) {
             const ret = globalThis.measureTextWidth(getStringFromWasm0(arg0, arg1), getStringFromWasm0(arg2, arg3));
             return ret;
         },

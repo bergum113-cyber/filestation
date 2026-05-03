@@ -1,4 +1,4 @@
-# FileStation v5.8.1b
+# FileStation v5.8.1c
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -8,7 +8,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.8 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.9 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -193,7 +193,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.8 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.9 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -473,7 +473,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.8** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.9** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -485,7 +485,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1b.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1c.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -571,7 +571,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1b');
+define('APP_VERSION', '5.8.1c');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -643,7 +643,7 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.8
+버전: 0.7.9
 파일: assets/rhwp/
 업그레이드: rhwp_업그레이드_가이드_v4.md 참조
 ```
@@ -664,7 +664,7 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.8의 베타 단계 제한, HWP 형식만 저장 가능
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.9의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -699,11 +699,95 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1b (rhwp 0.7.8 기반)
+**현재 버전**: v5.8.1c (rhwp 0.7.9 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1b (2026-04-30) ⭐ 현재
+#### v5.8.1c (2026-05-03) ⭐ 현재
+**1. rhwp 0.7.8 → 0.7.9 업그레이드**
+- 가이드 v5 표준 절차 진행 (사전 회귀 점검 → clone → npm @rhwp/core 0.7.9 → studio 빌드 → 패치 J1/P2 자동 적용 → 검증 15/15 통과)
+- 빌드 결과:
+  - JS: `index-Db8NVuPi.js` → `index-CCef3-Zl.js` (해시 갱신)
+  - CSS: `index-ro3nVBB2.css` (해시 동일 — 0.7.9 CSS 변경 없음)
+  - WASM: `rhwp_bg-BqZZZ9ls.wasm` → `rhwp_bg-Bb98LUYj.wasm` (해시 갱신)
+- 0.7.9 주요 개선 (rhwp 측):
+  - **Task #501**: HWP 셀 padding 비정상 케이스 한컴 방어 로직 추가 — `pad_top + pad_bottom > cell.height`인 비정상 셀에서 row 높이 계산 회귀 정정 (mel-001.hwp 등 정상 표시)
+  - **PR #428**: 그룹 내 그림(Picture) 직렬화 구현 — 그룹 안에 그림이 포함된 HWP 저장 시 그림 데이터 유실 결함 정정
+  - **PR #494**: `Paragraph::utf16_pos_to_char_idx` 외부 노출 (API 추가)
+  - **PR #478**: Layout 정합 + 수식 렌더링 정정 (수식 토크나이저 폰트 스타일 prefix 분리, italic honor 등)
+- 패치 적용 결과:
+  - 패치 J1 (file:save 단축키 매핑 제거): 1건 매칭 → 제거 성공 (커스텀 Ctrl+S 정상 동작)
+  - 패치 P1 (절대경로): 0건 (0.7.9도 절대경로 사용 안 함)
+  - 패치 P2 (`../images/` → `images/`): 1건 매칭 → 제거 성공
+- 빌드 환경 변화: vite 5/6 → vite 8, TypeScript 5 → 6 (PWA 플러그인 추가됐으나 FileStation은 PWA 미사용 — 가이드대로 PWA 없이 빌드)
+- 커스텀 보존 검증 15/15 통과 (save/save-as/Ctrl+S/syncSuspended/notifyParent/MutationObserver/HWPX 차단 5중 방어 등 모두 그대로)
+
+**2. MP3 플레이어 가사 모달 (옵션 A — Apple Music 스타일)**
+- 본질: 동기화된 가사(LRC, synced=true)는 인라인 3줄 표시 + 모달, 정적 가사(USLT/TXT, synced=false)는 인라인 숨김 + 모달에서만 정적 표시
+- 새 기능:
+  - 가사 버튼 (`fap-btn-lyrics`) — 가사 있는 트랙만 활성화 (없으면 숨김)
+  - 가사 모달 — PC: 흰색 카드 (사이트 일반 모달 스타일), 모바일: 풀스크린 어두운 배경 (Apple Music 스타일)
+  - 헤더 노래 제목 표시 (PC/모바일 통일 — "가사" 라벨 없이 트랙 제목만)
+  - PC 헤더 드래그로 모달 위치 이동 가능 (모바일은 풀스크린이라 비활성)
+  - 정적 가사 모달은 사용자 자유 스크롤 (자동 스크롤 제거 — 시간 동기 불가능해서 혼란 방지)
+  - 동기화 가사 모달은 활성라인 자동 스크롤 (LRC만)
+- 단축키:
+  - `Ctrl+L`: 가사 모달 토글 (MusicBee/Apple Music 비공식 표준)
+  - `Esc`: 가사 모달만 닫기 (mp3 모달은 유지)
+  - 가사 모달 열려있을 때 다른 키(Space/←/→/M/S/L) 차단 — 의도치 않은 음악 컨트롤 방지
+  - 외부 클릭으로 안 닫힘 (X 버튼 또는 Esc로만)
+- 적용 범위: app.js (메인 미리보기), fs-audio-player.js + share.php (공유 페이지)
+- APlayer Fixed 스킨 grid 조정:
+  - 마지막 행 `1fr` 적용 → 모달 크기 변화 시 남는 공간이 마지막 행으로 흡수 (다른 스킨 패턴과 일관)
+  - 시킹바/컨트롤/볼륨 패딩 16px로 늘림 + `align-self: start`로 상단 고정
+  - 볼륨은 컨트롤 바로 아래 고정 (남는 공간은 모달 바닥으로 몰림)
+  - 가사 없을 때 (정적 가사 또는 가사 0개) `fap-no-inline-lyrics` 클래스로 grid row 2 압축
+
+**3. 동영상 화질(Quality) 셀렉터 추가**
+- 본질: HLS 트랜스코딩 영상에 7단계 화질 선택 (원본 / 1080p / 720p / 480p / 360p / 240p / 144p)
+- 동작 케이스:
+  - CASE 1: 네이티브 → 네이티브 (original 유지) — 변화 없음
+  - CASE 2: 네이티브 → 트랜스코딩 (비-original 선택) — HLS 세션 시작
+  - CASE 3: 트랜스코딩 → 네이티브 (original 선택) — HLS 인스턴스 정리 + native source 복원
+  - CASE 4: 트랜스코딩 → 다른 quality — 기존 인스턴스/세션 정리 + 새 HLS 세션 시작
+- `_qualitySeekOffset` 누적 보정 (핵심):
+  - 트랜스코딩은 `stream0.ts = 새 세션 시작 시점`이라 `currentTime`은 상대시간
+  - 절대시점 = `currentTime + offset` 으로 누적 계산 (audio 변경 시도 보정)
+  - 메인 app.js + share.php 모두 동일 패턴
+- race-safe play: `MANIFEST_PARSED` 후 `canplay` 이벤트에서 play() 호출 (interrupted 경고 회피) + 2초 fallback
+- 위치: PC 우상단 (audio 셀렉터와 가로 배치), 모바일 audio 셀렉터 아래
+- 적용 범위: app.js, share.php — 트랜스코딩 영상 + 네이티브 재생 영상 모두 활성화
+
+**4. FLAC/Opus 등 모바일 재생 (MIME 타입 보강)**
+- 본질: `getMimeType()`/`mimeMap`이 FLAC, M4A, AAC, OPUS 등 누락 → `application/octet-stream` 응답 → 모바일 브라우저가 audio로 인식 못 하고 다운로드 처리
+- 수정:
+  - FileManager::getMimeType() — FLAC, M4A, AAC, OPUS, WMA, OGA, AIFF 추가
+  - ShareManager mimeMap — 동일하게 동기화 + Opus를 `audio/opus` → `audio/ogg`로 변경 (일부 모바일은 audio/opus 미인식)
+- 효과: iOS Safari, Chrome Android에서 FLAC 재생 정상
+
+**5. 모바일 자막 컨트롤 정리**
+- PC: fullscreen에서만 표시 (`:fullscreen` / `:-webkit-full-screen`)
+- 모바일: 항상 숨김 (`!important`) — 화면이 좁아 컨트롤이 거슬림
+- 자막 컨트롤 위치: `bottom: 190px` (iOS native fullscreen 컨트롤바 회피)
+
+**6. 모바일 파일 리스트 UX 개선 (CSS 한정)**
+- 모바일 list-view에서 grid 레이아웃 적용 (`grid-template-areas: "check icon name name" / "check icon date type"`)
+- 이름 1행 전체폭, 그 아래 작은 글씨로 날짜·유형
+- size 컬럼 모바일 숨김 + 헤더 숨김 (옵션 B)
+- PC는 변경 없음
+
+**7. 메모리 누수 + UX 결함 수정 (4차 검토 누적)**
+- 가사 모달 드래그 핸들러 destroy 시 `removeEventListener` 정리 추가
+- 드래그 후 모달 재오픈 시 `position/margin/transition` 모두 초기화 (이전엔 `left/top`만 초기화 → 좌상단 표시 버그)
+- 가사 모달 열 때 LRC 활성라인 즉시 표시 (`_renderLyricsModalContent` 끝에 처리 — 이전엔 다음 timeupdate 기다림)
+- `scrollIntoView` → 수동 `scrollTop` 패턴으로 통일 (페이지 스크롤 영향 회피, 메인-share 일관성)
+- `_openLyricsModal` 순서 변경 — `display = ''` 먼저 → 그 후 렌더 (clientHeight 정확한 계산)
+
+**8. 캐시 무효화**
+- `APP_VERSION` `5.8.1b` → `5.8.1c` 업데이트
+- `?v=APP_VERSION` 자원 URL 모두 새로 다운로드 (iOS Safari 등 공격적 캐시 회피)
+
+#### v5.8.1b (2026-04-30)
 **1. 멀티오디오 영상 HW 인코딩 활용 (저부하 개선)**
 - 본질: 기존 멀티오디오 검출 시 무조건 SW 강제 → CPU 부하 큼 (특히 N100/저사양 환경)
 - 변경: 스트리밍 방식별 분기 — HLS 경로는 HW 시도, MMS 경로 + iOS만 SW 강제
@@ -875,5 +959,5 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ---
 
-*FileStation v5.8.1b — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-04-30*
+*FileStation v5.8.1c — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-05-03*

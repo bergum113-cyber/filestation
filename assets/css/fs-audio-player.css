@@ -1117,15 +1117,16 @@
     overflow: hidden;
     display: grid !important;
     grid-template-columns: 340px 1fr;
-    /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 */
-    grid-template-rows: 340px auto auto auto auto !important;
+    /* Row 1: 커버(고정) / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨(남은공간 흡수) */
+    /* ★ 마지막 행 1fr (펜닐님 결정 v5.8.1c): 모달 크기 변화 시 남는 공간을 마지막 볼륨 행이 흡수 */
+    grid-template-rows: 340px auto auto auto 1fr !important;
     gap: 0 !important;
     min-height: 460px;
     position: relative;
 }
 /* ★ iOS: 볼륨 영역 숨김 시 grid 마지막 행 제거 (좌측 column 빈 공간 방지) */
 .fap.fap-skin-ap-fixed.fap-ios {
-    grid-template-rows: 340px auto auto auto !important;
+    grid-template-rows: 340px auto auto 1fr !important;
     min-height: auto;
 }
 /* 스킨 선택기: 우측 상단에 고정, 플레이리스트 영역 위에 오버레이 */
@@ -1245,7 +1246,9 @@
 .fap-skin-ap-fixed .fap-seek {
     grid-column: 1;
     grid-row: 3;
-    padding: 2px 16px 4px !important;
+    align-self: start;     /* 행 상단에 고정 (행 stretch 방지) */
+    /* ★ 위 여백 늘림: 썸네일과 시킹바 사이 시각적 분리 (펜닐님 요청 v5.8.1c) */
+    padding: 16px 16px 8px !important;
     background: #fff;
     margin: 0 !important;
 }
@@ -1263,7 +1266,9 @@
 .fap-skin-ap-fixed .fap-controls {
     grid-column: 1;
     grid-row: 4;
-    padding: 4px 16px !important;
+    align-self: start;     /* 행 상단에 고정 */
+    /* ★ 상하 여백 늘림: 시킹바/볼륨과 시각적 분리 (펜닐님 요청 v5.8.1c) */
+    padding: 16px 16px !important;
     background: #fff;
     justify-content: center !important;
     gap: 16px !important;
@@ -1302,11 +1307,16 @@
 }
 
 /* 5행: 볼륨 - 가사 행 추가로 한 칸 밀림 */
+/* ★ 볼륨 컨트롤 바로 아래 고정 (펜닐님 요청 v5.8.1c) */
+/*    grid 마지막 행(1fr)이 모달 크기에 따라 늘어나는데, align-self: start로 행 상단에 고정 */
+/*    → 컨트롤(4행) 바로 아래에 볼륨이 붙어 보임. 남는 공간은 볼륨 아래(모달 바닥)로 몰림 */
 .fap-skin-ap-fixed .fap-volume {
     grid-column: 1;
     grid-row: 5;
-    padding: 4px 16px 8px !important;
+    align-self: start;     /* 행 상단 = 컨트롤 바로 아래에 고정 */
+    padding: 12px 16px 16px !important;
     background: #fff;
+    margin: 0 !important;
 }
 .fap-skin-ap-fixed .fap-btn-vol { color: #3ac0ff !important; }
 .fap-skin-ap-fixed .fap-vol-bar::before { background: #eee !important; }
@@ -1410,8 +1420,8 @@
 @media (max-width: 768px) {
     .fap.fap-skin-ap-fixed {
         grid-template-columns: 1fr;
-        /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 / Row 6: 플레이리스트 */
-        grid-template-rows: 240px auto auto auto auto auto !important;
+        /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 / Row 6: 플레이리스트(1fr 남은공간 흡수) */
+        grid-template-rows: 240px auto auto auto auto 1fr !important;
         min-height: auto;
     }
     .fap-skin-ap-fixed .fap-now {
@@ -1431,7 +1441,7 @@
     }
     /* ★ iOS: 볼륨 영역 숨김 시 playlist를 row 5 자리로 이동 (빈 공간 방지) */
     .fap.fap-skin-ap-fixed.fap-ios {
-        grid-template-rows: 240px auto auto auto auto !important;
+        grid-template-rows: 240px auto auto auto 1fr !important;
     }
     .fap.fap-skin-ap-fixed.fap-ios .fap-playlist {
         grid-row: 5;
@@ -1685,3 +1695,246 @@
     background: #fff;
 }
 
+/* ★ 가사 인라인 표시 안 될 때(LRC 없음 또는 정적 가사) grid row 2 압축 (v5.8.1c — 펜닐님 요청) */
+/*    JS: _renderLyrics에서 _lyricsSynced=false 또는 가사 없을 때 root에 .fap-no-inline-lyrics 추가 */
+/*    APlayer Fixed 스킨은 grid 5행이라 row 2가 빈 채로 자리 차지 → 썸네일과 시킹바 사이 떨어짐 */
+/*    또한 마지막 행 1fr로 모달 크기 변화 시 남는 공간을 마지막 행이 흡수 */
+.fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
+    /* PC: row 1=커버(340px) / row 2=가사(0) / row 3=시킹바 / row 4=컨트롤 / row 5=볼륨(1fr) */
+    grid-template-rows: 340px 0 auto auto 1fr !important;
+}
+.fap.fap-skin-ap-fixed.fap-no-inline-lyrics.fap-ios {
+    /* iOS: 볼륨 영역 숨김 — row 1=커버 / row 2=0 / row 3=시킹바 / row 4=컨트롤(1fr) */
+    grid-template-rows: 340px 0 auto 1fr !important;
+}
+@media (max-width: 768px) {
+    /* 모바일: row 1=커버(240px) / row 2=가사(0) / row 3=시킹바 / row 4=컨트롤 / row 5=볼륨 / row 6=플레이리스트(1fr) */
+    .fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
+        grid-template-rows: 240px 0 auto auto auto 1fr !important;
+    }
+    .fap.fap-skin-ap-fixed.fap-no-inline-lyrics.fap-ios {
+        grid-template-rows: 240px 0 auto auto 1fr !important;
+    }
+}
+
+
+/* ============================================================
+   ★ 가사 모달 — share.php 전용 (메인 style.css에서 동기화 v5.8.1c)
+   PC: 일반 모달 스타일 (흰 배경, 카드형) — 사이트 다른 모달과 통일
+   모바일: 풀스크린 (Apple Music 스타일, 어두운 배경)
+   ============================================================ */
+/* ★ 가사 모달 (v5.8.1c — 옵션 A) */
+/*    PC: 일반 모달 스타일 (흰 배경, 카드형) — 사이트 다른 모달과 통일 */
+/*    모바일: 풀스크린 (Apple Music 스타일, 어두운 배경) */
+.fap-lyrics-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 100002;  /* mp3 audio 모달(10000)과 서브모달(100003) 사이 — mp3 모달 위에 보장 */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    pointer-events: none;
+}
+.fap-lyrics-modal.fap-lyrics-modal-open {
+    opacity: 1;
+    pointer-events: auto;
+}
+.fap-lyrics-modal-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+}
+
+/* ===== PC: 일반 모달 스타일 (사이트 .modal과 통일) ===== */
+.fap-lyrics-modal-content {
+    position: relative;
+    background: white;
+    border-radius: var(--radius, 8px);
+    width: 100%;
+    max-width: 600px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    overflow: hidden;
+    transform: translateY(20px);
+    transition: transform 0.25s ease;
+    margin: 20px;
+}
+.fap-lyrics-modal.fap-lyrics-modal-open .fap-lyrics-modal-content {
+    transform: translateY(0);
+}
+.fap-lyrics-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border, #e0e0e0);
+    background: var(--primary, #667eea);
+    color: var(--modal-header-text, white);
+    flex-shrink: 0;
+    cursor: move;          /* ★ PC: 헤더 드래그 가능 표시 (v5.8.1c) */
+    user-select: none;     /* 드래그 중 텍스트 선택 방지 */
+}
+.fap-lyrics-modal-title-wrap {
+    flex: 1;
+    min-width: 0;
+}
+/* ★ PC (v5.8.1c — 펜닐님 요청): "가사" 라벨 숨김, 노래 제목만 헤더에 표시 */
+.fap-lyrics-modal-title {
+    display: none;
+}
+/* 트랙 제목을 헤더 메인으로 (이전엔 보조였음) */
+.fap-lyrics-modal-track {
+    color: var(--modal-header-text, white);
+    font-size: 16px;
+    font-weight: 600;
+    margin-top: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.fap-lyrics-modal-close {
+    background: rgba(255,255,255,0.15);
+    border: none;
+    color: var(--modal-header-text, white);
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.15s;
+    flex-shrink: 0;
+    margin-left: 16px;
+}
+.fap-lyrics-modal-close:hover {
+    background: rgba(255,255,255,0.28);
+}
+.fap-lyrics-modal-body {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: #fafafa;
+}
+.fap-lyrics-modal-text {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 24px 24px;
+    color: #333;
+    font-size: 15px;
+    line-height: 1.8;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: smooth;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.fap-lyrics-modal-line {
+    transition: color 0.25s ease, font-weight 0.25s ease;
+    padding: 4px 0;
+}
+.fap-lyrics-modal-line.fap-lyrics-empty {
+    height: 12px;
+}
+/* 동기화된 가사일 때 활성 라인 강조 (LRC 등) — PC 밝은 배경용 */
+.fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line {
+    color: rgba(0, 0, 0, 0.4);
+}
+.fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-active {
+    color: var(--primary, #667eea);
+    font-weight: 700;
+    font-size: 17px;
+}
+.fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-prev,
+.fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-next {
+    color: rgba(0, 0, 0, 0.6);
+}
+
+/* ===== 모바일: 풀스크린 (Apple Music 스타일 어두운 배경) ===== */
+@media (max-width: 768px) {
+    /* 모달 오버레이를 더 진하게 (풀스크린 느낌) */
+    .fap-lyrics-modal-overlay {
+        background: rgba(0, 0, 0, 0.85);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+    }
+    .fap-lyrics-modal-content {
+        width: 100vw;
+        height: 100vh;
+        height: 100dvh;  /* iOS Safari/Chrome — 동적 viewport (주소창 고려) */
+        max-width: 100vw;
+        max-height: 100vh;
+        max-height: 100dvh;
+        border-radius: 0;
+        margin: 0;
+        background: #1a1a1a;  /* 어두운 배경 */
+    }
+    /* ★ 모바일 헤더 — 안전영역(노치/주소창) 위로 올려 패딩 (v5.8.1c) */
+    .fap-lyrics-modal-header {
+        padding-top: max(16px, env(safe-area-inset-top));
+        padding-left: max(20px, env(safe-area-inset-left));
+        padding-right: max(20px, env(safe-area-inset-right));
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        background: #1a1a1a;  /* 모바일은 어두운 헤더로 통일 (PC primary 컬러 무효화) */
+        border-bottom-color: rgba(255,255,255,0.08);
+        cursor: default;  /* 모바일은 드래그 비활성 (풀스크린이라 불필요) */
+    }
+    .fap-lyrics-modal-title {
+        color: #fff;
+    }
+    .fap-lyrics-modal-close {
+        background: rgba(255,255,255,0.08);
+        color: #fff;
+        width: 36px;
+        height: 36px;
+    }
+    .fap-lyrics-modal-close:hover {
+        background: rgba(255,255,255,0.18);
+    }
+    .fap-lyrics-modal-body {
+        background: #1a1a1a;
+        padding-bottom: max(20px, env(safe-area-inset-bottom));
+    }
+    .fap-lyrics-modal-text {
+        color: rgba(255,255,255,0.85);
+        font-size: 15px;
+        padding: 24px 20px;
+        padding-bottom: max(60px, env(safe-area-inset-bottom));  /* 하단 컨트롤바/홈 인디케이터 회피 */
+    }
+    /* 동기화 라인 — 모바일 어두운 배경용 색상 오버라이드 */
+    .fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line {
+        color: rgba(255,255,255,0.4);
+    }
+    .fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-active {
+        color: #fff;
+        font-weight: 600;
+        font-size: 17px;
+    }
+    .fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-prev,
+    .fap-lyrics-modal-text[data-synced="true"] .fap-lyrics-modal-line.fap-lyrics-next {
+        color: rgba(255,255,255,0.65);
+    }
+    /* ★ 모바일 (v5.8.1c — 펜닐님 요청): "가사" 라벨 숨김, 노래 제목만 헤더에 표시 */
+    .fap-lyrics-modal-title {
+        display: none;
+    }
+    /* 트랙 제목을 헤더 메인으로 (이전엔 보조였음) */
+    .fap-lyrics-modal-track {
+        font-size: 16px;
+        font-weight: 600;
+        color: #fff;
+        margin-top: 0;
+    }
+    /* 트랙 제목/아티스트가 헤더 우측 X 버튼과 겹치지 않게 우측 여백 */
+    .fap-lyrics-modal-title-wrap {
+        padding-right: 8px;
+    }
+}

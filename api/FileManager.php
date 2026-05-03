@@ -2672,6 +2672,17 @@ class FileManager {
             $videoCodecArgs = $this->detectHwEncoder($ffmpeg);
         }
         
+        // ★ Quality 옵션 처리 (v5.8.1c — MMS 모드)
+        //   quality 요청이 있으면 -c:v copy 분기를 풀어서 SW 인코딩으로 전환
+        //   (copy 모드는 비트레이트/scale 적용 불가)
+        $mmsQuality = isset($_GET['quality']) ? trim($_GET['quality']) : 'original';
+        if ($mmsQuality !== 'original' && $mmsQuality !== '') {
+            // copy 모드면 SW로 전환 (비트레이트 적용 위해)
+            if (strpos($videoCodecArgs, '-c:v copy') !== false) {
+                $videoCodecArgs = '-c:v libx264 -preset veryfast -crf 23 -profile:v high -level 4.1 -pix_fmt yuv420p';
+            }
+        }
+        
         // 실시간 트랜스코딩
         $devNull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
         
@@ -2726,6 +2737,20 @@ class FileManager {
             $gopArgs = ' -g 48 -keyint_min 48';
         }
         
+        // ★ Quality 옵션 적용 (v5.8.1c — MMS 모드, iOS 분기 후)
+        //   사용자 quality 선택이 있으면 iOS의 6M 비트레이트보다 우선
+        //   원본/미지정이면 원본 동작 유지
+        $mmsQualityVf = '';
+        if ($mmsQuality !== 'original' && $mmsQuality !== '') {
+            $mmsQualityResult = $this->applyQualityToArgs($videoCodecArgs, $mmsQuality);
+            $videoCodecArgs = $mmsQualityResult['codecArgs'];
+            $mmsQualityVf = $mmsQualityResult['vfPrepend'];
+            // scaleFilter (iOS 1080p 다운스케일)와 quality scale 충돌 시 quality 우선
+            if ($mmsQualityVf !== '') {
+                $scaleFilter = ''; // 기존 iOS 다운스케일 무시 (quality scale로 통합)
+            }
+        }
+        
         // 응답 헤더로 세션 ID 전달 (클라이언트가 kill 시 사용)
         header('X-Pipe-Sid: ' . $pipeSid);
         
@@ -2746,7 +2771,19 @@ class FileManager {
             $fpsArg = ' -r 30';
         }
         
-        $buildCmd = function($vCodec, $gop, $fps) use ($ffmpeg, $seekArg, $reFlag, $inputPath, $audioMap, $pipeSid, $scaleFilter) {
+        $buildCmd = function($vCodec, $gop, $fps) use ($ffmpeg, $seekArg, $reFlag, $inputPath, $audioMap, $pipeSid, $scaleFilter, $mmsQualityVf) {
+            // ★ scaleFilter (iOS 1080p) + mmsQualityVf (사용자 quality scale) 합치기
+            //   둘 다 -vf로 시작하지 않고 필터 표현식만 들어있음
+            //   scaleFilter 형식: ' -vf "scale=1920:-2"' (이미 -vf 포함)
+            //   mmsQualityVf 형식: 'scale=\'-2:min(720\\,ih)\'' (필터만)
+            $vfArg = '';
+            if ($mmsQualityVf !== '') {
+                // quality vf 단독 사용 (iOS scaleFilter는 위에서 ''로 클리어됨)
+                $vfArg = ' -vf "' . $mmsQualityVf . '"';
+            } else {
+                // 기존 iOS scaleFilter 사용
+                $vfArg = $scaleFilter;
+            }
             return escapeshellarg($ffmpeg)
                 . $seekArg
                 . ' -analyzeduration 2000000 -probesize 2000000'
@@ -2755,7 +2792,7 @@ class FileManager {
                 . ' -i ' . $inputPath
                 . $audioMap
                 . ' -sn'
-                . $scaleFilter
+                . $vfArg
                 . ' -metadata comment=pipesid_' . $pipeSid
                 . ' ' . $vCodec
                 . $gop
@@ -3369,6 +3406,13 @@ class FileManager {
         $reqAudioIdx = isset($_GET['audio']) ? (int)$_GET['audio'] : null;
         // ★ client_session — PHP 세션 ID hash로 기기별 분리 (같은 사용자 PC/모바일 동시 시청 시 폴더 공유 방지)
         $reqClientSession = session_id() ? substr(hash('sha256', session_id()), 0, 16) : '';
+        // ★ quality 비교 — 다른 quality 요청은 별도 세션 (v5.8.1c)
+        //   1080p로 재생 중 → 720p 변경 시: reqQuality='720p' vs existQuality='1080p' → 새 세션
+        //   같은 quality + 같은 audio + 같은 client_session: reuse 가능 (이중 호출 방어)
+        $reqQuality = isset($_GET['quality']) ? trim($_GET['quality']) : 'original';
+        // ★ seek 비교 — quality 변경 시 seek=150 같이 들어오면 별도 세션 (다른 시점부터 인코딩)
+        //   같은 시점 + 같은 quality 재요청은 reuse 가능
+        $reqSeek = isset($_GET['seek']) ? (float)$_GET['seek'] : 0;
         $existingDirs = glob($hlsDir . '/*', GLOB_ONLYDIR);
         if ($existingDirs) {
             foreach ($existingDirs as $existDir) {
@@ -3376,18 +3420,24 @@ class FileManager {
                 if (!file_exists($existMeta)) continue;
                 $existMetaData = @json_decode(file_get_contents($existMeta), true);
                 if (!$existMetaData) continue;
-                // 같은 storage_id + path + audio + force_sw + client_session 인지 확인
+                // 같은 storage_id + path + audio + force_sw + client_session + quality + seek 인지 확인
                 //   audio 비교: 둘 다 null/없으면 같은 것으로 처리 (단일 오디오 영상)
                 //   force_sw 일치 — HW에서 SW fallback 시도 시 새 세션 강제
                 //   client_session 일치 — 기기별 분리 (같은 영상이라도 다른 기기는 다른 폴더)
+                //   quality 일치 — 다른 화질은 새 세션 (v5.8.1c)
+                //   seek 일치 — 다른 시점은 새 세션 (v5.8.1c, quality 변경 시 사용자 위치부터 시작)
                 $existAudioIdx = isset($existMetaData['audio']) ? (int)$existMetaData['audio'] : null;
                 $existIsSw = !empty($existMetaData['current_encoder']) && strpos($existMetaData['current_encoder'], 'libx264') !== false ? '1' : '0';
                 $existClientSession = $existMetaData['client_session'] ?? '';
+                $existQuality = $existMetaData['quality'] ?? 'original';
+                $existSeek = (float)($existMetaData['seek'] ?? 0);
                 if (($existMetaData['storage_id'] ?? -1) == $storageId 
                     && ($existMetaData['path'] ?? '') === $path
                     && $existAudioIdx === $reqAudioIdx
                     && $existIsSw === $reqForceSw
-                    && $existClientSession === $reqClientSession) {
+                    && $existClientSession === $reqClientSession
+                    && $existQuality === $reqQuality
+                    && abs($existSeek - $reqSeek) < 0.5) {
                     $existSessionId = basename($existDir);
                     $isActive = false;
                     $existCreated = $existMetaData['created'] ?? 0;
@@ -3417,7 +3467,7 @@ class FileManager {
                     }
                     if ($isActive) {
                         // reuse 시 meta.json 갱신 + touch (cleanup 보호)
-                        // ★ sw_cmd, stderr_log, audio, current_encoder, client_session은 기존 값 보존
+                        // ★ sw_cmd, stderr_log, audio, current_encoder, client_session, quality, seek 기존 값 보존
                         $existMeta = $existDir . '/meta.json';
                         @file_put_contents($existMeta, json_encode([
                             'created' => time(),
@@ -3428,6 +3478,8 @@ class FileManager {
                             'sw_cmd' => $existMetaData['sw_cmd'] ?? null,
                             'stderr_log' => $existMetaData['stderr_log'] ?? null,
                             'current_encoder' => $existMetaData['current_encoder'] ?? null,
+                            'quality' => $existQuality,
+                            'seek' => $existSeek,
                         ]));
                         @touch($existDir);
                         
@@ -3504,6 +3556,19 @@ class FileManager {
         }
         $gopArgs = ' -g 48 -keyint_min 48';
         
+        // ★ Quality 옵션 적용 (v5.8.1c)
+        //   - $_GET['quality'] = '1080p' | '720p' | '480p' | '360p' | '240p' | '144p' | 'original' | 미지정(=original)
+        //   - 'original' / 미지정: 옵션 변경 없음 (기존 CRF/QP 그대로)
+        //   - 그 외: 비트레이트 옵션 + scale 필터 적용
+        //   - HW/SW 양쪽 모두 동일 quality 적용 (SW backup도 같은 옵션)
+        $hlsQuality = isset($_GET['quality']) ? trim($_GET['quality']) : 'original';
+        $hlsQualityResult = $this->applyQualityToArgs($videoCodecArgs, $hlsQuality);
+        $videoCodecArgs = $hlsQualityResult['codecArgs'];
+        $hlsQualityVf = $hlsQualityResult['vfPrepend'];
+        // SW backup도 동일 quality 적용
+        $swQualityResult = $this->applyQualityToArgs($swCodecArgs, $hlsQuality);
+        $swCodecArgs = $swQualityResult['codecArgs'];
+        
         // ffmpeg HLS 출력 명령
         $outputM3u8 = $this->escapeShellPath($sessionDir . '/stream.m3u8');
         $segPattern = '"' . str_replace('/', DIRECTORY_SEPARATOR, $sessionDir . '/stream%d.ts') . '"';
@@ -3516,7 +3581,9 @@ class FileManager {
         //   피치가 낮아지는(두꺼비 목소리) 문제 방지.
         //   - async=1000: 최대 1초까지 샘플 추가/드롭으로 맞춤
         //   - first_pts=0: 첫 샘플을 0초부터 시작 (지연 무시)
-        $buildFfmpegCmd = function($codecArgs) use ($ffmpeg, $seekArg, $inputPath, $audioMap, $gopArgs, $segPattern, $outputM3u8) {
+        // ★ v5.8.1c: $hlsQualityVf 가 있으면 -vf 로 scale 필터 prepend
+        $buildFfmpegCmd = function($codecArgs) use ($ffmpeg, $seekArg, $inputPath, $audioMap, $gopArgs, $segPattern, $outputM3u8, $hlsQualityVf) {
+            $vfArg = $hlsQualityVf !== '' ? ' -vf "' . $hlsQualityVf . '"' : '';
             return escapeshellarg($ffmpeg)
                 . $seekArg
                 . ' -readrate 3'
@@ -3528,6 +3595,7 @@ class FileManager {
                 . ' ' . $codecArgs
                 . $gopArgs
                 . ' -c:a aac -b:a 128k -ac 2'
+                . $vfArg
                 . ' -af aresample=async=1000:first_pts=0'
                 . ' -f hls'
                 . ' -hls_time 4'
@@ -3576,6 +3644,8 @@ class FileManager {
             'sw_cmd' => $cmdSwBackup,
             'stderr_log' => $stderrLog,
             'current_encoder' => $currentEncoder,
+            'quality' => $hlsQuality,
+            'seek' => $seekSec,
         ]));
         
         // ★ ffmpeg 백그라운드 실행을 먼저 시작 (응답 전)
@@ -3871,6 +3941,95 @@ class FileManager {
      *     '-c:v libx264 -preset ultrafast ...' → 'libx264'
      * 배지 표시 및 meta.json 기록용
      */
+    
+    /**
+     * Quality 프리셋 (v5.8.1c — 펜닐님 요청 7단계, PC/모바일 공통)
+     *   - 키: 'original' / '1080p' / '720p' / '480p' / '360p' / '240p' / '144p'
+     *   - height: 다운스케일 목표 높이 (원본이 더 작으면 그대로 유지)
+     *   - vbr/maxrate/bufsize: ffmpeg 비트레이트 제한 옵션
+     *   - 'original': 옵션 없음 (재인코딩 없이 -c:v copy 가능 — caller가 결정)
+     *   - HW/SW 인코더 모두 -b:v -maxrate -bufsize 옵션을 받음
+     */
+    private function getQualityPreset(string $quality): ?array {
+        $presets = [
+            '1080p' => ['height' => 1080, 'vbr' => '5M',   'maxrate' => '6M',   'bufsize' => '10M'],
+            '720p'  => ['height' => 720,  'vbr' => '2500k','maxrate' => '3M',   'bufsize' => '5M'],
+            '480p'  => ['height' => 480,  'vbr' => '1200k','maxrate' => '1500k','bufsize' => '2500k'],
+            '360p'  => ['height' => 360,  'vbr' => '700k', 'maxrate' => '900k', 'bufsize' => '1500k'],
+            '240p'  => ['height' => 240,  'vbr' => '400k', 'maxrate' => '500k', 'bufsize' => '800k'],
+            '144p'  => ['height' => 144,  'vbr' => '200k', 'maxrate' => '250k', 'bufsize' => '400k'],
+        ];
+        return $presets[$quality] ?? null;
+    }
+    
+    /**
+     * Quality 옵션을 ffmpeg 인자로 변환 (v5.8.1c)
+     *   - $codecArgs: 기존 비디오 코덱 인자 (e.g. '-c:v libx264 ...')
+     *   - $quality: 'original' | '1080p' | '720p' | '480p' | '360p' | '240p' | '144p'
+     *   - 반환: ['codecArgs' => 변환된 인자 문자열, 'vfPrepend' => scale 필터 (없으면 '')]
+     *   - 'original' 또는 미지원 값이면 원본 그대로 반환
+     *   - -c:v copy 인 경우엔 quality 적용 불가 → caller가 copy를 풀어서 SW로 변경 후 호출해야 함
+     */
+    private function applyQualityToArgs(string $codecArgs, string $quality): array {
+        if ($quality === '' || $quality === 'original') {
+            return ['codecArgs' => $codecArgs, 'vfPrepend' => ''];
+        }
+        $preset = $this->getQualityPreset($quality);
+        if (!$preset) {
+            return ['codecArgs' => $codecArgs, 'vfPrepend' => ''];
+        }
+        // -c:v copy인 경우는 호출자가 미리 풀어서 와야 함 (방어적: copy면 quality 무시)
+        if (preg_match('/-c:v\s+copy/', $codecArgs)) {
+            return ['codecArgs' => $codecArgs, 'vfPrepend' => ''];
+        }
+        // 기존 -b:v / -maxrate / -bufsize 옵션 제거 후 새로 추가 (중복 방지)
+        $cleanArgs = preg_replace('/-b:v\s+\S+/', '', $codecArgs);
+        $cleanArgs = preg_replace('/-maxrate\s+\S+/', '', $cleanArgs);
+        $cleanArgs = preg_replace('/-bufsize\s+\S+/', '', $cleanArgs);
+        // h264_nvenc는 -qp 옵션 제거 (vbr 모드와 충돌)
+        $cleanArgs = preg_replace('/-qp\s+\d+/', '', $cleanArgs);
+        // h264_qsv는 -global_quality 제거 (비트레이트 모드)
+        $cleanArgs = preg_replace('/-global_quality\s+\d+/', '', $cleanArgs);
+        // h264_amf는 -qp_i / -qp_p 제거
+        $cleanArgs = preg_replace('/-qp_[ip]\s+\d+/', '', $cleanArgs);
+        // libx264의 crf 제거 (비트레이트 모드)
+        $cleanArgs = preg_replace('/-crf\s+\d+/', '', $cleanArgs);
+        $cleanArgs = preg_replace('/\s+/', ' ', trim($cleanArgs));
+        
+        $brArgs = ' -b:v ' . $preset['vbr'] . ' -maxrate ' . $preset['maxrate'] . ' -bufsize ' . $preset['bufsize'];
+        // scale 필터: 원본이 작으면 유지, 크면 다운스케일 (-2: 짝수 폭 자동 계산)
+        // 'min(H\,ih)' — ffmpeg 표현식에서 콤마 이스케이프 필요
+        $vfPrepend = "scale='-2:min(" . (int)$preset['height'] . "\\,ih)'";
+        return ['codecArgs' => $cleanArgs . $brArgs, 'vfPrepend' => $vfPrepend];
+    }
+    
+    /**
+     * vf 필터를 기존 ffmpeg 명령에 합치기 (v5.8.1c)
+     *   - 기존에 -af만 있고 -vf 없으면 -vf 추가
+     *   - 기존 -vf "..." 가 있으면 새 필터를 콤마로 합침
+     *   - $vfPrepend가 빈 문자열이면 변경 없음
+     */
+    private function injectVfFilter(string $cmd, string $vfPrepend): string {
+        if ($vfPrepend === '') return $cmd;
+        // 기존 -vf "..." 가 있는지 확인
+        if (preg_match('/-vf\s+"([^"]*)"/', $cmd, $m)) {
+            $newVf = $vfPrepend . ',' . $m[1];
+            return preg_replace('/-vf\s+"[^"]*"/', '-vf "' . $newVf . '"', $cmd, 1);
+        }
+        // -vf 없으면 -af 앞에 삽입 (없으면 -c:a 앞에)
+        if (strpos($cmd, ' -af ') !== false) {
+            return preg_replace('/(\s)-af\s/', '$1-vf "' . $vfPrepend . '" -af ', $cmd, 1);
+        }
+        if (strpos($cmd, ' -c:a ') !== false) {
+            return preg_replace('/(\s)-c:a\s/', '$1-vf "' . $vfPrepend . '" -c:a ', $cmd, 1);
+        }
+        // 마지막 수단: -f hls 앞에 (HLS만)
+        if (strpos($cmd, ' -f hls') !== false) {
+            return preg_replace('/(\s)-f hls/', '$1-vf "' . $vfPrepend . '" -f hls', $cmd, 1);
+        }
+        return $cmd;
+    }
+    
     private function extractEncoderFromArgs(string $args): string {
         if (preg_match('/-c:v\s+(\S+)/', $args, $m)) {
             return $m[1];
@@ -9438,10 +9597,26 @@ class FileManager {
     private function getMimeType(string $path): string {
         $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
         $mimes = [
+            // 이미지
             'jpg' => 'image/jpeg', 'jpeg' => 'image/jpeg', 'png' => 'image/png',
             'gif' => 'image/gif', 'webp' => 'image/webp', 'svg' => 'image/svg+xml',
+            'bmp' => 'image/bmp', 'tiff' => 'image/tiff', 'tif' => 'image/tiff',
+            // 비디오
             'mp4' => 'video/mp4', 'webm' => 'video/webm', 'mkv' => 'video/x-matroska',
+            'mov' => 'video/quicktime', 'avi' => 'video/x-msvideo',
+            'm4v' => 'video/mp4', 'wmv' => 'video/x-ms-wmv', 'flv' => 'video/x-flv',
+            '3gp' => 'video/3gpp', 'mpg' => 'video/mpeg', 'mpeg' => 'video/mpeg',
+            'ts' => 'video/mp2t', 'm2ts' => 'video/mp2t', 'mts' => 'video/mp2t',
+            // 오디오 (★ v5.8.1c 펜닐님 모바일 FLAC 재생 이슈 — 누락 포맷 추가)
             'mp3' => 'audio/mpeg', 'wav' => 'audio/wav', 'ogg' => 'audio/ogg',
+            'flac' => 'audio/flac',          // ★ 추가 — 이전엔 octet-stream으로 응답되어 모바일 재생 안 됨
+            'm4a' => 'audio/mp4',            // ★ 추가
+            'aac' => 'audio/aac',            // ★ 추가
+            'opus' => 'audio/ogg',           // ★ 추가 (Opus는 OGG 컨테이너)
+            'wma' => 'audio/x-ms-wma',       // ★ 추가
+            'oga' => 'audio/ogg',            // ★ 추가
+            'aiff' => 'audio/aiff', 'aif' => 'audio/aiff',  // ★ 추가
+            // 문서
             'pdf' => 'application/pdf', 'txt' => 'text/plain', 'html' => 'text/html',
             'json' => 'application/json', 'xml' => 'application/xml',
             'zip' => 'application/zip', 'rar' => 'application/x-rar-compressed'
@@ -10740,6 +10915,8 @@ class FileManager {
         // ★ client_session — PHP 세션 ID hash로 기기별 분리 (메인과 동일 패턴)
         //   같은 사용자 PC/모바일 동시 시청 시 폴더 공유 방지
         $reqClientSessionShare = session_id() ? substr(hash('sha256', session_id()), 0, 16) : '';
+        // ★ quality 비교 — 다른 quality 요청은 별도 세션 (v5.8.1c)
+        $reqQualityShare = isset($_GET['quality']) ? trim($_GET['quality']) : 'original';
         if (is_dir($hlsDir)) {
             foreach (new \DirectoryIterator($hlsDir) as $d) {
                 if ($d->isDot() || !$d->isDir()) continue;
@@ -10749,10 +10926,12 @@ class FileManager {
                 $existAudioIdxShare = isset($meta['audio']) ? (int)$meta['audio'] : null;
                 $existIsSwShare = !empty($meta['current_encoder']) && strpos($meta['current_encoder'], 'libx264') !== false ? '1' : '0';
                 $existClientSessionShare = $meta['client_session'] ?? '';
+                $existQualityShare = $meta['quality'] ?? 'original';
                 if (($meta['share_path'] ?? '') === $fullPath
                     && $existAudioIdxShare === $reqAudioIdxShare
                     && $existIsSwShare === $reqForceSwShare
-                    && $existClientSessionShare === $reqClientSessionShare) {
+                    && $existClientSessionShare === $reqClientSessionShare
+                    && $existQualityShare === $reqQualityShare) {
                     $existDir = $d->getPathname();
                     $existSessionId = $d->getFilename();
                     $existCreated = $meta['created'] ?? 0;
@@ -10767,7 +10946,7 @@ class FileManager {
                     }
                     if ($isActive) {
                         // reuse 시 meta.json 갱신 + touch (cleanup 보호)
-                        // ★ sw_cmd, stderr_log, current_encoder, audio, client_session는 기존 값 보존
+                        // ★ sw_cmd, stderr_log, current_encoder, audio, client_session, quality, seek 기존 값 보존
                         @file_put_contents($metaFile, json_encode([
                             'created' => time(),
                             'share_path' => $fullPath,
@@ -10777,6 +10956,8 @@ class FileManager {
                             'stderr_log' => $meta['stderr_log'] ?? null,
                             'current_encoder' => $meta['current_encoder'] ?? null,
                             'sw_fallback_applied' => $meta['sw_fallback_applied'] ?? false,
+                            'quality' => $existQualityShare,
+                            'seek' => (float)($meta['seek'] ?? 0),
                         ]));
                         @touch($existDir);
                         
@@ -10810,6 +10991,10 @@ class FileManager {
             $audioMap = ' -map 0:v:0 -map 0:' . $audioIdx;
         }
         
+        // ★ seek 파라미터 처리 (v5.8.1c — share에서도 quality 변경 시 사용자 시점부터 트랜스코딩)
+        $seekSecShare = isset($_GET['seek']) ? max(0, (float)$_GET['seek']) : 0;
+        $seekArgShare = $seekSecShare > 0 ? ' -ss ' . $seekSecShare : '';
+        
         // SW 코덱 인자는 고정 (HW 실패 시 재시도용)
         $swCodecArgs = '-c:v libx264 -preset ultrafast -crf 23 -tune zerolatency -profile:v high -level 4.1 -pix_fmt yuv420p';
         $usingHwEncoder = false;
@@ -10820,12 +11005,24 @@ class FileManager {
             $usingHwEncoder = (strpos($videoCodecArgs, 'libx264') === false);
         }
         $gopArgs = ' -g 48 -keyint_min 48';
+        
+        // ★ Quality 옵션 적용 (v5.8.1c)
+        //   메인 HLS와 동일 패턴 — 양쪽 codec args 모두 적용
+        $shareQuality = isset($_GET['quality']) ? trim($_GET['quality']) : 'original';
+        $shareQualityResult = $this->applyQualityToArgs($videoCodecArgs, $shareQuality);
+        $videoCodecArgs = $shareQualityResult['codecArgs'];
+        $shareQualityVf = $shareQualityResult['vfPrepend'];
+        $swQualityResultShare = $this->applyQualityToArgs($swCodecArgs, $shareQuality);
+        $swCodecArgs = $swQualityResultShare['codecArgs'];
+        
         $outputM3u8 = $this->escapeShellPath($sessionDir . '/stream.m3u8');
         $segPattern = '"' . str_replace('/', DIRECTORY_SEPARATOR, $sessionDir . '/stream%d.ts') . '"';
         
         // ffmpeg 명령 빌더 (같은 옵션으로 HW/SW 둘 다 만들 수 있도록 함수화)
-        $buildShareFfmpegCmd = function($codecArgs) use ($ffmpeg, $inputPath, $audioMap, $gopArgs, $segPattern, $outputM3u8) {
+        $buildShareFfmpegCmd = function($codecArgs) use ($ffmpeg, $inputPath, $audioMap, $gopArgs, $segPattern, $outputM3u8, $shareQualityVf, $seekArgShare) {
+            $vfArg = $shareQualityVf !== '' ? ' -vf "' . $shareQualityVf . '"' : '';
             return escapeshellarg($ffmpeg)
+                . $seekArgShare
                 . ' -readrate 3'
                 . ' -analyzeduration 2000000 -probesize 2000000'
                 . ' -fflags +genpts+igndts+fastseek'
@@ -10835,6 +11032,7 @@ class FileManager {
                 . ' ' . $codecArgs
                 . $gopArgs
                 . ' -c:a aac -b:a 128k -ac 2'
+                . $vfArg
                 . ' -af aresample=async=1000:first_pts=0'
                 . ' -f hls'
                 . ' -hls_time 4'
@@ -10874,6 +11072,8 @@ class FileManager {
             'sw_cmd' => $cmdSwBackup,
             'stderr_log' => $stderrLog,
             'current_encoder' => $this->extractEncoderFromArgs($videoCodecArgs),
+            'quality' => $shareQuality,
+            'seek' => $seekSecShare,
         ]));
         
         $pidFile = $sessionDir . '/pid.txt';
