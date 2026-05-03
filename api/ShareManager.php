@@ -627,6 +627,16 @@ class ShareManager {
             ]);
         }
         
+        // ★ stream 공유 폴더의 잘못된 stream 호출 차단 (v5.8.1c — 펜닐님 환경 share_*.zip 잔류 원인)
+        //   isFolderStream + stream=1 파라미터 있는데 file 파라미터 없는 호출은
+        //   "트랙 라우팅 실패 또는 잘못된 stream URL" — 폴더 통째 zip 생성 의도와 다름.
+        //   ※ stream=1 없이 download=1만 있는 호출은 다운로드 버튼 클릭 → 폴더 zip 다운로드 (정상 허용).
+        //     예: 빈 폴더를 stream 타입으로 공유한 사용자가 다운로드 버튼 누르는 경우.
+        if ($isFolderStream && isset($_GET['stream']) && ($subFile === null || $subFile === '') && !$isHlsPlaylistOrSegment) {
+            http_response_code(400);
+            exit(__('api_err_invalid_request', '잘못된 요청입니다.'));
+        }
+        
         // 폴더인 경우 ZIP으로 압축
         if (is_dir($fullPath)) {
             $this->downloadAsZip($fullPath);
@@ -782,6 +792,14 @@ class ShareManager {
     
     // ZIP 압축 다운로드
     private function downloadAsZip(string $dir): void {
+        // ★ 잔류 정리 안전망 (v5.8.1c — 다운로드 중단 시 unlink 못 한 zip 자동 정리)
+        //   readfile() 도중 사용자 abort/네트워크 끊김 시 PHP가 즉시 종료되어 @unlink 못 실행 →
+        //   sys_temp_dir에 share_*.zip 잔류 (큰 폴더면 GB급). 1시간 이상 된 것만 자동 삭제.
+        //   hwp_viewer.php의 fs_hwp_* 패턴과 동일.
+        foreach (@glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'share_*.zip') ?: [] as $_old) {
+            if (is_file($_old) && filemtime($_old) < time() - 3600) @unlink($_old);
+        }
+        
         $zipName = basename($dir) . '.zip';
         $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('share_') . '.zip';
         

@@ -50,6 +50,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
         $adapter = StorageAdapterFactory::create($storageInfo);
         if (!$adapter || !$adapter->connect()) { http_response_code(503); exit; }
         // ★ office_viewer.php 패턴 통일: read() + file_put_contents() (download() 메서드 없음)
+        // ★ 잔류 정리 안전망 (v5.8.1c — readfile 중 abort 시 @unlink 못 함)
+        foreach (@glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'rhwpe_*') ?: [] as $_old) {
+            if (is_file($_old) && filemtime($_old) < time() - 3600) @unlink($_old);
+        }
         $tempFile = tempnam(sys_get_temp_dir(), 'rhwpe_');
         $content = $adapter->read($filePath);
         $adapter->disconnect();

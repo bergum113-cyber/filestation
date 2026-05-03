@@ -4821,6 +4821,13 @@ class FileManager {
     
     // 폴더를 ZIP으로 압축해서 다운로드
     private function downloadFolderAsZip(string $folderPath): void {
+        // ★ 잔류 정리 안전망 (v5.8.1c — 다운로드 중단 시 unlink 못 한 zip 자동 정리)
+        //   readfile() 도중 사용자 abort/네트워크 끊김 시 @unlink 미실행 → 임시폴더 누수.
+        //   1시간 이상 된 것만 자동 삭제 (현재 진행 중인 다운로드 영향 없음).
+        foreach (@glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'folder_*.zip') ?: [] as $_old) {
+            if (is_file($_old) && filemtime($_old) < time() - 3600) @unlink($_old);
+        }
+        
         $folderName = basename($folderPath);
         $zipName = $folderName . '.zip';
         $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('folder_') . '.zip';
