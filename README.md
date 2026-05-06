@@ -1,4 +1,4 @@
-# FileStation v5.8.1c
+# FileStation v5.8.1d
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -8,7 +8,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.9 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.10 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -193,7 +193,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.9 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.10 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -473,7 +473,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.9** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.10** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -485,7 +485,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1c.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1d.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -571,7 +571,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1c');
+define('APP_VERSION', '5.8.1d');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -643,9 +643,9 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.9
+버전: 0.7.10
 파일: assets/rhwp/
-업그레이드: rhwp_업그레이드_가이드_v4.md 참조
+업그레이드: rhwp_업그레이드_가이드_v5.md 참조
 ```
 
 ### WebDAV 서버
@@ -664,7 +664,7 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.9의 베타 단계 제한, HWP 형식만 저장 가능
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.10의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -699,11 +699,128 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1c (rhwp 0.7.9 기반)
+**현재 버전**: v5.8.1d (rhwp 0.7.10 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1c (2026-05-03) ⭐ 현재
+#### v5.8.1d (2026-05-04 ~ 2026-05-06) ⭐ 현재
+
+**최종 상태 요약:** 30 리비전 누적 (VU 미터 28th + BF Cache 핸들러 29b + rhwp 0.7.10 30th)
+
+---
+
+**[30th rev] rhwp 0.7.9 → 0.7.10 업그레이드 (2026-05-06)**
+
+가이드 v5 표준 절차로 진행, 검증 15/15 통과.
+
+- **빌드 결과:**
+  - JS: `index-CCef3-Zl.js` → `index-zIVQkhcx.js`
+  - CSS: `index-ro3nVBB2.css` (해시 동일 — 0.7.10도 변경 없음)
+  - WASM: `rhwp_bg-Bb98LUYj.wasm` → `rhwp_bg-BbAYsuOY.wasm`
+  - 신규 폰트: `SourceHanSerifK-OldHangul-subset.woff2` (한글 옛 글자 지원)
+- **0.7.10 주요 신규 기능 (rhwp 측):**
+  - 외부 PR 13건 cherry-pick (7명 컨트리뷰터)
+  - HWP 5.0 스펙 0x18/0x1E swap 정정, HWP3 변환본 식별 휴리스틱
+  - 표 셀 레이아웃 7건 정정, HY견명조 폰트 분류 정정, 글상자 화살표 매핑 정정
+  - PNG raster backend (Skia 기반, native-skia feature gate)
+  - AI 파이프라인/VLM 연동 (export-png CLI, FileStation 미사용)
+  - CLI 바이너리 릴리즈 4 플랫폼
+- **패치 적용:** J1 1건 매칭(file:save 단축키 매핑 제거), P1 0건/P2 2건(`../images/` → `images/`)
+- **PR #335 회귀:** svg.rs preserveAspectRatio="none" 코드 0.7.10도 잔존, 펜닐 환경 실사용에서 재현 안 됨
+- **FileStation 버전 유지** (펜닐 룰: "버전 올려줘" 명시 없음 → v5.8.1d 그대로)
+
+---
+
+**[29b rev] 모바일 BF Cache 복원 처리 (2026-05-05)**
+
+**증상:** 모바일에서 음악/동영상/웹하드 사용 후 백그라운드 → 복귀 시 사이드바 스토리지 리스트 비어있고 "스토리지를 선택하세요" 메시지 표시. 수동 새로고침 시 정상.
+
+**원인:** iOS Safari/Android Chrome의 BF Cache(Back-Forward Cache)에서 페이지 복원 시 `init()` 자체가 재실행 안 되어 `loadStorages()` 호출 누락.
+
+**해결:**
+1. **App.init()에 pageshow 핸들러 추가** (라인 4514) — 음악 플레이어 인스턴스 유무와 무관하게 항상 등록
+   ```javascript
+   window.addEventListener('pageshow', (event) => {
+       if (!event.persisted) return;  // 일반 새로고침은 init() 재실행되므로 무관
+       if (!this.user) return;        // 미로그인 상태는 무관
+       this.loadStorages();
+       this.updateShareBadges();
+       this.updateSharedWithMeBadge();
+   });
+   ```
+2. **FSAudioPlayer의 _pageshowHandler에서 App 데이터 갱신 부분 제거** (중복 방지) — MediaSession 재설정 로직만 유지
+
+**시나리오 매트릭스 (6/6 정상):**
+- ✅ 음악 재생 후 백그라운드 → 복귀
+- ✅ 동영상 재생 후 백그라운드 → 복귀
+- ✅ 웹하드 탐색만 후 백그라운드 → 복귀
+- ✅ 미로그인 상태 BF Cache 복원 (this.user 가드)
+- ✅ 일반 새로고침 (event.persisted 가드)
+- ✅ PC 데스크탑 (BF Cache 거의 발생 안 함, 발생 시 정상)
+
+**fs-audio-player.js (share.php):** 단일 공유 페이지라 스토리지 사이드바 자체가 없어 수정 불필요.
+
+---
+
+**[28th rev] 죽은 코드/CSS 정리 + VU/VU LED 모드 _analyser 호출 스킵 (2026-05-05)**
+
+이전 리비전들에서 누적된 잔재 코드 청소 (동작 변경 0).
+
+1. **죽은 코드 제거** — `_vuBacklight = localStorage 값`을 즉시 `= true`로 덮어쓰는 패턴이 있어 localStorage 읽기 부분 제거 (양쪽 파일)
+2. **죽은 CSS 제거** — `.fap-vu-bl-toggle` 셀렉터 (15th rev에서 토글 버튼 제거됨에도 잔존, style.css/fs-audio-player.css)
+3. **`_analyser` 불필요 호출 스킵** — VU/VU LED 모드는 `_vuAnalyserL/R` 사용하므로 `_analyser.getByte*` + `_updateBandValues()` 호출 스킵 (단, VU 인프라 실패 시 bars fallback 보장 위해 `vuInfraReady` 체크 추가)
+
+검증: 양쪽 파일 동기화 12/12, 함수 정의/호출 일치 17/17, 보안 회귀 0.
+
+---
+
+**[VU 미터 디자인 진화: 13th ~ 27th rev]**
+
+WAVES VU 미터 비례 + 1번 이미지 디자인 매칭 (펜닐 직접 검증). 22번 리비전 동안 미세조정.
+
+- **박스 비율 변화**: 280×130 → 220×140 → 300×170 → **300×150** (12th의 가로형 → 더 압축된 가로형)
+- **0VU 위치**: WAVES 표준 (가로 72%) — 박스 정중앙 우측
+- **piecewise 매핑 진화**: 0VU=+5° → +12° (펜닐 "0이 빨강 1~2 사이" 요청)
+- **빨강 영역**: +12° ~ +24° (호 24%, 0VU 라벨부터 +3까지 균일 4° 간격)
+- **음수 라벨 균일 간격**: -20부터 0까지 약 27px씩 균일 (펜닐 "-20부터 0까지 균일 간격" 요청)
+- **−/+ 부호**: 호 양 끝 외측 (-27°/+27°, R-5) — 그래프 끝에 위치
+- **VU 라벨**: italic 세리프 폰트 (Georgia, 16pt) — McIntosh 위쪽 (y=120)
+- **하단 텍스트**: "McIntosh" → **"METER"** (상표권 회피, 펜닐 결정 — 27th rev)
+- **피벗 점(O) 제거** — viewBox 밖 dummy로 호환성 유지 (`_applyVUBacklight` 참조 위해 객체는 남김)
+- **VU LED 모드 추가** (14b rev) — 가로형 디지털 LED 미터 33 세그먼트 × 2행, 50ms attack
+- **백라이트 토글 제거** (15th rev) — 항상 ON 고정
+
+**WAVES VU 미터 비례 (22nd rev 최종):**
+- viewBox: `0 0 300 150`
+- 회전축: cx=150, cy=350 (viewBox 외부 200px 아래)
+- 호 반지름: 320 (눈금 정점이 박스 안 약간 안쪽)
+- 매핑: -20→-25°, -10→-20°, -7→-15°, -5→-10°, -3→-5°, -2→0°, -1→+6°, **0→+12°**, +1→+16°, +2→+20°, +3→+24°
+- 빨강 영역: +12° ~ +24°
+
+**디자인 출처 (누적):**
+- WAVES VU Meter 비례 (펜닐 1번 참고 이미지)
+- piecewise interpolation, ballistics 300ms: [Jun-Murakami/vu-meter-react](https://github.com/Jun-Murakami/vu-meter-react) (MIT)
+- SVG line + rotate(deg cx cy) 패턴: [matteovinci/angular-vumeter](https://github.com/matteovinci/angular-vumeter) (MIT)
+
+**유지된 인프라:**
+- VU ballistics — 1차 lowpass 필터, 300ms attack/release
+- 0 VU = -18dBFS 캘리브레이션
+- Peak lamp — 클립 임계값 / 1s 홀드 → 5s 페이드아웃
+- ChannelSplitter L/R, 기존 audio 그래프 영향 0%
+
+---
+
+**[VU 미터 12th rev (초기, 2026-05-04)]**
+
+McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 리비전까지 디자인 진화.
+
+---
+
+**[캐시 무효화]**
+- `APP_VERSION` `5.8.1c` → `5.8.1d` 업데이트 (rhwp 0.7.10 업그레이드 시에도 펜닐 룰 따라 유지)
+
+
+#### v5.8.1c (2026-05-03)
 **1. rhwp 0.7.8 → 0.7.9 업그레이드**
 - 가이드 v5 표준 절차 진행 (사전 회귀 점검 → clone → npm @rhwp/core 0.7.9 → studio 빌드 → 패치 J1/P2 자동 적용 → 검증 15/15 통과)
 - 빌드 결과:
@@ -959,5 +1076,5 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ---
 
-*FileStation v5.8.1c — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-05-03*
+*FileStation v5.8.1d — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-05-06 (rhwp 0.7.10 기준)*

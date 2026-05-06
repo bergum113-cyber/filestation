@@ -143,6 +143,58 @@
 .fap-visualizer:hover {
     opacity: 0.9;
 }
+/* ★ VU 모드 — 캔버스 높이 (18th rev: 박스 300×150) */
+.fap-visualizer.vu-mode {
+    height: 160px;
+    margin-bottom: 12px;
+    image-rendering: auto;
+}
+/* ★ VU LED 모드 — 가로형 디지털 LED 미터 */
+.fap-visualizer.vuled-mode {
+    height: 60px;
+    margin-bottom: 12px;
+    image-rendering: auto;
+    background: #050709;
+    border-radius: 4px;
+}
+.fap-skin-soundcloud .fap-visualizer.vuled-mode,
+.fap-skin-cassette .fap-visualizer.vuled-mode,
+.fap-skin-terminal .fap-visualizer.vuled-mode,
+.fap-skin-pixel .fap-visualizer.vuled-mode {
+    filter: none !important;
+    opacity: 1 !important;
+}
+.fap-skin-ap-fixed .fap-visualizer.vuled-mode {
+    display: none !important;
+}
+.fap-skin-soundcloud .fap-visualizer.vu-mode,
+.fap-skin-cassette .fap-visualizer.vu-mode,
+.fap-skin-terminal .fap-visualizer.vu-mode,
+.fap-skin-pixel .fap-visualizer.vu-mode {
+    filter: none !important;
+    opacity: 1 !important;
+}
+.fap-vu-canvas-wrap {
+    position: relative;
+    width: 100%;
+    display: block;
+    margin-bottom: 8px;
+}
+.fap-vu-canvas-wrap .fap-visualizer {
+    margin-bottom: 0;
+}
+.fap-vu-svg-root {
+    pointer-events: none;
+}
+.fap-vu-svg-root .fap-vu-box {
+    transition: background 0.2s, border-color 0.2s;
+}
+.fap-skin-soundcloud .fap-vu-svg-root,
+.fap-skin-cassette .fap-vu-svg-root,
+.fap-skin-terminal .fap-vu-svg-root,
+.fap-skin-pixel .fap-vu-svg-root {
+    filter: none !important;
+}
 /* 모드 변경 레이블 (클릭 시 잠깐 표시) */
 .fap-vis-label {
     position: absolute;
@@ -1211,8 +1263,10 @@
 }
 
 /* 1행: 큰 앨범 커버 (헤더 위에 오버레이로 제목 표시됨) */
-.fap-skin-ap-fixed .fap-visualizer {
-    /* 비주얼라이저는 ap-fixed에서 숨김 */
+.fap-skin-ap-fixed .fap-visualizer,
+.fap-skin-ap-fixed .fap-vu-canvas-wrap,
+.fap-skin-ap-fixed .fap-vu-svg-root {
+    /* 비주얼라이저 + VU 미터 wrapper/오버레이 모두 숨김 (10th rev) */
     display: none !important;
 }
 .fap-skin-ap-fixed .fap-ap-cover-big {

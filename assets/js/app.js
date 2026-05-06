@@ -1425,6 +1425,7 @@ class FSAudioPlayer {
         });
         
         // 비주얼라이저 클릭/탭 → 모드 순환
+        // (VU 모드 백라이트 토글은 SVG 오버레이 자체 버튼이 처리, 9th rev)
         if (this.$.visualizer) {
             this.$.visualizer.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -1473,7 +1474,8 @@ class FSAudioPlayer {
             this._pageshowHandler = (event) => {
                 if (this._destroyed) return;
                 if (event.persisted) {
-                    // BF Cache에서 복원된 경우
+                    // BF Cache에서 복원된 경우 — MediaSession 재설정 (잠금화면 음악 컨트롤)
+                    //   App 데이터 갱신(스토리지/뱃지)은 App.init()의 별도 pageshow 핸들러에서 처리
                     const track = this.playlist[this.currentIndex];
                     if (track) {
                         this._updateMediaSession(track);
@@ -2415,8 +2417,42 @@ class FSAudioPlayer {
             this._visPeaks = new Float32Array(this._visBars);
             this._visPeakVelocity = new Float32Array(this._visBars);
             
+            // ★ VU 미터용 스테레오 분리 (v5.8.1d)
+            //   기존 그래프(mediaSource → analyser → destination) 유지하면서 VU 분석만 추가
+            //   ChannelSplitter는 destination에 연결 안 함 → 기존 오디오 흐름 영향 없음 (passive monitoring)
+            try {
+                this._vuSplitter = this._audioCtx.createChannelSplitter(2);
+                this._vuAnalyserL = this._audioCtx.createAnalyser();
+                this._vuAnalyserR = this._audioCtx.createAnalyser();
+                // RMS 계산용 — fftSize 1024 (약 23ms @ 44.1kHz, 300ms 통합은 ballistics에서 처리)
+                this._vuAnalyserL.fftSize = 1024;
+                this._vuAnalyserR.fftSize = 1024;
+                this._vuAnalyserL.smoothingTimeConstant = 0;  // 직접 RMS 계산 (스무딩 비활성)
+                this._vuAnalyserR.smoothingTimeConstant = 0;
+                this._mediaSource.connect(this._vuSplitter);
+                this._vuSplitter.connect(this._vuAnalyserL, 0);  // L 채널
+                this._vuSplitter.connect(this._vuAnalyserR, 1);  // R 채널
+                this._vuTimeDataL = new Float32Array(this._vuAnalyserL.fftSize);
+                this._vuTimeDataR = new Float32Array(this._vuAnalyserR.fftSize);
+                // VU ballistics 상태 (300ms 통합 — 1차 lowpass 필터)
+                //   targetVU(현재 RMS dB) → currentVU(필터링된 값) 점진적으로 추적
+                //   1차 필터 계수: tau=300ms, frame=16ms(60fps) → alpha = 1 - exp(-frame/tau) ≈ 0.052
+                this._vuLevelL = -60;  // 현재 표시값 (dB)
+                this._vuLevelR = -60;
+                this._vuPeakHoldL = -60;  // 피크 홀드 (OL LED 트리거)
+                this._vuPeakHoldR = -60;
+                this._vuPeakHoldTimeL = 0;
+                this._vuPeakHoldTimeR = 0;
+                // 백라이트 항상 ON 고정 (15th rev: 토글 제거됨)
+                this._vuBacklight = true;
+            } catch(e) {
+                // ChannelSplitter 실패 시 VU 모드 비활성화 (다른 모드는 정상 작동)
+                this._vuSplitter = null;
+                console.warn('[VU] stereo splitter init failed, VU mode disabled:', e?.message);
+            }
+            
             // 모드 설정 (localStorage에서 복원, 기본: bars)
-            this._visModes = ['bars', 'mirror', 'wave', 'ripple', 'peak'];
+            this._visModes = ['bars', 'mirror', 'wave', 'ripple', 'peak', 'vu', 'vuled'];
             try {
                 const saved = localStorage.getItem('fap_vis_mode');
                 this._visModeIdx = saved ? Math.max(0, this._visModes.indexOf(saved)) : 0;
@@ -2512,8 +2548,27 @@ class FSAudioPlayer {
         
         const resize = () => {
             const dpr = window.devicePixelRatio || 1;
+            // ★ VU 모드는 캔버스 높이가 더 커야 함 (v5.8.1d)
+            //   CSS 클래스로 높이 제어 (.fap-visualizer.vu-mode / .vuled-mode)
+            const currentMode = this._visModes && this._visModes[this._visModeIdx];
+            const isVuMode = currentMode === 'vu';
+            const isVuLedMode = currentMode === 'vuled';
+            if (isVuMode) {
+                canvas.classList.add('vu-mode');
+                canvas.classList.remove('vuled-mode');
+            } else if (isVuLedMode) {
+                canvas.classList.add('vuled-mode');
+                canvas.classList.remove('vu-mode');
+                // VU SVG 오버레이 숨김 (vuled는 캔버스 직접 그리기)
+                if (this._vuSvgRoot) this._vuSvgRoot.style.display = 'none';
+            } else {
+                canvas.classList.remove('vu-mode');
+                canvas.classList.remove('vuled-mode');
+                if (this._vuSvgRoot) this._vuSvgRoot.style.display = 'none';
+            }
+            // 클래스 적용 후 offsetHeight 다시 측정
             const cssW = canvas.offsetWidth || 600;
-            const cssH = canvas.offsetHeight || 40;
+            const cssH = canvas.offsetHeight || (isVuMode ? 180 : (isVuLedMode ? 60 : 40));
             canvas.width = cssW * dpr;
             canvas.height = cssH * dpr;
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -2534,12 +2589,19 @@ class FSAudioPlayer {
             const cssH = this._visCssH;
             const mode = this._visModes[this._visModeIdx];
             
-            // 파형 모드는 time domain 데이터 사용, 나머지는 주파수 데이터
-            if (mode === 'wave') {
-                this._analyser.getByteTimeDomainData(this._visTimeData);
-            } else {
-                this._analyser.getByteFrequencyData(this._visFreqData);
-                this._updateBandValues();
+            // VU/VU LED 모드는 _vuAnalyserL/R 사용 — _analyser 데이터 불필요
+            // 단, VU 인프라 없으면 bars fallback 위해 데이터 갱신 필요
+            const isVuModeActive = (mode === 'vu' || mode === 'vuled');
+            const vuInfraReady = this._vuSplitter && this._vuAnalyserL && this._vuAnalyserR;
+            const skipAnalyser = isVuModeActive && vuInfraReady;
+            
+            if (!skipAnalyser) {
+                if (mode === 'wave') {
+                    this._analyser.getByteTimeDomainData(this._visTimeData);
+                } else {
+                    this._analyser.getByteFrequencyData(this._visFreqData);
+                    this._updateBandValues();
+                }
             }
             
             ctx.clearRect(0, 0, cssW, cssH);
@@ -2550,6 +2612,8 @@ class FSAudioPlayer {
                 case 'wave': this._drawWave(ctx, cssW, cssH); break;
                 case 'ripple': this._drawRipple(ctx, cssW, cssH); break;
                 case 'peak': this._drawPeakBars(ctx, cssW, cssH); break;
+                case 'vu': this._drawVU(ctx, cssW, cssH); break;
+                case 'vuled': this._drawVuLed(ctx, cssW, cssH); break;
             }
         };
         draw();
@@ -2726,7 +2790,7 @@ class FSAudioPlayer {
     _cycleVisualizerMode() {
         // 초기화 안 됐어도 모드는 바꿀 수 있음 (재생 시작 후 즉시 적용)
         // _visModes가 없으면 기본 배열 사용
-        if (!this._visModes) this._visModes = ['bars', 'mirror', 'wave', 'ripple', 'peak'];
+        if (!this._visModes) this._visModes = ['bars', 'mirror', 'wave', 'ripple', 'peak', 'vu', 'vuled'];
         if (typeof this._visModeIdx !== 'number') this._visModeIdx = 0;
         this._visModeIdx = (this._visModeIdx + 1) % this._visModes.length;
         // 피크 초기화
@@ -2735,13 +2799,674 @@ class FSAudioPlayer {
         try {
             localStorage.setItem('fap_vis_mode', this._visModes[this._visModeIdx]);
         } catch(e) {}
+        // ★ 모드 변경 시 캔버스 크기 재조정 (VU 모드는 더 큰 높이 필요, v5.8.1d)
+        if (this._visResizeHandler) this._visResizeHandler();
         // 모드 변경 라벨 표시
         this._showVisModeLabel();
     }
     
+    // ── VU 미터 (스테레오 아날로그 게이지, v5.8.1d 재작업 v6 — 카세트 데크 스타일) ──
+    //   디자인 참고: 펜닐님 제공 카세트 데크 VU 미터 이미지
+    //   - 노란 백라이트 배경 (#f5e6a8 → #e8d28a)
+    //   - 호 라인 없음 (눈금 + 라벨만 호 형태로 배치)
+    //   - 메인 라벨: -20 -10 -7 -5 -3 -2 -1 0 1 2 3 5
+    //   - 빨강 영역: 0 초과 (1, 2, 3, 5)
+    //   - 짧은 눈금 마크
+    //   - VU 텍스트 (호 안쪽 가운데)
+    //   - 얇은 검정 바늘 + 회전축
+    //   - 좌상단 백라이트 토글
+    // ── VU 미터 (스테레오 SVG, v5.8.1d 9th rev: Jun-Murakami 스타일) ──
+    //   디자인: github.com/Jun-Murakami/vu-meter-react (MIT) 차용
+    //   - SVG 베젤/눈금/숫자, div 바늘 (CSS transform 회전), div 피크 램프
+    //   - Piecewise interpolation으로 dB→각도 매핑 (실측 비선형)
+    //   - VU ballistics: 1차 lowpass, 300ms attack/release
+    //   - 좌/우 미터 2개를 캔버스 위에 절대배치 오버레이
+    //   - VU 모드 진입 시 SVG 보임, 캔버스 클리어 / 모드 해제 시 SVG 숨김
+    // ── VU 미터 (스테레오 SVG, v5.8.1d 10th rev) ──
+    //   디자인: github.com/Jun-Murakami/vu-meter-react (MIT) + matteovinci/angular-vumeter (MIT) 차용
+    //   - SVG 한 장 안에 베젤/눈금/숫자/바늘/피크 모두 포함
+    //   - 바늘 = SVG <line> + transform="rotate(deg cx cy)" (회전축이 viewBox 좌표계 → 항상 호 중심과 일치)
+    //   - 캔버스를 wrapper div로 감싸 SVG 오버레이가 캔버스 영역에만 정확히 매칭
+    //   - Piecewise interpolation, VU ballistics 300ms, 피크 1s 홀드 + 5s 페이드
+    _drawVU(ctx, w, h) {
+        if (!this._vuSplitter || !this._vuAnalyserL || !this._vuAnalyserR) {
+            this._drawBars(ctx, w, h);
+            return;
+        }
+        if (!this._vuSvgInitialized) {
+            this._initVUSvgOverlay();
+            this._vuSvgInitialized = true;
+        }
+        if (this._vuSvgRoot) this._vuSvgRoot.style.display = 'flex';
+        ctx.clearRect(0, 0, w, h);
+        
+        // RMS → dBFS → VU
+        this._vuAnalyserL.getFloatTimeDomainData(this._vuTimeDataL);
+        this._vuAnalyserR.getFloatTimeDomainData(this._vuTimeDataR);
+        let sumL = 0, sumR = 0;
+        const n = this._vuTimeDataL.length;
+        for (let i = 0; i < n; i++) {
+            sumL += this._vuTimeDataL[i] * this._vuTimeDataL[i];
+            sumR += this._vuTimeDataR[i] * this._vuTimeDataR[i];
+        }
+        const rmsL = Math.sqrt(sumL / n);
+        const rmsR = Math.sqrt(sumR / n);
+        const dbL = rmsL > 0 ? 20 * Math.log10(rmsL) : -100;
+        const dbR = rmsR > 0 ? 20 * Math.log10(rmsR) : -100;
+        const vuL = dbL - (-14);
+        const vuR = dbR - (-14);
+        
+        // Piecewise interpolation — 표준 VU 매핑 (19th rev: -3VU 정중앙, 0VU 우측 65%)
+        // Piecewise interpolation — 22nd rev: 균일 간격, 0VU=+12° (빨강 1~2 사이)
+        const vuToAngle = (v) => {
+            if (v <= -20) return -25;
+            if (v >= 3) return 24;
+            if (v <= -10) return -25 + ((v + 20) / 10) * 5;    // -25 ~ -20
+            if (v <= -7)  return -20 + ((v + 10) / 3) * 5;     // -20 ~ -15
+            if (v <= -5)  return -15 + ((v + 7)  / 2) * 5;     // -15 ~ -10
+            if (v <= -3)  return -10 + ((v + 5)  / 2) * 5;     // -10 ~ -5
+            if (v <= -2)  return -5  + ((v + 3)  / 1) * 5;     // -5 ~ 0
+            if (v <= -1)  return  0  + ((v + 2)  / 1) * 6;     // 0 ~ +6
+            if (v <= 0)   return  6  + ((v + 1) / 1) * 6;      // +6 ~ +12 (0VU=+12°)
+            if (v <= 1)   return 12  + (v / 1) * 4;            // +12 ~ +16
+            if (v <= 2)   return 16  + ((v - 1) / 1) * 4;      // +16 ~ +20
+            if (v <= 3)   return 20  + ((v - 2) / 1) * 4;      // +20 ~ +24
+            return 24;
+        };
+        
+        const targetL = vuToAngle(vuL);
+        const targetR = vuToAngle(vuR);
+        
+        // ballistics 300ms
+        const now = performance.now();
+        if (typeof this._vuLastTime !== 'number') this._vuLastTime = now;
+        const dt = Math.min(0.1, (now - this._vuLastTime) / 1000);
+        this._vuLastTime = now;
+        const coeff = 1 - Math.exp(-dt / 0.3);
+        if (typeof this._vuAngleL !== 'number') { this._vuAngleL = -25; this._vuAngleR = -25; }
+        this._vuAngleL += (targetL - this._vuAngleL) * coeff;
+        this._vuAngleR += (targetR - this._vuAngleR) * coeff;
+        
+        // peak — 클립 임계값 +23° (≈ +2.5VU 부근)
+        const HOLD = 1000, FADE = 5000, CLIP = 23;
+        if (this._vuAngleL >= CLIP) this._vuPeakClipL = now;
+        if (this._vuAngleR >= CLIP) this._vuPeakClipR = now;
+        const peakI = (t) => {
+            if (!t) return 0;
+            const ms = now - t;
+            if (ms <= HOLD) return 1;
+            return Math.max(0, 1 - (ms - HOLD) / FADE);
+        };
+        
+        this._updateVUMeter(this._vuMeterL, this._vuAngleL, peakI(this._vuPeakClipL));
+        this._updateVUMeter(this._vuMeterR, this._vuAngleR, peakI(this._vuPeakClipR));
+    }
+    
+    // ── LED 디지털 VU 미터 (가로형, 14b rev) ──
+    //   ChannelSplitter L/R RMS → dBFS → LED 세그먼트 점등
+    //   녹색 (-20 ~ -2dB), 빨강 (-1 ~ +6dB), 피크 홀드
+    _drawVuLed(ctx, w, h) {
+        // VU 인프라 재사용 (ChannelSplitter)
+        if (!this._vuSplitter || !this._vuAnalyserL || !this._vuAnalyserR) {
+            this._drawBars(ctx, w, h);
+            return;
+        }
+        // SVG 오버레이가 있으면 숨김 (VU 모드 SVG와 충돌 방지)
+        if (this._vuSvgRoot) this._vuSvgRoot.style.display = 'none';
+        
+        ctx.clearRect(0, 0, w, h);
+        
+        // 1) RMS → dBFS 계산
+        this._vuAnalyserL.getFloatTimeDomainData(this._vuTimeDataL);
+        this._vuAnalyserR.getFloatTimeDomainData(this._vuTimeDataR);
+        let sumL = 0, sumR = 0;
+        const n = this._vuTimeDataL.length;
+        for (let i = 0; i < n; i++) {
+            sumL += this._vuTimeDataL[i] * this._vuTimeDataL[i];
+            sumR += this._vuTimeDataR[i] * this._vuTimeDataR[i];
+        }
+        const rmsL = Math.sqrt(sumL / n);
+        const rmsR = Math.sqrt(sumR / n);
+        const dbL = rmsL > 0 ? 20 * Math.log10(rmsL) : -100;
+        const dbR = rmsR > 0 ? 20 * Math.log10(rmsR) : -100;
+        // 0 VU = -14dBFS, +8dB = -6dBFS (15th rev: 보통 음악 라우드니스에 맞춰 -18→-14 변경)
+        const vuL = dbL - (-14);
+        const vuR = dbR - (-14);
+        
+        // 2) 시간 기반 ballistics (50ms attack — LED는 빠르게)
+        const now = performance.now();
+        if (typeof this._vuLedLastTime !== 'number') this._vuLedLastTime = now;
+        const dt = Math.min(0.1, (now - this._vuLedLastTime) / 1000);
+        this._vuLedLastTime = now;
+        const coeff = 1 - Math.exp(-dt / 0.05);
+        if (typeof this._vuLedL !== 'number') { this._vuLedL = -25; this._vuLedR = -25; }
+        this._vuLedL += (vuL - this._vuLedL) * coeff;
+        this._vuLedR += (vuR - this._vuLedR) * coeff;
+        
+        // 3) 피크 홀드 (1.5초)
+        const HOLD = 1500;
+        if (typeof this._vuLedPeakL !== 'number') { this._vuLedPeakL = -25; this._vuLedPeakR = -25; this._vuLedPeakTL = 0; this._vuLedPeakTR = 0; }
+        if (this._vuLedL >= this._vuLedPeakL || (now - this._vuLedPeakTL) > HOLD) {
+            this._vuLedPeakL = this._vuLedL;
+            this._vuLedPeakTL = now;
+        }
+        if (this._vuLedR >= this._vuLedPeakR || (now - this._vuLedPeakTR) > HOLD) {
+            this._vuLedPeakR = this._vuLedR;
+            this._vuLedPeakTR = now;
+        }
+        // 피크 페이드 (홀드 후 천천히 떨어짐)
+        if ((now - this._vuLedPeakTL) > HOLD) this._vuLedPeakL -= dt * 12;
+        if ((now - this._vuLedPeakTR) > HOLD) this._vuLedPeakR -= dt * 12;
+        
+        // 4) 레이아웃
+        const VU_MIN = -25, VU_MAX = 8;
+        const VU_RANGE = VU_MAX - VU_MIN;
+        const N_SEG = 33;
+        const RED_FROM_VU = -1;
+        
+        const padL = 18, padR = 24, padT = 10, padB = 10;
+        const innerW = w - padL - padR;
+        const innerH = h - padT - padB;
+        const rowH = (innerH - 2) / 2;
+        const segW = innerW / N_SEG;
+        const segGap = Math.max(1, segW * 0.15);
+        const segActualW = segW - segGap;
+        
+        // 5) dB 눈금 라벨
+        const labelTicks = [
+            { vu: -20, label: '-20' }, { vu: -15, label: '-15' }, { vu: -10, label: '-10' },
+            { vu: -7,  label: '-7'  }, { vu: -5,  label: '-5'  }, { vu: -3,  label: '-3'  },
+            { vu: -1,  label: '-1'  }, { vu: 0,   label: '0'   }, { vu: 1,   label: '1'   },
+            { vu: 3,   label: '3'   }, { vu: 5,   label: '5'   }, { vu: 8,   label: '+8'  }
+        ];
+        ctx.font = '600 8px monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        labelTicks.forEach(t => {
+            const ratio = (t.vu - VU_MIN) / VU_RANGE;
+            const x = padL + ratio * innerW;
+            ctx.fillStyle = t.vu >= RED_FROM_VU ? '#ff5252' : '#888';
+            ctx.fillText(t.label, x, padT / 2);
+            ctx.fillText(t.label, x, h - padB / 2);
+        });
+        
+        // 6) "dB" 우측
+        ctx.fillStyle = '#888';
+        ctx.textAlign = 'left';
+        ctx.fillText('dB', w - padR + 4, padT / 2);
+        ctx.fillText('dB', w - padR + 4, h - padB / 2);
+        
+        // 7) L/R 라벨
+        ctx.fillStyle = '#aaa';
+        ctx.font = '700 11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('L', padL / 2, padT + rowH / 2);
+        ctx.fillText('R', padL / 2, padT + rowH + 2 + rowH / 2);
+        
+        // 8) LED 두 행
+        this._drawLedRow(ctx, padL, padT, segW, segActualW, segGap, rowH, N_SEG, VU_MIN, VU_RANGE, RED_FROM_VU, this._vuLedL, this._vuLedPeakL);
+        this._drawLedRow(ctx, padL, padT + rowH + 2, segW, segActualW, segGap, rowH, N_SEG, VU_MIN, VU_RANGE, RED_FROM_VU, this._vuLedR, this._vuLedPeakR);
+    }
+    
+    _drawLedRow(ctx, x0, y0, segW, segActualW, segGap, rowH, N, VU_MIN, VU_RANGE, RED_FROM, level, peak) {
+        const segPerVU = N / VU_RANGE;
+        const activeIdx = Math.floor((level - VU_MIN) * segPerVU);
+        const peakIdx = Math.floor((peak - VU_MIN) * segPerVU);
+        
+        for (let i = 0; i < N; i++) {
+            const segVu = VU_MIN + (i / segPerVU);
+            const isRed = segVu >= RED_FROM;
+            const isActive = i <= activeIdx;
+            const isPeak = i === peakIdx && peakIdx >= 0;
+            
+            const x = x0 + i * segW;
+            const sx = x + segGap / 2;
+            const sw = segActualW;
+            
+            // 배경 (꺼진 세그먼트)
+            ctx.fillStyle = isRed ? 'rgba(50,15,15,0.9)' : 'rgba(15,25,15,0.9)';
+            ctx.fillRect(sx, y0, sw, rowH);
+            
+            if (isActive || isPeak) {
+                if (isRed) {
+                    ctx.fillStyle = isPeak ? '#ff8080' : '#ff3030';
+                    ctx.shadowColor = '#ff5252';
+                } else {
+                    ctx.fillStyle = isPeak ? '#7dff7d' : '#22dd22';
+                    ctx.shadowColor = '#33ff33';
+                }
+                ctx.shadowBlur = isPeak ? 6 : 3;
+                ctx.fillRect(sx, y0, sw, rowH);
+                ctx.shadowBlur = 0;
+                
+                // 광택
+                const grad = ctx.createLinearGradient(sx, y0, sx, y0 + rowH);
+                grad.addColorStop(0, 'rgba(255,255,255,0.25)');
+                grad.addColorStop(0.5, 'rgba(255,255,255,0)');
+                grad.addColorStop(1, 'rgba(0,0,0,0.2)');
+                ctx.fillStyle = grad;
+                ctx.fillRect(sx, y0, sw, rowH);
+            }
+        }
+    }
+    
+    /**
+     * SVG 오버레이 초기화
+     * - 캔버스를 wrapper div로 감싸 SVG가 캔버스 영역에만 정확히 매칭되게 함
+     */
+    _initVUSvgOverlay() {
+        const canvas = this.$.visualizer;
+        if (!canvas || !canvas.parentElement) return;
+        
+        // 캔버스 wrapper 생성 (이미 있으면 재사용)
+        let wrap = canvas.parentElement.querySelector('.fap-vu-canvas-wrap');
+        if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.className = 'fap-vu-canvas-wrap';
+            wrap.style.cssText = 'position:relative;width:100%;display:block;';
+            canvas.parentElement.insertBefore(wrap, canvas);
+            wrap.appendChild(canvas);
+        }
+        this._vuCanvasWrap = wrap;
+        
+        const root = document.createElement('div');
+        root.className = 'fap-vu-svg-root';
+        root.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;display:none;align-items:center;justify-content:center;gap:10px;padding:0 8px;box-sizing:border-box;pointer-events:none;';
+        
+        this._vuMeterL = this._createVUMeterElement('L');
+        this._vuMeterR = this._createVUMeterElement('R');
+        root.appendChild(this._vuMeterL.box);
+        root.appendChild(this._vuMeterR.box);
+        
+        // 백라이트 항상 ON 고정 (15th rev: 토글 버튼 제거)
+        this._vuBacklight = true;
+        this._applyVUBacklight();
+        
+        wrap.appendChild(root);
+        this._vuSvgRoot = root;
+    }
+    
+    /**
+     * 백라이트 색상 적용 (CSS variable로 일괄 갱신)
+     */
+    /**
+     * 백라이트 색상 적용 — 맥킨토시 스타일 (시안 글로우 ON / 어두운 OFF)
+     */
+    _applyVUBacklight() {
+        if (!this._vuMeterL || !this._vuMeterR) return;
+        const on = this._vuBacklight;
+        const apply = (m) => {
+            // 박스 배경 (검정 페이스)
+            const bgColor = on ? '#0a1218' : '#080a0c';
+            m.box.style.background = bgColor;
+            m.box.style.borderColor = on ? '#2a3a4a' : '#1a1f25';
+            m.bgRect.setAttribute('fill', bgColor);
+            
+            // 시안 백라이트 그라디언트 (페이스 위에 깔리는 빛)
+            const glow = m.svg.querySelector('.vu-glow');
+            if (glow) glow.setAttribute('opacity', on ? '1' : '0');
+            
+            // 눈금/숫자 색상 — 백라이트 ON에서 시안빛 흰색, OFF에서 회색
+            const tickColor = on ? '#e8f7fb' : '#3a4248';
+            const labelColor = on ? '#e8f7fb' : '#3a4248';
+            const arcColor = on ? 'rgba(180,232,245,0.4)' : 'rgba(80,90,100,0.3)';
+            const plusColor = on ? '#ff5252' : '#5a2020';
+            const logoColor = on ? '#4dd0e1' : '#2a3a40';
+            
+            m.svg.querySelectorAll('.vu-tick').forEach(el => el.setAttribute('stroke', el.dataset.plus === '1' ? plusColor : tickColor));
+            m.svg.querySelectorAll('.vu-num').forEach(el => el.setAttribute('fill', el.dataset.plus === '1' ? plusColor : labelColor));
+            m.svg.querySelectorAll('.vu-arc').forEach(el => el.setAttribute('stroke', arcColor));
+            m.svg.querySelectorAll('.vu-logo').forEach(el => el.setAttribute('fill', logoColor));
+            m.svg.querySelectorAll('.vu-chlabel').forEach(el => el.setAttribute('fill', labelColor));
+            m.svg.querySelectorAll('.vu-brand').forEach(el => el.setAttribute('fill', on ? '#4dd0e1' : '#2a3a40'));
+            
+            // 바늘 색상 — 백라이트 ON에서 흰색에 시안 글로우, OFF에서 어두운 회색
+            m.needle.setAttribute('stroke', on ? '#f5fcfd' : '#4a5258');
+            m.needle.style.filter = on ? 'drop-shadow(0 0 1.5px rgba(77,208,225,0.9))' : 'none';
+            
+            // 회전축 점 색상
+            m.pivotDot.setAttribute('fill', on ? '#1a2530' : '#0a0e12');
+            m.pivotDot.setAttribute('stroke', on ? '#4dd0e1' : '#2a3a40');
+        };
+        apply(this._vuMeterL);
+        apply(this._vuMeterR);
+    }
+    
+    /**
+     * 단일 VU 미터 SVG 생성 — 맥킨토시 스타일 (검정 페이스 + 시안 백라이트)
+     */
+    /**
+     * 단일 VU 미터 SVG 생성 — McIntosh 가로형 비율 (12th rev)
+     * - 박스 비율 약 2.15:1 (실제 McIntosh MC275 등의 가로 비율)
+     * - viewBox 280×130, 호 반지름 키움 (콘텐츠가 박스를 꽉 채움)
+     * - 회전축 cy=160 (viewBox 외부 30px) → 호 정점이 y=10 부근
+     */
+    /**
+     * 단일 VU 미터 SVG 생성 — McIntosh 실물 비율 (13th rev)
+     * - 회전축이 박스 외부 깊숙히 (cy=250) → 호 반지름 235로 키움
+     * - 호 정점이 박스 상단 근처 (y≈15), 양 끝이 박스 좌우 41px 여백까지
+     * - 눈금/숫자/바늘 모두 박스 안에 꽉 차게 보임
+     */
+    /**
+     * 단일 VU 미터 SVG 생성 — WAVES VU 레이아웃 + McIntosh 시안 컬러 (14th rev)
+     * - 박스 비율 300×120 (약 2.5:1, 더 가로형)
+     * - 호가 박스 좌우 15px 여백까지 꽉 채움 (회전축 cy=330, 반지름 320)
+     * - 보조 눈금 추가 (0/20/40/60/80/100 — % 표시)
+     * - 0VU 라벨 굵게 강조
+     * - 빨강 영역 두꺼운 호로 강조
+     */
+    /**
+     * 단일 VU 미터 SVG 생성 — 이미지 기반 (16th rev)
+     * - 박스 220×140 (1.57:1, WAVES VU 미터 비율)
+     * - 회전축 cy=150 (박스 하단 10px 외부) — 시각적 피벗 점이 박스 하단에 보임
+     * - 호 반지름 R=140, ±30° 대칭
+     * - VU 라벨 정중앙 위쪽, 보조 % 눈금 호 안쪽
+     */
+    /**
+     * 단일 VU 미터 SVG 생성 — 17th rev
+     * - 박스 300×170 (1.76:1, 14th 가로 크기 + 더 깊은 세로)
+     * - 회전축 cy=200 (박스 외부 30px), R=190
+     * - 호 정점 박스 위 10px, 양 끝 ±30° (박스 좌우 55px 여백)
+     * - 시각적 피벗 점은 박스 하단 (150, 155)에 시안 작은 점
+     */
+    /**
+     * 단일 VU 미터 SVG 생성 — 18th rev (2~4번 이미지 비율)
+     * - 박스 300×150 (2:1, 가로형)
+     * - 회전축 cy=295 (박스 외부 145px 깊숙히), R=280
+     * - 호가 박스 가로 93% 차지 (좌우 10px 여백)
+     * - 호 정점 y=15 (박스 위 15px), 양 끝 y=52
+     * - 박스 하단 절반은 바늘 + McIntosh 라벨 + 피벗 점 영역
+     */
+    _createVUMeterElement(label) {
+        const NEEDLE_COLOR = '#f5fcfd';
+        const BG = '#0a1218';
+        const BORDER = '#2a3a4a';
+        const TICK = '#e8f7fb';
+        const PLUS = '#ff5252';
+        const CYAN = '#4dd0e1';
+        
+        const box = document.createElement('div');
+        box.className = 'fap-vu-box';
+        // 박스 300×150 (2:1), flex 반응형
+        box.style.cssText = `position:relative;flex:1 1 0;max-width:300px;min-width:0;aspect-ratio:300/150;background:${BG};border:1px solid ${BORDER};border-radius:6px;overflow:hidden;font-family:monospace;box-shadow:inset 0 1px 2px rgba(255,255,255,0.05),inset 0 -2px 4px rgba(0,0,0,0.3);`;
+        
+        const svgNS = 'http://www.w3.org/2000/svg';
+        const svg = document.createElementNS(svgNS, 'svg');
+        svg.setAttribute('viewBox', '0 0 300 150');
+        svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+        svg.style.cssText = 'width:100%;height:100%;display:block;';
+        
+        // <defs>: 시안 백라이트 그라디언트 (중심 박스 하단 가까이)
+        const defs = document.createElementNS(svgNS, 'defs');
+        const grad = document.createElementNS(svgNS, 'radialGradient');
+        const gradId = `vu-glow-${Math.random().toString(36).slice(2, 9)}`;
+        grad.setAttribute('id', gradId);
+        grad.setAttribute('cx', '50%');
+        grad.setAttribute('cy', '90%');
+        grad.setAttribute('r', '70%');
+        const stops = [
+            { offset: '0%',   color: 'rgba(77,208,225,0.4)' },
+            { offset: '50%',  color: 'rgba(77,208,225,0.15)' },
+            { offset: '100%', color: 'rgba(77,208,225,0)' }
+        ];
+        stops.forEach(s => {
+            const stop = document.createElementNS(svgNS, 'stop');
+            stop.setAttribute('offset', s.offset);
+            stop.setAttribute('stop-color', s.color);
+            grad.appendChild(stop);
+        });
+        defs.appendChild(grad);
+        svg.appendChild(defs);
+        
+        // ★ 회전축 — 박스(300×150) 외부 200px 깊숙히 (19th rev: 표준 ±25° 매핑)
+        // -3VU(angle=-3°)가 박스 가로 정중앙, 0VU(+8°)가 우측 65% 지점
+        const cx = 150, cy = 350;
+        const ARC_R = 320;
+        const polar = (deg, r) => {
+            const rad = deg * Math.PI / 180;
+            return { x: cx + Math.sin(rad) * r, y: cy - Math.cos(rad) * r };
+        };
+        
+        // 1) 배경
+        const bgRect = document.createElementNS(svgNS, 'rect');
+        bgRect.setAttribute('x', '0'); bgRect.setAttribute('y', '0');
+        bgRect.setAttribute('width', '300'); bgRect.setAttribute('height', '150');
+        bgRect.setAttribute('fill', BG);
+        svg.appendChild(bgRect);
+        
+        // 2) 시안 글로우
+        const glow = document.createElementNS(svgNS, 'rect');
+        glow.setAttribute('x', '0'); glow.setAttribute('y', '0');
+        glow.setAttribute('width', '300'); glow.setAttribute('height', '150');
+        glow.setAttribute('fill', `url(#${gradId})`);
+        glow.setAttribute('class', 'vu-glow');
+        svg.appendChild(glow);
+        
+        // 3) 빨강 영역 — +12°~+24° (0VU 라벨 위치부터 +3까지, -1~0 사이는 흰색)
+        const band = document.createElementNS(svgNS, 'path');
+        const p1 = polar(12, ARC_R - 1), p2 = polar(24, ARC_R - 1), p3 = polar(24, ARC_R - 12), p4 = polar(12, ARC_R - 12);
+        band.setAttribute('d', `M ${p1.x} ${p1.y} A ${ARC_R-1} ${ARC_R-1} 0 0 1 ${p2.x} ${p2.y} L ${p3.x} ${p3.y} A ${ARC_R-12} ${ARC_R-12} 0 0 0 ${p4.x} ${p4.y} Z`);
+        band.setAttribute('fill', 'rgba(255,82,82,0.6)');
+        svg.appendChild(band);
+        
+        // 4) 메인 가이드 호 (-25° ~ +25°)
+        const guide = document.createElementNS(svgNS, 'path');
+        const g1 = polar(-25, ARC_R - 12), g2 = polar(25, ARC_R - 12);
+        guide.setAttribute('d', `M ${g1.x} ${g1.y} A ${ARC_R-12} ${ARC_R-12} 0 0 1 ${g2.x} ${g2.y}`);
+        guide.setAttribute('fill', 'none');
+        guide.setAttribute('stroke', 'rgba(180,232,245,0.6)');
+        guide.setAttribute('stroke-width', '1.5');
+        guide.setAttribute('class', 'vu-arc');
+        svg.appendChild(guide);
+        
+        // 5) 메인 dB 눈금 + 숫자 — 22nd rev: 균일 간격, 0VU=+12° (빨강 1~2 사이)
+        const ticks = [
+            { vu: -20, a: -25 },
+            { vu: -10, a: -20 },
+            { vu: -7,  a: -15 },
+            { vu: -5,  a: -10 },
+            { vu: -3,  a: -5 },
+            { vu: -2,  a:  0 },
+            { vu: -1,  a:  6 },
+            { vu:  0,  a: 12 },
+            { vu:  1,  a: 16 },
+            { vu:  2,  a: 20 },
+            { vu:  3,  a: 24 }
+        ];
+        ticks.forEach(t => {
+            // 모든 눈금 같은 길이/두께 (1번 이미지처럼 통일)
+            const len = 13;
+            const a = polar(t.a, ARC_R);
+            const b = polar(t.a, ARC_R - len);
+            const line = document.createElementNS(svgNS, 'line');
+            line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+            line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+            line.setAttribute('stroke', t.vu > 0 ? PLUS : TICK);
+            line.setAttribute('stroke-width', '1.5');
+            line.setAttribute('class', 'vu-tick');
+            line.dataset.plus = t.vu > 0 ? '1' : '0';
+            svg.appendChild(line);
+            
+            // dB 숫자 (호 바깥쪽) — 모두 같은 크기 (1번 이미지처럼)
+            const npos = polar(t.a, ARC_R + 10);
+            const text = document.createElementNS(svgNS, 'text');
+            text.setAttribute('x', npos.x);
+            text.setAttribute('y', npos.y + 3);
+            text.setAttribute('fill', t.vu > 0 ? PLUS : TICK);
+            text.setAttribute('font-size', '10.5');
+            text.setAttribute('font-weight', '600');
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('class', 'vu-num');
+            text.dataset.plus = t.vu > 0 ? '1' : '0';
+            text.textContent = Math.abs(t.vu).toString();
+            svg.appendChild(text);
+        });
+        
+        // 6) 보조 % 눈금 (호 안쪽 0/20/40/60/80/100, 표준 매핑)
+        // 0%=-∞, 20%=-14, 40%=-8, 60%=-4.5, 80%=-2, 100%=0VU (새 매핑 각도)
+        const subTicks = [
+            { pct: 0,   a: -25 },
+            { pct: 20,  a: -18 },
+            { pct: 40,  a: -10 },
+            { pct: 60,  a: -4 },
+            { pct: 80,  a: 0 },
+            { pct: 100, a: 12 }
+        ];
+        subTicks.forEach(t => {
+            const a = polar(t.a, ARC_R - 13);
+            const b = polar(t.a, ARC_R - 18);
+            const line = document.createElementNS(svgNS, 'line');
+            line.setAttribute('x1', a.x); line.setAttribute('y1', a.y);
+            line.setAttribute('x2', b.x); line.setAttribute('y2', b.y);
+            line.setAttribute('stroke', 'rgba(180,232,245,0.7)');
+            line.setAttribute('stroke-width', '1');
+            line.setAttribute('class', 'vu-arc');
+            svg.appendChild(line);
+            
+            const npos = polar(t.a, ARC_R - 26);
+            const text = document.createElementNS(svgNS, 'text');
+            text.setAttribute('x', npos.x);
+            text.setAttribute('y', npos.y + 3);
+            text.setAttribute('fill', 'rgba(180,232,245,0.85)');
+            text.setAttribute('font-size', '7.5');
+            text.setAttribute('font-weight', '500');
+            text.setAttribute('text-anchor', 'middle');
+            text.setAttribute('class', 'vu-arc');
+            text.textContent = t.pct.toString();
+            svg.appendChild(text);
+        });
+        
+        // 7) +/- 부호 (호 양 끝 -27°/+27° 호 외측, 진짜 그래프 끝)
+        const minus = document.createElementNS(svgNS, 'text');
+        const mp = polar(-27, ARC_R - 5);
+        minus.setAttribute('x', mp.x);
+        minus.setAttribute('y', mp.y + 3);
+        minus.setAttribute('fill', TICK);
+        minus.setAttribute('font-size', '14');
+        minus.setAttribute('font-weight', '700');
+        minus.setAttribute('text-anchor', 'middle');
+        minus.setAttribute('class', 'vu-num');
+        minus.dataset.plus = '0';
+        minus.textContent = '−';
+        svg.appendChild(minus);
+        const plus = document.createElementNS(svgNS, 'text');
+        const pp = polar(27, ARC_R - 5);
+        plus.setAttribute('x', pp.x);
+        plus.setAttribute('y', pp.y + 3);
+        plus.setAttribute('fill', PLUS);
+        plus.setAttribute('font-size', '14');
+        plus.setAttribute('font-weight', '700');
+        plus.setAttribute('text-anchor', 'middle');
+        plus.setAttribute('class', 'vu-num');
+        plus.dataset.plus = '1';
+        plus.textContent = '+';
+        svg.appendChild(plus);
+        
+        // 8) "VU" 라벨 — 세리프 폰트 (클래식 VU 미터 스타일, McIntosh 위쪽)
+        const vuLabel = document.createElementNS(svgNS, 'text');
+        vuLabel.setAttribute('x', cx);
+        vuLabel.setAttribute('y', '120');
+        vuLabel.setAttribute('fill', CYAN);
+        vuLabel.setAttribute('font-size', '16');
+        vuLabel.setAttribute('font-weight', '700');
+        vuLabel.setAttribute('font-family', 'Georgia, "Times New Roman", Times, serif');
+        vuLabel.setAttribute('font-style', 'italic');
+        vuLabel.setAttribute('text-anchor', 'middle');
+        vuLabel.setAttribute('letter-spacing', '1');
+        vuLabel.setAttribute('class', 'vu-logo');
+        vuLabel.setAttribute('dominant-baseline', 'middle');
+        vuLabel.textContent = 'VU';
+        svg.appendChild(vuLabel);
+        
+        // 9) 채널 라벨 (L/R) — 좌상단
+        const chLabel = document.createElementNS(svgNS, 'text');
+        chLabel.setAttribute('x', '12');
+        chLabel.setAttribute('y', '18');
+        chLabel.setAttribute('fill', TICK);
+        chLabel.setAttribute('font-size', '13');
+        chLabel.setAttribute('font-weight', '700');
+        chLabel.setAttribute('text-anchor', 'start');
+        chLabel.setAttribute('class', 'vu-chlabel');
+        chLabel.textContent = label;
+        svg.appendChild(chLabel);
+        
+        // 10) McIntosh 브랜드 — 굵은 세리프 대문자 (실제 로고 스타일에 가깝게)
+        const brand = document.createElementNS(svgNS, 'text');
+        brand.setAttribute('x', cx);
+        brand.setAttribute('y', '143');
+        brand.setAttribute('fill', '#a8eef8');
+        brand.setAttribute('font-size', '10');
+        brand.setAttribute('font-weight', '700');
+        brand.setAttribute('font-family', 'Georgia, "Times New Roman", Times, serif');
+        brand.setAttribute('text-anchor', 'middle');
+        brand.setAttribute('letter-spacing', '1.5');
+        brand.setAttribute('class', 'vu-brand');
+        brand.textContent = 'METER';
+        svg.appendChild(brand);
+        
+        // 11) 바늘 — 회전축 (150, 350), 박스 외부에서 위로 솟음
+        const NEEDLE_LEN = ARC_R;
+        const needle = document.createElementNS(svgNS, 'line');
+        needle.setAttribute('x1', cx);
+        needle.setAttribute('y1', cy);
+        needle.setAttribute('x2', cx);
+        needle.setAttribute('y2', cy - NEEDLE_LEN);
+        needle.setAttribute('stroke', NEEDLE_COLOR);
+        needle.setAttribute('stroke-width', '1.8');
+        needle.setAttribute('stroke-linecap', 'round');
+        needle.setAttribute('transform', `rotate(-25 ${cx} ${cy})`);
+        needle.style.filter = 'drop-shadow(0 0 2px rgba(77,208,225,0.95))';
+        needle.style.transition = 'none';
+        svg.appendChild(needle);
+        
+        // 12) 회전축 점 — 22nd rev: 보이지 않게 (호환용 dummy, viewBox 밖에 작게)
+        // _applyVUBacklight에서 참조하므로 객체는 유지하되 화면엔 안 보임
+        const pivotDot = document.createElementNS(svgNS, 'circle');
+        pivotDot.setAttribute('cx', '-100');
+        pivotDot.setAttribute('cy', '-100');
+        pivotDot.setAttribute('r', '0');
+        pivotDot.setAttribute('fill', 'transparent');
+        pivotDot.setAttribute('stroke', 'transparent');
+        svg.appendChild(pivotDot);
+        
+        // 13) 피크 램프 (우상단)
+        const peak = document.createElementNS(svgNS, 'circle');
+        peak.setAttribute('cx', '283');
+        peak.setAttribute('cy', '14');
+        peak.setAttribute('r', '4.5');
+        peak.setAttribute('fill', '#1a2530');
+        peak.setAttribute('stroke', 'rgba(255,82,82,0.5)');
+        peak.setAttribute('stroke-width', '1');
+        svg.appendChild(peak);
+        
+        box.appendChild(svg);
+        
+        return { box, svg, bgRect, needle, pivotDot, peak, cx, cy };
+    }
+    
+    /**
+     * 미터 갱신 — 바늘 transform 갱신 + 피크 점등
+     */
+    _updateVUMeter(m, angle, peakI) {
+        if (!m) return;
+        m.needle.setAttribute('transform', `rotate(${angle} ${m.cx} ${m.cy})`);
+        if (peakI > 0.001) {
+            const a = 0.3 + peakI * 0.7;
+            m.peak.setAttribute('fill', `rgba(255,82,82,${a})`);
+            m.peak.style.filter = `drop-shadow(0 0 ${4 + peakI * 5}px rgba(255,82,82,${0.5 + peakI * 0.4}))`;
+        } else {
+            m.peak.setAttribute('fill', '#1a2530');
+            m.peak.style.filter = 'none';
+        }
+    }
+    
+    // 호환 stubs
+    _drawSingleVU(ctx, x, y, w, h, vu) { /* SVG 방식 */ }
+    _drawVUBacklightToggle(ctx, x, y, w, h) { /* SVG 토글 */ }
+    
     _showVisModeLabel() {
         if (!this.$ || !this.$.visualizer) return;
-        const labels = { bars: '막대', mirror: '미러', wave: '파형', ripple: '물결', peak: '피크' };
+        const labels = { bars: '막대', mirror: '미러', wave: '파형', ripple: '물결', peak: '피크', vu: 'VU', vuled: 'VU LED' };
         const mode = this._visModes[this._visModeIdx];
         const label = labels[mode] || mode;
         // 기존 라벨 제거
@@ -3470,6 +4195,25 @@ class FSAudioPlayer {
         this.audio.pause();
         // 비주얼라이저 정리
         this._stopVisualizer();
+        // VU SVG 오버레이 정리 (10th rev: wrapper도 풀어주기)
+        if (this._vuSvgRoot) {
+            try { this._vuSvgRoot.remove(); } catch(e) {}
+            this._vuSvgRoot = null;
+            this._vuMeterL = null;
+            this._vuMeterR = null;
+            this._vuSvgInitialized = false;
+        }
+        if (this._vuCanvasWrap) {
+            // 캔버스를 wrapper 밖으로 빼고 wrapper 제거
+            try {
+                const canvas = this.$.visualizer;
+                if (canvas && this._vuCanvasWrap.parentElement) {
+                    this._vuCanvasWrap.parentElement.insertBefore(canvas, this._vuCanvasWrap);
+                }
+                this._vuCanvasWrap.remove();
+            } catch(e) {}
+            this._vuCanvasWrap = null;
+        }
         // 미디어 keepalive / Wake Lock 정리 (자동 로그아웃/화면 잠금 방지 기능)
         this._stopMediaKeepalive();
         this._releaseWakeLock();
@@ -3523,6 +4267,12 @@ class FSAudioPlayer {
             this._audioCtx = null;
             this._analyser = null;
             this._mediaSource = null;
+            // ★ VU 미터용 스테레오 노드 정리 (v5.8.1d)
+            this._vuSplitter = null;
+            this._vuAnalyserL = null;
+            this._vuAnalyserR = null;
+            this._vuTimeDataL = null;
+            this._vuTimeDataR = null;
         }
         this.audio.removeAttribute('src');
         this.audio.load();
@@ -3757,6 +4507,17 @@ const App = {
         };
         window.addEventListener('pagehide', killActivePipe);
         window.addEventListener('beforeunload', killActivePipe);
+        
+        // ★ BF Cache 복원 시 데이터 갱신 (29th rev: 모바일 백그라운드 복귀 대응)
+        //   동영상/웹하드 등 음악 재생 무관하게 항상 동작 (App 레벨 등록)
+        //   init()이 BF Cache에선 재실행 안 되므로 명시적 갱신 필요
+        window.addEventListener('pageshow', (event) => {
+            if (!event.persisted) return;  // 일반 새로고침은 init() 자체가 재실행되므로 무관
+            if (!this.user) return;  // 미로그인 상태는 무관
+            try { this.loadStorages && this.loadStorages(); } catch(e) {}
+            try { this.updateShareBadges && this.updateShareBadges(); } catch(e) {}
+            try { this.updateSharedWithMeBadge && this.updateSharedWithMeBadge(); } catch(e) {}
+        });
         
         this.bindEvents();
         this.initTheme();

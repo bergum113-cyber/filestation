@@ -4626,6 +4626,29 @@ export class HwpDocument {
         }
     }
     /**
+     * 다층 레이어 필터를 적용한 Canvas 렌더링 (Task #516, Stage 5.2).
+     *
+     * `layer_kind`:
+     * - `"all"` → 모든 그림 렌더 (기본 `renderPageToCanvas` 와 동일)
+     * - `"flow"` → 본문 layer (BehindText / InFrontOfText 그림 제외)
+     * - `"behind"` → BehindText overlay layer
+     * - `"front"` → InFrontOfText overlay layer
+     *
+     * 본문 Canvas 와 overlay 컨테이너를 분리하는 다층 layer 아키텍처에서 사용.
+     * @param {number} page_num
+     * @param {HTMLCanvasElement} canvas
+     * @param {number} scale
+     * @param {string} layer_kind
+     */
+    renderPageToCanvasFiltered(page_num, canvas, scale, layer_kind) {
+        const ptr0 = passStringToWasm0(layer_kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.hwpdocument_renderPageToCanvasFiltered(this.__wbg_ptr, page_num, canvas, scale, ptr0, len0);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * 특정 페이지를 기존 PageRenderTree 경로로 Canvas 2D에 직접 렌더링한다.
      * @param {number} page_num
      * @param {HTMLCanvasElement} canvas
@@ -6020,7 +6043,7 @@ function __wbg_get_imports() {
         __wbg_lineTo_fe5522fbbf79a59d: function(arg0, arg1, arg2) {
             arg0.lineTo(arg1, arg2);
         },
-        __wbg_measureTextWidth_b2ff54f2bcc245dd: function(arg0, arg1, arg2, arg3) {
+        __wbg_measureTextWidth_8348d9e9c7b34407: function(arg0, arg1, arg2, arg3) {
             const ret = globalThis.measureTextWidth(getStringFromWasm0(arg0, arg1), getStringFromWasm0(arg2, arg3));
             return ret;
         },
@@ -6076,6 +6099,9 @@ function __wbg_get_imports() {
         },
         __wbg_set_fillStyle_a37bbe1a6cf22936: function(arg0, arg1) {
             arg0.fillStyle = arg1;
+        },
+        __wbg_set_filter_73c9d4b507a71b7f: function(arg0, arg1, arg2) {
+            arg0.filter = getStringFromWasm0(arg1, arg2);
         },
         __wbg_set_font_5b1b8c76449f5864: function(arg0, arg1, arg2) {
             arg0.font = getStringFromWasm0(arg1, arg2);
