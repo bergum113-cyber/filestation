@@ -11415,6 +11415,14 @@ const App = {
                 'compress': false,
                 'new-folder': !!perms.can_write,
                 'new-vault-folder': !!perms.can_write && !this.vault.isVaultView && this.currentStorage == this.homeStorageId,
+                // ★ 새 파일 만들기 (펜닐 v5.8.1e — Windows 탐색기 스타일 신규 작성)
+                //   txt: 빈 Blob 업로드 / docx-pptx: OnlyOffice 활성 + 권한 / hwp: 서버 템플릿 + 권한
+                //   원격 스토리지 + 암호화 vault에서는 비활성 (안전)
+                'new-file-txt': !!perms.can_write && !this.vault.isVaultView,
+                'new-file-docx': !!perms.can_write && !this.vault.isVaultView && !!this.onlyofficeEnabled,
+                'new-file-xlsx': !!perms.can_write && !this.vault.isVaultView && !!this.onlyofficeEnabled,
+                'new-file-pptx': !!perms.can_write && !this.vault.isVaultView && !!this.onlyofficeEnabled,
+                'new-file-hwp': !!perms.can_write && !this.vault.isVaultView,
                 'upload-file': !!perms.can_write,
                 'upload-folder': !!perms.can_write,
                 'refresh': true
@@ -11452,6 +11460,11 @@ const App = {
                 'convert-to-vault': !isFile && !!perms.can_write && firstItem && !firstItem.isVault && this.currentStorage == this.homeStorageId && !inVault && !(firstItem._plain && this.vault.currentVaultPath),
                 'new-folder': false,
                 'new-vault-folder': false,
+                'new-file-txt': false,
+                'new-file-docx': false,
+                'new-file-xlsx': false,
+                'new-file-pptx': false,
+                'new-file-hwp': false,
                 'upload-file': false,
                 'upload-folder': false,
                 'refresh': false
@@ -11719,6 +11732,27 @@ const App = {
                 return;
             case 'upload-folder':
                 document.getElementById('folder-input').click();
+                return;
+            // ★ 새 파일 만들기 (펜닐 v5.8.1e — Windows 탐색기 스타일)
+            //   txt: 클라이언트 빈 Blob → upload API
+            //   docx/xlsx/pptx/hwp: 서버 템플릿 복사 → create_from_template API
+            case 'new-file-txt':
+                this._showNewFileDialog('txt', 'text/plain');
+                return;
+            case 'new-file-docx':
+                this._showNewFileDialog('docx', 'template');
+                return;
+            case 'new-file-xlsx':
+                this._showNewFileDialog('xlsx', 'template');
+                return;
+            case 'new-file-pptx':
+                this._showNewFileDialog('pptx', 'template');
+                return;
+            case 'new-file-hwp':
+                // ★ hwp도 서버 템플릿 복사 방식으로 통일 (펜닐 v5.8.1e)
+                //   기존 rhwp.createEmpty()는 페이지 0개 hwp를 만들어 에디터에서 panic 발생
+                //   → 한컴오피스 정품이 만든 templates/empty.hwp를 복사하는 방식으로 변경
+                this._showNewFileDialog('hwp', 'template');
                 return;
             case 'refresh':
                 if (this.vault && this.vault.isVaultView) this.vaultLoadFiles();
@@ -16230,6 +16264,103 @@ const App = {
             this.loadFiles();
         } else {
             this.toast(res.error, 'error');
+        }
+    },
+    
+    // ★ 새 파일 만들기 (펜닐 v5.8.1e — Windows 탐색기 스타일 즉시 생성 + 자동 번호)
+    //   ext: 'txt' | 'docx' | 'xlsx' | 'pptx' | 'hwp'
+    //   mime: 'text/plain' | 'template' (서버 템플릿 복사)
+    _showNewFileDialog(ext, mime) {
+        // Windows 탐색기 방식: prompt 없이 기본 이름으로 즉시 생성, 중복 시 (2), (3) 자동 증가
+        const defaultNameMap = {
+            'txt':  t('default_name_txt',  '새 텍스트 문서'),
+            'docx': t('default_name_docx', '새 Word 문서'),
+            'xlsx': t('default_name_xlsx', '새 Excel 문서'),
+            'pptx': t('default_name_pptx', '새 프레젠테이션'),
+            'hwp':  t('default_name_hwp',  '새 한글 문서'),
+        };
+        const baseName = defaultNameMap[ext] || `new`;
+        // 현재 폴더의 파일 목록에서 중복 검사 → 사용 가능한 이름 결정
+        const fileName = this._findUniqueFileName(baseName, ext);
+        this._createNewFile(fileName, ext, mime);
+    },
+    
+    // ★ Windows 탐색기 방식 — 같은 이름 있으면 (2), (3) 자동 증가
+    //   "새 프레젠테이션.pptx" → 있으면 "새 프레젠테이션 (2).pptx" → 있으면 "새 프레젠테이션 (3).pptx"
+    _findUniqueFileName(baseName, ext) {
+        // 현재 표시된 파일 목록 (this.files) 확인
+        const existingNames = new Set();
+        if (Array.isArray(this.files)) {
+            this.files.forEach(f => {
+                if (f && f.name) existingNames.add(f.name.toLowerCase());
+            });
+        }
+        // 1차: "{baseName}.{ext}" 시도
+        let candidate = `${baseName}.${ext}`;
+        if (!existingNames.has(candidate.toLowerCase())) return candidate;
+        // 2차 이상: "{baseName} ({n}).{ext}" 시도 (n=2부터)
+        for (let n = 2; n <= 999; n++) {
+            candidate = `${baseName} (${n}).${ext}`;
+            if (!existingNames.has(candidate.toLowerCase())) return candidate;
+        }
+        // 안전 폴백 (999개 넘으면 timestamp 사용)
+        return `${baseName} ${Date.now()}.${ext}`;
+    },
+    
+    // ★ 실제 새 파일 생성 (펜닐 v5.8.1e)
+    //   text/plain, text/markdown: 빈 Blob → 기존 upload API 사용 (보안/권한 자동)
+    //   template (docx/xlsx/pptx/hwp): create_from_template API → 서버 템플릿 복사
+    async _createNewFile(fileName, ext, mime) {
+        const storageId = this.currentStorage;
+        const targetPath = this.currentPath || '';
+        
+        if (mime === 'template') {
+            // 서버 템플릿 복사 방식
+            const res = await this.api('create_from_template', {
+                storage_id: storageId,
+                path: targetPath,
+                name: fileName,
+                template: ext  // 서버에서 templates/empty.{ext} 사용
+            });
+            if (res.success) {
+                // 서버가 자동 증가한 최종 파일명 표시 (예: "새 프레젠테이션 (2).pptx")
+                const actualName = res.name || fileName;
+                this.toast(`📄 ${actualName}`, 'success');
+                this.loadFiles();
+            } else {
+                this.toast(res.error || t('error_create_file', '파일 생성에 실패했습니다.'), 'error');
+            }
+            return;
+        }
+        
+        // 빈 텍스트 파일 (txt): 클라이언트에서 빈 Blob 만들어 upload API 사용
+        const blob = new Blob([''], { type: mime });
+        const file = new File([blob], fileName, { type: mime });
+        const formData = new FormData();
+        formData.append('storage_id', storageId);
+        formData.append('path', targetPath);
+        formData.append('file', file);  // ★ 서버 $_FILES['file'] (단수) 키와 일치
+        
+        try {
+            if (this.csrfToken) formData.append('csrf_token', this.csrfToken);
+            const resp = await fetch('api.php?action=upload', {
+                method: 'POST',
+                body: formData,
+                credentials: 'same-origin',
+                headers: this.csrfToken ? {'X-CSRF-Token': this.csrfToken} : {}
+            });
+            const data = await resp.json();
+            if (data.success) {
+                // 서버 upload는 자동 (2),(3) 증가 → 응답 filename 사용
+                const actualName = data.filename || fileName;
+                this.toast(`📄 ${actualName}`, 'success');
+                this.loadFiles();
+            } else {
+                this.toast(data.error || t('error_create_file', '파일 생성에 실패했습니다.'), 'error');
+            }
+        } catch (err) {
+            this.toast(t('error_create_file', '파일 생성에 실패했습니다.'), 'error');
+            console.error('[NewFile]', err);
         }
     },
     
@@ -33581,8 +33712,58 @@ const App = {
                     }
                     
                     if (!info.success) {
-                        // API 에러 시에도 네이티브 재생 시도 (이미 <source>가 있으므로)
-                        if (badgeParent) badgeParent.textContent = '▶ 일반 재생';
+                        // ★ media_info API success=false 시 폴백 동작 (펜닐 v5.8.1e 결정)
+                        //   모바일 + 500MB 이상: 트랜스코딩 폴백 (메모리/배터리 안전)
+                        //   그 외: native 재생 폴백 (재생 시도)
+                        const _isMobileF2 = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && ('ontouchend' in document);
+                        const _itemSize2 = info.file_size || item.size || 0;
+                        const _MOBILE_LIMIT2 = 500 * 1024 * 1024;
+                        const _shouldTranscodeF2 = _isMobileF2 && _itemSize2 > _MOBILE_LIMIT2;
+                        
+                        if (_shouldTranscodeF2) {
+                            // 모바일 + 대용량: 트랜스코딩 폴백
+                            if (window._videoDebug) console.log('[VD INFO-FAIL] transcoding fallback (mobile+large)');
+                            
+                            // ★ video의 <source> 태그 정리 (정상 트랜스코딩 분기는 video 요소 자체를 교체하지만,
+                            //    폴백은 동일 video 요소 재사용하므로 source 명시 제거 필요)
+                            const _oldVidF2 = document.querySelector('#preview-content .preview-video');
+                            if (_oldVidF2) {
+                                _oldVidF2._switchingToTranscode = true;
+                                try { _oldVidF2.pause(); } catch(e) {}
+                                _oldVidF2.removeAttribute('src');
+                                _oldVidF2.querySelectorAll('source').forEach(s => s.remove());
+                                const _oldWrapF2 = _oldVidF2.closest('.video-player-wrap');
+                                if (_oldWrapF2 && !_oldWrapF2.classList.contains('video-not-ready')) {
+                                    _oldWrapF2.classList.add('video-not-ready');
+                                }
+                            }
+                            
+                            const _transcodeBaseF2 = `api.php?action=transcode&storage_id=${storageId}&path=${encodeURIComponent(item.path)}`;
+                            if (badgeParent) {
+                                badgeParent.className = 'video-stream-badge';
+                                const _sizeMB2 = Math.round(_itemSize2 / (1024 * 1024));
+                                badgeParent.innerHTML = `⚡ 대용량(${_sizeMB2}MB) → 스트리밍 재생`;
+                            }
+                            // 트랜스코딩 시작 (정상 분기와 동일 패턴)
+                            if (window._startTranscodeTimer) clearTimeout(window._startTranscodeTimer);
+                            window._startTranscodeTimer = setTimeout(() => {
+                                window._startTranscodeTimer = null;
+                                App._startTranscode(_transcodeBaseF2, storageId, item.path);
+                            }, 100);
+                        } else {
+                            // 그 외: native 재생 폴백
+                            if (window._videoDebug) console.log('[VD INFO-FAIL] native fallback (PC or small file)');
+                            if (badgeParent) badgeParent.textContent = '▶ 일반 재생';
+                            const _nativeVid2 = document.querySelector('#preview-content .preview-video');
+                            if (_nativeVid2) {
+                                _nativeVid2._isReady = true;
+                                if (_nativeVid2._hadControls) {
+                                    try { _nativeVid2.setAttribute('controls', ''); } catch(e) {}
+                                }
+                                const _nw2 = _nativeVid2.closest('.video-player-wrap');
+                                if (_nw2) _nw2.classList.remove('video-not-ready');
+                            }
+                        }
                         return;
                     }
                 const codecName = (info.video_codec || '').toUpperCase();
@@ -33703,12 +33884,72 @@ const App = {
                         if (App._savedSubtitleTracks && App._savedSubtitleTracks.length > 0) {
                             setTimeout(() => App._loadSubtitles(App._savedSubtitleStorageId, App._savedSubtitleTracks), 500);
                         }
+                        // ★ 자동 다음 재생 리스너 재바인딩 (video 요소 교체로 옛 리스너 소실)
+                        //   _fsVpBindAutoNext()가 _fsVpAutoNextBound 플래그로 중복 방지하므로 안전
+                        App._fsVpBindAutoNext();
+                        // ★ 자동 다음 트랙 재생 트리거 (펜닐 v5.8.1e — 트랜스코딩 분기)
+                        App._fsVpTryAutoPlay();
                     };
                     setTimeout(_waitAndBind, 500);
                 }, 200);
             }).catch(err => {
-                const badgeParent = document.querySelector('.video-stream-badge');
-                if (badgeParent) badgeParent.textContent = '▶ 일반 재생';
+                // ★ AbortError는 사용자가 모달 닫거나 다른 파일 전환한 정상 abort — 처리 X
+                if (err && err.name === 'AbortError') return;
+                
+                // ★ media_info 실패 시 폴백 동작 (펜닐 v5.8.1e 결정 — iOS Safari abort race 보완)
+                //   모바일 + 500MB 이상: 트랜스코딩 폴백 (메모리/배터리 안전)
+                //   그 외: native 재생 폴백 (재생 시도)
+                const _isMobileFb = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && ('ontouchend' in document);
+                const _itemSize = item.size || 0;
+                const _MOBILE_LIMIT = 500 * 1024 * 1024;
+                const _shouldTranscodeFb = _isMobileFb && _itemSize > _MOBILE_LIMIT;
+                
+                if (_shouldTranscodeFb) {
+                    // 모바일 + 대용량: 트랜스코딩 폴백
+                    if (window._videoDebug) console.log('[VD CATCH-FALLBACK] transcoding fallback (mobile+large)');
+                    
+                    // ★ video의 <source> 태그 정리 (정상 트랜스코딩 분기는 video 요소 자체를 교체하지만,
+                    //    폴백은 동일 video 요소 재사용하므로 source 명시 제거 필요)
+                    const _oldVidFb = document.querySelector('#preview-content .preview-video');
+                    if (_oldVidFb) {
+                        _oldVidFb._switchingToTranscode = true;
+                        try { _oldVidFb.pause(); } catch(e) {}
+                        _oldVidFb.removeAttribute('src');
+                        _oldVidFb.querySelectorAll('source').forEach(s => s.remove());
+                        const _oldWrapFb = _oldVidFb.closest('.video-player-wrap');
+                        if (_oldWrapFb && !_oldWrapFb.classList.contains('video-not-ready')) {
+                            _oldWrapFb.classList.add('video-not-ready');
+                        }
+                    }
+                    
+                    const _transcodeBaseFb = `api.php?action=transcode&storage_id=${storageId}&path=${encodeURIComponent(item.path)}`;
+                    const _badgeFb = document.querySelector('.video-stream-badge');
+                    if (_badgeFb) {
+                        _badgeFb.className = 'video-stream-badge';
+                        const _sizeMB = Math.round(_itemSize / (1024 * 1024));
+                        _badgeFb.innerHTML = `⚡ 대용량(${_sizeMB}MB) → 스트리밍 재생`;
+                    }
+                    // 트랜스코딩 시작 (정상 분기와 동일 패턴)
+                    if (window._startTranscodeTimer) clearTimeout(window._startTranscodeTimer);
+                    window._startTranscodeTimer = setTimeout(() => {
+                        window._startTranscodeTimer = null;
+                        App._startTranscode(_transcodeBaseFb, storageId, item.path);
+                    }, 100);
+                } else {
+                    // 그 외: native 재생 폴백
+                    if (window._videoDebug) console.log('[VD CATCH-FALLBACK] native fallback (PC or small file)');
+                    const badgeParent = document.querySelector('.video-stream-badge');
+                    if (badgeParent) badgeParent.textContent = '▶ 일반 재생';
+                    const _nativeVid = document.querySelector('#preview-content .preview-video');
+                    if (_nativeVid) {
+                        _nativeVid._isReady = true;
+                        if (_nativeVid._hadControls) {
+                            try { _nativeVid.setAttribute('controls', ''); } catch(e) {}
+                        }
+                        const _nw = _nativeVid.closest('.video-player-wrap');
+                        if (_nw) _nw.classList.remove('video-not-ready');
+                    }
+                }
             });
             }, 50); // abort 후 50ms 지연
         }
@@ -36423,6 +36664,114 @@ const App = {
         }
     },
     
+    // ★ 자동 다음 재생 리스너 바인딩 헬퍼 (v5.8.1e)
+    //   현재 #preview-content의 video 요소에 ended 리스너 등록
+    //   트랜스코딩 분기에서 video 요소 교체 후에도 재바인딩 가능
+    //   _fsVpAutoNextBound 플래그로 중복 바인딩 방지
+    //   조건: 현재 폴더 비디오 목록이 있고, 마지막 트랙이 아닌 경우만 다음 트랙 자동 재생
+    _fsVpBindAutoNext() {
+        const folderVideos = this._fsVpFolderVideos || [];
+        if (folderVideos.length < 2) return;  // 단일 영상은 자동 재생 무관
+        const video = document.querySelector('#preview-content .preview-video');
+        if (!video || video._fsVpAutoNextBound) return;
+        video._fsVpAutoNextBound = true;
+        const curIdx = folderVideos.findIndex(f => f.path === this._fsVpCurrentPath);
+        video.addEventListener('ended', () => {
+            if (curIdx >= 0 && curIdx < folderVideos.length - 1) {
+                const nextFile = folderVideos[curIdx + 1];
+                if (nextFile) {
+                    // 스크롤 위치 보존 (패널이 살아있을 때만)
+                    try {
+                        const body = document.getElementById('fs-vp-body');
+                        if (body) sessionStorage.setItem('fs_vp_panel_scroll', String(body.scrollTop));
+                    } catch (e) {}
+                    // ★ 자동 다음 트랙 — 새 영상 로드 후 자동 재생 (펜닐 v5.8.1e)
+                    //   첫 재생은 수동(펜닐 룰)이지만, 자동 다음은 이미 재생 중이던 흐름의 연속이라 자동 play() OK
+                    //   showPreview 안에서 비디오 준비되면 _fsVpTryAutoPlay() 호출 (자기 자신이 플래그 1회용 소비)
+                    App._fsVpPendingAutoPlay = true;
+                    // 모달 유지 + 즉시 전환
+                    App.hideModal('modal-preview', { keepOpen: true });
+                    App.showPreview(nextFile);
+                }
+            }
+            // 마지막 트랙이면 그냥 끝 (반복 재생 X — 펜닐 룰)
+        });
+    },
+    
+    // ★ 자동 다음 트랙 재생 트리거 (펜닐 v5.8.1e)
+    //   _fsVpPendingAutoPlay 플래그가 true일 때 video 요소 준비되면 play() 호출
+    //   1회용 플래그 (호출 후 false로 리셋) — 사용자 트랙 클릭은 수동이라 플래그 없음
+    //   네이티브/트랜스코딩/HLS 분기 모두 video 준비 후 호출 가능하도록 헬퍼화
+    //
+    //   ★ 중요: 코덱 체크 가드 인지 (라인 32985, 35185)
+    //     showPreview 진입 시 _checkMediaInfo=true 면 video._isReady=false 설정 +
+    //     play 이벤트 가드가 즉시 pause() 호출 → 자동 재생 불가
+    //     → wrapper의 video-not-ready 클래스 제거를 기다려야 안전하게 play() 가능
+    _fsVpTryAutoPlay() {
+        if (!App._fsVpPendingAutoPlay) return;
+        const video = document.querySelector('#preview-content .preview-video');
+        // ★ video 없어도 플래그는 즉시 소비 (펜닐 v5.8.1e — stuck 방지)
+        //   video 로드 실패 시 플래그 잔존 → 다음 사용자 수동 클릭 시 자동재생되는 펜닐 룰 위반 방지
+        App._fsVpPendingAutoPlay = false;  // 무조건 1회용 소비
+        if (!video) return;
+        const wrapper = video.closest('.video-player-wrap');
+        const _playNow = () => {
+            const _p = video.play();
+            if (_p && typeof _p.catch === 'function') {
+                _p.catch(() => { /* 자동 재생 거부 — 사용자 수동 ▶로 폴백, 무시 */ });
+            }
+        };
+        // ★ 준비 완료 판단:
+        //   1) wrapper에 video-not-ready 클래스가 없음 (코덱 체크 끝남)
+        //   2) video._isReady !== false (가드 통과)
+        //   3) video.readyState >= 1 (HAVE_METADATA 이상 — play() 호출 시 자동 로드 시작 가능)
+        //      ★ readyState >= 2 요구 시 preload="metadata" 영상은 안 도달할 수 있어 완화 (펜닐 v5.8.1e)
+        const _isFullyReady = () => {
+            if (wrapper && wrapper.classList.contains('video-not-ready')) return false;
+            if (video._isReady === false) return false;
+            return video.readyState >= 1;
+        };
+        if (_isFullyReady()) {
+            _playNow();
+            return;
+        }
+        // 아직 준비 안 됨 — wrapper의 video-not-ready 클래스 제거 + canplay 둘 다 감시
+        let _done = false;
+        const _tryFinalize = () => {
+            if (_done) return;
+            if (!_isFullyReady()) return;
+            _done = true;
+            _cleanup();
+            _playNow();
+        };
+        // MutationObserver로 video-not-ready 클래스 제거 감시
+        let _mo = null;
+        if (wrapper && typeof MutationObserver !== 'undefined') {
+            _mo = new MutationObserver(() => _tryFinalize());
+            _mo.observe(wrapper, { attributes: true, attributeFilter: ['class'] });
+        }
+        // canplay + loadedmetadata 둘 다 감시 (readyState 단계별 보강)
+        //   loadedmetadata: readyState 1 도달 (네이티브 preload="metadata" 케이스)
+        //   canplay: readyState 3 도달 (HLS/트랜스코딩 등 충분히 버퍼된 케이스)
+        const _onReady = () => _tryFinalize();
+        video.addEventListener('canplay', _onReady);
+        video.addEventListener('loadedmetadata', _onReady);
+        // 정리 함수
+        const _cleanup = () => {
+            if (_mo) { try { _mo.disconnect(); } catch (e) {} _mo = null; }
+            try { video.removeEventListener('canplay', _onReady); } catch (e) {}
+            try { video.removeEventListener('loadedmetadata', _onReady); } catch (e) {}
+        };
+        // 안전망: 10초 내 준비 안 되면 포기
+        setTimeout(() => {
+            if (!_done) {
+                _done = true;
+                _cleanup();
+                // 자동 재생 거부 폴백과 동일 — 사용자가 ▶ 누르면 됨
+            }
+        }, 10000);
+    },
+    
     // ★ 폴더 동영상 플레이리스트 사이드 패널 셋업
     //   펜닐님 결정 (메인 인덱스):
     //   - 2개 이상 동영상 있을 때만 패널 표시 (조건은 HTML 빌드 시점에 처리됨)
@@ -36435,6 +36784,11 @@ const App = {
         const closeBtn = document.getElementById('fs-vp-close');
         const body = document.getElementById('fs-vp-body');
         if (!panel || !toggleBtn || !body) return;
+        
+        // ★ 새 영상 진입 시 사용자 스크롤 플래그 리셋 (펜닐 v5.8.1e)
+        //   영상마다 "OFF→ON 첫 토글 시 가운데" 동작 보장
+        //   (이전 영상에서 스크롤한 흔적은 새 영상엔 무관)
+        App._fsVpUserScrolled = false;
         
         const folderVideos = this._fsVpFolderVideos || [];
         if (folderVideos.length < 2) return;
@@ -36464,11 +36818,26 @@ const App = {
             sessionStorage.setItem(PANEL_KEY, isOpen ? '1' : '0');
             if (isOpen) {
                 // ★ 패널 토글 = DOM 그대로 유지 → body.scrollTop 자동 보존
-                //   → 스크롤 위치 처리 안 함 (가운데 강제 이동 방지, 펜닐님 의도 보존)
+                //   단, 사용자가 한 번도 스크롤 안 했으면 (OFF 상태에서 영상 시작 케이스) 가운데로 이동 (펜닐 v5.8.1e)
+                //   _fsVpUserScrolled 플래그: body 스크롤 이벤트 발생 시 true로 세팅 (라인 36809 인근에서 등록)
+                if (!App._fsVpUserScrolled) {
+                    this._fsVpScrollToCurrent();
+                }
                 requestAnimationFrame(() => this._fsVpCheckOverflow());
                 setTimeout(() => this._fsVpCheckOverflow(), 300);
             }
         });
+        
+        // ★ 사용자 스크롤 감지 (펜닐 v5.8.1e — 토글 ON 시 가운데 이동 여부 판단)
+        //   사용자가 한 번이라도 스크롤하면 토글 ON 시 위치 보존, 안 했으면 가운데로
+        //   _fsVpScrollToCurrent() 가 body.scrollTop 변경 시에도 이벤트 발생하므로 setTimeout으로 등록 지연
+        if (body) {
+            setTimeout(() => {
+                body.addEventListener('scroll', () => {
+                    App._fsVpUserScrolled = true;
+                }, { passive: true });
+            }, 50);
+        }
         
         // 닫기 버튼
         if (closeBtn) {
@@ -36501,30 +36870,22 @@ const App = {
             //   showPreview가 #preview-content.html(content) 호출하면 사이드 패널 DOM 새로 생성됨
             //   → 클릭 시점의 스크롤 위치 저장 → 새 패널의 _fsVpApplyScrollPosition에서 복원
             try { sessionStorage.setItem('fs_vp_panel_scroll', String(body.scrollTop)); } catch (e) {}
+            // ★ 사용자 수동 클릭 — 자동 재생 플래그 명시 리셋 (펜닐 v5.8.1e — 펜닐 룰 보호)
+            //   ended 핸들러로 인한 잔존 플래그가 있더라도 수동 클릭은 첫 재생 = 수동 ▶
+            App._fsVpPendingAutoPlay = false;
             // ★ keepOpen=true: 모달 display 유지 (정리만), setTimeout 없이 즉시 showPreview
             //   showModal에서도 이미 표시 중이면 display 변경 스킵 → 깜빡임 0
             App.hideModal('modal-preview', { keepOpen: true });
             App.showPreview(targetFile);
         });
         
-        // 자동 다음 재생
-        const video = document.querySelector('#preview-content .preview-video');
-        if (video && !video._fsVpAutoNextBound) {
-            video._fsVpAutoNextBound = true;
-            const curIdx = folderVideos.findIndex(f => f.path === this._fsVpCurrentPath);
-            video.addEventListener('ended', () => {
-                if (curIdx >= 0 && curIdx < folderVideos.length - 1) {
-                    const nextFile = folderVideos[curIdx + 1];
-                    if (nextFile) {
-                        // ★ 자동 다음 재생도 스크롤 위치 보존
-                        try { sessionStorage.setItem('fs_vp_panel_scroll', String(body.scrollTop)); } catch (e) {}
-                        // ★ 자동 다음 재생도 동일 패턴 — 모달 유지 + 즉시 전환
-                        App.hideModal('modal-preview', { keepOpen: true });
-                        App.showPreview(nextFile);
-                    }
-                }
-            });
-        }
+        // 자동 다음 재생 (트랜스코딩 분기에서도 호출 가능하도록 헬퍼 호출)
+        this._fsVpBindAutoNext();
+        
+        // ★ 자동 다음 트랙 재생 트리거 (펜닐 v5.8.1e)
+        //   _fsVpPendingAutoPlay 플래그가 true면 video 준비됐을 때 play()
+        //   _fsVpTryAutoPlay 내부에서 canplay 이벤트 + 8초 안전망 처리 — 한 번만 호출
+        this._fsVpTryAutoPlay();
         
         // ★ 재생 시작/정지 이벤트 — 글로벌 캡처 핸들러 (video 교체/트랜스코딩 전환에도 작동)
         //   #preview-content 내부의 모든 video 요소 play/pause를 캡처
@@ -37242,25 +37603,27 @@ const App = {
                 .replace(/&gt;/g, '>')
                 .replace(/&amp;/g, '&')
                 .replace(/\r/g, '')          // 잔여 CR 제거
+                .replace(/\n[ \t]+\n/g, '\n\n')  // 공백/탭만 있는 줄 → 빈 줄로 (다음 정규식이 잡을 수 있게)
                 .replace(/\n{2,}/g, '\n')    // 연속 줄바꿈 → 단일 (VTT에서 빈 줄은 큐 구분자이므로 필수)
                 .trim();
             
-            // 빈 자막 필터: 공백, nbsp만 있는 경우 건너뛰기
-            if (!text || /^\s*$/.test(text)) continue;
-            syncs.push({ ms, text });
+            // 빈 자막(SMI 자막 OFF 신호 — &nbsp; 또는 공백)도 syncs에 추가
+            //   이전 자막의 endTime 역할을 하므로 무시하면 자막이 다음 자막 시작까지 잔존하는 버그 발생
+            //   text가 비어있으면 cue로는 만들지 않지만 endMs 계산엔 활용
+            syncs.push({ ms, text: text || '' });
         }
         
         // 시간순 정렬 후 VTT 큐 생성
         syncs.sort((a, b) => a.ms - b.ms);
         for (let i = 0; i < syncs.length; i++) {
+            // 빈 자막은 cue로 만들지 않음 (다음 자막의 endTime 역할만 함)
+            if (!syncs[i].text) continue;
             const start = this._msToVttTime(syncs[i].ms);
-            // 다음 큐 시작시간을 끝시간으로 사용, 없으면 +5초
+            // 다음 sync(빈 자막 포함)의 ms를 endTime으로 사용 — 빈 자막이 있으면 거기서 정확히 끝남
             const endMs = (i + 1 < syncs.length) ? syncs[i + 1].ms : syncs[i].ms + 5000;
             const end = this._msToVttTime(endMs);
             
-            if (syncs[i].text) {
-                vtt += `${start} --> ${end}\n${syncs[i].text}\n\n`;
-            }
+            vtt += `${start} --> ${end}\n${syncs[i].text}\n\n`;
         }
         
         return vtt;

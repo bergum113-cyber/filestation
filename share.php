@@ -1246,8 +1246,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             <h1><?= htmlspecialchars($share['filename']) ?></h1>
             <?php endif; ?>
             
-            <?php if ($pageSubFile !== null && $folderTrackTotal !== null): ?>
-            <!-- 폴더 stream sub-file: 트랙 네비게이션 -->
+            <?php if ($pageSubFile !== null && $folderTrackTotal !== null && $folderTrackTotal >= 2): ?>
+            <!-- 폴더 stream sub-file: 트랙 네비게이션 (동영상 2개 이상일 때만 표시 — 펜닐 v5.8.1e) -->
             <div style="margin:8px 0 12px;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;">
                 <?php if ($folderTrackPrev): ?>
                     <a href="<?= htmlspecialchars($folderTrackPrev) ?>" style="color:#667eea;text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid rgba(102,126,234,0.4);border-radius:4px;">◀ <?= __('prev_track', '이전') ?></a>
@@ -1434,9 +1434,10 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             <?php endif; /* isStreamable else */ ?>
         <?php endif; ?>
 
-        <?php if ($pageSubFile !== null && $folderTrackTotal !== null && !empty($folderTracks)): ?>
+        <?php if ($pageSubFile !== null && $folderTrackTotal !== null && $folderTrackTotal >= 2 && !empty($folderTracks)): ?>
         <!-- 폴더 stream sub-file: 사이드 플레이리스트 패널 (팟플레이어 스타일)
-             container 안 absolute로 배치 → 영상 위치 흔들림 X -->
+             container 안 absolute로 배치 → 영상 위치 흔들림 X
+             ★ 동영상 2개 이상일 때만 표시 (펜닐 v5.8.1e) -->
         <aside class="share-playlist-panel" id="share-playlist-panel" aria-hidden="true">
             <div class="share-playlist-header">
                 <span class="pl-icon">🎬</span>
@@ -3064,9 +3065,52 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             const _folderNextUrl = <?= json_encode($folderTrackNext) ?>;
             player.addEventListener('ended', () => {
                 // 약간 딜레이 후 이동 (마지막 프레임 보고 자연스러운 전환)
-                setTimeout(() => { location.href = _folderNextUrl; }, 1000);
+                // ★ autoplay=1 추가 — 다음 페이지에서 자동 재생 트리거 (펜닐 v5.8.1e)
+                //   사용자 "다음" 버튼 클릭은 autoplay 없음 (이 핸들러 통하지 않음)
+                const _autoUrl = _folderNextUrl + (_folderNextUrl.indexOf('?') >= 0 ? '&' : '?') + 'autoplay=1';
+                setTimeout(() => { location.href = _autoUrl; }, 1000);
             });
             <?php endif; ?>
+            
+            // ★ URL의 autoplay=1 파라미터 처리 (펜닐 v5.8.1e — 폴더 stream 자동 다음 트랙)
+            //   자동 다음 트랙 이동으로 페이지 로드 시 video.play() 자동 호출
+            //   사용자 인터랙션(이전 페이지에서 재생 중) 직후라 브라우저 autoplay 정책 통과
+            try {
+                const _qs = new URLSearchParams(window.location.search);
+                if (_qs.get('autoplay') === '1') {
+                    // ★ 트랜스코딩 영상은 startTranscode() 자동 호출 (네이티브와 분기)
+                    //   네이티브: video.play() 직접 호출
+                    //   트랜스코딩: 사용자 ▶ 오버레이 클릭 대신 startTranscode() 자동 시작
+                    <?php if (!empty($needsTranscode)): ?>
+                    // 트랜스코딩 모드 — startTranscode() 자동 시작 (overlay 클릭 시뮬레이션)
+                    if (typeof startTranscode === 'function') {
+                        setTimeout(() => { try { startTranscode(); } catch(e) {} }, 200);
+                    }
+                    <?php else: ?>
+                    // 네이티브 모드 — video.play() 직접 호출
+                    //   ★ 1회용 가드 (펜닐 v5.8.1e): 한 번 시도 후 _autoPlayDone=true → 사용자가 일시정지 후 setTimeout 재시도 차단
+                    let _autoPlayDone = false;
+                    const _tryAutoPlay = () => {
+                        if (_autoPlayDone) return;  // 이미 시도했으면 더 이상 호출 안 함 (사용자 일시정지 보호)
+                        _autoPlayDone = true;
+                        const _p = player.play();
+                        if (_p && typeof _p.catch === 'function') {
+                            _p.catch(() => {
+                                // 자동 재생 거부 — 1.5초 후 한 번 더 시도 (트랜스코딩/HLS 등 늦게 준비되는 케이스)
+                                _autoPlayDone = false;  // 재시도 허용
+                            });
+                        }
+                    };
+                    if (player.readyState >= 2) {  // HAVE_CURRENT_DATA 이상
+                        _tryAutoPlay();
+                    } else {
+                        player.addEventListener('loadedmetadata', _tryAutoPlay, { once: true });
+                        // 안전망: 1.5초 후 재시도 (단, _autoPlayDone 가드로 사용자 일시정지 보호)
+                        setTimeout(_tryAutoPlay, 1500);
+                    }
+                    <?php endif; ?>
+                }
+            } catch (e) { /* 무시 */ }
             
             const shareVideoKeyHandler = (e) => {
                 // input/textarea 안에서는 무시 (자막 검색 등)
@@ -3685,12 +3729,15 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             // CRLF 정규화 (Windows 자막 파일 대응)
             text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
             const regex = /<sync\s+start=(\d+)>\s*<p[^>]*>([\s\S]*?)(?=<sync|$)/gi;
+            // 1단계: 모든 sync를 (ms, text) 형태로 수집 — 빈 자막도 OFF 신호로 보존
+            const syncs = [];
             let m;
             while ((m = regex.exec(text)) !== null) {
                 const ms = parseInt(m[1]);
-                // 보안: HTML 태그/entity 제거 후 이스케이프 (XSS 방어)
-                let txt = m[2].replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').replace(/\n{2,}/g, '\n').trim();
-                if (txt && txt !== '&nbsp;' && !/^\s*$/.test(txt)) {
+                let txt = m[2].replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').replace(/\n[ \t]+\n/g, '\n\n').replace(/\n{2,}/g, '\n').trim();
+                const isEmpty = !txt || /^\s*$/.test(txt);
+                if (!isEmpty) {
+                    // XSS 방어 (HTML 이스케이프) + \n → <br>
                     txt = txt
                         .replace(/&/g, '&amp;')
                         .replace(/</g, '&lt;')
@@ -3698,14 +3745,21 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                         .replace(/"/g, '&quot;')
                         .replace(/'/g, '&#39;')
                         .replace(/\n/g, '<br>');
-                    cues.push({ start: ms/1000, end: 0, text: txt });
+                    syncs.push({ ms, text: txt });
+                } else {
+                    // 빈 자막 = SMI의 자막 OFF 신호. cue로는 만들지 않지만 endTime 계산엔 사용
+                    syncs.push({ ms, text: '' });
                 }
             }
-            for (let i = 0; i < cues.length - 1; i++) {
-                if (!cues[i].end) cues[i].end = cues[i+1].start;
-            }
-            if (cues.length > 0 && !cues[cues.length-1].end) {
-                cues[cues.length-1].end = cues[cues.length-1].start + 5;
+            // 2단계: 시간순 정렬 후 cue 생성 — 빈 자막은 endTime 역할만
+            syncs.sort((a, b) => a.ms - b.ms);
+            for (let i = 0; i < syncs.length; i++) {
+                if (!syncs[i].text) continue; // 빈 자막은 cue로 만들지 않음
+                const start = syncs[i].ms / 1000;
+                // 다음 sync(빈 자막 포함)의 ms를 endTime으로 사용 — 빈 자막이 자막 OFF 시점이 됨
+                const endMs = (i + 1 < syncs.length) ? syncs[i + 1].ms : syncs[i].ms + 5000;
+                const end = endMs / 1000;
+                cues.push({ start, end, text: syncs[i].text });
             }
             return cues;
         }
@@ -3761,9 +3815,10 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
     <?php endif; ?>
     <?php endif; ?>
 
-    <?php if ($pageSubFile !== null && $folderTrackTotal !== null && !empty($folderTracks)): ?>
+    <?php if ($pageSubFile !== null && $folderTrackTotal !== null && $folderTrackTotal >= 2 && !empty($folderTracks)): ?>
     <script nonce="<?= $cspNonce ?>">
-    /* ★ 폴더 stream sub-file: 사이드 플레이리스트 패널 토글 (팟플레이어 스타일) */
+    /* ★ 폴더 stream sub-file: 사이드 플레이리스트 패널 토글 (팟플레이어 스타일)
+       ★ 동영상 2개 이상일 때만 작동 (펜닐 v5.8.1e) */
     (function() {
         const panel = document.getElementById('share-playlist-panel');
         const toggleBtn = document.getElementById('share-pl-toggle-btn');
@@ -3798,9 +3853,29 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             toggleBtn.classList.remove('active');
             try { sessionStorage.setItem(STORAGE_KEY, '0'); } catch (e) {}
         }
+        // ★ 사용자 스크롤 감지 플래그 (펜닐 v5.8.1e — OFF→ON 토글 시 가운데 이동 여부 판단)
+        //   사용자가 한 번이라도 스크롤하면 토글 ON 시 위치 보존, 안 했으면 가운데로
+        //   페이지 로드 시 false로 시작 → scrollToCurrentTrack()도 scroll 이벤트 발생시키므로 등록은 setTimeout 50ms 지연
+        let _userScrolled = false;
+        if (body) {
+            setTimeout(function() {
+                body.addEventListener('scroll', function() {
+                    _userScrolled = true;
+                }, { passive: true });
+            }, 50);
+        }
+        
         function togglePanel() {
             if (panel.classList.contains('open')) closePanel();
-            else openPanel(true);  // 토글로 열 때는 스크롤 조정 스킵 (위치 유지)
+            else {
+                // ★ OFF→ON 토글 시 사용자가 스크롤 안 했으면 가운데 이동 (펜닐 v5.8.1e)
+                //   기존 동작 보존: 사용자가 스크롤한 후 OFF→ON은 위치 유지
+                if (!_userScrolled) {
+                    openPanel(false);  // skipScrollAdjust=false → applyScrollPosition() 호출
+                } else {
+                    openPanel(true);   // 위치 유지
+                }
+            }
         }
         // ★ 스크롤 위치 적용 (sessionStorage 우선, 없으면 가운데 — 펜닐님 결정 옵션 B)
         function applyScrollPosition() {

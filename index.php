@@ -17,7 +17,9 @@ header('Referrer-Policy: strict-origin-when-cross-origin');
 
 // CSP (Content Security Policy) 헤더
 // 'unsafe-inline'은 현재 인라인 스크립트/스타일 사용으로 필요, 추후 제거 권장
-header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' blob: https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: https://cdnjs.cloudflare.com; media-src 'self' blob: data:; frame-src 'self' blob:; frame-ancestors 'self'; worker-src 'self' blob:;");
+// 'wasm-unsafe-eval': rhwp_viewer.php / rhwp_editor.php 의 HWP/HWPX 뷰어·편집기 WASM 로드 위해 필요 (펜닐 v5.8.1e)
+//   ※ 'unsafe-eval'(JS eval) 보다 훨씬 제한적 — WebAssembly 모듈 컴파일/인스턴스화만 허용
+header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob: https://cdnjs.cloudflare.com; media-src 'self' blob: data:; frame-src 'self' blob:; frame-ancestors 'self'; worker-src 'self' blob:;");
 
 $auth = new Auth();
 
@@ -2834,8 +2836,14 @@ RewriteRule ^/oo/(.*) ws://<?php echo $currentLang === 'en' ? 'OnlyOffice_Intern
 &lt;Location /cache/&gt;
     ProxyPass http://<?php echo $currentLang === 'en' ? 'OnlyOffice_Internal_IP' : 'OnlyOffice내부IP'; ?>:8080/cache/
     ProxyPassReverse http://<?php echo $currentLang === 'en' ? 'OnlyOffice_Internal_IP' : 'OnlyOffice내부IP'; ?>:8080/cache/
+&lt;/Location&gt;
+
+<?php echo $currentLang === 'en' ? '# Print PDF Proxy (Required for OnlyOffice 9.3.1+ print feature)' : '# 인쇄 PDF 프록시 (OnlyOffice 9.3.1+ 인쇄 기능 필수)'; ?>
+&lt;Location /printfile/&gt;
+    ProxyPass http://<?php echo $currentLang === 'en' ? 'OnlyOffice_Internal_IP' : 'OnlyOffice내부IP'; ?>:8080/printfile/
+    ProxyPassReverse http://<?php echo $currentLang === 'en' ? 'OnlyOffice_Internal_IP' : 'OnlyOffice내부IP'; ?>:8080/printfile/
 &lt;/Location&gt;</pre>
-                                <p style="margin-top:10px; font-size:12px; color:#666;"><?php echo $currentLang === 'en' ? '※ Replace OnlyOffice internal IP → Server IP or Docker IP, domain → actual domain. Restart Apache after configuration.' : '※ OnlyOffice내부IP → 서버IP 또는 Docker IP로, 도메인 → 실제 도메인으로 변경하세요. 설정 후 Apache 재시작 필요.'; ?></p>
+                                <p style="margin-top:10px; font-size:12px; color:#666;"><?php echo $currentLang === 'en' ? '※ Replace OnlyOffice internal IP → Server IP or Docker IP, domain → actual domain. Restart Apache after configuration.<br>※ The <code>/printfile/</code> block is required for OnlyOffice editor\'s "File → Print" feature (calls <code>/printfile/...</code> path on the same domain).' : '※ OnlyOffice내부IP → 서버IP 또는 Docker IP로, 도메인 → 실제 도메인으로 변경하세요. 설정 후 Apache 재시작 필요.<br>※ <code>/printfile/</code> 블록은 OnlyOffice 편집기의 "파일 → 인쇄" 기능에 필수입니다 (인쇄 시 같은 도메인의 <code>/printfile/...</code> 경로 호출).'; ?></p>
                                 
                                 <p style="margin-top:15px;">🖥️ <strong><?php echo $currentLang === 'en' ? 'Synology DSM Reverse Proxy Settings' : '시놀로지 DSM 리버스 프록시 설정'; ?></strong></p>
                                 <p style="font-size:12px; color:#666; margin-bottom:5px;"><?php echo $currentLang === 'en' 
@@ -2855,13 +2863,13 @@ RewriteRule ^/oo/(.*) ws://<?php echo $currentLang === 'en' ? 'OnlyOffice_Intern
 <?php echo $currentLang === 'en' ? 'Hostname' : '호스트명'; ?>: localhost
 <?php echo $currentLang === 'en' ? 'Port' : '포트'; ?>: 8080</pre>
                                 <p style="font-size:12px; color:#666; margin-top:5px;"><?php echo $currentLang === 'en' 
-                                    ? '※ Document Server URL → <code>https://oo.your-domain.com</code><br>※ Add DNS A record for <code>oo.your-domain.com</code> pointing to the same IP<br>※ Add <code>oo.your-domain.com</code> to SSL certificate (DSM → Security → Certificate)<br>※ In Custom Header tab, add: <code>Upgrade</code> → <code>$http_upgrade</code>, <code>Connection</code> → <code>Upgrade</code> (for WebSocket)'
-                                    : '※ Document Server URL → <code>https://oo.도메인.com</code><br>※ DNS에 <code>oo.도메인.com</code> A레코드 추가 (같은 IP)<br>※ SSL 인증서에 <code>oo.도메인.com</code> 추가 (DSM → 보안 → 인증서)<br>※ 사용자 지정 헤더 탭에서 추가: <code>Upgrade</code> → <code>$http_upgrade</code>, <code>Connection</code> → <code>Upgrade</code> (WebSocket 지원)'; ?></p>
+                                    ? '※ Document Server URL → <code>https://oo.your-domain.com</code><br>※ Add DNS A record for <code>oo.your-domain.com</code> pointing to the same IP<br>※ Add <code>oo.your-domain.com</code> to SSL certificate (DSM → Security → Certificate)<br>※ In Custom Header tab, add: <code>Upgrade</code> → <code>$http_upgrade</code>, <code>Connection</code> → <code>Upgrade</code> (for WebSocket)<br>※ Subdomain proxies all paths including <code>/printfile/</code>, <code>/cache/</code> → no separate config needed for print feature.'
+                                    : '※ Document Server URL → <code>https://oo.도메인.com</code><br>※ DNS에 <code>oo.도메인.com</code> A레코드 추가 (같은 IP)<br>※ SSL 인증서에 <code>oo.도메인.com</code> 추가 (DSM → 보안 → 인증서)<br>※ 사용자 지정 헤더 탭에서 추가: <code>Upgrade</code> → <code>$http_upgrade</code>, <code>Connection</code> → <code>Upgrade</code> (WebSocket 지원)<br>※ 서브도메인 방식은 <code>/printfile/</code>, <code>/cache/</code> 포함 모든 경로를 프록시하므로 인쇄 기능에 추가 설정 불필요.'; ?></p>
                                 <p style="font-size:12px; color:#999; margin-top:10px; margin-bottom:3px;"><?php echo $currentLang === 'en' ? '▸ Method 2 - Subpath (/oo) — Apache only recommended' : '▸ 방법2 - 서브패스 (/oo) — Apache에서만 권장'; ?></p>
                                 <pre style="background:#f9f9f9; padding:8px; border-radius:4px; overflow-x:auto; font-size:10px; color:#888;"><?php echo $currentLang === 'en' ? '# Source' : '# 소스'; ?>: HTTPS / <?php echo $currentLang === 'en' ? 'your-domain.com' : '도메인.com'; ?> / 443 / <?php echo $currentLang === 'en' ? 'Path' : '경로'; ?>: /oo
 <?php echo $currentLang === 'en' ? '# Destination' : '# 대상'; ?>: HTTP / localhost / 8080
 → Document Server URL: https://<?php echo $currentLang === 'en' ? 'your-domain.com' : '도메인.com'; ?>/oo
-<?php echo $currentLang === 'en' ? '⚠️ May cause redirect issues (404) on Synology DSM Nginx' : '⚠️ 시놀로지 DSM Nginx에서 리다이렉트 문제(404) 발생 가능'; ?></pre>
+<?php echo $currentLang === 'en' ? '⚠️ May cause redirect issues (404) on Synology DSM Nginx, and /printfile/ /cache/ paths need separate proxy entries' : '⚠️ 시놀로지 DSM Nginx에서 리다이렉트 문제(404) 발생 가능, /printfile/ /cache/ 경로 별도 프록시 항목 필요'; ?></pre>
                                 
                                 <p style="margin-top:15px;">🟢 <strong><?php echo $currentLang === 'en' ? 'Nginx Reverse Proxy Settings' : 'Nginx 리버스 프록시 설정'; ?></strong></p>
                                 <p style="font-size:12px; color:#666; margin-bottom:5px;"><?php echo $currentLang === 'en' ? 'Add a new server block for the OnlyOffice subdomain.' : 'OnlyOffice 서브도메인용 서버 블록을 추가하세요.'; ?></p>
@@ -2890,8 +2898,8 @@ RewriteRule ^/oo/(.*) ws://<?php echo $currentLang === 'en' ? 'OnlyOffice_Intern
     }
 }</pre>
                                 <p style="font-size:12px; color:#666; margin-top:5px;"><?php echo $currentLang === 'en' 
-                                    ? '※ Document Server URL → <code>https://oo.your-domain.com</code><br>※ Add DNS A record for <code>oo.your-domain.com</code><br>※ Same server: use <code>127.0.0.1</code> instead of OnlyOffice internal IP'
-                                    : '※ Document Server URL → <code>https://oo.도메인.com</code><br>※ DNS에 <code>oo.도메인.com</code> A레코드 추가<br>※ 같은 서버면 OnlyOffice내부IP 대신 <code>127.0.0.1</code> 사용'; ?></p>
+                                    ? '※ Document Server URL → <code>https://oo.your-domain.com</code><br>※ Add DNS A record for <code>oo.your-domain.com</code><br>※ Same server: use <code>127.0.0.1</code> instead of OnlyOffice internal IP<br>※ <code>location /</code> proxies all paths including <code>/printfile/</code>, <code>/cache/</code> → no separate config needed for print feature.'
+                                    : '※ Document Server URL → <code>https://oo.도메인.com</code><br>※ DNS에 <code>oo.도메인.com</code> A레코드 추가<br>※ 같은 서버면 OnlyOffice내부IP 대신 <code>127.0.0.1</code> 사용<br>※ <code>location /</code> 가 <code>/printfile/</code>, <code>/cache/</code> 포함 모든 경로를 프록시하므로 인쇄 기능에 추가 설정 불필요.'; ?></p>
                                 <p style="margin-top:5px;"><?php echo $currentLang === 'en' ? 'Supported files: docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp, txt, csv, html, etc.' : '지원 파일: docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp, txt, csv, html 등'; ?></p>
                             </div>
                         </div>
@@ -5569,6 +5577,13 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <!-- 빈 공간 우클릭 시 -->
                 <li data-action="new-folder">📁 <?php _e('new_folder'); ?></li>
                 <li data-action="new-vault-folder">🔒 <?php echo $currentLang === 'en' ? 'New Encrypted Folder' : '새 암호화 폴더'; ?></li>
+                <li class="divider new-file-divider"></li>
+                <li data-action="new-file-txt"><img src="assets/file-icons/text.svg?v=<?= APP_VERSION ?>" alt="txt" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New Text File' : '새 텍스트 파일'; ?></li>
+                <li data-action="new-file-docx"><img src="assets/file-icons/word.svg?v=<?= APP_VERSION ?>" alt="docx" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New Word Document' : '새 Word 문서'; ?></li>
+                <li data-action="new-file-xlsx"><img src="assets/file-icons/excel.svg?v=<?= APP_VERSION ?>" alt="xlsx" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New Excel Spreadsheet' : '새 Excel 문서'; ?></li>
+                <li data-action="new-file-pptx"><img src="assets/file-icons/powerpoint.svg?v=<?= APP_VERSION ?>" alt="pptx" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New PowerPoint' : '새 PowerPoint'; ?></li>
+                <li data-action="new-file-hwp"><img src="assets/file-icons/hwp.svg?v=<?= APP_VERSION ?>" alt="hwp" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New HWP Document' : '새 한글 문서'; ?></li>
+                <li class="divider"></li>
                 <li data-action="upload-file">📄 <?php echo $currentLang === 'en' ? 'Upload Files' : '파일 업로드'; ?></li>
                 <li data-action="upload-folder">📂 <?php echo $currentLang === 'en' ? 'Upload Folder' : '폴더 업로드'; ?></li>
                 <li data-action="refresh">🔄 <?php _e('refresh'); ?></li>

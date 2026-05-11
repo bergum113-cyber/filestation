@@ -5,7 +5,7 @@ require_once __DIR__ . '/php_version_check.php';
  * 
  * Rust + WebAssembly (rhwp) 기반 고품질 HWP/HWPX 렌더링
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.7.10
+ * @rhwp_version 0.7.11
  */
 
 require_once __DIR__ . '/config.php';
@@ -241,6 +241,16 @@ if ($vaultUrl && $vaultName) {
             /* SVG를 화면 너비에 꽉 맞춤 */
             .page-container svg { width: 100% !important; height: auto !important; }
         }
+        /* ★ 인쇄용 스타일 (펜닐 v5.8.1e) — 사용자가 인쇄/PDF 저장 시 본문만 출력 */
+        @media print {
+            .viewer-header { display: none !important; }
+            .viewer-body { padding: 0; gap: 0; background: #fff; overflow: visible; height: auto; }
+            html, body { background: #fff; overflow: visible; height: auto; }
+            .page-container { box-shadow: none; page-break-after: always; break-after: page; margin: 0; padding: 0; }
+            .page-container:last-child { page-break-after: auto; break-after: auto; }
+            .page-container svg { display: block; width: 100% !important; height: auto !important; max-width: 100%; }
+            @page { margin: 10mm; }
+        }
     </style>
     <script>
     // WASM에서 호출하는 텍스트 폭 측정 함수
@@ -288,6 +298,7 @@ if ($vaultUrl && $vaultName) {
             <?php if ($canDownload): ?>
             <button id="btn-download" title="다운로드">📥</button>
             <?php endif; ?>
+            <button id="btn-print" title="<?php echo __('viewer_print'); ?> (Ctrl+P)">🖨️</button>
             <button id="btn-close" title="닫기">✕</button>
         </div>
     </div>
@@ -556,6 +567,12 @@ if ($vaultUrl && $vaultName) {
             : `api.php?action=download&storage_id=${STORAGE_ID}&path=${encodeURIComponent(FILE_PATH)}`;
         a.download = FILE_NAME;
         a.click();
+    });
+    
+    // 인쇄 (브라우저 기본 인쇄 → 사용자가 "PDF로 저장" 선택 가능)
+    //   rhwp가 SVG로 렌더한 페이지를 브라우저가 인쇄 미리보기에 그대로 표시
+    document.getElementById('btn-print')?.addEventListener('click', () => {
+        window.print();
     });
     
     // 닫기

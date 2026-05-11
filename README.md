@@ -1,4 +1,4 @@
-# FileStation v5.8.1d
+# FileStation v5.8.1e
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -419,10 +419,17 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 메뉴 | 설명 |
 |---|---|
 | 새 폴더 | 폴더 생성 |
+| 새 텍스트 문서 (.txt) | 빈 텍스트 파일 즉시 생성 |
+| 새 Word 문서 (.docx) | 빈 Word 문서 즉시 생성 (서버 템플릿 복사) |
+| 새 Excel 문서 (.xlsx) | 빈 Excel 문서 즉시 생성 (서버 템플릿 복사) |
+| 새 프레젠테이션 (.pptx) | 빈 PowerPoint 문서 즉시 생성 (서버 템플릿 복사) |
+| 새 한글 문서 (.hwp) | 빈 한글 문서 즉시 생성 (서버 템플릿 복사) |
 | 파일 업로드 | 파일 올리기 |
 | 폴더 업로드 | 폴더 올리기 |
 | 붙여넣기 | 복사/잘라낸 파일 붙여넣기 |
 | 새로고침 | 목록 새로고침 |
+
+> 💡 Windows 탐색기 방식 — prompt 없이 기본 이름으로 즉시 생성, 중복 시 `(2)`, `(3)` 자동 증가
 
 ---
 
@@ -485,7 +492,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1d.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1e.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -558,6 +565,11 @@ filestation/
 ├── lang/
 │   ├── ko.json                   # 한국어 번역
 │   └── en.json                   # 영어 번역
+├── templates/                    # 새 파일 만들기용 빈 문서 템플릿
+│   ├── empty.docx
+│   ├── empty.xlsx
+│   ├── empty.pptx
+│   └── empty.hwp                 # 한컴오피스 한글 2010 정품 빈 문서
 ├── data/                         # 사용자 데이터 (DB, 캐시 등)
 └── shared/                       # 공유 자원
 ```
@@ -571,7 +583,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1d');
+define('APP_VERSION', '5.8.1e');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -699,11 +711,640 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1d (rhwp 0.7.10 기반)
+**현재 버전**: v5.8.1e (rhwp 0.7.10 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1d (2026-05-04 ~ 2026-05-06) ⭐ 현재
+#### v5.8.1e (2026-05-06 ~ 2026-05-10) ⭐ 현재
+
+**최종 상태 요약:** 누적 21개 항목 (자동 다음 트랙 31st + SMI 자막 fix #1/#2 + iOS Safari media_info 폴백 + SMB media_info 보완 + 새 파일 만들기 + CSP wasm-unsafe-eval + 빈 파일 업로드 fix + hwp 템플릿 통합 + create_from_template quota + scanWithDefender 사이즈 비교 + validateMimeType php 항목 정리 + 청크 업로드 로컬 MIME 검증 + i18n/주석 정리 + 동영상 플레이리스트 단일 영상 숨김 + 자동 다음 트랙 자동 재생 + 새 파일 메뉴 아이콘 SVG + 동영상 패널 OFF→ON 가운데 스크롤 + rhwp 0.7.10 → 0.7.11 + hwp/rhwp 미리보기 인쇄 버튼 + 시스템 설정 OnlyOffice 안내 보강 + OnlyOffice 디버그 로그 조건부 활성화)
+
+
+**[rhwp 0.7.10 → 0.7.11 업그레이드] (2026-05-10)**
+
+**진행:** `rhwp_업그레이드_가이드_v5.md` 표준 절차에 따라 수행.
+
+**변경:**
+- `assets/rhwp/rhwp.js`, `rhwp_bg.wasm` 0.7.11 교체 (뷰어용)
+- studio 빌드 결과 교체:
+  - `index-zIVQkhcx.js` → `index-1fhO7yjt.js`
+  - `index-ro3nVBB2.css` → `index-DMFL0yRA.css`
+  - `rhwp_bg-BbAYsuOY.wasm` → `rhwp_bg-B9Ehujv1.wasm`
+  - fonts/images/favicon 신규 빌드 자산 교체
+- `rhwp_editor.php` studio 해시 갱신 (라인 397~398)
+- `@rhwp_version 0.7.10` → `@rhwp_version 0.7.11` (editor + viewer)
+
+**패치 적용:**
+- J1 (file:save Ctrl+S 매핑 제거): 1개 매칭 → 제거 ✓
+- J2 (file:print Ctrl+P 매핑 제거, **신규**): 1개 매칭 → 제거 ✓ (Ctrl+P → 브라우저 기본 인쇄 대화상자로 fallback)
+- P1 (절대경로 `/images/`): 0개 매칭 (0.7.11은 절대경로 미사용)
+- P2 (상위참조 `../images/`): 다수 매칭 → `images/` 로 정규화 ✓
+- A/B (HWPX canExecute / 툴팁): 원본 그대로 유지 (펜닐 룰 — 데이터 손상 방지)
+
+**0.7.11 주요 변경 (회귀 점검 결과):**
+- CLI 바이너리 릴리즈 (웹 빌드 영향 없음)
+- PNG raster backend (`native-skia` feature gate, opt-in — 기본 빌드 영향 0)
+- AI 파이프라인 / VLM 연동 (CLI 전용)
+- HWP 5.0 스펙 정정, HWP3 처리, TAC 표 정정 등 (정합성 개선)
+- 외부 PR 13건 cherry-pick (모두 정합성/회귀 정정 영역)
+- → **렌더링 회귀 없음**, 웹 (rhwp_viewer/editor) 영향 없음
+
+**검증 (15/15 통과):**
+- 커스텀 기능 보존: save / save-as / Blob 캡처 / save-as 메뉴 / MutationObserver / 캐시 버스팅 / Ctrl+S 핸들러 / syncSuspended / notifyParentFileChanged / app.js postMessage 리스너 ✓
+- 엔진 패치 상태: J1 적용 + A/B 원본 + CSS 경로 정규화 + rhwp 버전 0.7.11 ✓
+
+**작업 이력 메모:**
+- 2026-05-10 PDF 내보내기 기능 시도 → 인쇄 대화상자 방식이라 "바로 저장" 안 됨 → 펜닐 결정에 따라 제거
+- jsPDF (한글 폰트 이슈), Chrome headless (서버 환경 변경 부담) 등 대안 모두 트레이드오프 큼 → 현재 미구현 상태 유지
+- 패치 J2는 PDF 내보내기 작업 중 도입했으나 PDF 제거 후에도 **유지 결정** — Ctrl+P 누를 시 disabled 메뉴로 빠지는 불친절 동작 대신 브라우저 기본 인쇄 대화상자가 열리도록 함
+- 2026-05-11 OnlyOffice events 핸들러 추가 시도 → `onDownloadAs` 등록만으로 OnlyOffice가 "호스트 처리" 모드 전환 → 인쇄 미리보기 안 뜨고 바로 PDF 다운으로 동작 변경 → 펜닐 보고로 발견 → 모두 제거 (events 12개 + window.open 가로채기 + api.php onlyoffice_clientlog 액션). 펜닐 룰 위반 사례.
+
+---
+
+**[hwp/rhwp 미리보기 인쇄 버튼 추가] (2026-05-11)**
+
+**기능:** `hwp_viewer.php` (legacy ohah/hwpjs)와 `rhwp_viewer.php` (rhwp WASM) 미리보기에 🖨️ 인쇄 버튼 추가. 클릭 시 브라우저 기본 인쇄 대화상자 → 사용자가 "PDF로 저장" 또는 실물 프린터 선택.
+
+**구현:**
+- `rhwp_viewer.php` 라인 292: 다운로드 버튼 옆 `<button id="btn-print">🖨️</button>` 추가, title=`__('viewer_print')` i18n
+- 클릭 핸들러 (라인 ~563): 단순 `window.print()` 호출
+- `@media print` CSS 추가 (라인 ~245~): `.viewer-header` 숨김 + `.page-container` page-break-after + `@page { margin: 10mm }`
+- `hwp_viewer.php` 라인 622: 툴바에 `printDocument()` 호출 버튼 추가, i18n 적용
+- `printDocument()` 함수 (라인 ~1205): 단순 `window.print()`
+- 기존 `@media print` CSS 보강 (라인 590~): `transform: none !important` (줌 transform 리셋) + `.hwp-page, .HWPPage` 페이지 분리 셀렉터 (안전한 좁은 셀렉터)
+
+**i18n:** 기존 `viewer_print` 키 재사용 (en.json: "Print", ko.json: "인쇄") — office_viewer.php와 동일 키
+
+**Ctrl+P:** 브라우저 기본 동작에 맡김 (별도 핸들러 등록 안 함 → OnlyOffice events 사례처럼 동작 변경 위험 회피)
+
+**효과:** 사용자가 미리보기에서 직접 인쇄/PDF 저장 가능 (이전엔 다운로드 후 외부 앱에서만 가능)
+
+**검증 권장 사항:** `.hwp-page` / `.HWPPage` 셀렉터가 실제 ohah/hwpjs 엔진 출력 클래스와 일치하는지는 미확정 — 매칭 안 되어도 부작용 없음 (페이지 분리 안 되어 한 페이지로 길게 인쇄). 펜닐 검증 후 정확한 클래스 확인되면 조정 가능.
+
+---
+
+**[시스템 설정 OnlyOffice 안내 보강] Apache /printfile/ + Nginx/시놀로지 명시 (2026-05-11)**
+
+**문제:** 펜닐 환경에서 OnlyOffice 9.3.1 인쇄 시도 → 404 발생. 진단 결과 Apache 서브패스 방식(`/oo/`)에서 인쇄용 URL `https://도메인/printfile/...` 가 Apache 리버스 프록시 누락으로 FileStation Apache가 받음 → 404.
+
+**원인 (OnlyOffice 측):**
+- OnlyOffice 9.3.1+ 인쇄 동작: 편집기 → Document Server에 PDF 생성 요청 → Document Server가 `/printfile/{key}/file.pdf` 절대경로 URL 생성
+- Document Server는 자신이 `/oo` 서브패스에 있는 걸 모르므로 `/oo/printfile/` 이 아닌 절대경로 사용
+- Apache 측 `/printfile/` 프록시 누락 시 404
+
+**해결 (펜닐 실제 적용 확인):**
+```apache
+<Location /printfile/>
+    ProxyPass http://OnlyOffice내부IP:8080/printfile/
+    ProxyPassReverse http://OnlyOffice내부IP:8080/printfile/
+</Location>
+```
+
+**FileStation 측 변경 (`index.php` OnlyOffice 설정 안내):**
+- Apache 안내문에 `/printfile/` 프록시 블록 추가 (`/cache/` 다음 위치)
+- Nginx 안내문에 명시 추가: "`location /` 가 `/printfile/`, `/cache/` 포함 모든 경로를 프록시하므로 인쇄 기능에 추가 설정 불필요"
+- 시놀로지 방법1 (서브도메인) 안내에 명시 추가: "서브도메인 방식은 `/printfile/`, `/cache/` 포함 모든 경로를 프록시하므로 인쇄 기능에 추가 설정 불필요"
+- 시놀로지 방법2 (서브패스 `/oo`) 경고 보강: "리다이렉트 문제 + `/printfile/` `/cache/` 경로 별도 프록시 항목 필요"
+
+**환경별 설정 필요 여부:**
+| 환경 | /printfile/ 추가 |
+|---|---|
+| Apache 서브패스 (/oo) | 필요 (펜닐 사례) |
+| Nginx 서브도메인 (oo.도메인.com) | 불필요 (자동 포함) |
+| 시놀로지 방법1 (서브도메인) | 불필요 (자동 포함) |
+| 시놀로지 방법2 (서브패스 /oo) | 필요 (안 권장) |
+
+---
+
+**[OnlyOffice 디버그 로그 조건부 활성화] (2026-05-11)**
+
+**목적:** OnlyOffice 인쇄 문제 진단 중 추가. 평소 동작 영향 0, 디버그 필요 시 로그 파일 생성으로 자동 활성화.
+
+**구현 패턴:** `if (file_exists($ooDataDir . '/onlyoffice_debug.log'))` 게이트로 모든 디버그 로그 호출 감쌈.
+
+**적용 위치:**
+- `onlyoffice.php` 라인 162~165: OPEN 로그 (파일 열림 시 fileUrl/callbackBase/mode 기록)
+- `api.php` 라인 1336~1377: JWT_FAIL × 3 + JWT_BYPASS + DOWNLOAD (Document Server 요청 추적)
+- `api.php` 라인 1497~1498: CALLBACK (저장 상태 변화 추적, 기존 무조건 기록을 조건부로 변경)
+- `api.php` 라인 1555~1595: SSRF BLOCKED + CURL FAIL + DOWNLOAD OK (저장 시 URL 다운로드 추적)
+
+**사용 방법:**
+```cmd
+# 디버그 활성화
+type nul > data\onlyoffice_debug.log
+
+# 디버그 종료
+del data\onlyoffice_debug.log
+```
+
+**효과:**
+- 평소: file_exists() 체크만 → 동작 영향 거의 0, 디스크 쓰기 0
+- 디버그 활성: 자동으로 모든 OnlyOffice 동작 추적, 펜닐 환경의 OnlyOffice 9.3.1 인쇄 404 진단에 핵심 단서 제공
+
+**검증된 사용 사례:** 펜닐 환경에서 OnlyOffice 인쇄 404 진단 → DOWNLOAD/CALLBACK 흐름 확인 → 원인이 FileStation 측 아닌 Apache `/printfile/` 프록시 누락임을 확정.
+
+---
+
+**[동영상 패널 OFF→ON 가운데 스크롤] 영상 재생 후 토글 ON 시 현재 트랙 가운데 (2026-05-10)**
+
+**문제:** 동영상 플레이리스트 패널 OFF 상태에서 영상 재생 시작 후 사용자가 패널 토글 ON 클릭하면, 현재 재생 중인 트랙이 가운데가 아닌 맨 위(scrollTop=0)에 위치 → 어느 영상이 재생 중인지 한눈에 안 보임.
+
+**원인:**
+- **메인 (`assets/js/app.js`):** 토글 핸들러(라인 36814~)가 `isOpen=true` 분기에서 스크롤 처리 안 함 (펜닐 의도: "사용자가 한번이라도 스크롤한 후엔 위치 보존")
+- **공유 (`share.php`):** `togglePanel()`이 `openPanel(true)` 호출 → `skipScrollAdjust=true` → 스크롤 조정 스킵 (동일 패턴)
+- 두 케이스 모두 "사용자 스크롤 후 위치 보존" 의도 보호하느라 "OFF 상태로 시작한 첫 토글 시 가운데" 케이스를 함께 차단
+
+**해결 (사용자 스크롤 추적 플래그):**
+
+**메인 (`assets/js/app.js`):**
+- 라인 36791: `_setupVideoPlaylistPanel()` 진입 시 `App._fsVpUserScrolled = false` 리셋 (새 영상마다)
+- 라인 36835~: body의 scroll 이벤트 리스너 등록 (50ms 지연 — `_fsVpScrollToCurrent()` 가 만든 자동 스크롤 이벤트 무시) → 사용자 스크롤 시 `true` 세팅
+- 라인 36819~: 토글 ON 시 `_fsVpUserScrolled === false` 면 `_fsVpScrollToCurrent()` 호출 (가운데), `true` 면 보존
+- 라인 36812: 사용자 패널 트랙 클릭 시 명시 리셋 (펜닐 룰 — 수동 클릭은 자동 재생 안 됨과 같은 보호)
+
+**공유 (`share.php` 라인 3856~3879):**
+- IIFE 내부 `let _userScrolled = false` 정의
+- body의 scroll 이벤트 리스너 등록 (50ms 지연 — `scrollToCurrentTrack()` 자동 스크롤 무시)
+- `togglePanel()` ON 분기 변경:
+  - `_userScrolled === false` → `openPanel(false)` (skipScrollAdjust=false) → `applyScrollPosition()` 호출 → 가운데
+  - `_userScrolled === true` → `openPanel(true)` (기존 동작 — 위치 유지)
+
+**보존된 펜닐 의도:**
+- 사용자가 한번이라도 스크롤하면 OFF→ON 시 위치 유지
+- 자동 다음 트랙 시 sessionStorage `SCROLL_POS_KEY` 우선 (펜닐 결정 옵션 B)
+- 단일 영상 폴더는 자동 재생 무관 (`folderVideos.length < 2` 체크)
+
+**검증 (펜닐님 직접):** 메인에서 OFF 상태로 영상 시작 → 토글 ON → 현재 트랙 가운데 ✓ 공유도 동일 패턴 적용.
+
+---
+
+**[새 파일 메뉴 아이콘 SVG] 컨텍스트 메뉴 5종 아이콘 → 기존 파일 확장자 아이콘 통일 (2026-05-09)**
+
+**문제:** 우클릭 → 새 파일 만들기 메뉴의 아이콘이 이모지(📄/📘/📊/📑/📄)로 되어 있어, 파일 목록의 SVG 아이콘과 시각적 일관성 부족.
+
+**해결 (`index.php` 라인 5575~5579):** 5개 메뉴 항목을 기존 파일 목록과 동일한 SVG 아이콘으로 교체:
+
+| 확장자 | 아이콘 |
+|---|---|
+| txt | `text.svg` |
+| docx | `word.svg` |
+| xlsx | `excel.svg` |
+| pptx | `powerpoint.svg` |
+| hwp | `hwp.svg` |
+
+**스타일 처리 — 한 줄 정렬 fix:**
+- `class="fs-file-icon-img"` **사용 안 함** — 이 클래스는 메인 파일 목록(grid/list view)용으로 `display:block` 적용됨 → 메뉴 `<li>` 안에서는 텍스트가 다음 줄로 밀리는 문제 발생
+- 대신 inline 스타일로 `display:inline-block; vertical-align:-3px; width:14px; height:14px; margin-right:5px;` 직접 지정 → 이모지처럼 한 줄 정렬
+- `user-select:none; -webkit-user-drag:none;` 드래그 방지
+
+**캐시 버스터:** `?v=<?= APP_VERSION ?>` 적용 (다른 SVG 사용처와 동일 패턴).
+
+**영향 범위:**
+- 메뉴 5개 항목만 변경 → 메인 파일 목록은 `fs-file-icon-img` 그대로 사용 → 영향 없음
+- CSS 파일 무수정 (펜닐 룰)
+
+---
+
+**[동영상 자동 다음 트랙 자동 재생] 메인 + 공유 페이지 자동 재생 트리거 (2026-05-09)**
+
+**문제:** 동영상 ended 후 다음 트랙으로 전환은 되지만 **자동 재생되지 않고 ▶ 버튼이 보이는 상태로 멈춤**. 사용자가 ▶ 클릭해야 재생 시작.
+
+**원인 ① (메인 페이지):** `_fsVpBindAutoNext()` 의 ended 핸들러가 `App.showPreview(nextFile)` 호출하지만, showPreview는 새 영상을 로드만 하고 자동 재생 의도를 받을 수단이 없었음. 게다가 코덱 체크 가드(라인 32985, 35185)가 `_isReady === false` 상태에서 play 이벤트 발생 시 즉시 `pause()` 호출 → 자동 재생 시도가 가드에 막힘.
+
+**원인 ② (공유 페이지):** ended 핸들러가 `location.href = _folderNextUrl` 로 새 페이지 로드 → 새 페이지 video는 `controls`만 있고 `autoplay` 없음 → 사용자 ▶ 필요.
+
+**해결 ① (`assets/js/app.js`):**
+- 라인 36670~: `_fsVpBindAutoNext()` 에서 다음 트랙 전환 시 `App._fsVpPendingAutoPlay = true` 플래그 세팅
+- 라인 36705~ 신규 함수 `_fsVpTryAutoPlay()`: 코덱 체크 가드 인지 + 준비 완료 대기 + play() 호출
+  - 준비 완료 판단 3조건: `wrapper`에 `video-not-ready` 없음 + `video._isReady !== false` + `video.readyState >= 1`
+  - **MutationObserver**: wrapper 클래스 변경 감시 (코덱 체크 완료)
+  - **canplay + loadedmetadata**: readyState 진행 감시 (네이티브/HLS/트랜스코딩 모두)
+  - **10초 안전망**: 그래도 안 되면 사용자 ▶ 폴백
+  - **video null 안전 가드**: 플래그 즉시 소비 (stuck 방지 → 다음 사용자 수동 클릭이 자동 재생되는 펜닐 룰 위반 방지)
+- 사용자 트랙 클릭 시 `App._fsVpPendingAutoPlay = false` 명시 리셋 (펜닐 룰 보호)
+- 트랜스코딩 분기에서도 `_fsVpTryAutoPlay()` 호출 (라인 33891)
+
+**해결 ② (`share.php` 라인 3063~3110):**
+- ended 핸들러에서 다음 URL에 `autoplay=1` 파라미터 추가 (사용자 "다음" 버튼은 영향 없음)
+- 페이지 로드 시 URL의 `autoplay=1` 처리:
+  - **트랜스코딩 모드:** `startTranscode()` 자동 시작 (overlay 클릭 시뮬레이션)
+  - **네이티브 모드:** `player.play()` 직접 호출
+- **`_autoPlayDone` 가드 (펜닐 v5.8.1e):** 한 번 시도 후 setTimeout 1.5초 재시도가 사용자 일시정지를 무시하고 재생하는 race 방지. 자동 재생 거부 시(catch)에만 재시도 허용
+
+**펜닐 룰 보호:**
+- 첫 재생은 수동 ▶ — 그대로 유지
+- 사용자 트랙 클릭은 자동 재생 X — 명시 리셋 + 1회용 플래그
+- 마지막 트랙 끝나면 그냥 끝 (반복 재생 X)
+- 단일 영상은 자동 재생 무관 (`folderVideos.length < 2` 체크)
+
+**검증 (펜닐님 직접):** 메인 네이티브 mp4 자동 다음 재생 ✅, 사용자 트랙 수동 클릭 → 수동 재생 ✅.
+
+---
+
+**[동영상 플레이리스트 단일 영상 숨김] 영상 1개 폴더에서 목록/네비게이션 숨김 (2026-05-09)**
+
+**문제:** 폴더 stream 공유 시 동영상이 1개여도 목록/이전/다음 네비게이션이 표시되어 의미 없는 UI 노출.
+
+**원인 (`share.php`):**
+- `$folderTrackTotal` 이 영상 1개여도 1로 채워짐 (라인 306)
+- 라인 1249, 1437, 3775의 조건이 `$folderTrackTotal !== null` 만 체크해서 1개일 때도 트랙 네비게이션 + 사이드 패널 + 토글 버튼 표시
+
+**해결:** 3곳 모두 `$folderTrackTotal >= 2` 조건 추가:
+- 라인 1249: 트랙 네비게이션 (이전/다음 + 1/N 표시)
+- 라인 1437: 사이드 플레이리스트 패널 (팟플레이어 스타일)
+- 라인 3775: 패널 JS 토글 핸들러
+
+**메인 페이지 (`assets/js/app.js`):** 이미 라인 32892에서 `hasVideoPlaylist = folderVideos.length >= 2` 조건으로 정상 동작 중 (이번 변경 불필요).
+
+**검증 (펜닐님 직접):** 영상 1개 폴더 stream 공유 → 목록/네비게이션 안 보임 ✅ (메인 + 공유 모두).
+
+---
+
+**[보안/일관성 강화 4종] quota 누락 + Defender 오진 + 화이트리스트 정리 + 청크 MIME 검증 (2026-05-08)**
+
+코드 검토 중 발견된 미시적 이슈 4건을 영향도 0으로 안전하게 수정.
+
+**① create_from_template Quota 검사 추가** (`api.php` 라인 5998~6006)
+
+**문제:** 새 파일 만들기(`create_from_template`) 핸들러가 quota 검사를 호출하지 않아, 한도 도달 사용자가 8.5KB(.hwp) 파일을 무한 생성 가능.
+
+**해결:** 템플릿 파일 존재 확인 후, 실제 복사 전에 `checkQuotaPublic` 호출 추가:
+```php
+$_templateSize = filesize($templatePath);
+if ($_templateSize !== false) {
+    $_quotaCheck = $fileManager->checkQuotaPublic($storageId, $_templateSize);
+    if (!($_quotaCheck['allowed'] ?? true)) {
+        $result = ['success' => false, 'error' => ...]; break;
+    }
+}
+```
+
+**안전 가드:** `filesize()` false 시 스킵, `allowed ?? true` defensive 처리. 일반 사용자(quota 여유) 영향 0%.
+
+**② scanWithDefender 임시파일 검증 정확도 개선** (`api/FileManager.php` 라인 1301~1320)
+
+**문제:** Defender 검사용 임시파일 복사 후 `filesize($tempFile) === 0` 으로 복사 실패 판정 → 정상 0-byte 파일도 오진. 또한 디스크 풀로 인한 부분 복사(예: 100KB 원본 → 50KB 사본)는 검출 못함.
+
+**해결:** 사본만 보던 검증을 원본/사본 사이즈 비교로 변경 (안전 가드 포함):
+```php
+clearstatcache(true, $tempFile);
+clearstatcache(true, $filePath);
+if (!file_exists($tempFile)) {
+    @unlink($tempFile);
+    return ['clean' => true, 'error' => __('temp_file_copy_fail')];
+}
+$_origSize = @filesize($filePath);
+$_copySize = @filesize($tempFile);
+// 원본 사이즈를 알 수 있을 때만 비교 (false이면 fallback: 사본 존재 자체가 OK)
+if ($_origSize !== false && $_copySize !== $_origSize) {
+    @unlink($tempFile);
+    return ['clean' => true, 'error' => __('temp_file_copy_fail')];
+}
+```
+
+**안전 가드:**
+- 원본 `filesize()` false 시(파일 사라짐, 권한 문제 등) 사본 존재만 확인 (race condition 방어)
+- `clearstatcache()` 양쪽 모두 호출 (PHP stat 캐시 무효화)
+
+**부수 개선:** 검증 실패 시 `@unlink($tempFile)` 추가 (기존엔 누락 → 임시파일 누적 가능성 있었음).
+
+**현재 영향:** scanForVirus의 0-byte 단축 통과로 도달 불가능 코드 경로 → 영향 0%. 미래 디스크 풀 시나리오 정확도 향상.
+
+**③ validateMimeType 화이트리스트의 php 항목 제거** (`api/FileManager.php` 라인 421~422)
+
+**문제:** `'php' => ['text/x-php', 'text/plain', 'application/x-httpd-php']` 화이트리스트 항목이 존재. `checkUploadSettings`의 `serverExecExts`에서 항상 차단되므로 현재는 도달 불가하지만, 미래에 누가 `serverExecExts`에서 php 빼면 이 항목이 PHP 업로드를 허용하는 함정이 됨.
+
+**해결:** php 항목 의도적 제거. py/java/c/cpp/h 항목은 위장 방지 기능 정상 작동하므로 유지 (서버 실행 안 됨).
+
+**현재 영향:** 도달 불가 코드라 0%. 미래 회귀 방지.
+
+**④ 청크 업로드 로컬 경로에 MIME 검증 추가** (`api/FileManager.php` 라인 1784~1793)
+
+**문제:** 일반 업로드(라인 1493)와 청크 업로드 원격(라인 1945)에는 `validateMimeType` 호출이 있는데 청크 업로드 로컬 경로에만 누락. 일관성 부족 + 위장 파일(.jpg에 PHP 코드) 우회 가능성.
+
+**해결:** 일반 업로드와 동일 패턴(옵션 체크 포함)으로 추가:
+```php
+$_chunkMimeCheck = $this->checkUploadSettings($filename, $finalSize);
+$_chunkMimeEnabled = $_chunkMimeCheck['mime_check'] ?? true;
+if ($_chunkMimeEnabled && !$this->validateMimeType($targetPath, $filename)) {
+    @unlink($targetPath);
+    $this->cleanupChunks($tempDir);
+    return ['success' => false, 'error' => __('file_type_invalid')];
+}
+```
+
+**다중 방어선 (이미 존재):**
+- 위험 확장자(.php/.jsp/.asp 등): `serverExecExts` 항상 차단
+- 이중 확장자(evil.php.jpg): 라인 511~522에서 차단
+- 브라우저 MIME 추론: `X-Content-Type-Options: nosniff` (api.php 라인 51)
+- SVG inline: 별도 CSP `sandbox` (api/FileManager.php 라인 4612)
+
+**MIME 검증 추가 효과:** 위장 파일 차단 강화 (예: .jpg 확장자에 실제 PHP 코드 → 청크 업로드로 업로드 시도 시 차단).
+
+**사용자 경험:** 정상 사용자 영향 0% (`mime_check` 옵션 켜진 환경에서만 작동, 일반 업로드와 동일 동작).
+
+---
+
+**[i18n/주석 정리] 영어 사용자 UX + 부정확 주석 정리 (2026-05-08)**
+
+**① en.json default_name_* 5개 키 추가** (`lang/en.json` 라인 545~549)
+
+**문제:** "새 파일 만들기" 시 사용되는 `default_name_txt`, `default_name_docx`, `default_name_xlsx`, `default_name_pptx`, `default_name_hwp` 키가 영어 번역 파일에 누락 → 영어 사용자가 새 파일 만들면 한국어 폴백("새 텍스트 문서.txt") 표시. 메뉴 자체는 영어인데 생성되는 파일명만 한국어 → UX 불일치.
+
+**해결:**
+```json
+"default_name_txt": "New Text Document",
+"default_name_docx": "New Word Document",
+"default_name_xlsx": "New Excel Document",
+"default_name_pptx": "New Presentation",
+"default_name_hwp": "New HWP Document",
+```
+
+**② 부정확 주석 정리** (`assets/js/app.js` 라인 11419/11737, 16271~16272 + `index.php` 라인 20)
+
+- `app.js`: 주석에 `'md'`, `'text/markdown'` 언급 있는데 라우터/defaultNameMap에 해당 케이스 없음 → 미래 혼란 방지를 위해 제거
+- `app.js`: hwp 분기 주석 "rhwp 항상 탑재" → "서버 템플릿" 으로 정확화 (이번 세션 변경 반영)
+- `index.php`: CSP 코멘트의 "빈 hwp 문서 생성 등" → "rhwp_viewer.php / rhwp_editor.php 의 HWP/HWPX 뷰어·편집기 WASM 로드" 로 정확화
+
+**코드 동작:** 변화 없음 (주석/번역 데이터만 변경).
+
+---
+
+**[hwp 생성 경로 통합] rhwp.createEmpty() → 한컴 정품 템플릿 복사 (2026-05-08)**
+
+**증상:** "새 한글 문서" 생성 후 한글 에디터(rhwp_editor.php)로 열면 panic:
+```
+panicked at src/document_core/queries/rendering.rs:300:47:
+index out of bounds: the len is 0 but the index is 0
+[CanvasView] 페이지 0 정보 조회 실패: RuntimeError: unreachable
+```
+
+**원인:** rhwp의 `HwpDocument.createEmpty()` 가 **페이지 0개의 hwp 바이트** 생성. 파일 자체는 유효한 CFB 컨테이너지만 BodyText에 페이지가 없어 `getPageInfo(0)` 호출 시 빈 배열에 인덱스 0 접근으로 패닉. rhwp 라이브러리 측 결함이라 직접 수정 불가.
+
+**해결:**
+- `templates/empty.hwp` 추가 — 한컴오피스 한글 2010 정품이 만든 빈 문서 (8704 bytes, CFB v5.0)
+- `assets/js/app.js` 라인 11751~11756 라우터: `'rhwp'` → `'template'` 으로 변경
+- `assets/js/app.js` 라인 16310~ `_createNewFile`: rhwp 분기(WASM 동적 import + createEmpty + exportHwp + Blob 업로드, 약 55줄) 통째로 제거
+- `api.php` 무수정 — `create_from_template` 핸들러는 이미 `['docx', 'xlsx', 'pptx', 'hwp']` 화이트리스트에 hwp 포함
+
+**부수적 이점:**
+- 새 파일 생성 시 WASM 컴파일 트리거 안 됨 (rhwp_viewer/editor 사용 시에만 트리거)
+- iOS Safari 15 이하에서도 새 한글문서 생성 가능 (편집/뷰어는 여전히 16+ 필요)
+- 응답 속도: WASM 로드/초기화 (~1-2초) 없이 즉시 생성
+- 외부 한글 프로그램 호환성 100% (한컴이 만든 파일 그대로)
+
+**검증 (펜닐님 직접):** 5종 새 파일(txt/docx/xlsx/pptx/hwp) 생성 + 에디터 열기 모두 정상 + 모바일 + 원격 스토리지 생성 확인.
+
+---
+
+**[빈 파일 업로드 fix] validateMimeType + scanForVirus 0-byte 단축 통과 (2026-05-08)**
+
+**증상 ①:** 빈 텍스트 문서(.txt) 생성 시 토스트 "파일 형식이 올바르지 않습니다. (확장자와 실제 파일 타입 불일치)"
+
+**원인 ①:** `_createNewFile` 이 `new Blob([''], {type: 'text/plain'})` 으로 0-byte 파일 업로드 → 서버 `validateMimeType()` 의 `finfo_file()` 이 빈 파일에 대해 `application/x-empty` (또는 `inode/x-empty`) 반환 → 화이트리스트(`txt => ['text/plain']`)와 불일치 → 거부.
+
+**해결 ①:** `api/FileManager.php` `validateMimeType()` 에 두 단계 안전망 추가:
+- 라인 444: `if (@filesize($tmpFile) === 0) return true;` (1차)
+- 라인 458: `if ($realMime === 'application/x-empty' || $realMime === 'inode/x-empty') return true;` (2차)
+
+**증상 ②:** ① 수정 후 다시 생성 시도하니 다른 토스트 발생 — "🛡️ 바이러스가 감지되었습니다: 백신 검사 오류로 차단됨: 임시 파일 복사 실패"
+
+**원인 ②:** Defender 검사용 임시파일 복사 후 검증 로직(`scanWithDefender` 라인 1295)이 0-byte를 "복사 실패"로 오판 → `block_on_error` 옵션으로 차단 전환.
+
+**해결 ②:** `api/FileManager.php` `scanForVirus()` 진입 직후 0-byte 단축 통과 추가 (라인 1177~1179):
+```php
+if ($fileSize === 0) {
+    return ['clean' => true, 'skipped' => true];
+}
+```
+- 엔진 분기(ClamAV/Defender) 이전에 처리 → 양쪽 엔진 모두 안전
+- 0 bytes는 어떤 바이러스 시그니처도 담을 수 없음 (수학적 자명)
+
+**보안 영향 평가:**
+- 위험 확장자 차단(`checkUploadSettings` 라인 505의 .php/.jsp/.asp 등)은 MIME 검사 **이전** 단계 → 우회 불가
+- 랜섬웨어 확장자 차단(`checkRansomwareExtension` 라인 1472)도 우회 불가
+- 이중 확장자(evil.php.jpg) 차단도 우회 불가
+
+**영향 범위 — 함께 해결:**
+- 새 텍스트 문서 (.txt) ⭐
+- 외부 도구가 만든 0-byte placeholder (rsync, Git LFS pointer 등)
+- WebDAV 클라이언트의 빈 PUT 요청
+- 청크 업로드의 0-byte 합본 케이스
+
+---
+
+**[CSP wasm-unsafe-eval] WebAssembly 컴파일 허용 (2026-05-07)**
+
+**증상:** 빈 한글 문서 생성 시 콘솔 에러:
+```
+Refused to compile or instantiate WebAssembly module because neither
+'wasm-unsafe-eval' nor 'unsafe-eval' is an allowed source of script
+```
+
+**원인:** `index.php` 라인 22 CSP 헤더의 `script-src` 디렉티브에 `'wasm-unsafe-eval'` 누락. 브라우저가 WebAssembly 모듈 컴파일/인스턴스화 차단.
+
+**해결:** `index.php` 라인 22 CSP 헤더에 `'wasm-unsafe-eval'` 추가:
+```
+script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdnjs.cloudflare.com
+```
+
+**보안 영향 평가:**
+- `'wasm-unsafe-eval'` 는 W3C 표준 키워드, `'unsafe-eval'` (JS eval) 보다 매우 제한적
+- WebAssembly 모듈 컴파일/인스턴스화만 허용, JavaScript `eval()` 같은 위험 동작은 **여전히 차단**
+- rhwp는 FileStation 자체 탑재 코드 (외부 동적 로드 아님)
+
+**브라우저 호환성:**
+| 브라우저 | 지원 |
+|---|---|
+| Chrome / Edge / Firefox | ✅ 모든 버전 |
+| Safari 16+ (2022년 9월 이후) | ✅ |
+| Safari 15.x 이하 | ⚠️ |
+
+**적용 페이지:** `index.php` 만 수정 — rhwp_viewer.php, rhwp_editor.php, share.php는 자체 CSP 없거나 별도 처리.
+
+---
+
+**[새 파일 만들기 — 우클릭 메뉴] Windows 탐색기 스타일 즉시 생성 + 자동 번호 (2026-05-07)**
+
+**기능:** 폴더 빈 영역 우클릭 → "새로 만들기" → txt / docx / xlsx / pptx / hwp 즉시 생성. prompt 없이 기본 이름으로 만들고 중복 시 `(2)`, `(3)` 자동 증가 (Windows 탐색기와 동일).
+
+**구현:**
+- `assets/js/app.js` 라인 11739~11756: 메뉴 라우터 5개 케이스 추가
+- `assets/js/app.js` 라인 16271~ `_showNewFileDialog()`: 기본 이름 매핑 (`'새 텍스트 문서'`, `'새 Word 문서'`, `'새 Excel 문서'`, `'새 프레젠테이션'`, `'새 한글 문서'`)
+- `assets/js/app.js` 라인 16288~ `_findUniqueFileName()`: 클라이언트 측 중복 검사 (`(2)`~`(999)` 자동 번호)
+- `assets/js/app.js` 라인 16313~ `_createNewFile()`: 두 경로 분기
+  - **txt:** 빈 Blob → 기존 `upload` API (보안/권한 자동 적용)
+  - **docx/xlsx/pptx/hwp:** `create_from_template` API → 서버 `templates/empty.{ext}` 복사
+- `api.php` 라인 5963~6102: `create_from_template` 핸들러 신규 추가
+  - 화이트리스트: `['docx', 'xlsx', 'pptx', 'hwp']`
+  - 파일명 보안 검사 (path traversal 방어, 특수문자 차단)
+  - 로컬: `copy()` 직접 복사 / 원격: `$adapter->write()` 호출
+  - 중복 시 서버측에서도 `(n)` 자동 증가 → 응답 `name` 사용
+  - 활동 로그 + 파일 인덱스 갱신
+- `templates/empty.docx`, `empty.xlsx`, `empty.pptx`, `empty.hwp` 4개 템플릿 추가
+
+**서버 보안:**
+- 화이트리스트 외 템플릿 거부
+- `realpath()` 기반 path traversal 방어 (라인 6047~6050)
+- 폴더별 쓰기 권한 체크 (라인 5971)
+
+---
+
+**[SMB media_info] SMB 타입도 ffprobe 가능하게 보완 (2026-05-08)**
+
+**문제:** `api/FileManager.php`의 `getMediaInfo()`가 SMB도 원격 스토리지로 묶어 early return → ffprobe 실행 안 함, `file_size` 응답 누락. 결과적으로 SMB 타입 등록한 NAS는 모바일 + 500MB 이상 mp4 자동 트랜스코딩 결정 못 함.
+
+**원인:** `isRemoteStorage()` true 분기가 FTP/SFTP/WebDAV/S3/SMB 모두 차단. 다만 SMB는 `transcodeStream()`에서 이미 마운트 포인트 / UNC 경로로 ffmpeg 정상 호출 → **media_info만 분기 일관성 부족**.
+
+**해결:**
+- `REMOTE_TYPES`에서 'smb' 제외한 타입만 차단 (`api/FileManager.php` 라인 8032~8043):
+  ```php
+  $_storageInfoMI = $this->storage->getStorageById($storageId);
+  if (!$_storageInfoMI) {
+      return ['success' => false, 'error' => 'Storage not found'];
+  }
+  $_storageTypeMI = $_storageInfoMI['storage_type'] ?? 'local';
+  // REMOTE_TYPES에서 'smb' 제외한 타입만 차단 (SMB는 ffprobe 가능)
+  if (in_array($_storageTypeMI, self::REMOTE_TYPES) && $_storageTypeMI !== 'smb') {
+      return ['success' => true, ..., 'note' => 'remote storage'];
+  }
+  ```
+- SMB는 `getRealPath()`에서 UNC 경로/마운트 포인트 받아 `is_file()`, `filesize()`, `ffprobe` 정상 호출
+- FTP/SFTP/WebDAV/S3는 기존대로 차단 (어댑터 외 접근 불가)
+
+**효과 매트릭스:**
+
+| 등록 방식 | media_info | 모바일+대용량 트랜스코딩 |
+|---|---|---|
+| 로컬 디스크 | ✅ | ✅ |
+| UNC + local 등록 (펜닐님 환경) | ✅ | ✅ |
+| **SMB 타입 등록** | ⭐ 이번 수정으로 ✅ | ⭐ 이번 수정으로 ✅ |
+| FTP/SFTP/WebDAV/S3 | ❌ early return (변경 없음) | ❌ |
+
+**적용 범위:** `api/FileManager.php`만 수정 (1개 함수의 1개 분기 보완 + null 체크 추가)
+
+---
+
+**[media_info fallback v2] iOS Safari abort race condition 보완 (2026-05-07)**
+
+**증상:** iPhone Safari에서 mp4 500MB 이상 파일 미리보기 시 간헐적으로 "▶ 일반 재생" 배지(코덱 정보 없음) + 재생 버튼 비활성. 모달 닫고 다시 열면 정상.
+
+**원인 진단:**
+- `media_info` API의 fetch 자체가 reject (iOS Safari fetch race / 네트워크 일시 실패)
+- catch 분기로 진입 → 배지만 변경하고 끝, native 활성화 처리 없음
+- `_isReady = false`, `controls` 미설정, `video-not-ready` 클래스 잔존 → 재생 버튼 비활성
+
+**해결 — 조건분기 폴백 (펜닐님 옵션 3 결정):**
+1. `assets/js/app.js` 라인 33747~ catch 분기:
+   - `err.name === 'AbortError'` 무시 (정상 abort)
+   - 진짜 에러: 모바일 + 500MB↑ → 트랜스코딩 폴백 / 그 외 → native 폴백
+2. 라인 33583~ `info.success === false` 분기에도 동일 패턴 적용
+3. **추가 보완:** 폴백 시 video 요소 `<source>` 태그 정리 누락 → 양쪽에 `_oldVidFb.querySelectorAll('source').forEach(s => s.remove())` + `_switchingToTranscode = true` + `video-not-ready` 추가 (정상 트랜스코딩 분기와 동일 패턴)
+
+**검증:** 변수 클로저 (`item`, `storageId` 모두 `_showPreviewImpl(item)` 함수 스코프), `App.` vs `this` 일관성, AbortError 처리, 보안 위험 0개
+
+---
+
+**[SMI fix #2] 멀티라인 자막 빈 공백 줄 정리 (2026-05-07)**
+
+**증상:** Lucky Number Slevin 같은 SMI 자막에서 2~3줄로 표시되어야 할 자막이 1줄만 표시.
+
+**검증 데이터:** `Lucky.Number.Slevin.2006.1080p.BrRip.x264.BOKUTOX.YIFY.smi` (cp949, 2309 sync, 멀티라인 588개)
+
+**원인 (시뮬레이션 추적):**
+- SMI 원본: `오케이,<br> \n용건이 뭐요?` (`<br>` + 공백 + `\n`)
+- `<br>` → `\n` 변환 후: `오케이,\n \n용건이 뭐요?` (`\n`과 `\n` 사이 공백 한 칸)
+- 기존 `\n{2,}` 정규식이 못 잡음 (공백 끼어있어 연속 \n이 아님)
+- VTT 출력 후 재파싱 라인 36919: `vttLines[ci].trim() !== ''` 체크에서 공백 줄을 빈 줄로 인식 → cue가 첫 줄에서 끊김
+- "용건이 뭐요?" 누락
+
+**해결:**
+- `assets/js/app.js` `_smiToVtt()` 라인 37262: `replace(/\n[ \t]+\n/g, '\n\n')` 추가 (공백/탭만 있는 줄 → 빈 줄로 만들어 다음 정규식 `\n{2,}→\n`이 잡을 수 있게)
+- `share.php` `parseSmi()` 라인 3693: 동일 정규식 추가
+- 검증: 588개 멀티라인 모두 정상 처리
+
+---
+
+**[SMI fix #1] 자막 들러붙음 (Subtitle Sticking) 수정 (2026-05-07)**
+
+**증상:** SMI 자막이 끝난 시점이 지나도 다음 자막 시작까지 화면에 박혀있음. 일반 플레이어(팟플레이어 등)는 정상.
+
+**검증 데이터:** John Wick .smi 자막 (628개 자막 OFF 신호, 5초+ 빈 시간 135개, 가장 긴 빈 시간 163초)
+
+**원인:** SMI 파서가 빈 SYNC 블록(`<SYNC Start=...><P>&nbsp;</P>`, SMI 표준의 자막 OFF 신호)을 무시하여 이전 자막의 endTime이 다음 자막 시작까지 늘어남. 시뮬레이션: 수정 전 "부기맨" 자막 166.9초 표시 → 수정 후 3.1초.
+
+**해결 (양쪽 동일 패턴):**
+- `assets/js/app.js` `_smiToVtt()` 라인 37230~: 빈 자막도 `syncs.push({ ms, text: text || '' })`로 추가, cue 생성 시 `if (!syncs[i].text) continue` (cue 안 만들지만 endTime 역할)
+- `share.php` `parseSmi()` 라인 3683~: 1단계로 모든 sync 수집 (빈 자막 포함), 2단계로 cue 생성 (정렬 후 빈 자막은 endTime만 활용)
+- XSS 방어 동일 유지 (텍스트 있을 때만 이스케이프)
+- VTT/SRT/ASS 파서는 endTime 명시 포맷이라 수정 불필요 (변경 없음)
+
+**효과 — 모든 자막 환경 검증 매트릭스 (12/12 통과):**
+
+| 환경 | SMI 들러붙음 (fix #1) | 멀티라인 (fix #2) |
+|---|---|---|
+| 일반 페이지 + 로컬 | ✅ | ✅ |
+| 일반 페이지 + SMB | ✅ | ✅ |
+| 일반 페이지 + FTP/SFTP/WebDAV/S3 | ✅ | ✅ |
+| 공유 페이지 + 모든 스토리지 | ✅ | ✅ |
+| 모달 재생 | ✅ | ✅ |
+| 전체화면 (PC/Android/iOS) | ✅ | ✅ |
+
+**검증된 라이브러리 비교:** sami-parser (elegantcoder, 한국 NPM), subsrt (papnkukn), mantas-done/subtitles (PHP) 모두 우리 SMI 파서와 거의 동등한 처리 수준.
+
+---
+
+**[31st rev] 동영상 자동 다음 트랙 재생 — 트랜스코딩 모드 보완 (2026-05-06)**
+
+**증상 진단:** 폴더 안 동영상 2개 이상일 때 끝나면 다음 트랙 자동 재생되어야 하는데, 트랜스코딩 모드(mkv/avi 등 변환 필요한 형식)에서 자동 재생이 안 되는 문제.
+
+**원인:** 트랜스코딩 분기에서 `replaceChild`로 video 요소 새로 생성 → `_setupVideoPlaylistPanel`에서 등록한 ended 리스너 소실 (`_fsVpAutoNextBound` 플래그도 새 요소엔 없음).
+
+**해결:**
+1. **헬퍼 함수 `_fsVpBindAutoNext()` 추출** — 기존 `_setupVideoPlaylistPanel` 안 인라인 자동 재생 로직을 별도 함수로 분리
+2. **트랜스코딩 분기 `_waitAndBind` 콜백에 재바인딩 추가** — video 요소 교체 후 새 video에 ended 리스너 재등록
+
+```javascript
+// 헬퍼 함수 (_fsVpAutoNextBound 플래그로 중복 바인딩 방지)
+_fsVpBindAutoNext() {
+    const folderVideos = this._fsVpFolderVideos || [];
+    if (folderVideos.length < 2) return;
+    const video = document.querySelector('#preview-content .preview-video');
+    if (!video || video._fsVpAutoNextBound) return;
+    video._fsVpAutoNextBound = true;
+    const curIdx = folderVideos.findIndex(f => f.path === this._fsVpCurrentPath);
+    video.addEventListener('ended', () => {
+        if (curIdx >= 0 && curIdx < folderVideos.length - 1) {
+            // 다음 트랙으로 전환
+            ...
+        }
+        // 마지막 트랙이면 그냥 끝 (반복 재생 X — 펜닐 룰)
+    });
+}
+```
+
+**시나리오 매트릭스 (모든 모드 + 일반/공유 양쪽):**
+
+| 시나리오 | 동작 |
+|---|---|
+| 일반 + 네이티브 (mp4) | ✅ |
+| 일반 + HLS (스트리밍) | ✅ |
+| 일반 + 트랜스코딩 (mkv/avi) | ✅ ⭐ (이번 수정) |
+| 공유 폴더 + 모든 모드 | ✅ (PHP measured `location.href` 자동 이동) |
+
+**펜닐 룰:**
+- 첫 재생은 수동 (사용자가 ▶ 버튼)
+- 마지막 트랙 끝나면 그냥 끝 (반복 X)
+- 단일 영상은 자동 재생 무관 (다음 트랙 자체가 없음)
+
+**적용 범위:** `assets/js/app.js`만 수정 (1개 함수 추가 + 2곳 호출 추가/수정)
+**share.php는 수정 안 함** — 이미 모든 모드 자동 이동 동작.
+
+**캐시 무효화:** `APP_VERSION` `5.8.1d` → `5.8.1e`
+
+---
+
+#### v5.8.1d (2026-05-04 ~ 2026-05-06)
 
 **최종 상태 요약:** 30 리비전 누적 (VU 미터 28th + BF Cache 핸들러 29b + rhwp 0.7.10 30th)
 
@@ -1076,5 +1717,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1d — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-05-06 (rhwp 0.7.10 기준)*
+*FileStation v5.8.1e — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-05-08 (rhwp 0.7.10 기준)*

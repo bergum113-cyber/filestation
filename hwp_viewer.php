@@ -588,9 +588,14 @@ if (!function_exists('h')) {
         }
         
         @media print {
-            .header, .loading-overlay { display: none; }
-            .viewer-container { padding: 0; overflow: visible; }
-            #hwp-viewer { box-shadow: none; max-width: none; }
+            .header, .loading-overlay { display: none !important; }
+            .viewer-container { padding: 0; overflow: visible; background: #fff; }
+            #hwp-viewer { box-shadow: none; max-width: none; transform: none !important; }
+            html, body { background: #fff; overflow: visible; }
+            /* 페이지 나눔: hwp 엔진이 페이지마다 .hwp-page 또는 .HWPPage 생성 (legacy/hwpx 공통) */
+            .hwp-page, .HWPPage { page-break-after: always; break-after: page; }
+            .hwp-page:last-child, .HWPPage:last-child { page-break-after: auto; break-after: auto; }
+            @page { margin: 10mm; }
         }
     </style>
 </head>
@@ -620,6 +625,7 @@ if (!function_exists('h')) {
             ?>
             <a href="<?php echo h($rhwpUrl); ?>" class="back-btn" title="rhwp 뷰어로 보기 (문서가 이상하게 보일 때)" style="text-decoration:none;">🔄 rhwp로 보기</a>
             <?php endif; ?>
+            <button class="back-btn" onclick="printDocument()" title="<?php echo __('viewer_print'); ?> (Ctrl+P)">🖨️</button>
             <a href="<?php echo h($download_url); ?>" class="back-btn" title="<?php echo __('hwp_download'); ?>">📥</a>
         </div>
     </div>
@@ -1199,6 +1205,12 @@ if (!function_exists('h')) {
         function updateZoom() {
             document.getElementById('zoomValue').textContent = currentZoom + '%';
             viewerEl.style.transform = `scale(${currentZoom / 100})`;
+        }
+        
+        // 인쇄 (브라우저 기본 인쇄 → 사용자가 "PDF로 저장" 선택 가능)
+        //   @media print CSS로 툴바/배경 숨김 + 본문만 인쇄
+        function printDocument() {
+            window.print();
         }
         
         // 문서 로드 시작

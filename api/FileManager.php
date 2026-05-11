@@ -418,7 +418,8 @@ class FileManager {
             // 기타
             'csv' => ['text/csv', 'text/plain'],
             'sql' => ['application/sql', 'text/plain'],
-            'php' => ['text/x-php', 'text/plain', 'application/x-httpd-php'],
+            // 'php' 항목 의도적 제거 (펜닐 v5.8.1e) — checkUploadSettings의 serverExecExts에서 항상 차단
+            //   여기에 두면 미래에 serverExecExts 변경 시 PHP 업로드 허용하는 함정이 됨
             'py' => ['text/x-python', 'text/plain'],
             'java' => ['text/x-java-source', 'text/plain'],
             'c' => ['text/x-c', 'text/plain'],
@@ -438,12 +439,24 @@ class FileManager {
             return true;
         }
         
+        // ★ 빈 파일(0 bytes)은 MIME 검증 스킵 — "새 텍스트 문서" 등 즉시 생성 시나리오 (펜닐 v5.8.1e)
+        //   finfo_file이 application/x-empty / inode/x-empty 를 반환하면 화이트리스트와 불일치하여 거부됨
+        //   확장자가 화이트리스트에 있으면 빈 파일은 무해하므로 허용
+        if (@filesize($tmpFile) === 0) {
+            return true;
+        }
+        
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
         $realMime = finfo_file($finfo, $tmpFile);
         finfo_close($finfo);
         
         // application/octet-stream은 iOS 등에서 정확한 MIME을 못 잡을 때 발생 → 허용
         if ($realMime === 'application/octet-stream') {
+            return true;
+        }
+        
+        // ★ 빈 파일 매직 — finfo가 이걸 반환하는 환경 추가 안전망 (펜닐 v5.8.1e)
+        if ($realMime === 'application/x-empty' || $realMime === 'inode/x-empty') {
             return true;
         }
         
@@ -1159,6 +1172,13 @@ class FileManager {
             return ['clean' => true];
         }
         
+        // ★ 빈 파일(0 bytes)은 바이러스 검사 스킵 (펜닐 v5.8.1e)
+        //   "새 텍스트 문서" 등 즉시 생성 시나리오 — 0 바이트는 어떤 시그니처도 담을 수 없으므로 검사 자체가 무의미
+        //   Defender/ClamAV의 임시파일 복사 검증(filesize===0) 로직과의 충돌도 회피
+        if ($fileSize === 0) {
+            return ['clean' => true, 'skipped' => true];
+        }
+        
         // 최대 크기 체크 (MB -> bytes)
         $maxSize = ($config['max_size'] ?? 100) * 1024 * 1024;
         if ($maxSize > 0 && $fileSize > $maxSize) {
@@ -1279,8 +1299,21 @@ class FileManager {
         fclose($dst);
         
         // 파일이 완전히 쓰여졌는지 확인
+        // ★ 원본/사본 사이즈 비교로 변경 (펜닐 v5.8.1e — 정상 0-byte 파일 오진 방지)
+        //   기존: filesize($tempFile) === 0 → 정상 빈 파일도 "복사 실패"로 오판
+        //   현재: 원본 사이즈와 비교 → 디스크 풀로 인한 부분 복사도 정확히 검출
+        //   안전 가드: 원본 사이즈 false 시(파일 사라짐 등) 사본 존재만 확인 (기존 동작 유지)
         clearstatcache(true, $tempFile);
-        if (!file_exists($tempFile) || filesize($tempFile) === 0) {
+        clearstatcache(true, $filePath);
+        if (!file_exists($tempFile)) {
+            @unlink($tempFile);
+            return ['clean' => true, 'error' => __('temp_file_copy_fail')];
+        }
+        $_origSize = @filesize($filePath);
+        $_copySize = @filesize($tempFile);
+        // 원본 사이즈를 알 수 있을 때만 비교 (false이면 fallback: 사본 존재 자체가 OK)
+        if ($_origSize !== false && $_copySize !== $_origSize) {
+            @unlink($tempFile);
             return ['clean' => true, 'error' => __('temp_file_copy_fail')];
         }
         
@@ -1746,6 +1779,17 @@ class FileManager {
                 $this->cleanupChunks($tempDir);
                 $threat = $virusScan['threat'] ?? __('unknown_threat');
                 return ['success' => false, 'error' => __('virus_detected') . $threat];
+            }
+            
+            // ★ MIME 타입 검증 (펜닐 v5.8.1e — 일반 업로드와 일관성)
+            //   기존: 청크 업로드 로컬 경로에만 MIME 검증 누락 (원격 청크 업로드는 라인 1945에서 호출됨)
+            //   업로드 설정의 mime_check 옵션 존중 (일반 업로드 라인 1493과 동일 패턴)
+            $_chunkMimeCheck = $this->checkUploadSettings($filename, $finalSize);
+            $_chunkMimeEnabled = $_chunkMimeCheck['mime_check'] ?? true;
+            if ($_chunkMimeEnabled && !$this->validateMimeType($targetPath, $filename)) {
+                @unlink($targetPath);
+                $this->cleanupChunks($tempDir);
+                return ['success' => false, 'error' => __('file_type_invalid')];
             }
             
             // 랜섬웨어 내용 검사 (엔트로피 + 시그니처)
@@ -8029,8 +8073,16 @@ class FileManager {
             return ['success' => false, 'error' => 'Permission denied'];
         }
         
-        // 원격 스토리지는 코덱 확인 불가
-        if ($this->isRemoteStorage($storageId)) {
+        // 진짜 원격 스토리지(FTP/SFTP/WebDAV/S3)는 어댑터 통한 데이터 접근만 가능 → ffprobe 불가
+        // SMB는 OS에 마운트된 UNC/마운트 포인트로 접근 가능 → ffprobe 진행
+        // (펜닐 v5.8.1e — 펜닐님 지적: SMB도 본질적으로 IP 접근이고 transcodeStream도 SMB 동작하니 일관성 위해 보완)
+        $_storageInfoMI = $this->storage->getStorageById($storageId);
+        if (!$_storageInfoMI) {
+            return ['success' => false, 'error' => 'Storage not found'];
+        }
+        $_storageTypeMI = $_storageInfoMI['storage_type'] ?? 'local';
+        // REMOTE_TYPES에서 'smb' 제외한 타입만 차단 (SMB는 ffprobe 가능)
+        if (in_array($_storageTypeMI, self::REMOTE_TYPES) && $_storageTypeMI !== 'smb') {
             return ['success' => true, 'video_codec' => '', 'audio_codec' => '', 'can_play_native' => true, 'note' => 'remote storage'];
         }
         

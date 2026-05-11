@@ -159,9 +159,11 @@ $callbackUrl = $callbackBaseUrl . '/api.php?action=onlyoffice_callback';
 // 파일 다운로드 URL
 $fileUrl = $callbackBaseUrl . '/api.php?action=onlyoffice_download&storage_id=' . $storageId . '&path=' . rawurlencode($filePath) . '&key=' . $documentKey;
 
-// 디버그 로그
+// 디버그 로그 (펜닐 v5.8.1e — 파일 존재 시에만 활성)
 $ooDataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
-// @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " OPEN file=$filePath fileUrl=$fileUrl callbackBase=$callbackBaseUrl\n", FILE_APPEND);
+if (file_exists($ooDataDir . '/onlyoffice_debug.log')) {
+    @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " OPEN file=$filePath fileUrl=$fileUrl callbackBase=$callbackBaseUrl mode=$mode\n", FILE_APPEND);
+}
 
 // OnlyOffice 설정
 $config = [

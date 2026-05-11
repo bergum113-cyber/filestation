@@ -1332,7 +1332,10 @@ try {
                         if (hash_equals($expectedSig, $signature)) {
                             $authenticated = true;
                         } else {
-                            // @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_FAIL sig_mismatch expected=" . substr($expectedSig, 0, 20) . "... got=" . substr($signature, 0, 20) . "... secret_len=" . strlen($onlyofficeSecret) . "\n", FILE_APPEND);
+                            // ★ JWT 검증 실패 디버그 (펜닐 v5.8.1e — 파일 존재 시만)
+                            if (file_exists($ooDbgDir . '/onlyoffice_debug.log')) {
+                                @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_FAIL sig_mismatch expected=" . substr($expectedSig, 0, 20) . "... got=" . substr($signature, 0, 20) . "... secret_len=" . strlen($onlyofficeSecret) . "\n", FILE_APPEND);
+                            }
                         }
                     }
                 } else {
@@ -1342,13 +1345,19 @@ try {
                     $docKey = $_GET['key'] ?? '';
                     if ($docKey && strlen($docKey) === 32 && ctype_xdigit($docKey)) {
                         $authenticated = true; // document key가 유효하면 허용
-                        // @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_BYPASS key=$docKey\n", FILE_APPEND);
+                        if (file_exists($ooDbgDir . '/onlyoffice_debug.log')) {
+                            @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_BYPASS key=$docKey\n", FILE_APPEND);
+                        }
                     } else {
-                        // @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_FAIL no_token authHeader=" . ($authHeader ? 'present' : 'empty') . "\n", FILE_APPEND);
+                        if (file_exists($ooDbgDir . '/onlyoffice_debug.log')) {
+                            @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_FAIL no_token authHeader=" . ($authHeader ? 'present' : 'empty') . "\n", FILE_APPEND);
+                        }
                     }
                 }
             } else {
-                // @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_FAIL no_secret\n", FILE_APPEND);
+                if (file_exists($ooDbgDir . '/onlyoffice_debug.log')) {
+                    @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_FAIL no_secret\n", FILE_APPEND);
+                }
             }
             
             // JWT 인증 실패 시 세션 로그인 필요
@@ -1363,7 +1372,10 @@ try {
             $storageId = (int)($_GET['storage_id'] ?? 0);
             $filePath = $_GET['path'] ?? '';
             
-            // @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " DOWNLOAD storageId=$storageId path=$filePath auth=$ooDbgAuth IP=" . ($_SERVER['REMOTE_ADDR'] ?? '') . "\n", FILE_APPEND);
+            // ★ DOWNLOAD 디버그 (펜닐 v5.8.1e — Document Server 요청 확인용, 파일 존재 시만)
+            if (file_exists($ooDbgDir . '/onlyoffice_debug.log')) {
+                @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " DOWNLOAD storageId=$storageId path=$filePath auth=$ooDbgAuth IP=" . ($_SERVER['REMOTE_ADDR'] ?? '') . " UA=" . substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 80) . "\n", FILE_APPEND);
+            }
             
             // 세션 인증 fallback인 경우 스토리지 읽기 권한 확인
             if (!$authenticated && !$storage->checkPermission($storageId, 'can_read')) {
@@ -1480,9 +1492,11 @@ try {
             
             $status = $input['status'] ?? 0;
             
-            // 디버그 로그
+            // 디버그 로그 (펜닐 v5.8.1e — 파일 존재 시만 기록, 운영 부담 방지)
             $ooDataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
-            @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " CALLBACK status=$status key=$key storage=$storageId path=$filePath url=" . ($input['url'] ?? '(none)') . "\n", FILE_APPEND);
+            if (file_exists($ooDataDir . '/onlyoffice_debug.log')) {
+                @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " CALLBACK status=$status key=$key storage=$storageId path=$filePath url=" . ($input['url'] ?? '(none)') . "\n", FILE_APPEND);
+            }
             
             // status 코드:
             // 0 - 문서 편집 중
@@ -1539,7 +1553,9 @@ try {
                 if (filter_var($normalizedIp, FILTER_VALIDATE_IP) !== false &&
                     filter_var($normalizedIp, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
                     error_log("[FileStation] OnlyOffice SSRF blocked (private IP {$normalizedIp}, original: {$resolvedIp}): {$downloadUrl}");
-                    @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " SSRF BLOCKED: ip=$normalizedIp resolved=$resolvedIp url=$downloadUrl\n", FILE_APPEND);
+                    if (file_exists($ooDataDir . '/onlyoffice_debug.log')) {
+                        @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " SSRF BLOCKED: ip=$normalizedIp resolved=$resolvedIp url=$downloadUrl\n", FILE_APPEND);
+                    }
                     echo json_encode(['error' => 1]);
                     exit;
                 }
@@ -1569,11 +1585,15 @@ try {
                 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 curl_close($ch);
                 if ($newContent === false || $curlErr) {
-                    @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " CURL FAIL: err=$curlErr msg=$curlErrMsg http=$httpCode url=$downloadUrl\n", FILE_APPEND);
+                    if (file_exists($ooDataDir . '/onlyoffice_debug.log')) {
+                        @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " CURL FAIL: err=$curlErr msg=$curlErrMsg http=$httpCode url=$downloadUrl\n", FILE_APPEND);
+                    }
                     echo json_encode(['error' => 1]);
                     exit;
                 }
-                @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " DOWNLOAD OK: " . strlen($newContent) . " bytes, http=$httpCode\n", FILE_APPEND);
+                if (file_exists($ooDataDir . '/onlyoffice_debug.log')) {
+                    @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " DOWNLOAD OK: " . strlen($newContent) . " bytes, http=$httpCode\n", FILE_APPEND);
+                }
                 
                 // 파일 저장
                 if (@file_put_contents($fullPath, $newContent) === false) {
@@ -5953,6 +5973,160 @@ try {
                             'modified' => time(),
                             'is_dir' => true
                         ]);
+                }
+            }
+            break;
+            
+        // ★ 새 파일 만들기 — 서버 템플릿 복사 (펜닐 v5.8.1e)
+        //   docx/xlsx/pptx/hwp 빈 템플릿 복사 (파일 내용 자체는 templates/ 디렉토리)
+        //   txt/md는 클라이언트에서 빈 Blob → upload API 사용 (이 액션 X)
+        case 'create_from_template':
+            $auth->requireLogin();
+            $storageId = (int)($input['storage_id'] ?? 0);
+            $relativePath = $input['path'] ?? '';
+            $fileName = $input['name'] ?? '';
+            $template = $input['template'] ?? '';
+            
+            // 폴더별 쓰기 권한 체크
+            if (!$storage->checkFolderPermission($storageId, $relativePath, 'can_write')) {
+                $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')]; break;
+            }
+            
+            // 허용된 템플릿만 처리 (whitelist)
+            $allowedTemplates = ['docx', 'xlsx', 'pptx', 'hwp'];
+            if (!in_array($template, $allowedTemplates, true)) {
+                $result = ['success' => false, 'error' => 'Invalid template type']; break;
+            }
+            
+            // 파일명 보안 검사
+            if (empty($fileName) || preg_match('/[\\\\\\/:\*\?"<>\|]/', $fileName) || strpos($fileName, '..') !== false || $fileName[0] === '.') {
+                $result = ['success' => false, 'error' => __('invalid_filename', '파일 이름이 잘못되었습니다.')]; break;
+            }
+            
+            // 확장자 일치 검사
+            $expectedExt = '.' . $template;
+            if (substr(strtolower($fileName), -strlen($expectedExt)) !== $expectedExt) {
+                $fileName .= $expectedExt;
+            }
+            
+            // 템플릿 파일 경로 확인
+            $templatePath = __DIR__ . '/templates/empty.' . $template;
+            if (!is_file($templatePath)) {
+                $result = ['success' => false, 'error' => 'Template file not found: ' . $template]; break;
+            }
+            
+            // ★ Quota 검사 (펜닐 v5.8.1e — 일반 업로드와 동일하게 한도 체크)
+            //   템플릿 파일 사이즈는 4~36KB로 작지만, 한도 도달 사용자가 무한 생성 못하도록 차단
+            $_templateSize = filesize($templatePath);
+            if ($_templateSize !== false) {
+                $_quotaCheck = $fileManager->checkQuotaPublic($storageId, $_templateSize);
+                if (!($_quotaCheck['allowed'] ?? true)) {
+                    $result = ['success' => false, 'error' => $_quotaCheck['error'] ?? __('quota_exceeded', '용량 한도를 초과했습니다.')]; break;
+                }
+            }
+            
+            // 대상 경로 결정
+            $basePath = $storage->getRealPath($storageId);
+            if (empty($basePath) && !$fileManager->isRemoteStorage($storageId)) {
+                $result = ['success' => false, 'error' => __('storage_path_invalid', '스토리지 경로가 잘못되었습니다.')]; break;
+            }
+            
+            // 원격 스토리지면 어댑터 사용 (어댑터의 write 메서드)
+            if ($fileManager->isRemoteStorage($storageId)) {
+                $storageInfo = $storage->getStorageById($storageId);
+                $adapter = StorageAdapterFactory::create($storageInfo);
+                if (!$adapter || !$adapter->connect()) {
+                    $result = ['success' => false, 'error' => __('adapter_connect_failed', '원격 스토리지 연결 실패')]; break;
+                }
+                // ★ Windows 탐색기 방식: 중복 시 (2), (3) 자동 증가 (펜닐 v5.8.1e)
+                $remoteFullPath = ltrim($relativePath . '/' . $fileName, '/');
+                if ($adapter->exists($remoteFullPath)) {
+                    // 확장자 분리해서 (n) 추가
+                    $dotPos = strrpos($fileName, '.');
+                    $namePart = $dotPos !== false ? substr($fileName, 0, $dotPos) : $fileName;
+                    $extPart  = $dotPos !== false ? substr($fileName, $dotPos) : '';
+                    // 이미 (n) 패턴 있으면 그 부분 제거 후 새로 시도
+                    $namePart = preg_replace('/ \(\d+\)$/u', '', $namePart);
+                    for ($n = 2; $n <= 999; $n++) {
+                        $tryName = $namePart . ' (' . $n . ')' . $extPart;
+                        $tryRemote = ltrim($relativePath . '/' . $tryName, '/');
+                        if (!$adapter->exists($tryRemote)) {
+                            $fileName = $tryName;
+                            $remoteFullPath = $tryRemote;
+                            break;
+                        }
+                    }
+                    if ($adapter->exists($remoteFullPath)) {
+                        $adapter->disconnect();
+                        $result = ['success' => false, 'error' => __('file_already_exists', '같은 이름의 파일이 너무 많습니다.')]; break;
+                    }
+                }
+                $templateContent = file_get_contents($templatePath);
+                $writeOk = $adapter->write($remoteFullPath, $templateContent);
+                $adapter->disconnect();
+                if (!$writeOk) {
+                    $result = ['success' => false, 'error' => __('error_create_file', '파일 생성에 실패했습니다.')]; break;
+                }
+                $result = ['success' => true, 'name' => $fileName];
+            } else {
+                // 로컬 (또는 UNC + local 등록): 직접 복사
+                $targetDir = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relativePath);
+                $targetFullPath = rtrim($targetDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $fileName;
+                
+                // path traversal 방어
+                $realBase = realpath($basePath);
+                $realTargetDir = realpath($targetDir);
+                if ($realBase && $realTargetDir && strpos($realTargetDir, $realBase) !== 0) {
+                    $result = ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')]; break;
+                }
+                
+                // ★ Windows 탐색기 방식: 중복 시 (2), (3) 자동 증가 (펜닐 v5.8.1e)
+                if (file_exists($targetFullPath)) {
+                    $dotPos = strrpos($fileName, '.');
+                    $namePart = $dotPos !== false ? substr($fileName, 0, $dotPos) : $fileName;
+                    $extPart  = $dotPos !== false ? substr($fileName, $dotPos) : '';
+                    $namePart = preg_replace('/ \(\d+\)$/u', '', $namePart);
+                    for ($n = 2; $n <= 999; $n++) {
+                        $tryName = $namePart . ' (' . $n . ')' . $extPart;
+                        $tryFull = rtrim($targetDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . $tryName;
+                        if (!file_exists($tryFull)) {
+                            $fileName = $tryName;
+                            $targetFullPath = $tryFull;
+                            break;
+                        }
+                    }
+                    if (file_exists($targetFullPath)) {
+                        $result = ['success' => false, 'error' => __('file_already_exists', '같은 이름의 파일이 너무 많습니다.')]; break;
+                    }
+                }
+                
+                if (!@copy($templatePath, $targetFullPath)) {
+                    $result = ['success' => false, 'error' => __('error_create_file', '파일 생성에 실패했습니다.')]; break;
+                }
+                
+                $result = ['success' => true, 'name' => $fileName];
+            }
+            
+            // 활동 로그 + 인덱스 갱신
+            if ($result['success'] ?? false) {
+                $storageInfo2 = $storage->getStorageById($storageId);
+                $activityLog->log(ActivityLog::TYPE_UPLOAD ?? 'upload', [
+                    'storage_id' => $storageId,
+                    'storage_name' => $storageInfo2['name'] ?? '',
+                    'path' => trim($relativePath . '/' . $fileName, '/'),
+                    'filename' => $fileName,
+                    'note' => 'created from template: ' . $template
+                ]);
+                
+                $fileIndex2 = FileIndex::getInstance();
+                if ($fileIndex2->isAvailable()) {
+                    $filepath2 = trim($relativePath . '/' . $fileName, '/');
+                    $fileIndex2->addFile($storageId, $filepath2, [
+                        'name' => $fileName,
+                        'size' => filesize($templatePath),
+                        'modified' => time(),
+                        'is_dir' => false
+                    ]);
                 }
             }
             break;
