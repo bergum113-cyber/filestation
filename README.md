@@ -1,4 +1,4 @@
-# FileStation v5.8.1e
+# FileStation v5.8.1f
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -492,7 +492,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1e.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1f.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -583,7 +583,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1e');
+define('APP_VERSION', '5.8.1f');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -711,11 +711,54 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1e (rhwp 0.7.10 기반)
+**현재 버전**: v5.8.1f (rhwp 0.7.10 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1e (2026-05-06 ~ 2026-05-10) ⭐ 현재
+#### v5.8.1f (2026-05-12) ⭐ 현재
+
+**[32nd rev] PC 미리보기 모달 동영상 비율 처리 개선**
+
+**증상 진단:**
+- 와이드 동영상 (16:9, 21:9 등) 재생 시 modal-body 상단에 영상이 붙고 세로 가운데 정렬 안 됨 (패널 열림/닫힘 모두)
+- 4:3, 1:1 동영상 처음 재생 시 모달 폭에 꽉 차서 영상이 세로로 잘림
+
+**원인 분석:**
+- video 인라인 스타일 `width:100%; height:100%`이 `.video-player-wrap` 가득 채우는데, `_fitVideoToModal`이 wrap 크기를 영상 비율로 조정하기 전 시점에 영상이 모달 폭 기준으로 강제 확대됨
+- `.fs-vp-flex`의 `align-items: stretch`가 wrap을 세로 가득 stretch → 영상 위에 붙음
+
+**해결 (공유 페이지 패턴 적용):**
+- `.preview-video`: `width:100%; height:100%` 제거 → 자연 크기 + `max-width/max-height: 100%`로 wrap 안에 한정, `margin: 0 auto → margin: auto`
+- `.fs-vp-flex`: `align-items: stretch → center`, `justify-content: center` 추가 → wrap 세로/가로 가운데 정렬
+- `.fs-vp-flex .video-player-wrap`: `flex: 1 1 auto → 0 1 auto` → wrap이 영상 비율로 줄어들도록 (4:3, 1:1 정상 표시 위해 필수 — 펜닐님 테스트로 확정)
+- video 인라인 스타일에서 `width:100%; height:100%` 제거 (2곳: 초기 생성 + 트랜스코딩 fallback)
+
+**시나리오 매트릭스 (펜닐님 검증 완료):**
+
+| 비율 | 동작 |
+|---|---|
+| 와이드 (24:10, 21:9) | 세로 가운데 ✓ |
+| 16:9 일반 | 거의 가득, 미세 가운데 ✓ |
+| 4:3 | 자연 크기 fit, **잘림 없음** ✓ |
+| 1:1 | 양축 가운데 ✓ |
+| 세로 (9:16) | 기존 vertical-video 처리 유지 |
+| 전체화면 (F11) | `:fullscreen` `!important` 보호 → 영향 없음 |
+| pseudo-fullscreen (⛶) | `.pseudo-fullscreen` `!important` 보호 → 영향 없음 |
+| 모바일 (1024px 이하) | `max-height: 70vh !important` 보호 → 영향 없음 |
+
+**주의 사항 (잠재 동작 차이):**
+- `flex: 0 1 auto` 변경으로 인해 재생 중 패널 자동 숨김 시 영상 폭 확장 동작에 미세한 차이가 있을 수 있음. 펜닐님 테스트에서 정상 동작 확인 — 그대로 유지.
+
+**적용 범위:**
+- `assets/css/style.css` 3개 규칙 (`.preview-video`, `.fs-vp-flex`, `.fs-vp-flex .video-player-wrap`)
+- `assets/js/app.js` 2곳 (video 인라인 스타일 정리)
+- `share.php` 무수정 — 이미 공유 페이지는 동일 패턴 사용 중이라 무변경
+
+**캐시 무효화:** `APP_VERSION` `5.8.1e` → `5.8.1f`
+
+---
+
+#### v5.8.1e (2026-05-06 ~ 2026-05-10)
 
 **최종 상태 요약:** 누적 21개 항목 (자동 다음 트랙 31st + SMI 자막 fix #1/#2 + iOS Safari media_info 폴백 + SMB media_info 보완 + 새 파일 만들기 + CSP wasm-unsafe-eval + 빈 파일 업로드 fix + hwp 템플릿 통합 + create_from_template quota + scanWithDefender 사이즈 비교 + validateMimeType php 항목 정리 + 청크 업로드 로컬 MIME 검증 + i18n/주석 정리 + 동영상 플레이리스트 단일 영상 숨김 + 자동 다음 트랙 자동 재생 + 새 파일 메뉴 아이콘 SVG + 동영상 패널 OFF→ON 가운데 스크롤 + rhwp 0.7.10 → 0.7.11 + hwp/rhwp 미리보기 인쇄 버튼 + 시스템 설정 OnlyOffice 안내 보강 + OnlyOffice 디버그 로그 조건부 활성화)
 
@@ -1717,5 +1760,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1e — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-05-08 (rhwp 0.7.10 기준)*
+*FileStation v5.8.1f — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-05-12 (rhwp 0.7.10 기준)*

@@ -32936,7 +32936,7 @@ const App = {
                     ${audioSelectHtml}
                     ${qualitySelectHtml}
                     ${toggleBtnHtml}
-                    <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
+                    <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;max-width:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
                     <div class="video-play-overlay" id="video-play-overlay"><svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></div>
                     <div class="video-seek-overlay video-seek-left">-5</div>
                     <div class="video-seek-overlay video-seek-right">+5</div>
@@ -33834,7 +33834,7 @@ const App = {
                     newVid.setAttribute('webkit-playsinline', '');
                     newVid.className = 'preview-video';
                     // 이전 비디오와 동일한 스타일 적용 (모달 크기 맞춤용)
-                    newVid.style.cssText = 'object-fit:contain;width:100%;height:100%;max-height:100%;';
+                    newVid.style.cssText = 'object-fit:contain;max-width:100%;max-height:100%;';
                     newVid.preload = 'metadata';
                     // ★ 새 video도 준비 전 상태로 세팅 (HLS init 코드 실행 전까지 재생 차단)
                     newVid._isReady = false;

@@ -4555,14 +4555,13 @@ body.board-mode #transfer-progress {
 }
 
 .preview-video {
-    width: 100%;
-    height: 100%;
     max-width: 100%;
     max-height: 100%;
     object-fit: contain;
     display: block;
-    margin: 0 auto;
+    margin: auto;
 }
+/* ★ 전체화면/pseudo-fullscreen은 별도 !important 규칙(아래)이 width:100%/height:100% 강제 */
 /* 네이티브 전체화면 버튼 숨김 → 커스텀 wrap 전체화면 사용 (오버레이 유지) */
 .preview-video::-webkit-media-controls-fullscreen-button { display: none; }
 
@@ -15598,10 +15597,14 @@ body.video-pseudo-fs {
    펜닐님 결정 옵션 A: flex 방식 (영상 폭 자동 조정, 조금 흔들림 허용)
    ============================================================ */
 
-/* flex wrapper — 영상 + 패널을 가로로 배치 */
+/* flex wrapper — 영상 + 패널을 가로로 배치
+   ★ align-items: center로 변경 — wrap이 영상 비율에 맞춰 작아질 때 세로 가운데 정렬
+   ★ justify-content: center 추가 — wrap이 modal-body보다 좁을 때 가로 가운데 정렬
+   (패널은 stretch가 필요한데 .fs-vp-panel에 align-self: stretch가 이미 설정되어 있음 — 그대로 유지됨) */
 .fs-vp-flex {
     display: flex;
-    align-items: stretch;
+    align-items: center;
+    justify-content: center;
     gap: 8px;
     width: 100%;
     height: 100%;
@@ -15612,7 +15615,7 @@ body.video-pseudo-fs {
     min-width: 0;
 }
 .fs-vp-flex .video-player-wrap {
-    flex: 1 1 auto;
+    flex: 0 1 auto;
     min-width: 0;
     position: relative;
 }
