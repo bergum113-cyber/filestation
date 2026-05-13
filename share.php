@@ -455,6 +455,66 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             flex-shrink: 0;
         }
         .share-playlist-header .pl-close:hover { color: #fff; }
+        /* ★ 자동 다음 재생 토글 스위치 (v5.8.1g) — 유튜브 스타일 + ON/OFF 텍스트 */
+        .share-playlist-header .pl-autonext {
+            position: relative;
+            width: 44px;
+            height: 18px;
+            background: #555;
+            border: none;
+            border-radius: 9px;
+            cursor: pointer;
+            flex-shrink: 0;
+            margin-right: 4px;
+            padding: 0;
+            transition: background 0.2s ease;
+            overflow: hidden;
+        }
+        .share-playlist-header .pl-autonext::before {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            background: #ddd;
+            border-radius: 50%;
+            transition: left 0.2s ease, background 0.2s ease;
+            z-index: 2;
+        }
+        .share-playlist-header .pl-autonext::after {
+            content: 'OFF';
+            position: absolute;
+            top: 50%;
+            right: 4px;
+            transform: translateY(-50%);
+            font-size: 8px;
+            font-weight: 700;
+            color: #ddd;
+            letter-spacing: 0.3px;
+            line-height: 1;
+            transition: opacity 0.2s ease;
+            z-index: 1;
+        }
+        .share-playlist-header .pl-autonext.on {
+            background: #ffc107;
+        }
+        .share-playlist-header .pl-autonext.on::before {
+            left: 28px;
+            background: #fff;
+        }
+        .share-playlist-header .pl-autonext.on::after {
+            content: 'ON';
+            right: auto;
+            left: 5px;
+            color: #1a1a1a;
+        }
+        .share-playlist-header .pl-autonext:hover {
+            background: #666;
+        }
+        .share-playlist-header .pl-autonext.on:hover {
+            background: #ffca2c;
+        }
         .share-playlist-body {
             flex: 1 1 auto;
             overflow-y: auto;
@@ -1443,6 +1503,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 <span class="pl-icon">🎬</span>
                 <span class="pl-title"><?= __('share_video_folder', '동영상 폴더') ?></span>
                 <span class="pl-count"><?= count($folderTracks) ?><?= __('tracks_unit', '개 트랙') ?></span>
+                <button type="button" class="pl-autonext" id="share-pl-autonext" title="<?= __('autonext_toggle', '자동 다음 재생') ?>" aria-label="<?= __('autonext_toggle', '자동 다음 재생') ?>"></button>
                 <button type="button" class="pl-close" id="share-pl-close" title="<?= __('close', '닫기') ?>">✕</button>
             </div>
             <div class="share-playlist-body" id="share-pl-body">
@@ -3064,6 +3125,11 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             <?php if ($pageSubFile !== null && $folderTrackNext !== null): ?>
             const _folderNextUrl = <?= json_encode($folderTrackNext) ?>;
             player.addEventListener('ended', () => {
+                // ★ 자동 다음 재생 토글 체크 (v5.8.1g) — OFF면 다음 페이지로 안 넘어감
+                //   기본 ON (펜닐님 룰), sessionStorage 세션 한정
+                try {
+                    if ((sessionStorage.getItem('share_auto_next') ?? '1') !== '1') return;
+                } catch(e) {}
                 // 약간 딜레이 후 이동 (마지막 프레임 보고 자연스러운 전환)
                 // ★ autoplay=1 추가 — 다음 페이지에서 자동 재생 트리거 (펜닐 v5.8.1e)
                 //   사용자 "다음" 버튼 클릭은 autoplay 없음 (이 핸들러 통하지 않음)
@@ -3957,6 +4023,26 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             closeBtn.addEventListener('click', function(e) {
                 e.preventDefault();
                 closePanel();
+            });
+        }
+        
+        // ★ 자동 다음 재생 토글 버튼 (v5.8.1g — 펜닐님 결정: sessionStorage 세션 한정, 기본 ON)
+        //   sessionStorage 'share_auto_next' : '1' = ON (기본), '0' = OFF
+        //   ended 핸들러에서 이 값 체크 (라인 위쪽 player.addEventListener('ended', ...))
+        const AUTONEXT_KEY = 'share_auto_next';
+        const autonextBtn = document.getElementById('share-pl-autonext');
+        if (autonextBtn) {
+            // 초기 상태 — 없으면 ON 기본
+            const _initOn = (sessionStorage.getItem(AUTONEXT_KEY) ?? '1') === '1';
+            autonextBtn.classList.toggle('on', _initOn);
+            autonextBtn.setAttribute('aria-pressed', _initOn ? 'true' : 'false');
+            autonextBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const nowOn = !autonextBtn.classList.contains('on');
+                autonextBtn.classList.toggle('on', nowOn);
+                autonextBtn.setAttribute('aria-pressed', nowOn ? 'true' : 'false');
+                try { sessionStorage.setItem(AUTONEXT_KEY, nowOn ? '1' : '0'); } catch(e) {}
             });
         }
 

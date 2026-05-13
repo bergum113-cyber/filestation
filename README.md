@@ -1,4 +1,4 @@
-# FileStation v5.8.1f
+# FileStation v5.8.1g
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -298,6 +298,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 - iOS ManagedMediaSource sourceBuffer 쿼터 관리
 - 적응형 버퍼 관리
 - 자동 세그먼트 정리 (HLS cleanup)
+- **폴더 자동 다음 재생** — 영상 2개 이상 폴더에서 재생 종료 시 다음 트랙 자동 재생 (사이드 패널 헤더 토글 스위치로 ON/OFF, 일반=영구/공유=세션 저장). 작은 화면(1024px 이하)에서는 패널 숨김으로 토글 불가능하므로 자동 재생 비활성화
 
 ### 오디오 (FSAudioPlayer)
 
@@ -492,7 +493,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1f.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1g.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -583,7 +584,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1f');
+define('APP_VERSION', '5.8.1g');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -711,11 +712,78 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1f (rhwp 0.7.11 기반)
+**현재 버전**: v5.8.1g (rhwp 0.7.11 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1f (2026-05-12) ⭐ 현재
+#### v5.8.1g (2026-05-12) ⭐ 현재
+
+**[33rd rev] 동영상 자동 다음 재생 ON/OFF 토글 추가**
+
+**배경:**
+- v5.8.1e에서 자동 다음 트랙 재생 기능 도입 (31st rev) — 항상 ON 동작
+- 사용자가 자동 재생을 끄고 싶을 때 토글 수단 부재
+
+**추가 기능:**
+- 사이드 패널 헤더에 자동 다음 재생 ON/OFF 토글 스위치 추가 (유튜브 스타일 가로 막대 + 동그라미)
+- ON 상태: 노란색 트랙 + 우측 동그라미 / OFF 상태: 회색 트랙 + 좌측 동그라미
+- 기본값: ON (펜닐님 기존 동작 유지)
+
+**저장 정책 (펜닐님 결정):**
+- 일반 페이지: `localStorage` `fs_vp_auto_next` (영구 저장)
+- 공유 페이지: `sessionStorage` `share_auto_next` (세션 한정 — 공유는 외부 일회성 사용이라 영구 저장 불필요)
+- 두 페이지가 다른 키 이름 사용 → 정책 분리 명확
+
+**동작:**
+- 동영상 종료 시 (`ended` 이벤트) 키 체크 → OFF면 다음 트랙으로 안 넘어감
+- 사용자가 패널에서 트랙 수동 클릭은 토글과 무관 (수동 클릭은 `ended` 이벤트 안 거침)
+- 단일 영상 폴더: 패널 자체가 표시 안 되므로 토글도 무관 (기존 동작)
+- 마지막 트랙: 자동 재생 ON이라도 다음 트랙 없으므로 정지 (기존 동작)
+- **작은 화면(1024px 이하)**: 사이드 패널 자체가 숨김(`display: none !important`)이라 토글 버튼이 보이지 않음 → **자동 재생 자체를 비활성화** (사용자가 끌 방법이 없으므로). CSS 미디어쿼리 `@media (max-width: 1024px)`와 일치하는 `window.innerWidth <= 1024` 기준. UA 무관 화면 크기 기반 (아이폰/안드로이드/iPadOS 동일)
+- 1024px 초과 (PC, 아이패드 가로, 큰 태블릿): 토글 설정에 따름
+- 공유 페이지는 별도 — 모바일에서도 패널이 정상 노출되므로 토글 그대로 작동
+
+**적용 범위:**
+- `assets/css/style.css`: `.fs-vp-header .fs-vp-autonext` 스타일 추가
+- `assets/js/app.js`:
+  - 패널 HTML에 토글 버튼 추가 (라인 ~32917 인근)
+  - 토글 핸들러 등록 (라인 ~36815 인근)
+  - `_fsVpBindAutoNext`의 `ended` 핸들러에 키 체크 추가 (라인 ~36683)
+- `share.php`:
+  - `.share-playlist-header .pl-autonext` 스타일 추가
+  - 패널 HTML에 토글 버튼 추가
+  - 토글 핸들러 등록
+  - `ended` 핸들러에 키 체크 추가 (라인 ~3096)
+- `lang/ko.json`, `lang/en.json`: `autonext_toggle` 키 추가
+
+**추가 수정 — preview-immersive 모드 적용 조건 변경:**
+
+iPad Air 가로(1180×820) 등 1024px 초과 큰 터치 디바이스에서 미리보기 모달 헤더/푸터가 사라지는 증상 (`preview-immersive` 모드가 터치 디바이스 + 가로 조건으로 진입하여 헤더 opacity:0, 푸터 display:none 처리).
+
+- **변경**: `_setupPreviewImmersive`의 isMobile 판정을 `'ontouchstart' in window || window.innerWidth <= 1024` → **`window.innerWidth <= 1024`**로 변경
+- **효과**:
+  - 1024px 초과 (iPad Air 가로 1180, iPad mini 가로 1133, 큰 태블릿 등): immersive 미적용 → **PC처럼 헤더/푸터 정상 표시**
+  - 1024px 이하 (iPhone/안드폰 가로 등): 기존대로 immersive 적용
+- **정책 일관성**: 자동재생 토글의 화면 크기 기준 + CSS 미디어쿼리 `@media (max-width: 1024px)`와 완전 일치 (UA/터치 기반 아닌 화면 크기 기반으로 통일)
+
+**추가 수정 — preview-immersive 모드 동작 패턴 변경 (유튜브/넷플릭스 스타일):**
+
+작은 화면 가로모드(iPhone 등)에서 동영상/PDF/이미지 미리보기 모달 열림 시 헤더/푸터가 즉시 숨겨져 파일명/X 닫기/재생속도 등 컨트롤 접근이 어려운 증상.
+
+- **변경 전**: 모달 열림 직후 헤더/푸터 즉시 숨김 → 탭하면 잠깐 표시 (3초 후 다시 숨김)
+- **변경 후**: 모달 열림 직후 헤더/푸터 **보임** → 영상 재생 시작 시 3초 후 자동 숨김 → 일시정지/종료 시 다시 보임 → 탭으로 토글 가능
+- **유튜브/넷플릭스 패턴**: 컨트롤이 처음엔 보이다가 재생 시작하면 자연스럽게 사라지는 일반적인 영상 플레이어 UX
+- **추가 진단/수정**: 푸터가 안 보이는 증상의 근본 원인 발견 — CSS `display: none !important`가 인라인 style을 덮어쓰는 문제. JS를 **`show-bar` 클래스 토글** 방식으로 변경하여 CSS 설계와 일치시킴 (헤더/푸터/줌바 모두 동일 패턴)
+- **콘텐츠별 동작**:
+  - **동영상**: play 이벤트로 3초 자동 숨김 트리거, pause/ended에서 다시 보임
+  - **PDF/이미지/문서**: 자동 숨김 없음 (정적 콘텐츠는 사용자가 탭할 때만 토글)
+- **모든 미리보기 모달**에 일관 적용 (펜닐님 결정)
+
+**캐시 무효화:** `APP_VERSION` `5.8.1f` → `5.8.1g`
+
+---
+
+#### v5.8.1f (2026-05-12)
 
 **[32nd rev] PC 미리보기 모달 동영상 비율 처리 개선**
 
@@ -1760,5 +1828,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1f — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*FileStation v5.8.1g — 한국 사용자를 위한 자체호스팅 웹 NAS*
 *최종 업데이트: 2026-05-12 (rhwp 0.7.11 기준)*

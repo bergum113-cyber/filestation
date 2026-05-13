@@ -101,6 +101,7 @@
     "close": "Close",
     "playlist": "Playlist",
     "playlist_toggle": "Toggle playlist",
+    "autonext_toggle": "Auto-play next",
     "share_video_folder": "Video Folder",
     "tracks_unit": " tracks",
     "share_no_playable_track": "No playable tracks",

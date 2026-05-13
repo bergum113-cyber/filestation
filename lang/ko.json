@@ -101,6 +101,7 @@
     "close": "닫기",
     "playlist": "목록",
     "playlist_toggle": "목록 열기/닫기",
+    "autonext_toggle": "자동 다음 재생",
     "share_video_folder": "동영상 폴더",
     "tracks_unit": "개 트랙",
     "share_no_playable_track": "재생 가능한 트랙이 없습니다",

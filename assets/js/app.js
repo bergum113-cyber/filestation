@@ -30049,7 +30049,14 @@ const App = {
         let hideTimer = null;
         
         const check = () => {
-            const isMobile = 'ontouchstart' in window || window.innerWidth <= 1024;
+            // ★ v5.8.1g (펜닐님 결정): immersive 모드 적용 조건을 화면 크기 기반으로 변경
+            //   기존: 'ontouchstart' in window || innerWidth <= 1024
+            //     → 터치 디바이스면 화면이 커도(예 iPad Air 가로 1180px) immersive 진입 → 헤더/푸터 숨겨짐
+            //   변경: innerWidth <= 1024 만 사용
+            //     → 1024px 초과 (iPad Air 가로 1180px, iPad mini 가로 1133px, 큰 태블릿 등): PC처럼 헤더/푸터 정상 표시
+            //     → 1024px 이하 (작은 폰 가로 등): immersive 유지
+            //   CSS 미디어쿼리 @media (max-width: 1024px) 및 자동재생 토글 정책과 일관
+            const isMobile = window.innerWidth <= 1024;
             const isLandscape = window.innerWidth > window.innerHeight;
             if (isMobile && isLandscape) {
                 modal.classList.add('preview-immersive');
@@ -30059,13 +30066,42 @@ const App = {
                 // overlay 배경 어둡게 (불투명 대신 반투명으로 — 복원 실패 시에도 UI 접근 가능)
                 const overlay = document.getElementById('modal-overlay');
                 if (overlay) overlay.style.background = 'rgba(0,0,0,0.95)';
-                // 헤더/푸터/줌바 직접 숨김
-                const header = modal.querySelector('.modal-header');
-                const footer = modal.querySelector('.preview-footer');
-                const zoomBar = modal.querySelector('#preview-image-zoom-bar');
-                if (header) { header.style.opacity = '0'; header.style.pointerEvents = 'none'; }
-                if (footer) { footer.style.display = 'none'; }
-                if (zoomBar) { zoomBar.style.opacity = '0'; }
+                // ★ v5.8.1g (펜닐님 결정): 초기 상태는 헤더/푸터 **보임** (유튜브/넷플릭스 패턴)
+                //   - 모달 열림 직후: 파일명/X/재생속도 등 컨트롤 접근 가능
+                //   - 영상 재생 시작 시 3초 후 자동 숨김 (아래 video play 리스너에서 처리)
+                //   - 영상 아닌 콘텐츠(PDF/이미지/문서): 자동 숨김 없음, 탭으로만 토글
+                //   ★ show-bar 클래스 토글 방식 — CSS의 !important 규칙(라인 10899 등)과 일치
+                //     인라인 style은 !important에 무력 → 클래스 기반이 정답
+                const _setBars = (visible) => {
+                    const _h = modal.querySelector('.modal-header');
+                    const _f = modal.querySelector('.preview-footer');
+                    const _z = modal.querySelector('#preview-image-zoom-bar');
+                    if (_h) _h.classList.toggle('show-bar', visible);
+                    if (_f) _f.classList.toggle('show-bar', visible);
+                    if (_z) _z.classList.toggle('show-bar', visible);
+                };
+                _setBars(true);
+                // 영상 재생 시작 시 3초 후 자동 숨김 (유튜브 스타일)
+                const _video = modal.querySelector('.preview-video');
+                if (_video && !_video._fsImmersivePlayBound) {
+                    _video._fsImmersivePlayBound = true;
+                    _video.addEventListener('play', () => {
+                        if (!modal.classList.contains('preview-immersive')) return;
+                        if (hideTimer) clearTimeout(hideTimer);
+                        hideTimer = setTimeout(() => {
+                            if (!modal.classList.contains('preview-immersive')) return;
+                            _setBars(false);
+                        }, 3000);
+                    });
+                    // 일시정지/종료 시 헤더/푸터 다시 보임 + 타이머 취소 (유튜브 패턴)
+                    const _restoreBars = () => {
+                        if (!modal.classList.contains('preview-immersive')) return;
+                        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+                        _setBars(true);
+                    };
+                    _video.addEventListener('pause', _restoreBars);
+                    _video.addEventListener('ended', _restoreBars);
+                }
             } else {
                 modal.classList.remove('preview-immersive');
                 // 자동 숨김 타이머 취소 (세로 전환 후 헤더 사라짐 방지)
@@ -30073,13 +30109,13 @@ const App = {
                 // overlay 복원
                 const overlay = document.getElementById('modal-overlay');
                 if (overlay) overlay.style.background = '';
-                // 복원
+                // 복원 — show-bar 클래스 제거 (일반 모드는 헤더/푸터 항상 보이므로 클래스 불필요)
                 const header = modal.querySelector('.modal-header');
                 const footer = modal.querySelector('.preview-footer');
                 const zoomBar = modal.querySelector('#preview-image-zoom-bar');
-                if (header) { header.style.opacity = ''; header.style.pointerEvents = ''; }
-                if (footer) { footer.style.display = ''; }
-                if (zoomBar) { zoomBar.style.opacity = ''; zoomBar.style.bottom = '40px'; }
+                if (header) header.classList.remove('show-bar');
+                if (footer) footer.classList.remove('show-bar');
+                if (zoomBar) { zoomBar.classList.remove('show-bar'); zoomBar.style.opacity = ''; zoomBar.style.bottom = ''; }
             }
         };
         check();
@@ -30091,28 +30127,27 @@ const App = {
             const header = modal.querySelector('.modal-header');
             const footer = modal.querySelector('.preview-footer');
             const zoomBar = modal.querySelector('#preview-image-zoom-bar');
-            const isVisible = header && header.style.opacity === '1';
+            // ★ show-bar 클래스 기반 (CSS의 !important와 일치 — 인라인 style은 무력)
+            const isVisible = header && header.classList.contains('show-bar');
+            const _setBarsT = (visible) => {
+                if (header) header.classList.toggle('show-bar', visible);
+                if (footer) footer.classList.toggle('show-bar', visible);
+                if (zoomBar) zoomBar.classList.toggle('show-bar', visible);
+            };
+            _setBarsT(!isVisible);
             
-            if (isVisible) {
-                // 숨기기
-                if (header) { header.style.opacity = '0'; header.style.pointerEvents = 'none'; }
-                if (footer) { footer.style.display = 'none'; }
-                if (zoomBar) { zoomBar.style.opacity = '0'; zoomBar.style.bottom = '8px'; }
-            } else {
-                // 보이기
-                if (header) { header.style.opacity = '1'; header.style.pointerEvents = 'auto'; }
-                if (footer) { footer.style.display = 'flex'; }
-                if (zoomBar) { zoomBar.style.opacity = '1'; zoomBar.style.bottom = '40px'; }
-            }
-            
-            // 3초 후 자동 숨김
+            // 3초 후 자동 숨김 — 영상 재생 중일 때만 (펜닐 v5.8.1g)
+            //   PDF/이미지/문서 등 정적 콘텐츠는 사용자가 탭할 때만 숨김 (명시적 제어)
             if (hideTimer) clearTimeout(hideTimer);
             if (!isVisible) {
-                hideTimer = setTimeout(() => {
-                    if (header) { header.style.opacity = '0'; header.style.pointerEvents = 'none'; }
-                    if (footer) { footer.style.display = 'none'; }
-                    if (zoomBar) { zoomBar.style.opacity = '0'; zoomBar.style.bottom = '8px'; }
-                }, 3000);
+                // 방금 보이게 했음 — 영상 재생 중이면 3초 후 다시 숨김
+                const _video = modal.querySelector('.preview-video');
+                const _isPlaying = _video && !_video.paused && !_video.ended;
+                if (_isPlaying) {
+                    hideTimer = setTimeout(() => {
+                        _setBarsT(false);
+                    }, 3000);
+                }
             }
         };
         
@@ -30128,13 +30163,13 @@ const App = {
             modal.style.top = '';
             const overlay = document.getElementById('modal-overlay');
             if (overlay) overlay.style.background = '';
-            // 스타일 복원
+            // 스타일 복원 — show-bar 클래스 제거
             const h = modal.querySelector('.modal-header');
             const f = modal.querySelector('.preview-footer');
             const z = modal.querySelector('#preview-image-zoom-bar');
-            if (h) { h.style.opacity = ''; h.style.pointerEvents = ''; }
-            if (f) { f.style.display = ''; }
-            if (z) { z.style.opacity = ''; z.style.bottom = '40px'; }
+            if (h) h.classList.remove('show-bar');
+            if (f) f.classList.remove('show-bar');
+            if (z) { z.classList.remove('show-bar'); z.style.opacity = ''; z.style.bottom = ''; }
             if (hideTimer) clearTimeout(hideTimer);
         };
     },
@@ -32914,6 +32949,7 @@ const App = {
                             <span class="fs-vp-icon">🎬</span>
                             <span class="fs-vp-title">${t('share_video_folder', '동영상 폴더')}</span>
                             <span class="fs-vp-count">${folderVideos.length}${t('tracks_unit', '개 트랙')}</span>
+                            <button type="button" class="fs-vp-autonext" id="fs-vp-autonext" title="${t('autonext_toggle', '자동 다음 재생')}" aria-label="${t('autonext_toggle', '자동 다음 재생')}"></button>
                             <button type="button" class="fs-vp-close" id="fs-vp-close" title="${t('close', '닫기')}">✕</button>
                         </div>
                         <div class="fs-vp-body" id="fs-vp-body">${itemsHtml}</div>
@@ -36677,6 +36713,15 @@ const App = {
         video._fsVpAutoNextBound = true;
         const curIdx = folderVideos.findIndex(f => f.path === this._fsVpCurrentPath);
         video.addEventListener('ended', () => {
+            // ★ 작은 화면(1024px 이하)에서는 자동 재생 비활성화 (v5.8.1g 펜닐님 결정)
+            //   이유: 모바일/작은 태블릿에서는 사이드 패널 자체가 숨김(display: none) → 토글 버튼도 안 보임
+            //         → 사용자가 자동재생을 끌 방법이 없으므로 화면 크기 기준으로 자동 OFF
+            //   기준: CSS 미디어쿼리 @media (max-width: 1024px)와 일치 (UA 아닌 화면 크기 기반)
+            //   1024px 초과 (PC, 아이패드 가로 등): 토글 설정에 따름
+            if (window.innerWidth <= 1024) return;
+            // ★ 자동 다음 재생 토글 체크 (v5.8.1g) — OFF면 다음 트랙으로 안 넘어감
+            //   기본 ON (펜닐님 룰), localStorage 영구 저장
+            if ((localStorage.getItem('fs_vp_auto_next') ?? '1') !== '1') return;
             if (curIdx >= 0 && curIdx < folderVideos.length - 1) {
                 const nextFile = folderVideos[curIdx + 1];
                 if (nextFile) {
@@ -36808,6 +36853,25 @@ const App = {
             // transition (0.25s) 끝난 후 측정 보장
             requestAnimationFrame(() => this._fsVpCheckOverflow());
             setTimeout(() => this._fsVpCheckOverflow(), 300);
+        }
+        
+        // ★ 자동 다음 재생 토글 버튼 (v5.8.1g — 펜닐님 결정: localStorage 영구 저장, 기본 ON)
+        //   localStorage 'fs_vp_auto_next' : '1' = ON (기본), '0' = OFF
+        //   _fsVpBindAutoNext의 ended 핸들러에서 이 값 체크
+        const AUTONEXT_KEY = 'fs_vp_auto_next';
+        const autonextBtn = document.getElementById('fs-vp-autonext');
+        if (autonextBtn) {
+            // 초기 상태 — 없으면 ON 기본
+            const isOn = (localStorage.getItem(AUTONEXT_KEY) ?? '1') === '1';
+            autonextBtn.classList.toggle('on', isOn);
+            autonextBtn.setAttribute('aria-pressed', isOn ? 'true' : 'false');
+            autonextBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const nowOn = !autonextBtn.classList.contains('on');
+                autonextBtn.classList.toggle('on', nowOn);
+                autonextBtn.setAttribute('aria-pressed', nowOn ? 'true' : 'false');
+                localStorage.setItem(AUTONEXT_KEY, nowOn ? '1' : '0');
+            });
         }
         
         // 토글 버튼

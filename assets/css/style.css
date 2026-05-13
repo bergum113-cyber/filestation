@@ -10912,8 +10912,14 @@ tr:hover,
     }
     .modal-preview.preview-immersive .preview-footer .btn {
         color: #fff !important;
+        background: rgba(255, 255, 255, 0.15) !important;
+        border: 1px solid rgba(255, 255, 255, 0.3) !important;
         font-size: 12px !important;
         padding: 4px 10px !important;
+    }
+    .modal-preview.preview-immersive .preview-footer .btn:hover,
+    .modal-preview.preview-immersive .preview-footer .btn:active {
+        background: rgba(255, 255, 255, 0.25) !important;
     }
     
     /* 본문: 전체 영역 */
@@ -10958,7 +10964,7 @@ tr:hover,
     }
     .modal-preview.preview-immersive #preview-image-zoom-bar.show-bar {
         opacity: 1;
-        bottom: 40px !important;
+        bottom: 50px !important;
     }
     
     /* immersive: 이미지/비디오 높이 제한 해제 */
@@ -15662,6 +15668,73 @@ body.video-pseudo-fs {
     flex-shrink: 0;
 }
 .fs-vp-header .fs-vp-close:hover { color: #fff; }
+/* ★ 자동 다음 재생 토글 스위치 (v5.8.1g) — 사이드 패널 헤더에 표시
+   유튜브 스타일 토글: 가로 막대 + 동그라미 슬라이더 + ON/OFF 텍스트
+   ON 상태: 노란색 트랙 + 우측 동그라미 + 좌측 "ON" 텍스트
+   OFF 상태: 회색 트랙 + 좌측 동그라미 + 우측 "OFF" 텍스트 */
+.fs-vp-header .fs-vp-autonext {
+    position: relative;
+    width: 44px;
+    height: 18px;
+    background: #555;
+    border: none;
+    border-radius: 9px;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-right: 4px;
+    padding: 0;
+    transition: background 0.2s ease;
+    overflow: hidden;
+}
+/* 동그라미 슬라이더 */
+.fs-vp-header .fs-vp-autonext::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background: #ddd;
+    border-radius: 50%;
+    transition: left 0.2s ease, background 0.2s ease;
+    z-index: 2;
+}
+/* ON/OFF 텍스트 — OFF 상태 (기본) */
+.fs-vp-header .fs-vp-autonext::after {
+    content: 'OFF';
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
+    font-size: 8px;
+    font-weight: 700;
+    color: #ddd;
+    letter-spacing: 0.3px;
+    line-height: 1;
+    transition: opacity 0.2s ease;
+    z-index: 1;
+}
+/* ON 상태 */
+.fs-vp-header .fs-vp-autonext.on {
+    background: #ffc107;
+}
+.fs-vp-header .fs-vp-autonext.on::before {
+    left: 28px;
+    background: #fff;
+}
+.fs-vp-header .fs-vp-autonext.on::after {
+    content: 'ON';
+    right: auto;
+    left: 5px;
+    color: #1a1a1a;
+}
+/* hover */
+.fs-vp-header .fs-vp-autonext:hover {
+    background: #666;
+}
+.fs-vp-header .fs-vp-autonext.on:hover {
+    background: #ffca2c;
+}
 .fs-vp-body {
     flex: 1 1 auto;
     overflow-y: auto;
