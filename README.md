@@ -1,4 +1,4 @@
-# FileStation v5.8.1g
+# FileStation v5.8.1h
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -493,7 +493,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1g.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1h.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -584,7 +584,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1g');
+define('APP_VERSION', '5.8.1h');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -712,11 +712,132 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1g (rhwp 0.7.11 기반)
+**현재 버전**: v5.8.1h (rhwp 0.7.11 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1g (2026-05-12) ⭐ 현재
+#### v5.8.1h (2026-05-14) ⭐ 현재
+
+**모바일 백그라운드 복귀 시 "스토리지를 선택하세요" 멈춤 증상 진단 + 수정**
+
+펜닐님 보고: 모바일에서 다른 탭에 30분+ 머물다 FileStation 복귀 시 "스토리지를 선택하세요" 탐색기 화면에서 멈춤, 새로고침해야 정상 (간헐적 증상). 추측 수정 절대 금지 원칙에 따라 디버그 로그 시스템 구축 → 정확 진단 → 정확 수정 순서로 진행.
+
+**[34th rev] PC 미리보기 모달 영상 비율 (팟플레이어 동작) 보완 (v5.8.1g 후속)**
+
+v5.8.1f에서 4:3/1:1 영상 세로 잘림 해결 위해 `.preview-video`의 `width: 100%; height: 100%` 제거. v5.8.1g 검증 중 부작용 발견 (펜닐님 보고): 작은 영상(720x480, 853x480 등)이 자연 크기로만 표시되어 모달 안에 작게 나타남.
+
+- **펜닐님 F12 측정으로 정확 진단** (추측 수정 아님):
+  - 853x480 영상: wrap은 1177x666으로 정확히 계산되지만 video는 자연 크기 853x480만 표시 → 좌우 공간 큼
+  - 640x480 영상: wrap은 960x720 (4:3 정확), video는 640x480 자연 크기 → 작게 보임
+  - 원인: `_fitVideoToModal()`이 wrap을 영상 비율로 정확히 계산하지만, video가 `width:100%; height:100%` 없어서 wrap을 채우지 않음
+- **해결**:
+  - `.preview-video`에 `width: 100%; height: 100%` 복원
+  - video 인라인 style 2곳(초기 생성 라인 33018, 트랜스코딩 fallback 라인 33916)에 `width:100%;height:100%` 복원
+  - `object-fit: contain`이 유지되어 비율 잘림 절대 없음 (v5.8.1f 시나리오 재발 방지)
+- **검증된 동작 (펜닐님 직접)**:
+  - 16:9 영상: 모달 꽉 채움 ✓
+  - 4:3 영상: 세로 꽉 + 좌우 검정 띠 ✓
+  - 1:1, 21:9 등 모든 비율: 비율 유지하며 최대 확대 ✓
+  - "팟플레이어 같다" 확인 ✓
+
+**모바일 백그라운드 복귀 진단 시스템 (임시 진단 도구)**
+
+펜닐님 보고: 모바일에서 다른 탭 30분+ 머물다가 FileStation 복귀 시 "스토리지를 선택하세요" 화면에서 멈춤, 새로고침해야 정상 (간헐적, 모바일에서 F12 불가). 추측 수정 안 함, 정확 진단 위한 서버 로그 시스템 구축.
+
+- **신규 action**: `api.php` `?action=debug_log`
+  - `noAuthActions`, `csrfExclude` 모두 포함 → 인증/CSRF 무관 동작 (세션 만료 케이스도 진단 가능)
+  - JSON body 수신 → `data/debug_logs/YYYY-MM-DD.log`에 한 줄 JSON으로 append
+  - 보안: 페이로드 4KB 제한, 일일 로그 10MB 제한, `data/.htaccess` 외부 접근 차단(기존)
+  - 영구 보존 (펜닐님 결정, 수동 제거)
+- **ON/OFF 제어 (펜닐님 결정 방식)**:
+  - **폴더 존재 여부**로 ON/OFF 결정 (`data/debug_logs/`)
+  - **ON**: 폴더 생성 → `mkdir data/debug_logs` → 페이지 새로고침 → 로그 기록 시작
+  - **OFF**: 폴더 삭제 → `rmdir data/debug_logs` → 페이지 새로고침 → 로그 기록 안 함
+  - OFF 시 클라이언트: 페이지당 fetch 1회 (`disabled: true` 응답 받음) → 그 후 호출 안 함 (네트워크 부하 0)
+  - OFF 시 서버: `is_dir()` 체크 1번만 → 즉시 종료 (CPU 부하 0)
+  - 코드는 그대로 유지 — 추후 진단 필요 시 폴더만 다시 생성하면 즉시 활성화
+- **클라이언트 진단 시점 (`app.js`)**:
+  - `init_start` / `init_end`: 페이지 새로 로드 + 성능 정보
+  - `pageshow`: BF Cache 복원 (`event.persisted`) + 인증/스토리지 상태
+  - `popstate`: 브라우저 뒤로가기 + history state 내용 (storageId 누락 진단)
+  - `visibility_visible` / `visibility_hidden`: 탭 보임/숨김
+  - `loadStorages_start` / `loadStorages_response` (강화) / `loadStorages_retry_scheduled` / `loadStorages_failed_final`: 스토리지 API 호출 추적 (storagesKeys, firstHomeId, firstHomeIdType, elapsedMs 응답 시간)
+  - `loadStorages_hashRestore_try` / `loadStorages_hashRestore_exists`: hash 기반 복원 추적
+  - `loadStorages_done`: 최종 currentStorage 값
+  - `selectDefaultStorage` / `selectDefaultStorage_all_empty` / `selectStorage_called`: 스토리지 선택 시점
+  - `boardHash_no_homeStorageId`: boardHash + homeStorageId 누락 케이스
+  - **`show_select_storage_msg`** ⭐ : 펜닐님 증상 발생 시점 (stack trace 포함)
+- **403 에러 픽스**: 초기 구현 시 `debug_log`를 `noAuthActions`에만 포함하고 `csrfExclude` 누락 → POST CSRF 검증 단계에서 403. 동일 ZIP 패키지 내 수정 완료
+
+**"스토리지를 선택하세요" 증상 진단 완료 및 수정**
+
+펜닐님 보고 증상 ("스토리지를 선택하세요" 잠깐 보였다가 파일 리스트로 교체)을 디버그 로그 분석으로 정확 진단.
+
+- **진단 (추측 아님)**:
+  - 펜닐님 모바일에서 증상 발생 시 `show_select_storage_msg` 디버그 로그가 한 번도 안 찍힘
+  - 코드 정밀 검토 결과 `index.php` 라인 702에 **HTML 정적 메시지** 발견
+  - JS 실행 전 HTML 자체에 박혀있어 펜닐님 진단 로그 추적 경로 우회
+- **원인 확정**:
+  - 페이지 로드 시점에 `<div class="empty-msg">스토리지를 선택하세요</div>` HTML로 즉시 표시
+  - JS의 `init() → loadStorages() → selectStorage() → loadFiles()` 흐름이 완료되면서 자동으로 파일 리스트로 교체됨
+  - 평소: 빠른 교체로 사용자 인지 못함
+  - 모바일/네트워크 느림 시: JS 실행 지연으로 수초 동안 메시지 노출 → 펜닐님이 인지
+- **수정**: `index.php` 라인 702 HTML 정적 메시지를 "로딩 중..." (영문 "Loading...")으로 변경
+  - 자연스러운 로딩 표시 (혼란 없음)
+  - 펜닐님 코드의 다른 곳도 같은 "로딩 중..." 패턴 사용 중 → 일관성 유지
+  - JS의 `loadFiles()` 안에 있는 "스토리지를 선택하세요" 메시지(라인 9446)는 **그대로 유지** — 진짜로 스토리지 선택이 필요한 케이스(빈 목록 등)에서는 정확한 메시지 필요
+- **변경 범위**: `index.php` 단 1줄
+- **펜닐 룰 부합**:
+  - 추측 수정 0건 — 디버그 로그로 100% 진단 후 수정
+  - 최소 변경 — 단 1줄
+  - 다른 기능 영향 없음 — JS 메시지 유지
+
+**모바일 백그라운드 복귀 자동 갱신 (옵션 A, 펜닐님 결정)**
+
+펜닐님 보고 "30분+ 후 복귀 시 파일 리스트 안 보임, 새로고침해야 정상" 증상의 진짜 원인(JS 멈춤)은 간헐적이라 시점 확정 어려움. 펜닐님 결정으로 **로그 기반 합리적 보완** 적용.
+
+- **근거 (디버그 로그로 확인된 사실)**:
+  - 펜닐님 BF Cache 코드(`pageshow` + `event.persisted`)가 환경에서 **작동 안 함** (모바일/PC 모두 `persisted: false`로 한 번도 안 찍힘)
+  - `visibilitychange` 이벤트는 **정상 작동** (탭 보임/숨김 정상 추적됨)
+  - API 응답은 **정상** (success, 데이터 있음, elapsedMs 21~67ms)
+  - → BF Cache 코드 보완 필요성 명확 (추측 아닌 데이터 기반)
+- **동작**:
+  - `visibilitychange` 시 `document.visibilityState === 'visible'` 감지
+  - 조건: 로그인 상태 + 게시판 모드 아님 + 마지막 갱신 후 **5분+ 경과**
+  - 자동으로 `loadStorages()` + `loadFiles(false)` 호출
+  - 펜닐님이 수동 새로고침하던 동작을 자동화
+- **안전성**:
+  - try/catch로 본 기능 영향 격리
+  - 게시판 모드는 건드리지 않음
+  - 5분 쿨다운으로 과도한 API 호출 방지
+  - `loadStorages()` 호출 시 `_lastRefresh` 자동 갱신 (수동 작업 시 쿨다운 정확도 향상)
+- **실증 검증 (펜닐님 PC 로그)**:
+  - 00:54:09: elapsedMs=448,553ms (7분 28초) → willRefresh: true → 자동 갱신 정상 발동 확인 ✓
+  - `visibility_auto_refresh_start` → `loadStorages_start` → `loadStorages_response` (성공, 67ms) → `loadStorages_done` 흐름 정상
+- **추적**:
+  - `visibility_refresh_check`: 갱신 검토 시점 (elapsed, threshold, willRefresh)
+  - `visibility_auto_refresh_start`: 자동 갱신 시작 시점
+  - `visibility_auto_refresh_loadStorages_error` / `visibility_auto_refresh_loadFiles_error`: 에러 발생 시
+
+**debug_log API 세션 활동 시간 갱신 부작용 제거 (펜닐님 결정)**
+
+자기 검토 시 발견된 잠재 부작용을 펜닐님 결정으로 수정.
+
+- **부작용 원인**: `debug_log` case 내부에서 `$auth->isLoggedIn()` 호출 시 부작용 발생
+  - `$_SESSION['last_activity'] = time()` 갱신 (세션 무한 연장)
+  - `recordSession()` 호출로 sessions DB 테이블 update (불필요한 디스크 I/O)
+- **영향**: 디버그 모드 ON 상태에서 디버그 로그가 자주 호출되면 세션 자동 연장됨 (의도되지 않은 부작용)
+- **수정**: `$auth->isLoggedIn()` / `$auth->getUser()` → `$_SESSION['user_id']`, `$_SESSION['username']` 직접 체크
+  - `$_SESSION['username']`이 모든 로그인 경로(일반 로그인, Remember Me, SSO 등)에서 설정됨 확인 후 적용
+  - 결과값 (authed Y/N, user 값) 동일 — 부작용만 제거됨
+  - 함수 호출 2회 → 0회 (성능 약간 개선)
+- **변경 범위**: `api.php` debug_log case 내부 4줄
+
+**캐시 무효화:** `APP_VERSION` `5.8.1g` → `5.8.1h`
+
+---
+
+#### v5.8.1g (2026-05-12)
 
 **[33rd rev] 동영상 자동 다음 재생 ON/OFF 토글 추가**
 
@@ -778,6 +899,19 @@ iPad Air 가로(1180×820) 등 1024px 초과 큰 터치 디바이스에서 미�
   - **동영상**: play 이벤트로 3초 자동 숨김 트리거, pause/ended에서 다시 보임
   - **PDF/이미지/문서**: 자동 숨김 없음 (정적 콘텐츠는 사용자가 탭할 때만 토글)
 - **모든 미리보기 모달**에 일관 적용 (펜닐님 결정)
+
+**추가 — 음악 기본 artwork SVG → PNG 변경 (iOS Safari 잠금화면 호환):**
+
+iOS Safari MediaSession API는 SVG data URL을 artwork로 지원 안 함 (iOS 16.1.1 이후 알려진 제약). 커버 아트 없는 MP3 재생 시 iOS 잠금화면에 회색 빈 상자 표시되는 증상.
+
+- **변경**: `_updateMediaSession`의 SVG data URL fallback → **PNG 정적 파일**(`assets/images/default-music-artwork.png`, 512x512, 8.9KB)로 교체
+- **디자인**: 기존 SVG와 동일 (배경 `#1e1e2e` 둥근 모서리, 보라색 `#7c6ef6` 음표)
+- **호환성**:
+  - iOS Safari 잠금화면/제어센터: 정상 표시 ✓
+  - 안드 Chrome 잠금화면/알림: 정상 표시 ✓
+  - 데스크톱 미디어 컨트롤: 정상 표시 ✓
+- **MediaMetadata artwork 배열**: 96x96, 128x128, 256x256, 512x512 메타 제공 (iOS가 적절한 사이즈 선택, 실제 파일은 1개)
+- **신규 파일**: `assets/images/default-music-artwork.png` (8.9KB)
 
 **캐시 무효화:** `APP_VERSION` `5.8.1f` → `5.8.1g`
 
@@ -1828,5 +1962,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1g — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*FileStation v5.8.1h — 한국 사용자를 위한 자체호스팅 웹 NAS*
 *최종 업데이트: 2026-05-12 (rhwp 0.7.11 기준)*

@@ -3903,7 +3903,7 @@ class FSAudioPlayer {
             // _activeCoverUrl은 ID3 커버 확인 완료 후 설정됨:
             //   - ID3 로드 성공 → coverApiUrl
             //   - ID3 실패/미지원 → 폴더 이미지 URL (this.cover)
-            //   - 둘 다 없음 → null → 기본 SVG 아이콘
+            //   - 둘 다 없음 → null → 기본 PNG 아이콘 (v5.8.1g, 이전 SVG는 iOS 미지원)
             //
             // 첫 호출 시 (ID3 로드 전) _activeCoverUrl이 undefined일 수 있음 — 폴더 이미지로 시작
             const resolved = (typeof this._activeCoverUrl !== 'undefined')
@@ -3927,17 +3927,19 @@ class FSAudioPlayer {
                 artwork.push({ src: resolved, sizes: '384x384', type: imgType });
                 artwork.push({ src: resolved, sizes: '512x512', type: imgType });
             } else {
-                // 기본 음표 아이콘 (SVG → Data URL, 모든 플랫폼 동일)
+                // ★ 기본 음표 아이콘 — PNG 파일 사용 (펜닐 v5.8.1g)
+                //   기존 SVG data URL은 iOS Safari MediaSession에서 작동 안 함 (회색 빈 화면)
+                //   → assets/images/default-music-artwork.png 정적 파일로 변경
+                //   iOS Safari가 정상 인식하여 잠금화면에 음표 아이콘 표시
+                //   PNG (8KB)는 모든 플랫폼 호환 (안드/PC 동일 동작)
                 if (!this._defaultArtwork) {
-                    this._defaultArtwork = 'data:image/svg+xml,' + encodeURIComponent(
-                        '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">' +
-                        '<rect width="512" height="512" rx="64" fill="#1e1e2e"/>' +
-                        '<g fill="#7c6ef6" transform="translate(256,256) scale(0.55) translate(-256,-256)">' +
-                        '<path d="M390 100v236c0 0-4 18-24 32s-46 22-66 18-38-22-38-48 14-44 34-54 38-12 50-8V164l-160 40v196c0 0-4 18-24 32s-46 22-66 18-38-22-38-48 14-44 34-54 38-12 50-8V140c0-12 8-22 20-26l168-44c16-4 30 4 30 20z"/>' +
-                        '</g></svg>'
-                    );
+                    this._defaultArtwork = 'assets/images/default-music-artwork.png';
                 }
-                artwork.push({ src: this._defaultArtwork, sizes: '512x512', type: 'image/svg+xml' });
+                // 여러 사이즈 제공 — iOS Safari가 적절한 걸 선택 (실제 파일은 1개지만 메타만 다름)
+                artwork.push({ src: this._defaultArtwork, sizes: '96x96', type: 'image/png' });
+                artwork.push({ src: this._defaultArtwork, sizes: '128x128', type: 'image/png' });
+                artwork.push({ src: this._defaultArtwork, sizes: '256x256', type: 'image/png' });
+                artwork.push({ src: this._defaultArtwork, sizes: '512x512', type: 'image/png' });
             }
             navigator.mediaSession.metadata = new MediaMetadata({
                 title: track.name || '',
@@ -4438,6 +4440,43 @@ const App = {
     async init() {
         // [DEBUG] 페이지 로드 감지
         
+        // ★ 디버그 로그 함수 (v5.8.1g 임시 진단 도구) - 펜닐님 요청
+        //   모바일 30분+ 백그라운드 복귀 시 "스토리지를 선택하세요" 멈춤 증상 진단용
+        //   서버에 한 줄 JSON으로 전송 (data/debug_logs/YYYY-MM-DD.log)
+        //   진단 완료 후 제거 예정
+        //   init() 맨 처음에 정의 — 이후 모든 함수에서 사용 가능
+        // ★ 디버그 로그 ON/OFF 제어: 서버의 data/debug_logs/ 폴더 존재 여부로 결정
+        //   서버가 응답에 disabled:true 반환하면 이후 호출 안 함 (네트워크 부하 0)
+        //   첫 호출에서만 1회 fetch 발생, 그 후엔 자동 비활성화
+        //   펜닐님이 폴더 다시 만들면 페이지 새로고침 시 재활성화됨
+        this._debugLogDisabled = false;
+        this._debugLog = function(event, detail) {
+            if (this._debugLogDisabled) return;
+            try {
+                const payload = JSON.stringify({ event: event, detail: detail || null });
+                fetch('api.php?action=debug_log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: payload,
+                    keepalive: true,
+                }).then(r => r.json()).then(j => {
+                    if (j && j.disabled) {
+                        this._debugLogDisabled = true;
+                    }
+                }).catch(() => {});
+            } catch(e) {}
+        };
+        // init() 시작 시점 로그
+        this._debugLog('init_start', {
+            url: location.pathname,
+            referrer: document.referrer ? document.referrer.substring(0, 100) : null,
+            visibility: document.visibilityState,
+            performance: performance.timing ? {
+                domLoading: performance.timing.domLoading - performance.timing.navigationStart,
+                domInteractive: performance.timing.domInteractive - performance.timing.navigationStart
+            } : null
+        });
+        
         // 라벨 오버레이 위치 적용 (페이지 렌더 직전에 CSS 변수 세팅)
         //   window.LABEL_POSITION은 PHP가 data/icon_label_position.json에서 읽어 주입
         if (window.LABEL_POSITION && typeof this._applyLabelPosition === 'function') {
@@ -4511,12 +4550,78 @@ const App = {
         // ★ BF Cache 복원 시 데이터 갱신 (29th rev: 모바일 백그라운드 복귀 대응)
         //   동영상/웹하드 등 음악 재생 무관하게 항상 동작 (App 레벨 등록)
         //   init()이 BF Cache에선 재실행 안 되므로 명시적 갱신 필요
+        // 
+        // 디버그 로그 함수는 init() 시작부에 이미 정의됨 (this._debugLog)
+        
         window.addEventListener('pageshow', (event) => {
+            // ★ 디버그: pageshow 발생 시점 + persisted 여부 + 인증 상태 기록
+            this._debugLog('pageshow', {
+                persisted: event.persisted,
+                hasUser: !!this.user,
+                currentStorage: this.currentStorage ?? null,
+                currentPath: this.currentPath ?? null,
+                storagesCount: (this.storages || []).length,
+                filesCount: (this.files || []).length,
+                visibility: document.visibilityState
+            });
             if (!event.persisted) return;  // 일반 새로고침은 init() 자체가 재실행되므로 무관
             if (!this.user) return;  // 미로그인 상태는 무관
-            try { this.loadStorages && this.loadStorages(); } catch(e) {}
+            try { 
+                this._debugLog('pageshow_loadStorages_start');
+                this.loadStorages && this.loadStorages(); 
+            } catch(e) { this._debugLog('pageshow_loadStorages_error', String(e)); }
             try { this.updateShareBadges && this.updateShareBadges(); } catch(e) {}
             try { this.updateSharedWithMeBadge && this.updateSharedWithMeBadge(); } catch(e) {}
+        });
+        
+        // ★ 디버그: visibilitychange 모니터링 (탭 보임/숨김 전환)
+        // ★ v5.8.1g 자동 갱신 (펜닐님 결정 옵션 A): 5분+ 경과 후 visible 전환 시 자동 갱신
+        //    BF Cache 코드가 펜닐님 환경에서 작동 안 함이 디버그 로그로 확인됨 (event.persisted 항상 false)
+        //    visibilitychange는 정상 작동하므로 이걸로 보완
+        //    조건: visible 전환 + 로그인 상태 + 5분+ 경과 + 게시판 모드 아님
+        this._lastRefresh = Date.now();  // 초기값
+        document.addEventListener('visibilitychange', () => {
+            this._debugLog('visibility_' + document.visibilityState, {
+                hasUser: !!this.user,
+                currentStorage: this.currentStorage ?? null,
+                storagesCount: (this.storages || []).length,
+                filesCount: (this.files || []).length
+            });
+            // visible 전환 시에만 자동 갱신 검토
+            if (document.visibilityState !== 'visible') return;
+            if (!this.user) return;
+            if (this.boardInlineMode) return;  // 게시판 모드는 건드리지 않음
+            
+            const elapsed = Date.now() - (this._lastRefresh || 0);
+            const threshold = 5 * 60 * 1000;  // 5분
+            
+            this._debugLog('visibility_refresh_check', {
+                elapsedMs: elapsed,
+                threshold: threshold,
+                willRefresh: elapsed > threshold,
+                currentStorage: this.currentStorage ?? null
+            });
+            
+            if (elapsed > threshold) {
+                this._debugLog('visibility_auto_refresh_start', {
+                    currentStorage: this.currentStorage ?? null,
+                    currentPath: this.currentPath ?? null
+                });
+                try {
+                    this.loadStorages && this.loadStorages();
+                } catch(e) {
+                    this._debugLog('visibility_auto_refresh_loadStorages_error', String(e));
+                }
+                try {
+                    // 현재 폴더가 있으면 파일 목록도 갱신
+                    if (this.currentStorage) {
+                        this.loadFiles && this.loadFiles(false);
+                    }
+                } catch(e) {
+                    this._debugLog('visibility_auto_refresh_loadFiles_error', String(e));
+                }
+                this._lastRefresh = Date.now();
+            }
         });
         
         this.bindEvents();
@@ -4565,6 +4670,16 @@ const App = {
         
         // 브라우저 뒤로가기/앞으로가기 처리
         window.addEventListener('popstate', (e) => {
+            // ★ 디버그: popstate 발생 시점 + state 내용
+            this._debugLog && this._debugLog('popstate', {
+                hasUser: !!this.user,
+                hasState: !!e.state,
+                stateStorageId: e.state?.storageId ?? null,
+                stateBoard: e.state?.board ?? null,
+                statePath: e.state?.path ? String(e.state.path).substring(0, 100) : null,
+                currentStorage: this.currentStorage ?? null,
+                currentHash: location.hash.substring(0, 100)
+            });
             if (!this.user) return;
             if (e.state) {
                 if (e.state.board) {
@@ -4606,6 +4721,13 @@ const App = {
                     this.loadFiles(false);
                 }
             }
+        });
+        
+        // ★ 디버그: init() 완료 시점 로그
+        this._debugLog && this._debugLog('init_end', {
+            hasUser: !!this.user,
+            currentStorage: this.currentStorage ?? null,
+            storagesCount: (this.storages || []).length
         });
     },
     
@@ -8835,12 +8957,45 @@ const App = {
     
     // 스토리지 로드
     async loadStorages() {
+        const _startTime = performance.now();
+        // ★ v5.8.1g: 자동 갱신 쿨다운 기준 갱신 (visibilitychange 자동 갱신과 연동)
+        this._lastRefresh = Date.now();
+        // ★ 디버그: loadStorages 시작 시점
+        this._debugLog && this._debugLog('loadStorages_start', {
+            hasUser: !!this.user,
+            currentStorage: this.currentStorage ?? null,
+            retried: !!this._storageRetried
+        });
+        
         const res = await this.api('storages', {}, 'GET');
+        const _elapsedMs = Math.round(performance.now() - _startTime);
+        
+        // ★ 디버그: API 응답 결과 (응답 시간 포함 — 디스크 IO 지연 진단)
+        this._debugLog && this._debugLog('loadStorages_response', {
+            success: !!res.success,
+            session_expired: !!res.session_expired,
+            error: res.error ? String(res.error).substring(0, 200) : null,
+            elapsedMs: _elapsedMs,  // ★ 응답 시간 (ms) — 디스크 IO 지연 시 매우 클 것
+            storagesType: res.storages ? (Array.isArray(res.storages) ? 'array' : typeof res.storages) : 'null',
+            // 가설 B: 응답 구조 자세히
+            storagesKeys: res.storages && typeof res.storages === 'object' ? Object.keys(res.storages).slice(0, 10).join(',') : null,
+            homeCount: res.storages?.home?.length ?? null,
+            publicCount: res.storages?.public?.length ?? null,
+            sharedCount: res.storages?.shared?.length ?? null,
+            firstHomeId: res.storages?.home?.[0]?.id ?? null,
+            firstHomeIdType: res.storages?.home?.[0]?.id !== undefined ? typeof res.storages.home[0].id : null
+        });
+        
         if (!res.success) {
             // 세션 만료가 아닌 일시적 오류면 재시도
             if (!res.session_expired && !this._storageRetried) {
                 this._storageRetried = true;
+                this._debugLog && this._debugLog('loadStorages_retry_scheduled');
                 setTimeout(() => this.loadStorages(), 1000);
+            } else {
+                this._debugLog && this._debugLog('loadStorages_failed_final', {
+                    session_expired: !!res.session_expired
+                });
             }
             return;
         }
@@ -8968,10 +9123,27 @@ const App = {
             const storageMatch = hash.match(/storage=(\d+)/);
             const pathMatch = hash.match(/path=([^&]*)/);
             
+            // ★ 디버그: hash 복원 시도 시점
+            this._debugLog && this._debugLog('loadStorages_hashRestore_try', {
+                hash: hash.substring(0, 100),
+                hasStorageMatch: !!storageMatch,
+                hashStorageId: storageMatch ? storageMatch[1] : null,
+                storagesCount: (this.storages || []).length
+            });
+            
             if (storageMatch) {
                 const hashStorageId = parseInt(storageMatch[1]);
                 // 해당 스토리지가 실제 존재하는지 확인
                 const exists = this.storages.find(s => s.id == hashStorageId);
+                
+                // ★ 디버그: 해시 스토리지 존재 여부
+                this._debugLog && this._debugLog('loadStorages_hashRestore_exists', {
+                    hashStorageId: hashStorageId,
+                    exists: !!exists,
+                    existsId: exists?.id ?? null,
+                    storageIds: (this.storages || []).map(s => s.id).slice(0, 10)
+                });
+                
                 if (exists) {
                     this.currentStorage = hashStorageId;
                     this.currentPath = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
@@ -9036,10 +9208,28 @@ const App = {
                     // 게시판 모드에서도 기본 스토리지는 내부적으로 설정 (파일 목록은 안 로드)
                     if (this.homeStorageId) {
                         this.currentStorage = this.homeStorageId;
+                    } else {
+                        // ★ 가설 C: boardHash 모드인데 homeStorageId 없음 → currentStorage 미설정
+                        this._debugLog && this._debugLog('boardHash_no_homeStorageId', {
+                            hash: hash.substring(0, 100),
+                            boardMatch: boardHash[1],
+                            homeStorageId: this.homeStorageId,
+                            homeListLength: homeList?.length ?? 0
+                        });
                     }
                 }
             }
         }
+        
+        // ★ 디버그: loadStorages 모든 처리 완료 후 최종 상태
+        //   currentStorage가 어떻게 설정됐는지 (또는 안 됐는지) 추적
+        this._debugLog && this._debugLog('loadStorages_done', {
+            currentStorage: this.currentStorage ?? null,
+            currentPath: this.currentPath ?? null,
+            homeStorageId: this.homeStorageId,
+            hash: location.hash ? location.hash.substring(0, 100) : '',
+            storagesTotal: (this.storages || []).length
+        });
         
         // 저장된 검색어 복원 (새로고침 시)
         setTimeout(() => {
@@ -9054,12 +9244,32 @@ const App = {
     
     // 기본 스토리지 선택 (홈 → 공용 → 외부)
     _selectDefaultStorage(homeList, publicList, sharedList) {
+        // ★ 디버그: 자동 선택 시점 진단
+        const _willSelect = this.homeStorageId ? 'home' : (publicList?.length ? 'public' : (sharedList?.length ? 'shared' : 'NONE'));
+        this._debugLog && this._debugLog('selectDefaultStorage', {
+            homeStorageId: this.homeStorageId,
+            homeCount: homeList?.length ?? 0,
+            publicCount: publicList?.length ?? 0,
+            sharedCount: sharedList?.length ?? 0,
+            willSelect: _willSelect,
+            // 가설 A: 모두 비어있어 currentStorage 안 설정될 케이스
+            allEmpty: _willSelect === 'NONE'
+        });
         if (this.homeStorageId) {
             this.selectStorage(this.homeStorageId);
         } else if (publicList.length) {
             this.selectStorage(publicList[0].id);
         } else if (sharedList.length) {
             this.selectStorage(sharedList[0].id);
+        } else {
+            // ★ 가설 A 확정: 모든 분기 실패 — currentStorage null 유지됨
+            this._debugLog && this._debugLog('selectDefaultStorage_all_empty', {
+                homeStorageId: this.homeStorageId,
+                homeListType: typeof homeList,
+                homeListIsArray: Array.isArray(homeList),
+                publicListType: typeof publicList,
+                sharedListType: typeof sharedList
+            });
         }
     },
     
@@ -9109,6 +9319,12 @@ const App = {
     
     // 스토리지 선택
     selectStorage(id) {
+        // ★ 디버그: selectStorage 호출 시점
+        this._debugLog && this._debugLog('selectStorage_called', {
+            requestedId: id,
+            currentStorage: this.currentStorage ?? null,
+            isFirstLoad: !this.currentStorage
+        });
         const isFirstLoad = !this.currentStorage;
         
         // vault 뷰 해제
@@ -9271,6 +9487,14 @@ const App = {
         }
         
         if (!this.currentStorage) {
+            // ★ 디버그: "스토리지를 선택하세요" 표시 시점 — 펜닐님 증상 발생 위치
+            this._debugLog && this._debugLog('show_select_storage_msg', {
+                hasUser: !!this.user,
+                storagesCount: (this.storages || []).length,
+                currentStorageValue: this.currentStorage,
+                currentPath: this.currentPath ?? null,
+                stack: (new Error()).stack ? (new Error()).stack.split('\n').slice(1, 4).join(' | ') : null
+            });
             $('#file-list').html(`<div class="empty-msg">${t('select_storage','스토리지를 선택하세요')}</div>`);
             return { success: false };
         }
@@ -32972,7 +33196,7 @@ const App = {
                     ${audioSelectHtml}
                     ${qualitySelectHtml}
                     ${toggleBtnHtml}
-                    <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;max-width:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
+                    <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-width:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
                     <div class="video-play-overlay" id="video-play-overlay"><svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></div>
                     <div class="video-seek-overlay video-seek-left">-5</div>
                     <div class="video-seek-overlay video-seek-right">+5</div>
@@ -33870,7 +34094,7 @@ const App = {
                     newVid.setAttribute('webkit-playsinline', '');
                     newVid.className = 'preview-video';
                     // 이전 비디오와 동일한 스타일 적용 (모달 크기 맞춤용)
-                    newVid.style.cssText = 'object-fit:contain;max-width:100%;max-height:100%;';
+                    newVid.style.cssText = 'object-fit:contain;width:100%;height:100%;max-width:100%;max-height:100%;';
                     newVid.preload = 'metadata';
                     // ★ 새 video도 준비 전 상태로 세팅 (HLS init 코드 실행 전까지 재생 차단)
                     newVid._isReady = false;

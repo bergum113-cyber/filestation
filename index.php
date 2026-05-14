@@ -699,7 +699,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                     
                     <!-- 파일 목록 -->
                     <div id="file-list" class="file-list grid-view">
-                        <div class="empty-msg"><?php echo $currentLang === 'en' ? 'Select a storage' : '스토리지를 선택하세요'; ?></div>
+                        <div class="empty-msg"><?php echo $currentLang === 'en' ? 'Loading...' : '로딩 중...'; ?></div>
                     </div>
                     
                     <!-- 검색 페이지네이션 -->

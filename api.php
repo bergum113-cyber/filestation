@@ -446,6 +446,8 @@ $csrfExclude = [
     'vault_info', 'vault_list', 'vault_download', 'vault_convert_file',
     // E2E Vault cleanup (sendBeacon에서 CSRF 토큰 없이 호출)
     'vault_preview_cleanup',
+    // 디버그 로그 (v5.8.1g 임시 진단 도구 — 인증/CSRF 무관 동작)
+    'debug_log',
     // SSO 콜백 (외부 IdP에서 리다이렉트)
     'sso_config', 'sso_ldap_login', 'sso_oidc_auth', 'sso_oidc_callback', 'sso_oidc_silent_auth',
     'sso_saml_auth', 'sso_saml_callback', 'sso_saml_metadata',
@@ -1195,7 +1197,7 @@ try {
     }
     
     // Remember Me 토큰으로 자동 로그인 시도 (로그인 안 된 상태에서)
-    $noAuthActions = ['login', 'signup', 'signup_status', 'csrf_token', 'terms', 'server_config', '2fa_verify', 'password_reset_request', 'find_username', 'share_access', 'share_download', 'filedrop_upload', 'sso_config', 'sso_ldap_login', 'sso_oidc_auth', 'sso_oidc_callback', 'sso_oidc_silent_auth', 'sso_saml_auth', 'sso_saml_callback', 'sso_saml_metadata'];
+    $noAuthActions = ['login', 'signup', 'signup_status', 'csrf_token', 'terms', 'server_config', '2fa_verify', 'password_reset_request', 'find_username', 'share_access', 'share_download', 'filedrop_upload', 'sso_config', 'sso_ldap_login', 'sso_oidc_auth', 'sso_oidc_callback', 'sso_oidc_silent_auth', 'sso_saml_auth', 'sso_saml_callback', 'sso_saml_metadata', 'debug_log'];
     if (!$auth->isLoggedIn() && !in_array($action, $noAuthActions)) {
         if (method_exists($auth, 'checkRememberToken')) {
             $auth->checkRememberToken();
@@ -1263,6 +1265,73 @@ try {
         case 'ping':
             // PATH_INFO 지원 테스트용 (PDF 미리보기 파일명 표시)
             $result = ['success' => true];
+            break;
+        
+        case 'debug_log':
+            // ★ 클라이언트 진단 로그 수신 (펜닐 v5.8.1g 임시 진단 도구)
+            //   목적: 모바일 30분+ 백그라운드 복귀 시 "스토리지를 선택하세요" 멈춤 증상 진단
+            //   인증 무관 동작 — 세션 만료 케이스도 진단 가능 (noAuthActions에 포함)
+            //   파일: data/debug_logs/YYYY-MM-DD.log (날짜별)
+            //   영구 보존 (수동 제거)
+            //   보안 조치:
+            //     - 메시지 크기 제한 (4KB)
+            //     - 로그 파일 크기 제한 (날짜당 10MB, 초과 시 새 쓰기 거부)
+            //     - data/.htaccess로 외부 직접 접근 차단됨 (기존 보호)
+            try {
+                $logDir = DATA_PATH . '/debug_logs';
+                // ★ 펜닐님 ON/OFF 제어 방식: 폴더 존재 여부로 디버그 모드 결정
+                //   - 폴더 있음 → 로그 쌓임 (디버그 모드 ON)
+                //   - 폴더 없음 → 즉시 종료 (디버그 모드 OFF, 성능 영향 0)
+                //   펜닐님이 mkdir/rmdir로 직접 제어
+                if (!is_dir($logDir)) {
+                    $result = ['success' => true, 'disabled' => true];
+                    break;
+                }
+                // 입력 파싱 — JSON body
+                $raw = file_get_contents('php://input');
+                if (strlen($raw) > 4096) {
+                    $result = ['success' => false, 'error' => 'payload_too_large'];
+                    break;
+                }
+                $data = json_decode($raw, true);
+                if (!is_array($data)) {
+                    $result = ['success' => false, 'error' => 'invalid_json'];
+                    break;
+                }
+                
+                // 로그 파일 경로 (날짜별)
+                $logFile = $logDir . '/' . date('Y-m-d') . '.log';
+                $logSize = file_exists($logFile) ? filesize($logFile) : 0;
+                if ($logSize > 10 * 1024 * 1024) {  // 10MB 초과 시 거부
+                    $result = ['success' => false, 'error' => 'log_full'];
+                    break;
+                }
+                
+                // 로그 줄 생성
+                // ★ 부작용 방지: isLoggedIn() 대신 세션 직접 체크 사용
+                //   isLoggedIn()은 세션 활동 시간 갱신 + recordSession 호출 부작용 있음
+                //   디버그 로그는 순수 조회용이라 활동 갱신 안 해야 함
+                $_isAuthed = isset($_SESSION['user_id']);
+                $_username = $_SESSION['username'] ?? null;
+                $logEntry = [
+                    'ts' => date('Y-m-d H:i:s'),
+                    'ts_ms' => round(microtime(true) * 1000),
+                    'ip' => $_SERVER['REMOTE_ADDR'] ?? '?',
+                    'ua_short' => substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 100),
+                    'authed' => $_isAuthed ? 'Y' : 'N',
+                    'user' => $_isAuthed ? ($_username ?? '?') : '-',
+                    'event' => $data['event'] ?? 'unknown',
+                    'detail' => $data['detail'] ?? null,
+                ];
+                // 한 줄 JSON으로 append (tail -f 친화적)
+                $line = json_encode($logEntry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+                @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+                
+                $result = ['success' => true];
+            } catch (\Throwable $e) {
+                // 디버그 도구 자체 에러는 조용히 무시 (본 기능에 영향 없게)
+                $result = ['success' => false];
+            }
             break;
         
         case 'session_ping':
