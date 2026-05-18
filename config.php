@@ -4,7 +4,7 @@
  * 시놀로지 파일스테이션 대체용 셀프호스팅 파일 관리 시스템
  *
  * @author   펜닐 (Pennil)
- * @version  5.8.1h
+ * @version  5.8.1i
  * @license  All rights reserved
  */
 
@@ -13,7 +13,7 @@
 // ini_set('error_log', __DIR__ . '/data/php_error.log');
 
 // 버전 (수정 시 상단 @version 주석도 함께 업데이트할 것!)
-define('APP_VERSION', '5.8.1h');
+define('APP_VERSION', '5.8.1i');
 
 // 위험 확장자 목록 (전역 — 업로드/이름변경/게시판 공통)
 // 서버 실행 가능 확장자 (모든 환경에서 항상 차단 — 업로드 설정과 무관)

@@ -11012,6 +11012,55 @@ tr:hover,
         height: 36px !important;
         font-size: 18px !important;
     }
+    
+    /* ★ v5.8.1i 1번 (펜닐님 보고): 모바일 가로 일반 음악 플레이어 재생목록 안 보임 + 터치 스크롤 안 됨 문제
+       
+       1차 시도 (.preview-audio-wrap에 overflow-y: auto 추가):
+         PC 휠 스크롤은 됐지만 모바일 터치 스크롤 안 됨
+         원인: iOS Safari의 flex + align-items:center + overflow:auto 조합 터치 버그
+       
+       2차 수정 (.modal-body flex-start로 변경 + .fap height auto):
+         모바일 터치 스크롤은 됐지만 재생목록 가상 스크롤이 깨짐
+         원인: .fap-playlist-list는 가상 스크롤 컨테이너인데 .fap이 height auto로 늘어나
+                자체 스크롤 트리거 안 됨 → list.scrollTop=0 고정 → 첫 13개만 렌더링
+       
+       3차 수정 (현재):
+         - .modal-body flex-start 유지 (모바일 터치 스크롤 정상)
+         - .fap height auto 유지 (전체 콘텐츠 자연 흐름)
+         - .fap-playlist-list에 명시적 max-height 부여
+           → 자체 스크롤 컨테이너로 정상 동작 → 가상 스크롤(_vsRender) 정상 작동
+         - max-height 60vh: 가로 모드 화면 높이의 60% (충분한 목록 영역)
+       
+       :has() 선택자로 음악 미리보기 컨텍스트만 정확히 매칭 (iOS Safari 15.4+ 지원)
+       다른 미리보기(이미지/동영상/PDF)는 영향 없음
+       세로 모드, PC 모드는 미디어쿼리로 자동 분리 — 영향 없음
+       공유 페이지(share.php)는 별도 페이지 + 별도 구조 — 영향 없음 */
+    .modal-preview .modal-body:has(.preview-audio-wrap) {
+        align-items: flex-start !important;
+        -webkit-overflow-scrolling: touch;
+    }
+    .modal-preview .modal-body:has(.preview-audio-wrap) #preview-content {
+        height: auto !important;
+        min-height: 100%;
+        align-items: flex-start !important;
+    }
+    .modal-preview .modal-body .preview-audio-wrap {
+        height: auto !important;
+        min-height: 100%;
+    }
+    .modal-preview .modal-body #fs-audio-player {
+        height: auto !important;
+        min-height: 100%;
+    }
+    .modal-preview .modal-body .fap {
+        height: auto !important;
+        min-height: 100%;
+    }
+    /* 재생목록 자체 스크롤 영역 확보 → 가상 스크롤(_vsRender) 정상 동작 */
+    .modal-preview .modal-body .fap-playlist-list {
+        max-height: 60vh !important;
+        -webkit-overflow-scrolling: touch;
+    }
 }
 
 /* ========================================

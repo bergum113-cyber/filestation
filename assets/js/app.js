@@ -30376,11 +30376,75 @@ const App = {
         };
         
         const body = modal.querySelector('.modal-body');
-        if (body) body.addEventListener('click', toggleBars);
+        // ★ v5.8.1i 2번 (펜닐님 보고): 모바일 가로 동영상 화면 터치 시 헤더/푸터 무반응 문제
+        //   원인: video 태그가 click 이벤트를 controls 표시용으로 가로챔
+        //         (라인 21950의 펜닐님 자체 주석: "video controls가 click을 가로채기 때문" 참조)
+        //   해결: touchstart/touchend로 탭/스크롤 구분 — 표준 모바일 UX 패턴
+        //
+        // ★ v5.8.1i 부작용 수정 (펜닐님 보고): 음악 모달 스크롤 시 헤더/푸터 토글 발화 방지
+        //   원인: touchstart에서 즉시 toggleBars 호출 → 재생목록 스크롤 시작 터치에서도 발화
+        //   해결: touchstart는 시작 위치만 기록, touchend에서 이동 거리 측정 후 판단
+        //         - 탭 (이동 10px 이하): toggleBars 호출 → 헤더/푸터 토글
+        //         - 스크롤/드래그 (이동 큼): toggleBars 호출 안 함
+        //         → 음악 모달도 다른 미디어와 같은 표준 동작 (탭=토글, 스크롤=토글 안 함)
+        //   중복 발화 방지: touchend 후 _fsRecentTouch 플래그 설정,
+        //                   직후 click은 무시 (touch 후 click이 자동 발화되어 더블 토글 방지)
+        const TAP_THRESHOLD_PX = 10;   // 이 이상 이동하면 탭 아닌 드래그/스크롤로 간주
+        let _fsRecentTouch = false;
+        let _fsTouchTimer = null;
+        let _fsTouchStartX = 0;
+        let _fsTouchStartY = 0;
+        let _fsTouchMoved = false;
+        const onTouchStart = (e) => {
+            const t = e.touches?.[0];
+            if (!t) return;
+            _fsTouchStartX = t.clientX;
+            _fsTouchStartY = t.clientY;
+            _fsTouchMoved = false;
+        };
+        const onTouchMove = (e) => {
+            if (_fsTouchMoved) return;  // 이미 드래그 판정됨
+            const t = e.touches?.[0];
+            if (!t) return;
+            const dx = Math.abs(t.clientX - _fsTouchStartX);
+            const dy = Math.abs(t.clientY - _fsTouchStartY);
+            if (dx > TAP_THRESHOLD_PX || dy > TAP_THRESHOLD_PX) {
+                _fsTouchMoved = true;
+            }
+        };
+        const onTouchEnd = (e) => {
+            // 이동 발생 = 드래그/스크롤 → 토글 안 함
+            if (_fsTouchMoved) {
+                _fsTouchMoved = false;
+                return;
+            }
+            // 이동 없음 = 탭 → 토글 + 자동 click 차단 플래그 설정
+            _fsRecentTouch = true;
+            if (_fsTouchTimer) clearTimeout(_fsTouchTimer);
+            _fsTouchTimer = setTimeout(() => { _fsRecentTouch = false; }, 500);
+            toggleBars(e);
+        };
+        const onClickToggle = (e) => {
+            // 직전에 touchend로 이미 호출됐으면 중복 무시
+            if (_fsRecentTouch) return;
+            toggleBars(e);
+        };
+        if (body) {
+            body.addEventListener('click', onClickToggle);
+            body.addEventListener('touchstart', onTouchStart, { passive: true });
+            body.addEventListener('touchmove', onTouchMove, { passive: true });
+            body.addEventListener('touchend', onTouchEnd, { passive: true });
+        }
         window.addEventListener('resize', check);
         
         this._immersiveCleanup = () => {
-            if (body) body.removeEventListener('click', toggleBars);
+            if (body) {
+                body.removeEventListener('click', onClickToggle);
+                body.removeEventListener('touchstart', onTouchStart);
+                body.removeEventListener('touchmove', onTouchMove);
+                body.removeEventListener('touchend', onTouchEnd);
+            }
+            if (_fsTouchTimer) { clearTimeout(_fsTouchTimer); _fsTouchTimer = null; }
             window.removeEventListener('resize', check);
             modal.classList.remove('preview-immersive');
             modal.style.left = '';

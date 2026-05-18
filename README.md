@@ -1,4 +1,4 @@
-# FileStation v5.8.1h
+# FileStation v5.8.1i
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -8,7 +8,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.11 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.12 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -193,7 +193,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.11 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.12 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -481,7 +481,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.11** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.12** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -493,7 +493,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1h.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1i.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -584,7 +584,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1h');
+define('APP_VERSION', '5.8.1i');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -677,7 +677,7 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.11의 베타 단계 제한, HWP 형식만 저장 가능
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.12의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -712,11 +712,119 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1h (rhwp 0.7.11 기반)
+**현재 버전**: v5.8.1i (rhwp 0.7.12 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1h (2026-05-14) ⭐ 현재
+#### v5.8.1i (2026-05-15) ⭐ 현재
+
+**모바일 가로 모드 음악 플레이어 / 동영상 터치 UX 개선 (펜닐님 보고)**
+
+펜닐님 보고 2건을 정확 진단 후 수정. 추측 수정 0건.
+
+**1. 모바일 가로 일반 음악 플레이어 재생목록 안 보임 문제**
+
+- **현상**: 모바일 가로 모드에서 일반(미공유) 음악 미리보기 모달 열면 재생화면이 화면을 거의 차지해 재생목록이 안 보임. 공유 페이지(share.php)는 무관 (별도 페이지 + 별도 구조).
+- **1차 시도** (CSS overflow-y: auto 추가): PC 크롬 모바일 모드(휠)는 작동, 실제 모바일 터치 스크롤 안 됨 (펜닐님 1차 검증 보고)
+- **2차 시도** (.modal-body flex-start): 모바일 터치 스크롤은 됐지만 재생목록이 첫 13개만 보임 (펜닐님 2차 검증 보고)
+  - 원인: `.fap-playlist-list`는 가상 스크롤(`_vsRender`) 컨테이너인데, `.fap` height auto로 만들면서 자체 스크롤 트리거 못 함 → `list.scrollTop = 0` 고정 → 첫 viewH 만큼만 렌더링
+- **3차 해결 (`assets/css/style.css` 라인 11015 부근, `@media (orientation: landscape) and (max-width: 1024px)` 안):
+  - 2차 수정 유지: `.modal-body:has(.preview-audio-wrap)` `align-items: flex-start` (모바일 터치 스크롤 정상)
+  - 2차 수정 유지: `.fap` / `#fs-audio-player` / `.preview-audio-wrap` `height: auto + min-height: 100%`
+  - **추가**: `.fap-playlist-list` `max-height: 60vh !important` + `-webkit-overflow-scrolling: touch`
+    → 재생목록이 자체 스크롤 영역(60vh) 확보 → 가상 스크롤 정상 동작 → 200곡 모두 렌더링
+- **펜닐님 검증된 영역 무변경**: 가상 스크롤 로직(`_vsRender`, `_VS_ITEM_H`, `_VS_OVERSCAN` 등 라인 3706~) 그대로 유지
+- **영향 격리** (`:has()` 선택자 사용, iOS Safari 15.4+ 지원, 펜닐님 환경 iOS 18.5/26.5 모두 지원):
+  - 음악 미리보기 시(`:has(.preview-audio-wrap)`)만 매칭 → 이미지/동영상/PDF 미리보기 영향 0
+  - 가로 모드(orientation: landscape) + 모바일(max-width: 1024px) 한정 → 세로/PC 영향 0
+  - `.modal-preview` 한정 → 공유 페이지/다른 모달 영향 0
+
+**2. 모바일 가로 동영상 화면 터치 시 헤더/푸터 무반응 문제**
+
+- **현상**: 모바일 가로 모드 동영상 미리보기에서 동영상 화면을 터치하면 헤더/푸터가 안 나타남. 동영상 외 영역(검정 띠 등) 터치해야 헤더/푸터 토글됨.
+- **원인** (펜닐님 자체 주석으로 확인됨, 라인 21950: "video controls가 click을 가로채기 때문"):
+  - `_setupPreviewImmersive`의 `toggleBars`는 `body.addEventListener('click', ...)` 등록
+  - video 태그가 click 이벤트를 controls 표시용으로 가로채 → toggleBars까지 이벤트 도달 안 함
+- **해결 (`assets/js/app.js` 라인 30378 부근):
+  - 기존 `click` 이벤트는 유지 (PC 마우스 클릭 정상 작동)
+  - `touchstart` 이벤트 추가 등록 — video 위 터치도 잡힘
+  - touch 후 자동 발화되는 click과 중복 발화 방지 — `_fsRecentTouch` 플래그(500ms) 사용
+  - cleanup 시 두 이벤트 모두 제거 + 타이머 정리
+- **기존 코드와 공존**:
+  - 라인 34490의 `wrap.touchstart` 핸들러(영상 컨트롤바 show-controls 토글)는 그대로 유지 — 충돌 없음
+  - video 위 터치 시: 라인 34490이 영상 컨트롤바 표시 + 새 핸들러가 헤더/푸터 토글 — 펜닐님 의도와 일치
+- **영향 격리** (펜닐 룰 부합):
+  - `preview-immersive` 클래스 있을 때만 발화 — 일반 모드 영향 0
+  - `toggleBars` 내부 `e.target.closest('button, a, input, select, .modal-close')` 가드 유지 — 컨트롤 버튼 클릭 무관
+
+**추가 — v5.8.1i 자체 부작용 수정: 탭/스크롤 구분 패턴 적용 (펜닐님 보고)**
+
+자기 검토 후 펜닐님 검증으로 부작용 실제 발생 확인 → 수정.
+
+- **부작용 (펜닐님 보고)**:
+  - 1번 작업으로 음악 미리보기 모달이 모바일 가로에서 스크롤 가능해짐
+  - 2번 작업으로 `body.touchstart`가 등록되어 immersive 모드에서 즉시 `toggleBars` 발화
+  - 펜닐님이 재생목록 스크롤 시도 → 터치 발생 → 헤더/푸터 토글
+  - **펜닐님 보고**: "스크롤할려고 하니깐 터치가 들어가다 보니 헤더, 푸터가 나왔다 사라졌다가 하는 게 있구나"
+- **펜닐님 의도 명확화** (재질문 후 확인):
+  - 탭 (가만히 누르기): 헤더/푸터 토글 (음악 포함 모든 미디어)
+  - 드래그/스크롤: 토글 안 함
+  - 표준 모바일 UX 패턴 (YouTube/Netflix/Apple Music 모두 동일)
+- **해결 (`assets/js/app.js` `_setupPreviewImmersive` 함수 안)**:
+  - `touchstart`: 시작 위치(`_fsTouchStartX/Y`) 기록만, toggle 호출 안 함
+  - `touchmove`: 시작 위치 대비 이동량 측정, 10px 초과 시 `_fsTouchMoved = true`
+  - `touchend`: `_fsTouchMoved` false면 탭 판정 → `toggleBars` 호출, true면 드래그 → 무시
+  - `_fsRecentTouch` 플래그(500ms)로 touch 후 자동 발화되는 click 차단 (중복 방지)
+  - TAP_THRESHOLD_PX = 10px (표준 패턴)
+- **영향 검증**:
+  - 음악 모달 탭: 토글 ✓ (펜닐님 의도)
+  - 음악 모달 재생목록 스크롤: 토글 안 함 ✓ (펜닐님 보고 해결)
+  - 동영상 화면 탭: 토글 ✓ (v5.8.1i 2번 의도 유지)
+  - 동영상 화면 드래그: 토글 안 함 ✓ (의도된 동작)
+  - 이미지/PDF 미리보기 탭: 토글 ✓
+  - 이미지 핀치 줌/스와이프: 토글 안 함 ✓
+  - PC 마우스 클릭: 토글 ✓ (`onClickToggle` 그대로)
+  - X 버튼(`.modal-close`): 기존 가드로 정상
+
+**추가 — [rhwp 0.7.11 → 0.7.12 업그레이드] (2026-05-18)**
+
+펜닐님 요청. 펜닐 룰 부합 (npm 정식 배포 후 진행, 검증된 절차):
+- **npm @rhwp/core 0.7.12 tarball** 다운로드 (shasum 검증: 1ca43a89...) — 진본 확인
+- **GitHub v0.7.12 태그** clone — Cargo.toml/package.json 버전 0.7.12 확인
+- **rhwp-studio 빌드** (npm install + tsc + vite build)
+  - `vite.config.ts`에 `base: './'` 추가 (상대경로 ./assets/... 출력, FileStation 경로와 일치)
+  - PWA 플러그인 + 기존 alias (@/@wasm) 보존
+- **파일 교체** (assets/rhwp/):
+  - core: `rhwp.js` (234K → 240K) + `rhwp_bg.wasm` (4.5M → 4.4M, -100KB) — 0.7.12 LTO+strip 최적화
+  - studio: `index-1fhO7yjt.js` → `index-EQbwmbnL.js`, `index-DMFL0yRA.css` → `index-C_SbAHsx.css`, `rhwp_bg-B9Ehujv1.wasm` → `rhwp_bg-BSNi2Fvg.wasm`
+  - 정적 자산: favicon.ico + fonts (37파일) + images (1파일) 0.7.12 빌드로 동기화
+- **패치** (이전 0.7.10/0.7.11 작업과 동일):
+  - J1 (Ctrl+S file:save 매핑 제거): ✅ 1개 매칭, 메뉴 정의 유지
+  - J2 (Ctrl+P file:print 매핑 제거): ✅ 1개 매칭
+  - P2 (CSS url 경로): ✅ `url(../images/)` → `url(images/)` 1건 (P1은 0건)
+- **rhwp_editor.php / rhwp_viewer.php**:
+  - studio 파일명 갱신 (sed 자동)
+  - 주석: `@rhwp_version 0.7.11` → `0.7.12`
+  - 커스텀 단축키 핸들러 + 캐시 버스팅 코드 무변경 (펜닐 룰 부합)
+- **0.7.12 변경 사항** (CHANGELOG 사전 점검):
+  - Issue #952 5개 분리 결함 완결 (Issue #956~#964)
+  - WMF SetTextAlign vertical bits 정정 (#966)
+  - HWP3 sample18 inflate 정정 (#968)
+  - release 빌드 LTO + codegen-units=1 + strip → CLI -28% / WASM -6.5%
+  - rhwp-studio 신규: F5 본문 블록 + F3 영역 확장 + 메뉴 hotkey + searchAllText API
+  - 외부 PR 19+ cherry-pick (cargo test 1288 통과, 회귀 0)
+- **검증**:
+  - file:save 메뉴 정의 유지 (마우스 클릭 동작) ✓
+  - J1/J2 패치 매칭 ✓
+  - url(images/) 정규형 ✓
+  - PHP 커스텀 로직 무변경 (캐시 버스팅 13건, 커스텀 단축키 56건) ✓
+  - `@rhwp_version 0.7.12` (editor + viewer) ✓
+
+**캐시 무효화:** `APP_VERSION` `5.8.1h` → `5.8.1i`
+
+---
+
+#### v5.8.1h (2026-05-14)
 
 **모바일 백그라운드 복귀 시 "스토리지를 선택하세요" 멈춤 증상 진단 + 수정**
 
@@ -1962,5 +2070,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1h — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-05-12 (rhwp 0.7.11 기준)*
+*FileStation v5.8.1i — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-05-18 (rhwp 0.7.12 기준)*
