@@ -4853,6 +4853,31 @@ try {
         case 'storages':
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제
+            // ★ v5.8.1j: HLS orphan 세션 자동 청소 (5분 throttle)
+            //   배경: hlsCleanupStale은 기존에 새 HLS 요청 시에만 호출됐음
+            //         → 사용자가 비정상 종료(브라우저 충돌/iOS 백그라운드/네트워크 끊김) 후
+            //           새 HLS 동영상 요청이 없으면 ffmpeg가 계속 살아 자원 점유
+            //   해결: 페이지 로드 시 반드시 호출되는 storages 액션에서 청소 시도
+            //         → 누군가 사이트만 방문해도 idle 세션 자동 정리됨
+            //   안전:
+            //     - 5분 throttle (data/hls_last_cleanup.txt)로 호출 빈도 제한
+            //     - try-catch로 청소 실패 시에도 응답 무영향
+            //     - hlsCleanupStale은 last_access.txt 기반이라 활성 세션 보호됨
+            //     - 디렉토리 없으면 즉시 return (오버헤드 ~0)
+            //   해결되는 케이스: A(모바일 네트워크 끊김) / B(브라우저 충돌) / C(iOS 백그라운드 종료)
+            //   부분 해결: D(마지막 사용자 종료 후 새 요청 없음) — 다음 방문 사용자가 있어야 청소됨
+            //   E(last_access.txt 권한 실패) / F(taskkill 권한 실패): 옵션 C로는 해결 안 됨
+            //     → 별도로 api/FileManager.php에서 케이스 E/F 수정으로 해결됨 (같은 v5.8.1j)
+            try {
+                $_hlsCleanupFlag = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data')) . '/hls_last_cleanup.txt';
+                $_lastCleanup = @file_exists($_hlsCleanupFlag) ? (int)@file_get_contents($_hlsCleanupFlag) : 0;
+                if (time() - $_lastCleanup > 300) {  // 5분 throttle
+                    @file_put_contents($_hlsCleanupFlag, (string)time(), LOCK_EX);
+                    $fileManager->hlsCleanupStale();
+                }
+            } catch (\Throwable $_e) {
+                // 청소 실패는 무시 (storages 응답이 최우선)
+            }
             $result = ['success' => true, 'storages' => $storage->getStorages()];
             break;
             
@@ -5674,6 +5699,25 @@ try {
                 break;
             }
             $fileManager->transcodeStream($storageId, $path);
+            break;
+        
+        case 'convert_h264':
+            // 동영상을 H264/MP4로 영구 변환 (SSE 진행률)
+            $auth->requireLogin();
+            session_write_close();
+            $storageId = (int)($_GET['storage_id'] ?? 0);
+            $path = $_GET['path'] ?? '';
+            // 폴더별 권한 체크 (transcode와 동일 패턴)
+            $cvDir = dirname($path);
+            if ($cvDir === '.') $cvDir = '';
+            if (!$storage->checkFolderPermission($storageId, $cvDir ?: $path)) {
+                http_response_code(403);
+                echo json_encode(['error' => 'No permission']);
+                break;
+            }
+            // deleteOriginal: 원본 휴지통 이동 여부 (1=이동). 기본 false(안전)
+            $cvDelete = isset($_GET['delete_original']) && $_GET['delete_original'] === '1';
+            $fileManager->convertToH264Mp4($storageId, $path, $cvDelete);
             break;
         
         case 'media_info':

@@ -703,15 +703,12 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 right: 4px !important;
                 left: auto !important;
             }
-            /* quality는 audio 아래로 (audio가 배지 아래로 갔으니 quality는 audio 아래) */
+            /* ★ v5.8.1j: 화질은 항상 맨 위 우측(top:10px) 고정 (펜닐님 결정)
+               오디오 유무와 무관하게 화질은 우상단 고정. 오디오는 있을 때만 그 아래(38px) */
             #share-quality-wrap {
-                top: 72px !important;
+                top: 10px !important;
                 right: 4px !important;
                 left: auto !important;
-            }
-            /* 단독 quality (audio wrap 비어있는 경우 = 단일오디오 영상)는 배지 아래(top:38px) */
-            .player-wrap:not(:has(#share-audio-track-wrap[style*="display:none"])) #share-quality-wrap {
-                /* audio 있을 때 — 위 룰 그대로 (top:72px) */
             }
         }
         .player-wrap:fullscreen .transcode-duration,
@@ -828,6 +825,43 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             .fs-subtitle-controls .fs-sub-sync {
                 padding: 6px 9px;
                 font-size: 13px;
+            }
+            /* ★ v5.8.1j 1차 시도: 모바일 세로에서 작은/세로 동영상 시 컨트롤이 영상 밖으로
+               어긋나는 문제 수정 (펜닐님 보고: 동영상 크기 따라 화질 등 컨트롤이 움직임)
+               원인: player-wrap width=100%(container)인데 video는 max-height:70vh로 세로 제한 시
+                     비율 유지로 width가 축소됨 → player-wrap width > video width
+                     → 컨트롤(player-wrap 기준 absolute, right:4px 등)이 영상 우측 검은 여백에 위치
+               해결: 일반 미리보기(모달)에서 검증된 방식 차용 — player-wrap을 영상 크기에 맞춤
+                     player-wrap을 flex+가운데정렬, video를 height 기준(width:auto)으로 → wrap=video 크기
+               제외: audio-wrap(음악)은 별도 처리(라인 371)라 제외
+               데스크탑(>1024px) 무영향: 이 규칙은 @media max-width:1024px 안에만 존재
+               ⚠️ 1차 시도 — 펜닐님 실기기 테스트 후 값 조정 필요할 수 있음 */
+            .container.stream-mode .player-wrap:not(.audio-wrap) {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                max-height: 70vh;
+            }
+            .container.stream-mode .player-wrap:not(.audio-wrap) > video {
+                width: auto !important;
+                max-width: 100%;
+                height: auto;
+                max-height: 70vh;
+            }
+            /* 전체화면 복원 (위 규칙이 전체화면 영상을 70vh로 줄이지 않도록 — 기존 패턴대로 분리) */
+            .container.stream-mode .player-wrap:not(.audio-wrap):fullscreen,
+            .container.stream-mode .player-wrap:not(.audio-wrap):-webkit-full-screen {
+                max-height: none;
+            }
+            .container.stream-mode .player-wrap:not(.audio-wrap):fullscreen > video {
+                width: auto !important;
+                height: 100%;
+                max-height: 100vh;
+            }
+            .container.stream-mode .player-wrap:not(.audio-wrap):-webkit-full-screen > video {
+                width: auto !important;
+                height: 100%;
+                max-height: 100vh;
             }
         }
         @media (max-width: 480px) {
@@ -1386,7 +1420,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     <svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                 </div>
                 <?php else: ?>
-                <div class="stream-badge native">▶ <?= __('native_playback', '일반 재생') ?><?php if ($videoCodec): ?> (<?= htmlspecialchars(strtoupper($videoCodec)) ?><?php if ($videoResolution): ?> <?= htmlspecialchars($videoResolution) ?><?php endif; ?>)<?php endif; ?></div>
+                <div class="stream-badge native">▶ <?= __('native_playback', '일반 재생') ?><?php if ($videoCodec): ?> (<?= htmlspecialchars(strtoupper($videoCodec)) ?><?php if ($videoResolution): ?> <?= htmlspecialchars($videoResolution) ?><?php endif; ?><?php if ($fileSize > 0): ?> <?= htmlspecialchars(formatFileSize($fileSize)) ?><?php endif; ?>)<?php endif; ?></div>
                 <!-- ★ Quality 셀렉터 (v5.8.1c) — 네이티브 재생 영상에도 표시 -->
                 <div id="share-quality-wrap" style="display:none;position:absolute;top:4px;right:4px;z-index:14;opacity:0;transition:opacity 0.3s;">
                     <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;">🎬 <?= __('quality_label', '화질') ?>:
@@ -1680,6 +1714,11 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             const togglePlay = (e) => {
                 e.stopPropagation();
                 if (e.type === 'touchend') e.preventDefault();
+                // ★ 더블클릭/마우스 채터링 방어: 마지막 토글 후 300ms 내 재호출 무시
+                //   play()는 비동기라 연속 클릭 시 재생 직후 pause로 즉시 정지되는 문제 차단
+                const _nowTP = Date.now();
+                if (player._lastToggleAt && _nowTP - player._lastToggleAt < 300) return;
+                player._lastToggleAt = _nowTP;
                 if (player.paused || player.ended) {
                     player.play().catch(() => {});
                 } else {

@@ -654,6 +654,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                     <div class="action-divider"></div>
                                     <div class="action-option" data-action="extract">📦 <?php echo $currentLang === 'en' ? 'Extract' : '압축 해제'; ?></div>
                                     <div class="action-option" data-action="compress">🗜️ <?php echo $currentLang === 'en' ? 'Compress (ZIP)' : '압축 (ZIP)'; ?></div>
+                                    <div class="action-option" data-action="convert-h264">🎬 <?php echo $currentLang === 'en' ? 'Convert to H264/MP4' : 'H264/MP4로 변환'; ?></div>
                                     <div class="action-option" data-action="convert-to-vault">🔒 <?php echo $currentLang === 'en' ? 'Encrypt This Folder' : '이 폴더 암호화'; ?></div>
                                     <div class="action-divider"></div>
                                     <div class="action-option" data-action="rename">✏️ <?php _e('rename'); ?></div>
@@ -5567,6 +5568,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <li class="divider"></li>
                 <li data-action="extract">📦 <?php echo $currentLang === 'en' ? 'Extract (ZIP)' : '압축 해제 (ZIP)'; ?></li>
                 <li data-action="compress">🗜️ <?php echo $currentLang === 'en' ? 'Compress (ZIP)' : '압축 (ZIP)'; ?></li>
+                <li data-action="convert-h264">🎬 <?php echo $currentLang === 'en' ? 'Convert to H264/MP4' : 'H264/MP4로 변환'; ?></li>
                 <li data-action="convert-to-vault">🔒 <?php echo $currentLang === 'en' ? 'Encrypt This Folder' : '이 폴더 암호화'; ?></li>
                 <li class="divider"></li>
                 <li data-action="rename">✏️ <?php _e('rename'); ?></li>

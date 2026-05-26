@@ -10483,6 +10483,33 @@ tr:hover,
         max-height: calc(100vh - 60px) !important;
         min-height: 0 !important;
     }
+    /* ★ v5.8.1j: 동영상 미리보기 시 modal-body 높이 고정 (PC와 동일하게)
+       문제: 모바일 modal-preview에 display:flex 없어 modal-body의 flex:1 미작동
+             → modal-body가 비디오 크기에 따라 가변 → .video-player-wrap도 가변
+             → 자막/전체화면/인코더/화질/오디오 컨트롤(wrap 기준 absolute)이 비디오 따라 이동
+       해결: 비디오일 때만 modal-body를 화면 높이로 고정 → wrap 고정 → 모든 컨트롤 위치 고정
+       범위: :has(.video-player-wrap)로 비디오만 영향 (이미지/오디오/PDF 미리보기 무영향)
+       제외: :not(.preview-immersive) — 가로 immersive 모드는 별도 height:100% 처리 (라인 10937) */
+    .modal-preview:not(.preview-immersive) .modal-body:has(.video-player-wrap) {
+        height: calc(100vh - 60px) !important;
+    }
+    /* ★ v5.8.1j 후속: 작은 세로 영상에서 컨트롤이 영상 따라 줄어드는 문제 수정
+       원인: modal-body는 고정됐으나 .video-player-wrap이 #preview-content(display:flex,
+             align-items:center)의 flex item이라, 영상이 작으면(max-height:70vh 미만)
+             wrap이 영상 높이로 shrink → wrap 기준 absolute 컨트롤(전체화면/배지/화질/오디오)이
+             영상 영역으로 줄어들어 보임 (펜닐님 보고: H264 1280x720 작은 영상)
+       해결: 모바일 세로에서만 wrap을 align-self:stretch + height:100%로 부모 꽉 채움
+             → wrap 고정 → 컨트롤 고정. 영상 자체는 wrap 안에서 object-fit:contain으로 가운데
+       제외: :not(.preview-immersive) — 가로 immersive는 별도 처리(라인 10985) 유지
+       데스크탑 무영향: 이 규칙은 모바일 @media 안에만 존재 (데스크탑은 영상 height:100%로 이미 정상) */
+    .modal-preview:not(.preview-immersive) #preview-content:has(.video-player-wrap) {
+        align-items: stretch !important;
+    }
+    .modal-preview:not(.preview-immersive) #preview-content > .video-player-wrap,
+    .modal-preview:not(.preview-immersive) #preview-content > .fs-vp-flex > .video-player-wrap {
+        align-self: stretch !important;
+        height: 100% !important;
+    }
     
     /* 이미지 미리보기 */
     .preview-image {
@@ -10538,11 +10565,11 @@ tr:hover,
         touch-action: manipulation;
     }
     /* 모바일: 자막 컨트롤을 상단 우측에 배치 (비디오 높이 무관) */
+    /* ★ v5.8.1j: 펜닐님 개발자도구 조정값 적용 (top:-80px, max-width:350px, right 제거) */
     .subtitle-controls {
-        top: 50px;
+        top: -80px;
         bottom: auto;
-        right: 6px;
-        max-width: 280px;
+        max-width: 350px;
     }
     .video-fullscreen-btn:active {
         background: rgba(0, 0, 0, 0.8);
@@ -10607,6 +10634,15 @@ tr:hover,
         max-width: 55%;
         flex-direction: row;
         align-items: center;
+    }
+    /* ★ v5.8.1j (펜닐님 요청): 오디오 셀렉트가 비었을 때(오디오 트랙 1개)
+       화질을 배지와 같은 줄(top:6px)로 올림. 오디오 있으면 위 규칙(top:44px) 유지
+       - 트랜스코딩 배지: audio-select 요소는 있고 비어있음(:empty)으로 감지
+       - 일반 재생 배지(.native): audio-select 요소 자체가 생성 안 됨(audioSelectHtml='')
+         → :empty로 못 잡으므로 .video-stream-badge.native 존재로 감지 (펜닐님 보고: 일반재생 안 됨) */
+    .video-player-wrap:has(.video-audio-select:empty) .video-quality-select,
+    .video-player-wrap:has(.video-stream-badge.native) .video-quality-select {
+        top: 6px !important;
     }
     /* PC용 has-toggle-sibling/has-quality-sibling 위치 룰을 모바일에서 무효화 */
     .video-player-wrap:has(.fs-vp-toggle) .video-quality-select,
@@ -10712,8 +10748,8 @@ tr:hover,
     .video-player-wrap.playing:not(.show-controls):hover .transcode-duration { opacity: 0; }
     
     /* 모바일 자막 조절 */
+    /* ★ v5.8.1j: 펜닐님 개발자도구 조정값 (bottom:200px 제거, right:6px/opacity 유지) */
     .subtitle-controls {
-        bottom: 200px !important;
         right: 6px !important;
         left: auto !important;
         opacity: 1 !important;
@@ -10977,10 +11013,10 @@ tr:hover,
     }
     
     /* 가로모드: 자막 컨트롤 축소 + 위치 조정 */
+    /* ★ v5.8.1j: 펜닐님 개발자도구 조정값 (가로모드 자막 top:90px, right 제거) */
     .subtitle-controls {
-        top: 40px;
+        top: 90px;
         bottom: auto;
-        right: 6px;
         max-width: 320px;
         gap: 3px;
         align-items: center;
@@ -11004,9 +11040,9 @@ tr:hover,
         height: 16px !important;
         margin: 0 2px !important;
     }
-    /* 가로모드: 전체화면 버튼 */
+    /* 가로모드: 전체화면 버튼 (★ v5.8.1j: 펜닐님 조정값 bottom:80px — 재생바 위로) */
     .video-fullscreen-btn {
-        bottom: 6px !important;
+        bottom: 80px !important;
         right: 6px !important;
         width: 36px !important;
         height: 36px !important;

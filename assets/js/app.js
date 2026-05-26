@@ -671,6 +671,19 @@ class FSAudioPlayer {
         this._coverBlobCache = new Map();
         // 진행 중인 fetch promise 캐시 (동일 URL 동시 요청 시 한 번만 fetch)
         this._coverBlobPending = new Map();
+        
+        // ★ v5.8.1j: iOS 잠금화면 썸네일 유지 (z_music 검증 패턴 이식)
+        //   문제: iOS Safari는 긴 음악 재생 시 (1시간+) MediaSession metadata를
+        //         메모리 관리로 무효화 → 잠금화면 썸네일 사라짐
+        //   해결 (z_music에서 검증된 패턴):
+        //     - 30초마다 maintenance 타이머로 metadata 상태 체크
+        //     - artwork 손실 감지 시 즉시 복구
+        //     - 2분마다 강제 갱신 (iOS 시스템 레벨 유실 대응)
+        //   안전: 재생 중일 때만 동작, destroy 시 clearInterval
+        this._artworkMaintenanceTimer = null;
+        this._lastArtworkCheck = 0;
+        this._currentMetadata = null;  // 마지막 설정 metadata (복구용)
+        this._lastForceRefreshMin = -1;  // 분 경계 강제 갱신 추적 (트랙당 1회씩)
 
         this._render();
         this._bind();
@@ -1549,6 +1562,8 @@ class FSAudioPlayer {
         this.currentIndex = idx;
         const track = this.playlist[idx];
         this.audio.src = track.url;
+        // ★ v5.8.1j: 트랙 변경 시 force refresh 분 경계 리셋 (이전 트랙 값 제거)
+        this._lastForceRefreshMin = -1;
         // 재생 중이면 마퀴, 아니면 일반 텍스트
         if (!this.audio.paused || autoplay) {
             this._setMarqueeTitle(track.name);
@@ -3941,12 +3956,87 @@ class FSAudioPlayer {
                 artwork.push({ src: this._defaultArtwork, sizes: '256x256', type: 'image/png' });
                 artwork.push({ src: this._defaultArtwork, sizes: '512x512', type: 'image/png' });
             }
-            navigator.mediaSession.metadata = new MediaMetadata({
+            const metadataObj = {
                 title: track.name || '',
                 artist: '',
                 album: '',
                 artwork: artwork
-            });
+            };
+            navigator.mediaSession.metadata = new MediaMetadata(metadataObj);
+            // ★ v5.8.1j: 마지막 metadata 저장 (z_music 패턴 — maintenance 복구용)
+            this._currentMetadata = metadataObj;
+            // ★ v5.8.1j: artwork 유지 타이머 시작 (iOS 잠금화면 사라짐 방지)
+            //   재생 중일 때만 30초마다 체크하여 손실 시 복구 + 2분마다 강제 갱신
+            this._startArtworkMaintenance();
+        } catch(e) {}
+    }
+
+    // ★ v5.8.1j: artwork 유지 타이머 시작 (z_music 검증 패턴 이식)
+    //   30초마다 mediaSession.metadata.artwork 존재 확인 후 손실 시 복구
+    //   재생 중일 때만 동작 (배터리 영향 최소)
+    _startArtworkMaintenance() {
+        if (!('mediaSession' in navigator)) return;
+        // 기존 타이머 정리 (중복 방지)
+        if (this._artworkMaintenanceTimer) {
+            clearInterval(this._artworkMaintenanceTimer);
+        }
+        this._artworkMaintenanceTimer = setInterval(() => {
+            if (this._destroyed) return;
+            // 재생 중일 때만 (일시정지면 OS가 이미 정리해도 무관)
+            if (!this.audio || this.audio.paused) return;
+            // 25초 throttle (setInterval 30초지만 시스템 지연 흡수)
+            const now = Date.now();
+            if (now - this._lastArtworkCheck < 25000) return;
+            this._lastArtworkCheck = now;
+            this._checkAndRestoreArtwork();
+        }, 30000);
+    }
+
+    // ★ v5.8.1j: artwork 손실 감지 + 2분마다 강제 갱신 (z_music 패턴)
+    _checkAndRestoreArtwork() {
+        if (!('mediaSession' in navigator)) return;
+        if (!this._currentMetadata) return;
+        let needsRestore = false;
+        try {
+            const meta = navigator.mediaSession.metadata;
+            if (!meta) {
+                // metadata 자체가 사라짐 → 복구
+                needsRestore = true;
+            } else if (!meta.artwork || meta.artwork.length === 0) {
+                // artwork만 사라짐 → 복구
+                needsRestore = true;
+            }
+        } catch(e) {
+            needsRestore = true;
+        }
+        // 2분마다 강제 갱신 (iOS 시스템 레벨 유실 대응 — z_music 검증)
+        //   재생 시간 기준 2분 경계마다 1회만 갱신 (중복 방지)
+        if (!needsRestore && this.audio && !this.audio.paused) {
+            const currentTime = this.audio.currentTime;
+            if (currentTime > 0) {
+                const minutes = Math.floor(currentTime / 60);
+                if (minutes > 0 && minutes % 2 === 0) {
+                    // 이번 트랙의 이 분 경계에 이미 갱신했는지 체크
+                    if (this._lastForceRefreshMin !== minutes) {
+                        this._lastForceRefreshMin = minutes;
+                        needsRestore = true;
+                    }
+                }
+            }
+        }
+        if (needsRestore) {
+            this._forceRefreshArtwork();
+        }
+    }
+
+    // ★ v5.8.1j: _currentMetadata로 MediaSession metadata 재설정
+    _forceRefreshArtwork() {
+        if (!('mediaSession' in navigator)) return;
+        if (!this._currentMetadata) return;
+        try {
+            // 깊은 복사 (참조 공유 방지)
+            const meta = JSON.parse(JSON.stringify(this._currentMetadata));
+            navigator.mediaSession.metadata = new MediaMetadata(meta);
         } catch(e) {}
     }
 
@@ -4310,6 +4400,12 @@ class FSAudioPlayer {
             document.removeEventListener('visibilitychange', this._mediaSessionVisHandler);
             this._mediaSessionVisHandler = null;
         }
+        // ★ v5.8.1j: artwork maintenance 타이머 정리 (메모리 누수 방지)
+        if (this._artworkMaintenanceTimer) {
+            clearInterval(this._artworkMaintenanceTimer);
+            this._artworkMaintenanceTimer = null;
+        }
+        this._currentMetadata = null;
         this.container.innerHTML = '';
     }
 }
@@ -11681,6 +11777,7 @@ const App = {
                 'delete-all': false,
                 'extract': hasExtractable && !!perms.can_write && !isLocked && !inVault && !isRemote,
                 'compress': hasSelection && !!perms.can_write && !inVault && !isRemote,
+                'convert-h264': selectedItems.some(it => !it.isDir && this.getFileType(it.name) === 'video' && !_nativeVideoExts.includes((it.name || '').split('.').pop().toLowerCase())) && !!perms.can_write && !isLocked && !inVault && !isRemote,
                 'convert-to-vault': !isFile && !!perms.can_write && firstItem && !firstItem.isVault && this.currentStorage == this.homeStorageId && !inVault && !(firstItem._plain && this.vault.currentVaultPath),
                 'new-folder': false,
                 'new-vault-folder': false,
@@ -11896,6 +11993,7 @@ const App = {
             'paste': hasClipboard && !!perms.can_write,
             'extract': hasExtractable && !!perms.can_write && !isLocked && !isRemote,
             'compress': items.length > 0 && !!perms.can_write && !isRemote,
+            'convert-h264': items.some(it => !it.isDir && this.getFileType(it.name) === 'video' && !_nativeVideoExts2.includes((it.name || '').split('.').pop().toLowerCase())) && !!perms.can_write && !isLocked && !isRemote,
             'convert-to-vault': !isFile && !!perms.can_write && firstItem && this.currentStorage == this.homeStorageId && !(this.vault && this.vault.isVaultView) && (() => {
                 const el = document.querySelector(`.file-item[data-path="${this.escapeHtml(firstItem.path)}"]`);
                 return el ? el.dataset.vault !== 'true' : true;
@@ -12130,6 +12228,9 @@ const App = {
                 break;
             case 'compress':
                 this.compressFiles(items);
+                break;
+            case 'convert-h264':
+                this.convertToH264(item);
                 break;
             case 'convert-to-vault':
                 if (this.currentStorage != this.homeStorageId) {
@@ -12468,7 +12569,184 @@ const App = {
             this.toastResponsive(t('https_required_msg','HTTPS에서만 저장 위치를 직접 선택할 수 있습니다.'), t('https_required','HTTPS 필요'), 'info');
         }
     },
-    
+
+    // 동영상을 H264/MP4로 영구 변환 (진입점 — 단일/다중 선택 모두 처리, 순차 변환)
+    async convertToH264(item) {
+        // 중복 실행 방지
+        if (this._convEventSource || this._convBatchRunning) {
+            this.toast(t('convert_in_progress', '이미 변환이 진행 중입니다.'), 'info');
+            return;
+        }
+        // 선택된 항목들 수집 (체크박스 다중선택 또는 우클릭 단일)
+        let items = this.getSelectedOrCheckedItems();
+        if (!items || items.length === 0) {
+            if (item) items = [item];
+        }
+        // 변환 대상만 필터: 동영상 + 비네이티브(mp4 등 제외)
+        const nativeExts = ['mp4', 'webm', 'ogg', 'ogv', 'm4v', '3gp'];
+        const targets = (items || []).filter(it =>
+            it && !it.isDir &&
+            this.getFileType(it.name) === 'video' &&
+            !nativeExts.includes((it.name || '').split('.').pop().toLowerCase())
+        );
+        if (targets.length === 0) {
+            this.toast(t('convert_video_only', '동영상 파일만 변환할 수 있습니다.'), 'error');
+            return;
+        }
+
+        // 확인 다이얼로그 1회 (대상 개수 안내 + 휴지통 체크박스)
+        const countMsg = targets.length > 1
+            ? `<p style="margin:0 0 8px;font-weight:500;">${targets.length}${t('count_items','개 항목')} ${t('convert_h264_confirm', '이 동영상을 H264/MP4로 변환합니다.')}</p>`
+            : `<p style="margin:0 0 8px;">${t('convert_h264_confirm', '이 동영상을 H264/MP4로 변환합니다.')}</p>`;
+        const ok = await this.showConfirmModal({
+            title: t('convert_h264_title', '🎬 H264/MP4로 변환'),
+            content: `${countMsg}<p style="margin:0 0 12px;color:#888;font-size:13px;">${t('convert_h264_desc', '원본이 이미 H264면 화질·용량 그대로 MP4로 재포장되고, 그 외(HEVC 등)는 화질을 최대한 보존하여 변환합니다. 변환된 파일은 같은 폴더에 생성됩니다.')}</p><label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;user-select:none;"><input type="checkbox" id="convert-delete-original" style="width:16px;height:16px;cursor:pointer;"><span>${t('convert_delete_original_label', '변환 후 원본을 휴지통으로 이동')}</span></label>`,
+            buttons: [
+                { text: t('cancel', '취소'), value: false, class: 'btn-secondary' },
+                { text: t('convert_start', '변환 시작'), value: true, class: 'btn-primary' }
+            ]
+        });
+        if (!ok) return;
+
+        const delChk = document.getElementById('convert-delete-original');
+        const deleteOriginal = delChk ? delChk.checked : false;
+
+        // 순차 변환
+        this._convBatchRunning = true;
+        const total = targets.length;
+        let okCount = 0, skipCount = 0, failCount = 0;
+        try {
+            for (let i = 0; i < total; i++) {
+                const tgt = targets[i];
+                const r = await this._convertOneFile(tgt, deleteOriginal, i + 1, total);
+                if (r === 'done') okCount++;
+                else if (r === 'skip') skipCount++;
+                else failCount++;
+            }
+        } finally {
+            this._convBatchRunning = false;
+            this.hideConvertProgressModal();
+            this.loadFiles();
+        }
+
+        // 결과 요약 토스트
+        if (total === 1) {
+            // 단일은 _convertOneFile 내부 토스트로 충분 (중복 방지 위해 생략)
+        } else {
+            const parts = [];
+            if (okCount) parts.push(`${t('convert_done','변환 완료')} ${okCount}`);
+            if (skipCount) parts.push(`${t('convert_skip_short','건너뜀')} ${skipCount}`);
+            if (failCount) parts.push(`${t('convert_fail_short','실패')} ${failCount}`);
+            this.toast(`${total}${t('count_items','개 항목')}: ${parts.join(', ')}`, failCount ? 'error' : 'success');
+        }
+    },
+
+    // 단일 파일 변환 (SSE) — 순차 래퍼에서 호출. 반환: 'done' | 'skip' | 'fail'
+    async _convertOneFile(item, deleteOriginal, idx, total) {
+        const storageId = this.currentStorage;
+        const path = item.path;
+        const prefix = (total > 1) ? `(${idx}/${total}) ` : '';
+
+        this.showConvertProgressModal(prefix + item.name);
+
+        const url = `api.php?action=convert_h264&storage_id=${storageId}&path=${encodeURIComponent(path)}&delete_original=${deleteOriginal ? '1' : '0'}`;
+
+        return await new Promise((resolve) => {
+            let es;
+            try {
+                es = new EventSource(url);
+            } catch (e) {
+                this._convEventSource = null;
+                resolve('fail');
+                return;
+            }
+            this._convEventSource = es;
+            let settled = false;
+            const finish = (result) => {
+                if (settled) return;
+                settled = true;
+                try { es.close(); } catch (_) {}
+                this._convEventSource = null;
+                resolve(result);
+            };
+
+            es.addEventListener('progress', (e) => {
+                try {
+                    const d = JSON.parse(e.data);
+                    this.updateConvertProgress(d.percent || 0, prefix + (d.stage || ''));
+                } catch (_) {}
+            });
+            es.addEventListener('skip', (e) => {
+                let msg = t('convert_already_h264_mp4', '이미 H264/MP4 형식입니다. 변환이 필요 없습니다.');
+                try { const d = JSON.parse(e.data); if (d.message) msg = d.message; } catch (_) {}
+                if (total === 1) this.toast(msg, 'info');
+                finish('skip');
+            });
+            es.addEventListener('done', (e) => {
+                let outName = '', trashed = false;
+                try { const d = JSON.parse(e.data); outName = d.output_name || ''; trashed = !!d.original_trashed; } catch (_) {}
+                if (total === 1) {
+                    const baseMsg = t('convert_done', '변환 완료') + (outName ? ': ' + outName : '');
+                    this.toast(baseMsg + (trashed ? ' (' + t('convert_orig_trashed', '원본은 휴지통으로 이동됨') + ')' : ''), 'success');
+                }
+                finish('done');
+            });
+            es.addEventListener('error', (e) => {
+                let msg = t('convert_failed', '변환 실패');
+                try { const d = JSON.parse(e.data); if (d.error) msg = d.error; } catch (_) {}
+                if (total === 1) this.toast(msg, 'error');
+                finish('fail');
+            });
+            es.onerror = () => {
+                if (es.readyState === EventSource.CLOSED) {
+                    finish('fail');
+                }
+            };
+        });
+    },
+
+    // 변환 진행률 모달 표시 (압축 모달과 분리된 전용 ID)
+    showConvertProgressModal(filename) {
+        // 기존 모달 제거 (순차 변환 시 중첩 방지)
+        const old = document.getElementById('conv-progress-modal');
+        if (old) old.remove();
+        const html = `
+            <div id="conv-progress-modal" class="modal-overlay" style="display:flex; align-items:center; justify-content:center; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:10000;">
+                <div style="background:white; border-radius:12px; padding:30px; min-width:400px; max-width:90%; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                    <h3 style="margin:0 0 20px; font-size:18px;">🎬 ${t('converting','변환 중...')}</h3>
+                    <div style="margin-bottom:15px;">
+                        <div style="font-size:14px; color:#666; margin-bottom:5px;">
+                            <span id="conv-progress-filename" style="font-weight:500;">${this.escapeHtml(filename)}</span>
+                        </div>
+                        <div style="background:#e0e0e0; border-radius:10px; height:20px; overflow:hidden;">
+                            <div id="conv-progress-bar" style="background:linear-gradient(90deg, #2196F3, #03A9F4); height:100%; width:0%; transition:width 0.3s; border-radius:10px;"></div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:13px; color:#888;">
+                            <span id="conv-progress-stage">${t('preparing','준비 중...')}</span>
+                            <span id="conv-progress-percent">0%</span>
+                        </div>
+                    </div>
+                    <p style="text-align:center;margin:12px 0 0;font-size:12px;color:#aaa;">⚠️ ${t('convert_no_cancel','변환 중에는 취소할 수 없습니다. 영상 길이/화질에 따라 시간이 걸릴 수 있습니다.')}</p>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', html);
+    },
+
+    updateConvertProgress(percent, stage) {
+        const bar = document.getElementById('conv-progress-bar');
+        const stageEl = document.getElementById('conv-progress-stage');
+        const percentEl = document.getElementById('conv-progress-percent');
+        if (bar) bar.style.width = percent + '%';
+        if (stageEl && stage) stageEl.textContent = stage;
+        if (percentEl) percentEl.textContent = percent + '%';
+    },
+
+    hideConvertProgressModal() {
+        const modal = document.getElementById('conv-progress-modal');
+        if (modal) modal.remove();
+    },
+
     // ZIP 압축 해제 (진행률 표시)
     async extractZip(item, password = '') {
         if (!item || !item.name) return;
@@ -34106,7 +34384,7 @@ const App = {
                     // 네이티브 재생 가능
                     if (badgeParent) {
                         badgeParent.className = 'video-stream-badge native';
-                        const sizeStr = fileSize > 0 ? ' ' + (fileSize / (1024*1024*1024)).toFixed(1) + 'GB' : '';
+                        const sizeStr = fileSize > 0 ? ' ' + this.formatSize(fileSize) : '';
                         badgeParent.innerHTML = `▶ 일반 재생<span class="codec-info"> (${codecName}${info.resolution ? ' ' + info.resolution : ''}${sizeStr})</span>`;
                     }
                     // ★ 네이티브 재생 가능 → 코덱 체크용 차단 해제 (재생 버튼 활성화)
@@ -34573,6 +34851,11 @@ const App = {
                     const togglePlay = (e) => {
                         e.stopPropagation();
                         if (e.type === 'touchend') e.preventDefault();
+                        // ★ 더블클릭/마우스 채터링 방어: 마지막 토글 후 300ms 내 재호출 무시
+                        //   play()는 비동기라 연속 클릭 시 재생 직후 pause로 즉시 정지되는 문제 차단
+                        const _nowTP = Date.now();
+                        if (vid._lastToggleAt && _nowTP - vid._lastToggleAt < 300) return;
+                        vid._lastToggleAt = _nowTP;
                         if (window._videoDebug) {
                             // console.log('[VD CLICK] togglePlay[overlay1] isReady=' + vid._isReady + ' paused=' + vid.paused + ' hasControls=' + vid.hasAttribute('controls'));
                         }
@@ -34623,7 +34906,7 @@ const App = {
                 fsBtn.style.position = 'absolute';
                 fsBtn.style.top = 'auto';
                 fsBtn.style.right = '12px';
-                fsBtn.style.bottom = isMobile ? '150px' : '75px';
+                fsBtn.style.bottom = isMobile ? '100px' : '75px';
                 wrap.appendChild(fsBtn);
                 
                 // 모달 닫힐 때 정리
@@ -36863,7 +37146,7 @@ const App = {
         fsBtn.style.position = 'absolute';
         fsBtn.style.top = 'auto';
         fsBtn.style.right = '12px';
-        fsBtn.style.bottom = isMobile ? '150px' : '75px';
+        fsBtn.style.bottom = isMobile ? '100px' : '75px';
         wrap.appendChild(fsBtn);
         
         fsBtn.addEventListener('click', (e) => {
@@ -36952,6 +37235,10 @@ const App = {
                 const togglePlay = (e) => {
                     e.stopPropagation();
                     if (e.type === 'touchend') e.preventDefault();
+                    // ★ 더블클릭/마우스 채터링 방어: 마지막 토글 후 300ms 내 재호출 무시
+                    const _nowTP = Date.now();
+                    if (vid._lastToggleAt && _nowTP - vid._lastToggleAt < 300) return;
+                    vid._lastToggleAt = _nowTP;
                     if (window._videoDebug) {
                         // console.log('[VD CLICK] togglePlay[overlay2] isReady=' + vid._isReady + ' paused=' + vid.paused);
                     }
@@ -37657,9 +37944,15 @@ const App = {
                         
                         // 자막 크기 조절 (0.6em ~ 2.5em)
                         let subSize = parseFloat(localStorage.getItem('subSize') || '1.1');
-                        let subBottom = parseFloat(localStorage.getItem('subBottom') || '8');
-                        overlay.style.fontSize = subSize + 'em';
-                        overlay.style.bottom = subBottom + '%';
+                        // 저장값 우선; 없으면 첫 기본값을 화면별로 (모바일 15% = CSS 모바일 기본과 일치, PC 8%)
+                        const _savedSubBottom = localStorage.getItem('subBottom');
+                        let subBottom = _savedSubBottom !== null
+                            ? parseFloat(_savedSubBottom)
+                            : (window.innerWidth <= 1024 ? 15 : 8);
+                        // ★ iOS: 모바일 @media .subtitle-overlay { font-size/bottom !important } 가
+                        //   inline style을 무력화하므로 important로 설정해야 버튼 조정이 반영됨 (PC는 영향 없음)
+                        overlay.style.setProperty('font-size', subSize + 'em', 'important');
+                        overlay.style.setProperty('bottom', subBottom + '%', 'important');
                         
                         // 싱크 오프셋 (초 단위, + = 자막 빨리, - = 자막 느리게)
                         video._subSyncOffset = parseFloat(localStorage.getItem('subSyncOffset') || '0');
@@ -37674,25 +37967,25 @@ const App = {
                         subCtrl.querySelector('.sub-size-down').onclick = (e) => {
                             e.stopPropagation();
                             subSize = Math.max(0.6, subSize - 0.1);
-                            overlay.style.fontSize = subSize + 'em';
+                            overlay.style.setProperty('font-size', subSize + 'em', 'important');
                             localStorage.setItem('subSize', subSize);
                         };
                         subCtrl.querySelector('.sub-size-up').onclick = (e) => {
                             e.stopPropagation();
-                            subSize = Math.min(2.5, subSize + 0.1);
-                            overlay.style.fontSize = subSize + 'em';
+                            subSize = Math.min(4.0, subSize + 0.1);
+                            overlay.style.setProperty('font-size', subSize + 'em', 'important');
                             localStorage.setItem('subSize', subSize);
                         };
                         subCtrl.querySelector('.sub-pos-up').onclick = (e) => {
                             e.stopPropagation();
                             subBottom = Math.min(40, subBottom + 2);
-                            overlay.style.bottom = subBottom + '%';
+                            overlay.style.setProperty('bottom', subBottom + '%', 'important');
                             localStorage.setItem('subBottom', subBottom);
                         };
                         subCtrl.querySelector('.sub-pos-down').onclick = (e) => {
                             e.stopPropagation();
                             subBottom = Math.max(0, subBottom - 2);
-                            overlay.style.bottom = subBottom + '%';
+                            overlay.style.setProperty('bottom', subBottom + '%', 'important');
                             localStorage.setItem('subBottom', subBottom);
                         };
                         subCtrl.querySelector('.sub-sync-down').onclick = (e) => {

@@ -3856,6 +3856,64 @@ class FileManager {
                 $_debugLog("kill pid=$foundPid result=" . trim(str_replace(["\r","\n"], ' | ', (string)$out)));
             }
             $_debugLog("total_killed=$killCount");
+        } else {
+            // ★ v5.8.1j 케이스 F 수정 (Linux/Unix 환경 권한 fallback):
+            //   pid.txt 기반 posix_kill/kill 이 권한 부족 등으로 실패 시
+            //   (예: nginx+PHP-FPM 워커가 다른 사용자, Synology DSM 시스템 사용자 분리)
+            //   sessionId로 ffmpeg 프로세스 재검색 후 추가 kill 시도
+            //   pgrep -af → grep으로 sessionId 매칭 (ffmpeg 명령행에 sessionId 포함)
+            //   pgrep 없는 환경은 ps -ef로 fallback
+            //   ★ 보안: sessionId 추가 sanitize (방어 심층 — basename($dir) 경로 진입 시 대응)
+            $safeSid = preg_replace('/[^a-zA-Z0-9_-]/', '', $sessionId);
+            if ($safeSid !== '' && $safeSid === $sessionId) {
+                $killCount2 = 0;
+                $foundPids2 = [];
+                
+                // 방법 2-1: pgrep -af (대부분 Linux/Synology에서 사용 가능)
+                if (function_exists('shell_exec')) {
+                    $pgrepOut = @shell_exec('pgrep -af ffmpeg 2>/dev/null');
+                    if ($pgrepOut) {
+                        foreach (explode("\n", $pgrepOut) as $line) {
+                            if (strpos($line, $safeSid) !== false && preg_match('/^(\d+)\s/', trim($line), $m)) {
+                                $foundPids2[] = (int)$m[1];
+                            }
+                        }
+                    }
+                    
+                    // 방법 2-2: pgrep 결과 없으면 ps -ef fallback (BusyBox 등 pgrep 미설치 환경)
+                    if (empty($foundPids2)) {
+                        $psOut2 = @shell_exec('ps -ef 2>/dev/null');
+                        if ($psOut2) {
+                            foreach (explode("\n", $psOut2) as $line) {
+                                if (strpos($line, 'ffmpeg') !== false && strpos($line, $safeSid) !== false) {
+                                    // ps -ef 출력: UID PID PPID C STIME TTY TIME CMD
+                                    if (preg_match('/^\S+\s+(\d+)\s/', trim($line), $m)) {
+                                        $foundPids2[] = (int)$m[1];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // 발견된 PID 종료 (posix_kill → kill -9 fallback)
+                foreach ($foundPids2 as $foundPid) {
+                    if (function_exists('posix_kill')) {
+                        $r = @posix_kill($foundPid, 9);
+                        $_debugLog("linux_fallback_posix_kill pid=$foundPid result=" . ($r ? 'OK' : 'FAIL'));
+                    } elseif (function_exists('exec')) {
+                        @exec('kill -9 ' . $foundPid . ' 2>/dev/null');
+                        $_debugLog("linux_fallback_kill_-9 pid=$foundPid");
+                    } elseif (function_exists('shell_exec')) {
+                        @shell_exec('kill -9 ' . $foundPid . ' 2>/dev/null');
+                        $_debugLog("linux_fallback_shell_kill pid=$foundPid");
+                    }
+                    $killCount2++;
+                }
+                if ($killCount2 > 0) {
+                    $_debugLog("linux_total_killed=$killCount2");
+                }
+            }
         }
         
         // ffmpeg 종료 대기
@@ -3962,7 +4020,36 @@ class FileManager {
             
             // ★ 2단계: last_access.txt 없는 구버전 세션 처리
             // 30분 이상 된 세션만 대상 (안전 여유)
+            // ★ v5.8.1j 케이스 E 수정 (다른 환경 권한 문제 대응):
+            //   nginx+PHP-FPM/Synology DSM 등에서 last_access.txt 쓰기 권한 실패 시
+            //   2단계가 30분 maxAge만 사용 → 정상 재생 중인 세션도 30분 후 끊김 발생
+            //   해결: ts 세그먼트 파일 mtime을 idle 판정 보조 신호로 사용
+            //   ffmpeg가 세그먼트 만들면 mtime 갱신 — 살아있으면 idle 짧음 / 죽었으면 idle 김
+            //   ts 파일은 ffmpeg 권한으로 생성/갱신 → last_access.txt 권한 문제와 무관
             $isOld = false;
+            
+            // ★ 2-A: ts 세그먼트 mtime 기반 idle 판정 (last_access.txt 권한 fallback)
+            $tsFiles = glob($dir . '/stream*.ts');
+            if ($tsFiles) {
+                // 가장 최근 ts 세그먼트의 mtime 찾기 (max mtime)
+                $latestTsMtime = 0;
+                foreach ($tsFiles as $ts) {
+                    $m = @filemtime($ts);
+                    if ($m && $m > $latestTsMtime) $latestTsMtime = $m;
+                }
+                if ($latestTsMtime > 0) {
+                    $tsIdleAge = $now - $latestTsMtime;
+                    if ($tsIdleAge > $orphanTimeout) {
+                        // ts 파일이 10분 이상 갱신 안 됨 = ffmpeg 정지/죽음 = 고아
+                        $this->hlsCleanup($sessionId, $hlsDir);
+                        continue;
+                    }
+                    // ts 파일이 최근 갱신됨 = 재생 중 = 보호
+                    continue;
+                }
+            }
+            
+            // ★ 2-B: ts 파일도 없는 경우 (초기화 실패 또는 오래된 손상) — 30분 절대 만료
             if (file_exists($metaFile)) {
                 $meta = json_decode(file_get_contents($metaFile), true);
                 $age = $now - ($meta['created'] ?? 0);
@@ -8148,6 +8235,290 @@ class FileManager {
         ];
     }
     
+    /**
+     * 동영상을 H264/MP4로 영구 변환 (SSE 진행률 스트리밍)
+     * - 원본이 H264 → -c:v copy (재인코딩 없이 MP4 재포장, 화질/용량 원본 그대로)
+     * - 그 외(HEVC 등) → libx264 -crf 18 (원본 화질 최대 보존)
+     * - 오디오: AAC 아니면 aac 변환, 이미 aac면 copy
+     * - 출력: 같은 폴더 원본명.mp4 (충돌 시 _h264 suffix)
+     * - 이미 h264 + .mp4면 변환 불필요 알림
+     * - ★ 1단계: 변환만. 원본 휴지통 이동은 별도 단계에서 활성화(deleteOriginal)
+     * - 백그라운드 실행: 기존 7-Zip 패턴(bat + resultFile + SSE) 재사용
+     */
+    public function convertToH264Mp4(int $storageId, string $relativePath, bool $deleteOriginal = false): void {
+        @set_time_limit(0);
+        @ignore_user_abort(true);
+
+        // SSE 헤더
+        header('Content-Type: text/event-stream');
+        header('Cache-Control: no-cache');
+        header('X-Accel-Buffering: no');
+        while (ob_get_level() > 0) { @ob_end_flush(); }
+
+        $sse = function($event, $data) {
+            echo "event: {$event}\n";
+            echo 'data: ' . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n\n";
+            @flush();
+        };
+
+        // 권한
+        if (!$this->storage->checkPermission($storageId, 'can_read') ||
+            !$this->storage->checkPermission($storageId, 'can_write')) {
+            $sse('error', ['error' => __('no_permission', '권한이 없습니다')]);
+            return;
+        }
+
+        // 원격 스토리지는 미지원 (로컬 ffmpeg 필요)
+        $basePath = $this->storage->getRealPath($storageId);
+        if (!$basePath) {
+            $sse('error', ['error' => __('convert_remote_unsupported', '원격 스토리지는 변환을 지원하지 않습니다')]);
+            return;
+        }
+
+        $fullPath = $this->buildPath($basePath, $relativePath);
+        if (!$this->isPathSafe($basePath, $fullPath) || !is_file($fullPath)) {
+            $sse('error', ['error' => __('file_not_found', '파일을 찾을 수 없습니다')]);
+            return;
+        }
+
+        $ffmpeg = $this->findFfmpeg();
+        if (!$ffmpeg) {
+            $sse('error', ['error' => __('ffmpeg_not_found', 'ffmpeg를 찾을 수 없습니다')]);
+            return;
+        }
+
+        $sse('progress', ['percent' => 0, 'stage' => __('convert_probing', '코덱 분석 중...')]);
+
+        // 1) 코덱/길이 프로브
+        $probeOut = @shell_exec(escapeshellarg($ffmpeg) . ' -i ' . escapeshellarg($fullPath) . ' 2>&1') ?? '';
+        $videoCodec = '';
+        $audioCodec = '';
+        if (preg_match('/Stream\s+#\d+:\d+.*Video:\s*(\w+)/i', $probeOut, $vm)) {
+            $videoCodec = strtolower($vm[1]);
+        }
+        if (preg_match('/Stream\s+#\d+:\d+.*Audio:\s*(\w+)/i', $probeOut, $am)) {
+            $audioCodec = strtolower($am[1]);
+        }
+        // 총 길이(초) — 진행률 계산용
+        $durationSec = 0.0;
+        if (preg_match('/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/', $probeOut, $dm)) {
+            $durationSec = (int)$dm[1] * 3600 + (int)$dm[2] * 60 + (float)$dm[3];
+        }
+
+        $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
+
+        // 2) 이미 h264 + mp4 컨테이너면 변환 불필요
+        if ($videoCodec === 'h264' && $ext === 'mp4') {
+            $sse('skip', [
+                'message' => __('convert_already_h264_mp4', '이미 H264/MP4 형식입니다. 변환이 필요 없습니다.'),
+                'video_codec' => $videoCodec,
+            ]);
+            return;
+        }
+
+        // 3) 출력 경로 결정 (충돌 회피)
+        $dir = dirname($fullPath);
+        $baseName = pathinfo($fullPath, PATHINFO_FILENAME);
+        $outName = $baseName . '.mp4';
+        $outPath = $dir . DIRECTORY_SEPARATOR . $outName;
+        if (file_exists($outPath) && realpath($outPath) !== realpath($fullPath)) {
+            // 동일 폴더에 같은 이름 mp4가 이미 있으면 _h264 suffix
+            $outName = $baseName . '_h264.mp4';
+            $outPath = $dir . DIRECTORY_SEPARATOR . $outName;
+            $i = 2;
+            while (file_exists($outPath)) {
+                $outName = $baseName . '_h264_' . $i . '.mp4';
+                $outPath = $dir . DIRECTORY_SEPARATOR . $outName;
+                $i++;
+            }
+        }
+        // 출력 경로도 안전성 검증
+        if (!$this->isPathSafe($basePath, $outPath)) {
+            $sse('error', ['error' => __('convert_output_unsafe', '출력 경로가 올바르지 않습니다')]);
+            return;
+        }
+
+        // 4) 코덱 인자 결정
+        //    오디오: aac면 copy, 아니면 aac 192k
+        $aArgs = ($audioCodec === 'aac')
+            ? '-c:a copy'
+            : '-c:a aac -b:a 192k';
+
+        // 비디오 인코딩 방식 결정
+        //  - h264 입력 → copy (재인코딩 없음, 화질/용량 그대로)
+        //  - 그 외(HEVC/WMV/VC-1 등) → HW(Intel QSV 등) 우선 시도, 실패 시 SW(libx264) 폴백
+        $isCopy = ($videoCodec === 'h264');
+        // SW 명령(폴백/최종): libx264 화질 우선
+        $swVArgs = '-c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p';
+        // HW 명령: detectHwEncoder가 동작 확인된 인코더 반환 (libx264면 HW 없음 → SW만)
+        $hwArgsRaw = $isCopy ? '' : $this->detectHwEncoder($ffmpeg);
+        $hwAvailable = (!$isCopy && $hwArgsRaw !== '' && strpos($hwArgsRaw, 'libx264') === false);
+        // HW 화질 우선 조정: 실시간용 global_quality 23 → 변환용 20(화질↑). qp 23 → 20.
+        $hwVArgs = $hwArgsRaw;
+        if ($hwAvailable) {
+            $hwVArgs = preg_replace('/-global_quality\s+\d+/', '-global_quality 20', $hwVArgs);
+            $hwVArgs = preg_replace('/-qp\s+\d+/', '-qp 20', $hwVArgs);
+            $hwVArgs = preg_replace('/-qp_i\s+\d+/', '-qp_i 20', $hwVArgs);
+            $hwVArgs = preg_replace('/-qp_p\s+\d+/', '-qp_p 20', $hwVArgs);
+            // 변환은 실시간이 아니므로 속도 preset을 화질 쪽으로 (qsv veryfast→medium)
+            $hwVArgs = preg_replace('/-preset\s+veryfast/', '-preset medium', $hwVArgs);
+        }
+
+        $progressFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_conv_prog_' . md5($outPath . microtime(true)) . '.txt';
+
+        // 변환 명령 빌더 (vArgs만 다르게)
+        $buildConvCmd = function($vArgs) use ($ffmpeg, $fullPath, $aArgs, $progressFile, $outPath) {
+            return escapeshellarg($ffmpeg)
+                . ' -y -i ' . escapeshellarg($fullPath)
+                . ' -map 0:v:0 -map 0:a? '
+                . $vArgs . ' ' . $aArgs
+                . ' -movflags +faststart'
+                . ' -progress ' . escapeshellarg($progressFile)
+                . ' ' . escapeshellarg($outPath);
+        };
+
+        // 첫 시도: copy면 copy, HW 가능하면 HW, 아니면 SW
+        $firstVArgs = $isCopy ? '-c:v copy' : ($hwAvailable ? $hwVArgs : $swVArgs);
+        $firstMode = $isCopy ? 'copy' : ($hwAvailable ? 'hw' : 'libx264');
+
+        $sse('progress', ['percent' => 1, 'stage' => __('convert_encoding', '변환 중...'),
+            'mode' => $firstMode, 'src_codec' => $videoCodec]);
+
+        // 5) 백그라운드 실행 클로저 (vArgs 받아 실행, resultFile/stderrLog 반환)
+        $runConv = function($vArgs) use ($buildConvCmd, $outPath, $progressFile) {
+            @unlink($progressFile);
+            @unlink($outPath);
+            $cmd = $buildConvCmd($vArgs);
+            $resultFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_conv_result_' . md5($outPath . microtime(true)) . '.txt';
+            $stderrLog  = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_conv_err_' . md5($outPath . microtime(true)) . '.txt';
+            @unlink($resultFile);
+            @unlink($stderrLog);
+            if (PHP_OS_FAMILY === 'Windows') {
+                $batFile = sys_get_temp_dir() . '\\fs_conv_' . md5(uniqid()) . '.bat';
+                $batContent = "@echo off\r\nchcp 65001 >nul\r\n" . $cmd . ' 2>"' . $stderrLog . '"' . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
+                @file_put_contents($batFile, $batContent);
+                pclose(popen('start /b cmd /c "' . $batFile . '"', 'r'));
+            } else {
+                $bgCmd = '(' . $cmd . ' 2>' . escapeshellarg($stderrLog) . '; echo $? > ' . escapeshellarg($resultFile) . ') > /dev/null 2>&1 &';
+                @exec($bgCmd);
+            }
+            return [$resultFile, $stderrLog];
+        };
+
+        // HW 에러 패턴 (실시간 트랜스코딩과 동일 — HW 실패 시 SW 폴백 트리거)
+        $hwErrorPatterns = [
+            '/No capable devices found/i',
+            '/not supported by the QSV runtime/i',
+            '/\[h264_qsv[^\]]*\].*Error while opening/i',
+            '/\[h264_nvenc[^\]]*\].*failed/i',
+            '/\[h264_amf[^\]]*\].*failed/i',
+            '/Error initializing output stream/i',
+            '/Device creation failed/i',
+        ];
+
+        // 첫 실행 (copy/HW/SW). HW로 시작했으면 실패 시 SW 폴백 가능.
+        $curVArgs = $firstVArgs;
+        $triedSw = $isCopy || !$hwAvailable; // copy거나 처음부터 SW면 폴백 불필요
+        list($resultFile, $stderrLog) = $runConv($curVArgs);
+
+        // 6) 진행률 폴링 (ffmpeg -progress 파일의 out_time_ms 사용)
+        $startTime = time();
+        $maxWait = 3600; // 최대 1시간
+        $lastPercent = 1;
+        $clientGone = false;
+        while (true) {
+            if (!$clientGone && connection_aborted()) {
+                // 클라이언트 끊김 — SSE 전송은 멈추지만, ffmpeg 완료/임시파일 정리를 위해 폴링은 계속
+                // (ignore_user_abort(true) 설정되어 있어 PHP는 계속 실행됨)
+                $clientGone = true;
+            }
+            // 완료 감지
+            if (file_exists($resultFile)) {
+                clearstatcache();
+                $code = trim(@file_get_contents($resultFile) ?: '');
+                @unlink($resultFile);
+                $okOutput = ($code === '0' && is_file($outPath) && filesize($outPath) > 0);
+
+                // HW 실패 → SW(libx264) 1회 폴백 (아직 SW 안 써봤을 때만)
+                if (!$okOutput && !$triedSw) {
+                    $errLog = @file_get_contents($stderrLog) ?: '';
+                    $hwFailed = true; // 출력 실패면 폴백 시도 (패턴 매칭은 로그 확인용 보조)
+                    foreach ($hwErrorPatterns as $pat) {
+                        if (preg_match($pat, $errLog)) { $hwFailed = true; break; }
+                    }
+                    @unlink($stderrLog);
+                    if ($hwFailed) {
+                        $triedSw = true;
+                        $curVArgs = $swVArgs;
+                        $lastPercent = 1;
+                        if (!$clientGone) {
+                            $sse('progress', ['percent' => 1, 'stage' => __('convert_sw_fallback', '하드웨어 변환 실패 — CPU로 재시도...'), 'mode' => 'libx264']);
+                        }
+                        list($resultFile, $stderrLog) = $runConv($curVArgs);
+                        $startTime = time(); // 타임아웃 리셋
+                        usleep(500000);
+                        continue;
+                    }
+                }
+                @unlink($stderrLog);
+                @unlink($progressFile);
+                if ($okOutput) {
+                    // 검증: 출력이 실제로 h264인지 확인
+                    $verifyOut = @shell_exec(escapeshellarg($ffmpeg) . ' -i ' . escapeshellarg($outPath) . ' 2>&1') ?? '';
+                    $okH264 = (bool)preg_match('/Video:\s*h264/i', $verifyOut);
+                    if (!$okH264) {
+                        @unlink($outPath);
+                        $sse('error', ['error' => __('convert_verify_fail', '변환 결과 검증 실패 (H264 아님)')]);
+                        return;
+                    }
+                    $outRel = ltrim(str_replace($basePath, '', $outPath), '/\\');
+                    $outRel = str_replace(DIRECTORY_SEPARATOR, '/', $outRel);
+
+                    // ★ 원본 휴지통 이동 (deleteOriginal=true일 때만 — 3단계에서 활성화)
+                    $trashed = false;
+                    if ($deleteOriginal) {
+                        // 출력과 원본이 다른 파일일 때만 (안전장치)
+                        if (realpath($outPath) !== realpath($fullPath)) {
+                            $tr = $this->moveToTrash($storageId, $relativePath, $fullPath);
+                            $trashed = !empty($tr['success']);
+                        }
+                    }
+                    $sse('done', [
+                        'percent' => 100,
+                        'output' => $outRel,
+                        'output_name' => $outName,
+                        'size' => filesize($outPath),
+                        'original_trashed' => $trashed,
+                        'mode' => ($isCopy ? 'copy' : ($curVArgs === $swVArgs ? 'libx264' : 'hw')),
+                    ]);
+                    return;
+                } else {
+                    @unlink($outPath); // 실패 시 불완전 출력 제거
+                    $sse('error', ['error' => __('convert_failed', '변환 실패') . ' (code=' . $code . ')']);
+                    return;
+                }
+            }
+            // 진행률 갱신
+            if ($durationSec > 0 && file_exists($progressFile)) {
+                $pc = @file_get_contents($progressFile) ?: '';
+                if (preg_match_all('/out_time_ms=(\d+)/', $pc, $om) && !empty($om[1])) {
+                    $outMs = (int)end($om[1]);
+                    $cur = $outMs / 1000000.0; // us → s
+                    $percent = (int)min(99, max($lastPercent, ($cur / $durationSec) * 100));
+                    if ($percent > $lastPercent) {
+                        $lastPercent = $percent;
+                        $sse('progress', ['percent' => $percent, 'stage' => __('convert_encoding', '변환 중...')]);
+                    }
+                }
+            }
+            if (time() - $startTime > $maxWait) {
+                $sse('error', ['error' => __('convert_timeout', '변환 시간 초과')]);
+                return;
+            }
+            usleep(500000); // 0.5s
+        }
+    }
+
     /**
      * 폴더 내 오디오 파일 duration 일괄 조회 (캐시 + 하이브리드 고속 추출)
      * - MP3: PHP로 프레임 헤더 읽어서 계산 (수 KB만 읽음, 매우 빠름)

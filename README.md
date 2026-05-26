@@ -1,4 +1,11 @@
-# FileStation v5.8.1i
+# FileStation v5.8.1j
+
+![version](https://img.shields.io/badge/version-v5.8.1j-blue)
+![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
+![license](https://img.shields.io/badge/license-GPL--3.0-green)
+![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
+![rhwp](https://img.shields.io/badge/rhwp-0.7.13-9cf)
+![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
 
@@ -8,7 +15,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.12 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.13 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -193,7 +200,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.12 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.13 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -481,7 +488,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.12** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.13** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -493,7 +500,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1i.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1j.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -584,7 +591,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'FileStation');
-define('APP_VERSION', '5.8.1i');
+define('APP_VERSION', '5.8.1j');
 
 // 데이터 경로
 define('DATA_PATH', __DIR__ . '/data');
@@ -677,7 +684,7 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.12의 베타 단계 제한, HWP 형식만 저장 가능
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.13의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -712,11 +719,254 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1i (rhwp 0.7.12 기반)
+**현재 버전**: v5.8.1j (rhwp 0.7.13 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1i (2026-05-15) ⭐ 현재
+#### v5.8.1j (2026-05-18) ⭐ 현재
+
+**추가 — [rhwp 0.7.12 → 0.7.13 업그레이드] (2026-05-26)**
+
+펜닐님 요청. 펜닐 룰 부합 (npm 정식 배포 후 진행, 검증된 절차):
+- **npm @rhwp/core 0.7.13 tarball** 다운로드 (shasum 검증: f9fd6a31...) — 진본 확인
+- **GitHub v0.7.13 태그** clone — rhwp-studio 빌드 입력으로 사용
+- **rhwp-studio 빌드** (npm install + tsc + vite build)
+  - `vite.config.ts`에 `base: './'` 안전 추가 (옵션 B) — PWA 플러그인 + 커스텀 `serve-samples-dir` 플러그인 + alias(@/@wasm) 보존
+- **파일 교체** (assets/rhwp/):
+  - core: `rhwp.js` + `rhwp_bg.wasm` (5.06MB, npm tarball md5 일치 — 진본)
+  - studio: `index-EQbwmbnL.js` → `index-B0ptdqhv.js`, `index-C_SbAHsx.css` → `index-Dp_1IBLX.css`, `rhwp_bg-BSNi2Fvg.wasm` → `rhwp_bg-CWgV9Qnr.wasm`
+  - 정적 자산: favicon.ico + fonts (37파일) + images (1파일) 0.7.13 빌드로 동기화
+  - 이전 해시 파일 자동 정리 (각 1개씩만 잔존)
+- **패치** (이전 0.7.10~0.7.12 작업과 동일):
+  - J1 (Ctrl+S file:save 매핑 제거): ✅ 1개 매칭, 메뉴 정의 유지
+  - J2 (Ctrl+P file:print 매핑 제거): ✅ 1개 매칭
+  - P2 (CSS url 경로): ✅ `url(../images/)` → `url(images/)` (P1은 0건)
+  - 다른 단축키 매핑 15개(Ctrl+Z/Y/A/E/O/B 등) 보존 — 의도한 2개만 제거 확인
+- **rhwp_editor.php / rhwp_viewer.php**:
+  - editor: studio 파일명 갱신 (3줄) + `@rhwp_version 0.7.13`
+  - viewer: `@rhwp_version 0.7.13` (1줄)
+  - 커스텀 로직(save/save-as/Blob 캡처/Ctrl+S 핸들러/MutationObserver/notifyParentFileChanged) 무변경 — 백업 대비 diff로 확인
+- **0.7.13 변경 사항** (CHANGELOG 사전 점검 — 0.7.12 후속 patch 사이클):
+  - HWPX → HWP 저장 호환성 대폭 보강 (표/셀 axis, gradient BORDER_FILL, 메모 컨트롤, 목차 필드 등)
+  - HWPX 렌더링 정합 (바탕쪽/머리말꼬리말/문단번호/글상자, exam_kor/exam_social/hwp3-sample16 한컴 변환본 SVG 시각 정합)
+  - 페이지네이션·조판 정정 (treat_as_char LINE_SEG, 중첩 표 분할, 그림 pushdown/vpos)
+  - rhwp-studio: TAC 도형 커서 이동 개선, Chrome 확장 file:// 접근 안내 (#1131/#1132)
+  - 외부 PR #1077/#1078/#1080/#1117/#1120/#1125 등 cherry-pick
+  - 이미지 비율 회귀(0.7.6 PR #335류) 신규 없음 — 정정 위주, 렌더링 회귀 없음
+- **ABI 호환성**: viewer.php import 심볼(HwpDocument, version, renderPageSvg) 0.7.13 core에 모두 존재 ✓
+- **검증** (16/16 통과):
+  - editor.php 참조 파일명 ↔ 실제 studio 파일 일치 ✓
+  - file:save 메뉴 정의 유지 (마우스 클릭 동작) ✓
+  - J1/J2 패치 매칭 + HWPX canExecute 차단 유지(`sourceFormat!==hwpx`) ✓
+  - CSS 참조 이미지(icon_small_ko.svg) 실제 존재 ✓
+  - url(images/) 정규형 ✓
+  - PHP 커스텀 로직 무변경 + 캐시 버스팅 보존 ✓
+  - `@rhwp_version 0.7.13` (editor + viewer) ✓
+- ⚠️ FileStation 버전 유지 (v5.8.1j — 펜닐 룰, "버전 올려줘" 명시 없음, 재패키징)
+
+**[2차 세션] 자막 컨트롤 iOS 작동 / 배지 용량 단위 / 재생 안정성 (펜닐님 보고)**
+
+펜닐님 보고 다건을 정밀 진단 후 수정. 모두 데이터/실측으로 원인 확정, 추측 수정 0건.
+
+**🟢 A. 자막 크기/위치 조절 4개 버튼 iOS 작동 안 됨**
+
+- **현상**: 일반 동영상 미리보기에서 iOS만 자막 컨트롤 4개 버튼(A-/A+/▲/▼) 무반응. PC는 정상. 같은 영역 싱크 버튼(-0.5s/+0.5s/↺)은 iOS도 정상.
+- **원인** (펜닐님 "싱크는 됨" 정보로 확정): 모바일 `@media (max-width:1024px) .subtitle-overlay { font-size: 0.95em !important; bottom: 15% !important }`가 JS의 inline style을 우선순위로 무력화. JS 핸들러는 정상 작동했으나 `overlay.style.fontSize`/`bottom` 변경이 CSS `!important`에 눌려 화면 미반영. 싱크 버튼은 `video._subSyncOffset`/`textContent`만 건드려 무관 → 정상.
+- **해결** (`assets/js/app.js` 자막 초기화/핸들러 5곳): `overlay.style.fontSize = ...` → `overlay.style.setProperty('font-size', ..., 'important')`, `bottom`도 동일. inline `!important`가 CSS `!important`를 이김. 버튼 안 누르면 모바일 기본값 유지 → 회귀 없음.
+- **자막 첫 기본 위치 분기**: `subBottom` 저장값 없을 때 모바일(≤1024px) 15% / PC 8% (CSS 모바일 기본 15%와 일치). 저장값은 `localStorage !== null`로 판정해 0% 저장도 정상 복원(기존 `||'8'`의 falsy 버그 해소). 한 번이라도 ▲/▼ 조정 시 저장값 우선(모바일/PC/전체화면 공통).
+- **자막 A+ 최대 크기**: `Math.min(2.5, ...)` → `Math.min(4.0, ...)` (기본 1.1em 대비 약 3.6배까지).
+
+**🟢 B. 모바일 세로 전체화면 버튼 위치**
+
+- **현상**: 전체화면 버튼이 200px(이전 세션 값)에서 세로로 긴 동영상의 영상 영역에 걸림.
+- **해결** (`assets/js/app.js` 2곳): `fsBtn.style.bottom = isMobile ? '200px' : '75px'` → `'100px' : '75px'`. PC 75px 무변경. 세로 모바일 CSS `bottom:8px`는 `!important` 없어 인라인 100px가 정상 우선.
+
+**🟢 C. 일반 재생 배지 용량 단위 (트랜스코딩 배지 제외)**
+
+- **현상**: 일반 재생 배지 용량이 항상 GB 고정 → 100MB가 0.1GB, 100MB 이하 0.0GB로 표시.
+- **메인앱 해결** (`assets/js/app.js`): `(fileSize/1024^3).toFixed(1)+'GB'` → `this.formatSize(fileSize)` (코드베이스 공용 함수, B/KB/MB/GB 자동). 100MB→"100.0 MB".
+- **공유 페이지 추가** (`share.php` 일반재생 배지): `(코덱 해상도)` → `(코덱 해상도 용량)`. `config.php`의 전역 `formatFileSize($fileSize)` 재사용(share.php가 config.php require). `$fileSize`는 항상 초기화 + `htmlspecialchars` 이스케이프. PHP 실행테스트 5케이스 warning 0.
+- **트랜스코딩 배지는 양쪽 제외** (펜닐님 결정). 메인앱 트랜스코딩 배지 실제 표시는 `⚡ HLS 스트리밍 HW : Intel`(인코더 정보만, 코덱/해상도/용량 없음).
+
+**🟢 D. 재생 버튼 더블클릭 / 마우스 채터링 방어 (일반/공유 공통)**
+
+- **현상**: 일반 재생에서 한 번 클릭인데 재생→즉시정지 또는 무반응 (간헐적). 트랜스코딩은 증상 거의 없음.
+- **원인** (펜닐님 "일반재생만, 한번 클릭인데 더블클릭 증상" 정보로 확정): `vid.play()`가 비동기(Promise)라, 채터링/더블클릭 시 1번째 클릭=play 시작 → 2번째 클릭 시점엔 `vid.paused=false`라 pause() 실행 → 즉시 정지. 무반응은 play Promise pending 중 pause 끼어들어 AbortError. (바인딩 자체는 방어됨: 일반재생=1회, 트랜스코딩=cloneNode 교체.)
+- **해결** (togglePlay 3곳: app.js 일반재생/트랜스코딩, share.php): 핸들러 맨 앞에 300ms 디바운스 — `if (vid._lastToggleAt && Date.now()-vid._lastToggleAt<300) return; vid._lastToggleAt=Date.now();`. `_lastToggleAt`은 video/player 객체 속성이라 video 교체 시에도 안전(새 객체 첫 클릭 통과). 다른 재생경로(자동재생/미디어세션/키보드)는 togglePlay 안 거쳐 영향 0.
+- **검증**: 시뮬레이션 — 단일클릭 통과 / 더블클릭 차단(재생 유지) / 시간차(300ms↑) 정지 정상.
+
+**보류 (펜닐님 "패스" 결정):**
+- 재생버튼(▶)과 브라우저 네이티브 로딩 인디케이터(검은 호) 중심 어긋남 — PC/iOS 공통, 잠깐 표시. 우리 코드에 영상 위 회전 스피너 요소 없음 확인 → 브라우저가 video 위에 직접 그리는 네이티브 인디케이터. CSS/JS 위치 제어 불가(표준 방법 없음). 멀쩡한 video-not-ready 로직 안 건드림.
+
+**오진단 정정 (자기 점검):**
+1. 자막 4개 버튼 → "iOS click 이벤트 문제" 추정 → 펜닐님 "싱크는 됨"으로 정정, 실제는 CSS `!important`.
+2. 트랜스코딩 배지에 "코덱 있다" 단언 → 실제 `⚡ HLS 스트리밍 HW : Intel`(인코더만). 펜닐님 지적 정정.
+3. 재생버튼 → "더블 바인딩" 의심 → 코드 추적 결과 바인딩 방어됨, 실제는 play() 비동기+디바운스 부재. 펜닐님 정보로 확정.
+
+**안전성:** 변경 파일 app.js/share.php 2개만(CSS/config/api 무변경). app.js `node --check` OK, share.php/config.php `php -l` OK. 인증/escape/보안함수 무변경. 검증영역(togglePlay 본체/_isReady 가드/cloneNode 바인딩) 무변경 — 가드만 앞에 추가.
+
+---
+
+**[1차 세션] HLS ffmpeg 자동 종료 신뢰성 개선 — 비정상 종료 케이스 + 다른 환경 권한 문제 해결**
+
+펜닐님 질문 "동영상 닫히면 ffmpeg가 자동 종료되어 자원 문제 해결되는가?" 에 대한 정밀 검토 후 발견된 6개 케이스 중 5개 해결.
+
+**검토 배경:**
+- 펜닐님 환경 (Windows + Apache + 단일 사용자)에서는 정상 동작 확인됨
+- 그러나 다른 환경 (Linux + nginx + PHP-FPM, Synology DSM, Docker 등)에서는 비정상 종료 시 ffmpeg 잔존 가능성 발견
+- 6개 케이스 분석: A(모바일 끊김) / B(브라우저 충돌) / C(iOS 백그라운드 종료) / D(마지막 사용자 후 새 요청 없음) / E(권한 실패) / F(taskkill 실패)
+
+**🟢 1. HLS orphan 세션 자동 청소 (옵션 C — 케이스 A/B/C/D 해결)**
+
+- **문제**: 기존 `hlsCleanupStale`은 **새 HLS 요청 시에만 호출됨**
+  - → 비정상 종료(브라우저 충돌/iOS 백그라운드/네트워크 끊김) 후 새 HLS 요청 없으면 ffmpeg가 계속 살아 자원 점유
+- **해결 (`api.php` storages case)**:
+  - 페이지 로드 시 반드시 호출되는 `storages` 액션에서 청소 시도
+  - 5분 throttle (`data/hls_last_cleanup.txt`)로 호출 빈도 제한
+  - try-catch로 청소 실패 시 응답 무영향
+  - 활성 세션은 `last_access.txt` 기반으로 보호됨
+- **효과**:
+  - A/B/C: ✅ 10분 대기 → **다음 페이지 로드 시 즉시 청소**
+  - D: 🟡 영구 → **다음 방문 사용자 있을 때 청소** (실용적 해결)
+- **안전성**:
+  - 기존 `hlsCleanupStale()` 로직 무변경 (검증된 코드 재사용)
+  - 5분 throttle로 성능 영향 0
+  - try-catch 격리, LOCK_EX 파일 쓰기로 동시성 안전
+  - `data/.htaccess`가 외부 접근 차단, 인증(requireLogin) 후 호출
+
+**🟢 2. 케이스 E 해결 — `last_access.txt` 갱신 권한 실패 대응**
+
+- **환경**: nginx+PHP-FPM 워커가 다른 사용자, Synology DSM 시스템 사용자 분리 등
+- **증상**: `@file_put_contents()` 조용히 실패 → hlsCleanupStale 2단계가 30분 maxAge만 사용 → 정상 재생 중인 세션도 30분 후 강제 종료 → **30분 이상 영상 시청 시 끊김** ⚠️
+- **해결 (`api/FileManager.php` hlsCleanupStale 2단계)**:
+  - **2-A 추가**: ts 세그먼트 파일(`stream*.ts`) mtime을 idle 판정 보조 신호로 사용
+  - ffmpeg가 ts 파일 생성/갱신 → ffmpeg 권한으로 생성 → `last_access.txt` 권한과 무관
+  - 마지막 ts mtime 10분 이내 = 재생 중 → 보호 / 10분 초과 = 고아 → 정리
+  - **2-B**: ts 파일도 없는 손상 케이스는 기존 30분 maxAge 로직 fallback으로 유지
+
+**🟢 3. 케이스 F 해결 — Linux/Unix taskkill 실패 fallback 추가**
+
+- **환경**: Linux+nginx+PHP-FPM 워커가 ffmpeg 실행 사용자와 다른 경우, Synology http 사용자 등
+- **기존 코드**: Windows는 `wmic`+`PowerShell` fallback 있음, **Linux는 fallback 없음** ⚠️
+- **해결 (`api/FileManager.php` hlsCleanup Linux `else` 경로)**:
+  - Windows 경로(`if`): 변경 없음 — 펜닐님 환경 영향 0
+  - Linux/Unix `else` 경로에 sessionId 기반 ffmpeg 재검색 추가:
+    - 방법 2-1: `pgrep -af ffmpeg` (대부분 Linux/Synology 사용 가능)
+    - 방법 2-2: `ps -ef` fallback (BusyBox 등 pgrep 미설치 환경)
+    - 발견 후 `posix_kill` → `exec('kill -9')` → `shell_exec('kill -9')` 우선순위
+- **보안 — 방어 심층**:
+  - sessionId 추가 sanitize (`preg_replace('/[^a-zA-Z0-9_-]/', '', ...)`)
+  - 원본 sessionId와 일치 여부 검증 (불일치 시 작업 안 함)
+  - basename($dir) 경로로 호출돼도 안전
+
+**환경별 영향 종합:**
+
+| 환경 | A | B | C | D | E | F |
+|---|---|---|---|---|---|---|
+| Windows (펜닐님) | ✅ | ✅ | ✅ | 🟡 | (해당없음) | (해당없음) |
+| Linux 일반 | ✅ | ✅ | ✅ | 🟡 | ✅ 해결 | ✅ 해결 |
+| nginx+PHP-FPM | ✅ | ✅ | ✅ | 🟡 | ✅ 해결 | ✅ 해결 |
+| Synology DSM | ✅ | ✅ | ✅ | 🟡 | ✅ 해결 | ✅ 해결 |
+| Docker | ✅ | ✅ | ✅ | 🟡 | ✅ 해결 | ✅ 해결 |
+
+🟡 D (영구 잔존): 마지막 사용자 후 0명 방문 케이스 — cron만 완전 해결 가능. 다만 누구든 방문 시 해결됨.
+
+**변경 파일:**
+- `config.php`: APP_VERSION `5.8.1i` → `5.8.1j`
+- `api.php`: storages case에 hlsCleanupStale throttled 호출 추가 (try-catch 격리)
+- `api/FileManager.php`:
+  - hlsCleanupStale 2단계에 ts mtime 기반 idle 판정 추가 (케이스 E)
+  - hlsCleanup Linux else 경로에 sessionId 기반 ffmpeg 재검색 fallback 추가 (케이스 F)
+- `assets/js/app.js` (FSAudioPlayer 클래스):
+  - 생성자: artwork maintenance 인스턴스 변수 4개 추가
+  - `_updateMediaSession`: `_currentMetadata` 저장 + `_startArtworkMaintenance()` 호출 추가
+  - 신규 메서드 3개 추가: `_startArtworkMaintenance` / `_checkAndRestoreArtwork` / `_forceRefreshArtwork`
+  - `_loadTrack`: 트랙 변경 시 `_lastForceRefreshMin` 리셋
+  - `destroy()`: artwork maintenance 타이머 정리 + metadata null
+- `assets/css/style.css`:
+  - 모바일 비디오 미리보기 시 modal-body 높이 고정 (컨트롤 위치 고정, 방안 C)
+  - 모바일 세로 작은 영상에서 wrap이 flex shrink되지 않도록 align-self:stretch (컨트롤 shrink 방지 후속 수정)
+
+**펜닐 룰 준수:**
+- ✅ Windows 경로 완전 무변경 (펜닐님 환경 회귀 위험 0)
+- ✅ 펜닐님 검증된 영역 (FileManager 코어, 1단계 종료 로직) 무변경
+- ✅ 보안 코드 무변경, sanitize는 강화만
+- ✅ `function_exists` 체크로 `disable_functions` 환경 안전
+- ✅ 추측 수정 0건 — 펜닐님 질문 기반 정밀 진단 후 안전한 fallback만 추가
+- ✅ 최소 변경: Windows 경로 0, Linux 경로 fallback만 추가
+
+**🟢 4. iOS 잠금화면 음악 썸네일 사라짐 수정 (z_music 검증 패턴 이식)**
+
+펜닐님 보고: "긴 음악 파일 재생 시 아이폰 잠금화면 썸네일이 나오다가 안 나옴".
+
+- **원인 정밀 진단**:
+  - iOS Safari는 긴 음악 재생(1시간+) 시 메모리 관리로 MediaSession metadata 캐시 무효화
+  - FileStation의 `_updateMediaSession`은 트랙 변경/visibilitychange 이벤트 기반만 호출 → 시간 경과 시 metadata 잃어버려도 갱신 안 됨
+  - 펜닐님 다른 프로젝트(Rhymix CMS의 `z_music`, `simple_mp3_player`)는 이미 동일 문제로 30초 체크 + 2분 강제 갱신 패턴 적용됨 (검증 완료)
+  - **FileStation에는 미적용** — 이번 v5.8.1j에서 동일 패턴 이식
+- **해결 — z_music 검증 패턴 그대로 이식 (`assets/js/app.js` FSAudioPlayer 클래스)**:
+  - 생성자: 인스턴스 변수 `_artworkMaintenanceTimer`, `_lastArtworkCheck`, `_currentMetadata`, `_lastForceRefreshMin` 추가
+  - `_updateMediaSession`: metadata 설정 후 `_currentMetadata` 저장 + `_startArtworkMaintenance()` 호출
+  - **신규 메서드 3개 추가**:
+    - `_startArtworkMaintenance()`: 30초 setInterval 타이머 시작 (재생 중일 때만, 25초 throttle)
+    - `_checkAndRestoreArtwork()`: artwork 손실 감지 + 2분 경계마다 강제 갱신 (재생 시간 기준)
+    - `_forceRefreshArtwork()`: `_currentMetadata`로 metadata 재설정 (z_music 동일)
+  - `_loadTrack`: 트랙 변경 시 `_lastForceRefreshMin = -1` 리셋 (이전 트랙 분 경계 제거)
+  - `destroy()`: `clearInterval` + `_currentMetadata = null` cleanup (메모리 누수 방지)
+- **효과**:
+  - iOS 잠금화면에서 1시간+ 음악 재생 시에도 썸네일 유지
+  - 30초마다 손실 감지 → 즉시 복구
+  - 2분마다 강제 갱신 → 시스템 레벨 무효화 대응
+- **안전성**:
+  - z_music에서 검증된 패턴 그대로 이식 (펜닐님 실사용 확인됨)
+  - 기존 `_updateMediaSession` 함수 본체 무변경 (metadata 객체 추출 + 2줄만 추가)
+  - 재생 중일 때만 동작 (`audio.paused` 체크) → 배터리 영향 최소
+  - 25초 throttle로 호출 빈도 제한
+  - 인스턴스 변수 (window 전역 안 씀) → 다른 페이지 영향 0
+  - iOS 외 환경 (안드/PC)도 안전 (mediaSession 표준 동작)
+- **펜닐 룰 준수**:
+  - 검증된 영역 (모바일 가로 UI, _vsRender, FSAudioPlayer 코어) 무변경
+  - 추측 수정 0건 — z_music 검증 패턴 정확 이식
+  - 보안 코드 무변경 (PHP/Windows 무관, JS만)
+
+**🟢 5. 모바일 세로 동영상 미리보기 컨트롤 위치 고정 (방안 C)**
+
+펜닐님 보고: "모바일 세로모드에서 자막/전체화면 등 컨트롤이 동영상 크기에 따라 움직임. PC처럼 화면(모달) 고정 위치 원함".
+
+- **원인 정밀 진단**:
+  - 모바일 `.modal-preview .modal-body`가 `height` 없이 `max-height: calc(100vh-60px)`만 있어서 비디오 크기에 따라 modal-body 높이 가변
+  - → 그 안의 `.video-player-wrap`(height:100%)도 가변
+  - → 모든 컨트롤(자막/전체화면/인코더 뱃지/화질/오디오)이 wrap 기준 absolute라서 비디오 크기 따라 이동
+  - 데스크탑은 `.modal-preview { height: 80vh }` 고정이라 컨트롤도 고정 → 환경 차이 발생
+- **해결 (`assets/css/style.css` 모바일 영역)**:
+  - 비디오일 때만 modal-body를 화면 높이로 고정 → wrap 고정 → 모든 컨트롤 위치 일괄 고정
+  - 선택자: `.modal-preview:not(.preview-immersive) .modal-body:has(.video-player-wrap) { height: calc(100vh - 60px) !important; }`
+- **효과**:
+  - 자막/전체화면/인코더 뱃지/화질/오디오 컨트롤 모두 PC처럼 모달 기준 고정
+  - 세로/가로 동영상 비율 무관하게 일관된 위치
+- **안전성**:
+  - `:has(.video-player-wrap)`로 비디오 미리보기만 영향 → 이미지/PDF/오디오 미리보기 무영향
+  - `:not(.preview-immersive)`로 모바일 가로 immersive 모드 제외 (v5.8.1i 작업 보존)
+  - 컨트롤 CSS 자체 무변경 (부모 modal-body 높이만 고정)
+  - `:has()` iOS 15.4+ 지원 (펜닐님 iOS 18.5 완전 지원, 코드베이스 18곳 사용 중)
+- **펜닐 룰 준수**:
+  - 컨트롤 위치 CSS 무변경 (근본 원인인 modal-body 높이만 수정)
+  - 모바일 가로 immersive (v5.8.1i 검증됨) 제외 처리
+  - 추측 수정 0건 — 근본 원인 진단 후 최소 변경
+
+- **후속 수정 (작은 세로 영상 컨트롤 shrink, 펜닐님 2차 보고)**:
+  - 증상: modal-body 고정했는데도 H264 1280x720 같은 작은 영상에서 전체화면/배지/화질/오디오 컨트롤 전체가 영상 영역으로 줄어듦
+  - 원인: `.video-player-wrap`이 `#preview-content`(display:flex, align-items:center)의 flex item이라, 영상이 작으면(max-height:70vh 미달) wrap이 영상 높이로 shrink → wrap 기준 absolute 컨트롤도 같이 줄어듦. modal-body는 고정됐지만 그 안 wrap이 flex로 줄어드는 건 못 막았음
+  - 데스크탑이 정상인 이유: 데스크탑 `.preview-video`는 `height: 100%`라 영상이 wrap을 꽉 채움. 모바일은 `max-height: 70vh`(height 없음)라 작은 영상 시 wrap이 shrink
+  - 해결: 모바일 세로에서만 wrap을 `align-self: stretch !important; height: 100% !important`로 부모 꽉 채움 + `#preview-content { align-items: stretch !important }`. 영상 자체는 wrap 안에서 `object-fit:contain`으로 가운데 유지
+  - 선택자: 단일 영상(`#preview-content > .video-player-wrap`) + 재생목록(`#preview-content > .fs-vp-flex > .video-player-wrap`) 둘 다 커버
+  - 안전: `@media (max-width:1024px)` 안에만 존재 → 데스크탑 무영향. `:not(.preview-immersive)` → 가로 immersive 무영향. 영상 크기 CSS 무변경 (wrap 높이만 stretch)
+
+**캐시 무효화:** `APP_VERSION` `5.8.1i` → `5.8.1j`
+
+---
+
+#### v5.8.1i (2026-05-15 ~ 2026-05-18)
 
 **모바일 가로 모드 음악 플레이어 / 동영상 터치 UX 개선 (펜닐님 보고)**
 
@@ -2070,5 +2320,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1i — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-05-18 (rhwp 0.7.12 기준)*
+*FileStation v5.8.1j — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-05-26 (rhwp 0.7.13 기준)*
