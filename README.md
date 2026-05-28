@@ -1,6 +1,6 @@
-# FileStation v5.8.1j
+# FileStation v5.8.1k
 
-![version](https://img.shields.io/badge/version-v5.8.1j-blue)
+![version](https://img.shields.io/badge/version-v5.8.1k-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
@@ -500,7 +500,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1j.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1k.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -719,11 +719,149 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1j (rhwp 0.7.13 기반)
+**현재 버전**: v5.8.1k (rhwp 0.7.13 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1j (2026-05-18) ⭐ 현재
+#### v5.8.1k (2026-05-27) ⭐ 현재
+
+**[메뉴 ▲▼ 스크롤 인디케이터] PC + 모바일 컨텍스트 메뉴 / 작업 버튼 메뉴 (펜닐님 요청)**
+
+펜닐님 분석: 모니터가 커도 메뉴가 화면 가득 차면 불편, 작아도 잘림. 스크롤바는 모양이 메뉴와 안 어울려 어색. 항목은 다 필요해서 못 줄이고, 서브메뉴화는 Windows 11처럼 숨김 불편 발생. 결론 — **고정 높이 + 스크롤바 숨김 + ▲▼로 "더 있음" 인지**. macOS Finder 검증된 패턴.
+
+- **CSS** (`assets/css/style.css` +96/-4):
+  - PC `.context-menu` / `.toolbar-action-menu`: max-height **500px** 고정 (모니터 크기 무관 일관)
+  - 스크롤바 완전 숨김: `::-webkit-scrollbar { display:none }` + `scrollbar-width: none` (Chrome/Edge/Firefox/Safari 모두)
+  - 컨텍스트 메뉴: 스크롤을 `<ul>`로 이동(메뉴 자체 overflow visible — ▲▼이 잘리지 않게), ▲▼은 메뉴 박스에 `position: absolute`로 부착
+  - 작업 버튼 메뉴: 메뉴 자체가 스크롤 영역, ▲▼은 `position: sticky`로 첫/마지막에 부착
+  - `.scroll-indicator`: 높이 22px, 흰 배경 95% 불투명, 회색 화살표(▲▼), `pointer-events: none`(항목 클릭 방해 X)
+  - `.has-scroll-up` / `.has-scroll-down` 클래스로 표시 토글
+  - 모바일 시트(`@media`): 기존 하단시트/그립바/slideUp 유지하되, 메뉴 자체 `overflow-y:auto` → `<ul>`로 이동 (PC와 통일된 ▲▼ 로직). ▲ 위치는 그립바 아래(top:14px)로 조정해 충돌 방지
+  - 작업 버튼 메뉴 max-height `calc(100vh - 120px)` → 500px (큰 모니터 가득참 해소)
+- **JS** (`assets/js/app.js` +82/-1): `_setupScrollArrows(menuEl, scrollEl)` 신규 헬퍼
+  - ▲▼ 인디케이터 요소 동적 삽입 (HTML 무변경)
+  - `scroll` 이벤트 + `ResizeObserver`(콘텐츠 크기 변화) + `MutationObserver`(메뉴 display/class 변화) 3중 감지로 ▲▼ 자동 토글
+  - `scrollTop > 1` → ▲ / `scrollTop + clientHeight < scrollHeight - 1` → ▼
+  - 페이지 로드 시 `App.init()` 직후 한 번만 부착 — 메뉴 표시/숨김 토글마다 호출 불필요
+  - `_scrollArrowsSetup` 플래그로 중복 부착 방지
+  - sticky(toolbar)/absolute(context) 두 가지 구조 자동 분기
+- **삭제된 4줄 (의도된 이동/대체)**:
+  - toolbar `max-height: calc(100vh - 120px)` → 500px
+  - 모바일 context-menu `-webkit-overflow-scrolling`/`overflow-y:auto`/`overscroll-behavior` 3줄 → `<ul>`로 이동 (스크롤 영역 분리)
+- **안전성**:
+  - 기존 메뉴 토글 로직 무변경 (showContextMenu 본체 등 일절 안 건드림)
+  - ▲▼ 동적 삽입 → HTML 파일 무변경
+  - `pointer-events: none` → 항목 클릭 절대 방해 안 함
+  - 메뉴 짧을 때(빈화면 메뉴 등) 자동으로 ▲▼ 안 뜸 (scrollHeight ≤ clientHeight 조건)
+- **회귀 검증**: app.js `node --check` OK, PHP 문법 OK. 메뉴 토글 함수 일절 미변경
+
+**[v5.8.1k 후속 수정] 펜닐님 테스트 보고 3건 (2026-05-27)**
+
+▲▼ 인디케이터 1차 적용 후 펜닐님 테스트로 발견된 문제 3건 정밀 수정. 데이터/코드 흐름으로 원인 확정 후 처리.
+
+- **1. 모바일 ▲▼이 첫/마지막 메뉴 항목 가림** (`style.css`)
+  - 원인: 모바일 시트에서 ▲(top:14px)/▼(bottom)이 22px 높이로 ul 영역과 겹침. ul은 ▲▼ 표시 시 회피 padding 없었음.
+  - 수정: `.context-menu.has-scroll-up > ul { padding-top }` / `.has-scroll-down > ul { padding-bottom }` 동적 padding. ▲▼ 안 떴을 때는 padding 0 (회귀 없음). PC 22px, 모바일 24/28px(env safe-area 고려).
+- **3. PC 메뉴 최대 높이 500 → 400px** (`style.css`)
+  - 펜닐님 판단: 500px 다소 김. 400px(약 11~12개 항목)로 축소.
+  - 적용: `.context-menu`(2670), `.context-menu > ul`(2677), `.toolbar-action-menu`(7640) 3곳. `.trash-list`(휴지통)은 메뉴 아님 → 500px 보존(건드리면 안 되는 멀쩡한 코드).
+- **4. 모바일 컨텍스트 메뉴 스크롤 중 메뉴 항목 잘못 눌림** (`assets/js/app.js`)
+  - 원인 (코드 흐름 확정): touch 임계값 10px이 작아 손가락 떨림 허용폭 부족 + **`click` 핸들러가 `ctxTouchMoved` 플래그 무시**(touchend는 막아도 iOS가 합성 발사하는 click이 그대로 통과해 액션 실행).
+  - 수정 ①: 임계값 `dx>10||dy>10` → `dx>20||dy>15` (수직이 메뉴 주 스크롤이라 dy 더 민감). 손가락 떨림 허용폭↑.
+  - 수정 ②: `click` 핸들러에 `if (ctxTouchMoved && Date.now()-ctxTouchEndTime < 500) return` 추가. iOS가 touchend 후 ~300ms 안에 합성하는 click을 차단(500ms 여유). touchend 직후의 합성 click만 정확히 막고, 일반 마우스 click(데스크탑)에는 영향 없음(`ctxTouchMoved`가 항상 false).
+  - `ctxTouchEndTime` 변수 추가로 click과 touchend 시간 상관관계 추적.
+- **검증**: app.js `node --check` OK / config.php `php -l` OK / `.trash-list`(500px) 보존 확인 / 멀쩡한 코드 무변경(이번 새 삭제 1줄 = 임계값 10px의 의도된 교체)
+
+**[v5.8.1k 후속 수정 2차] 메뉴 길이 통일 + ▼ 버그 + 컨텍스트 메뉴 구조 통일 (2026-05-28)**
+
+펜닐님 테스트 보고로 발견. 처음 ▲▼ 구현에서 컨텍스트 메뉴(absolute, `<ul>` 스크롤)와 작업버튼 메뉴(sticky, 메뉴 자체 스크롤)를 **다른 구조로 만든 것이 근본 원인**이었음. 여러 증상(항목 가림, ▼ 안 사라짐, 길이 차이)이 모두 여기서 파생. 최종적으로 두 메뉴를 100% 동일 구조로 통일하여 해결.
+
+- **▼ 버그 (다 봤는데 ▼ 안 사라짐)** (`assets/js/app.js`):
+  - 원인 (확정): ▲▼이 스크롤 영역(scrollEl) 안에 있어 그 높이(각 22px)가 `scrollHeight`에 포함됨 → 끝까지 스크롤해도 `scrollHeight > clientHeight`라 ▼ 유지.
+  - 수정: `update()`에서 표시 중인 ▲▼ 높이를 뺀 `effectiveScrollHeight`로 끝 도달 판정. (▲▼이 scrollEl 안이고 has-scroll 클래스일 때만 보정 → 컨텍스트/작업버튼 양쪽 동일 적용)
+- **컨텍스트 메뉴를 작업버튼 메뉴와 100% 동일 구조로 통일** (`style.css` + `app.js`):
+  - 기존: 컨텍스트만 `<ul>` 스크롤 + ▲▼ absolute → 기존 PC 위치조정 JS(menuEl 스크롤 전제)와 충돌해 max-height/▲▼ 위치 어긋남.
+  - 변경: 컨텍스트도 **메뉴 자체 스크롤**(overflow-y auto, `<ul>`은 흐름) + **▲▼ sticky**(scrollEl 안 첫/마지막) + 스크롤바 숨김. `_setupScrollArrows(ctxMenu, ctxMenu)`로 작업버튼과 동일 호출.
+  - 모바일 시트도 같은 구조로 정리(메뉴 자체 스크롤), 하단 시트/그립바/slideUp 디자인은 유지.
+- **메뉴 길이 (펜닐님 개발자도구 실측값)**:
+  - 컨텍스트 메뉴 max-height **420px** (CSS + JS `Math.min(420, viewHeight - 20)`)
+  - 작업버튼 메뉴 max-height **415.2px** (JS `Math.min(415.2, vh - btnRect.bottom - 14, vh*0.6)`)
+  - 둘 다 `Math.min`이라 작은 화면에선 화면에 맞게 자동 축소(메뉴 화면 밖 방지)
+- **안전성**:
+  - ▲▼ `pointer-events: none` + 클릭 핸들러 `closest('li')`/`data-action` 미존재로 무시 → 항목 클릭 이중 안전
+  - `_scrollArrowsSetup` 중복 부착 방지
+  - absolute 시절 잔재 CSS(padding-top/max-height 보정 등) 완전 제거 — 시행착오 흔적 정리됨
+- **검증**: app.js `node --check` OK / CSS 중괄호 균형 OK / `.trash-list`(500px) + 다른 400px 8곳 보존 / 두 메뉴 sticky·overflow-y 동일 확인 / 펜닐님 PC·모바일 테스트 "잘 된다" 확인
+- ⚠️ 솔직한 기록: 이번 메뉴 작업은 시행착오가 많았음(처음 두 메뉴를 다른 구조로 만든 것이 원인). 펜닐님 반복 테스트로 올바른 해법(동일 구조 통일)에 도달. 처음부터 동일 구조로 했어야 함.
+
+**[v5.8.1k 보안 수정] 동영상 변환 권한 체크 강화 (2026-05-28)**
+
+펜닐님 권한 검토로 발견. 변환 기능에 권한 허점 2건 — 공유 스토리지 환경에서 문제될 수 있어 수정.
+
+- **허점 1: 폴더별 쓰기 권한 우회** (`api.php`):
+  - 변환은 파일 생성(쓰기 작업)인데 라우팅이 `checkFolderPermission`을 `can_read`로만 체크(transcode 패턴 복사 실수). 스토리지 write는 있으나 특정 폴더만 read-only인 사용자가 그 폴더에서 변환(파일 생성) 가능했음.
+  - 수정: `can_read` → `can_write` (compress/rename 등 다른 쓰기 작업과 동일).
+- **허점 2: 삭제 권한 우회 (원본 휴지통 이동)** (`api/FileManager.php`):
+  - "변환 후 원본 휴지통 이동"이 `can_delete` 체크 없이 write 권한만으로 동작. 공유 스토리지에서 **쓰기는 되나 삭제 권한 없는 사용자가 변환을 통해 원본을 치우는** 우회 가능했음.
+  - 수정: deleteOriginal 시 `checkPermission(can_delete)` + `checkFolderPermission(can_delete)` 체크. 권한 없으면 변환은 정상 진행하되 **원본 보존**(moveToTrash 안 함).
+  - UI: 권한 없어 원본 보존된 경우 "삭제 권한이 없어 원본은 보존됨" 토스트 알림(`trash_skipped_no_perm` + i18n convert_no_delete_perm). 체크박스는 그대로 두되 서버가 권한으로 최종 판단(서버 차단이 핵심).
+- **변환 권한 체계 (최종, 다른 기능과 일관)**:
+  - 변환 실행: read + write (스토리지 + 폴더 레벨)
+  - 원본 휴지통 이동: can_delete (스토리지 + 폴더 레벨)
+  - UI 메뉴 표시: can_write
+- **검증**: PHP `php -l` OK / app.js `node --check` OK / JSON OK. 변경 = api.php 1곳(can_write) + FileManager.php deleteOriginal 권한 블록 + app.js done 토스트 + i18n 2키.
+
+**[v5.8.1k 보안 수정 2] 키보드 Del 키 삭제 권한 체크 (2026-05-28)**
+
+펜닐님 권한 검토 연장. 변환 권한을 점검하다 발견 — 컨텍스트 메뉴/작업버튼은 `can_delete` 없으면 삭제 항목을 숨기는데, **키보드 Del 키는 권한 체크 없이 `deleteSelected()` 직접 호출**하던 불일치.
+
+- **원인**: Del 키 핸들러가 선택 항목 있으면 바로 삭제 진행. 서버(api.php delete 라우팅)가 `can_delete`로 최종 차단하므로 **보안은 안전했으나**, 클라이언트가 미리 안 막아 헛된 요청 + 어색한 실패(확인 다이얼로그 후 서버 거부).
+- **수정** (`assets/js/app.js` Del 핸들러): `this.currentPermissions.can_delete` 체크 추가. 권한 없으면 "삭제 권한이 없습니다"(i18n no_delete_permission) 알림 후 동작 안 함. 컨텍스트 메뉴와 완전 일관.
+- **삭제 권한 3중 체계 (최종)**: ① UI 메뉴 표시(can_delete) ② 키보드 Del(can_delete, 이번 추가) ③ 서버 라우팅(checkFolderPermission can_delete)
+- **안전성**: Del 키 1곳만 변경. F2(이름변경) 등 다른 키 미변경. 서버 차단은 기존 유지(보안 변화 없음, UX 일관성 개선).
+- **검증**: app.js `node --check` OK / JSON OK / i18n no_delete_permission 2키 추가
+
+**[v5.8.1k 개선] 동영상 변환 진행률에 배속(speed) 표시 (2026-05-28)**
+
+펜닐님 제안. 변환 중 진행률(%)만 있고 속도 정보가 없어, ffmpeg의 실제 변환 배속을 표시. 저사양 환경에서 "얼마나 빠른지/오래 걸릴지" 가늠 가능.
+
+- **서버** (`api/FileManager.php`): ffmpeg `-progress` 파일에서 `speed=2.5x` 값 파싱(out_time_ms 파싱과 같은 자리) → `progress` 이벤트에 `speed` 추가. speed 있을 때만 전송(copy 모드는 인코딩 안 해 거의 없음).
+- **UI** (`assets/js/app.js`): progress 핸들러에서 `d.speed` 있으면 진행 문구에 "(2.5x)" 표시. 단일·다중 변환 공통(같은 `_convertOneFile` 핸들러).
+- **의미**: 2.5x=실시간의 2.5배 빠름, 0.6x=실시간보다 느림(시간 오래 걸림 신호). HW/SW 폴백 시 각 모드 실제 속도 표시.
+- **안전성**: H264 변환 경로만 변경. vault 등 무관한 `_updateConvertProgress`(언더스코어) 함수 미변경. speed 없으면 기존과 동일(하위 호환).
+- **검증**: PHP `php -l` OK / app.js `node --check` OK. (컨테이너 GPU 없어 SW libx264 speed만 실측 — HW QSV speed는 실기기 확인 필요)
+
+**[v5.8.1k 안정화] 동영상 실시간 트랜스코딩 — hang 타임아웃 + ffmpeg 종료 경로 keepalive (2026-05-28)**
+
+펜닐님 보고(개발 중 ffmpeg 2개 누적/종료 안 됨, 직접 죽여야 했음)를 정밀 코드 점검으로 진단 → 소스 문제 2건 확정·수정.
+
+- **문제 1: HW hang 시 첫 청크 blocking read 무한 대기** (`api/FileManager.php`):
+  - `transcodeStream`(미리보기) + `transcodeShareStream`(공유)의 첫 청크 읽기가 `stream_set_blocking(true)+fread`로 타임아웃 없음. HW ffmpeg가 초기화에서 hang(데이터도 안 주고 죽지도 않음)하면 PHP가 무한 대기 → `register_shutdown_function` 안 불림 → ffmpeg 잔존(직접 죽여야 함).
+  - 수정: `_readFirstChunkWithTimeout($pipe, 6)` 클래스 메서드 신설. non-blocking + `stream_select`로 6초 대기 → 데이터 오면 반환(정상, 기존과 동일), EOF/타임아웃이면 `''` 반환(=기존 폴백 로직 트리거). 모든 종료 경로에서 blocking 모드 복구 보장.
+  - 양쪽 함수 HW/SW 첫 청크 4곳 적용. 메인 스트리밍 루프(while feof)·폴백 판정 로직은 보존.
+  - 타임아웃 6초: HW 초기화(보통 1~3초)보다 충분, hang 시 체감 지연 최소화. 빠른 전환(끄고 바로 재생) 시 pipe_kill로 ffmpeg 죽으면 select가 EOF 감지해 즉시 탈출(6초 안 기다림).
+- **문제 2: ffmpeg 종료 요청(pipe_kill/stop)이 일반 fetch라 취소됨** (`assets/js/app.js`, `share.php`):
+  - 모달 닫기/새 재생 직전 이전 ffmpeg를 죽이는 호출이 일반 `fetch`로 된 곳이 미리보기 3곳(hideModal·preview 정리·새 재생 직전) + 공유 1곳(HLS→MMS 폴백 stop). "어 이상하네 하고 바로 끄고 다시 재생" 시 후속 정리/네비게이션 중 fetch가 취소 → 이전 ffmpeg 안 죽고 새 것과 공존(누적).
+  - 수정: 해당 경로 모두 `sendBeacon` 우선 + `fetch(keepalive)` 폴백으로 통일(페이지 정리 중에도 도달 보장). 기존 sendBeacon 경로(pagehide 등)의 폴백도 keepalive로 일관화.
+  - 최종: 미리보기 순수 일반 fetch pipe_kill 0개, 공유 순수 일반 fetch stop 0개.
+- **미수정(투명)**: ② proc_terminate 후 proc_get_status 미확인 — SIGKILL이 대부분 죽여 위험 낮아 안 건드림. 배지(HW/SW/fail) 로직 — 정교한 폴백 상태머신이고 명백한 버그 없어 보존(펜닐님 "거의 고쳐서 문제없다" 확인).
+- **검증**: app.js `node --check` OK / share.php·FileManager.php `php -l` OK. share.php 정확히 1줄 변경. 멀쩡한 코드 보존(스트리밍 루프·폴백 판정·배지 로직).
+- **테스트(실기기 필요, 컨테이너 GPU 없어 미실측)**: 미리보기/공유 각각 재생→바로 끄고 재생 반복 시 ffmpeg 누적 없는지, HW hang 시 6초 후 SW 폴백.
+
+**캐시 무효화:** `APP_VERSION` `5.8.1j` → `5.8.1k`
+
+---
+
+#### v5.8.1j (2026-05-18)
+
+**추가 — [음악 플레이어 iOS 썸네일: 재생 재개 시 복구] (2026-05-26)**
+
+펜닐님 보고. 추측 수정 금지 — 코드 흐름으로 원인 확정 후 수정.
+- **증상**: 재생 중 탭 닫음/다른 앱(유튜브 등) 갔다가 FileStation 탭 복귀 → 플레이어는 살아있어 이어듣기 가능하나, 재생 누를 시 iOS 잠금화면/제어센터 썸네일이 안 나오거나 갱신 안 됨. (잠금/백그라운드가 아닌, 정지 상태 후 재생 재개 케이스)
+- **원인** (확정): 정지 상태 동안 iOS가 MediaSession metadata/artwork를 메모리 정리로 유실. artwork maintenance 타이머는 `audio.paused`면 동작 안 함(`_startArtworkMaintenance`/`_checkAndRestoreArtwork` 둘 다 paused return). 게다가 `togglePlay()`가 재생 재개 시 `audio.play()`만 호출하고 artwork 복구 트리거가 없었음 → 재생해도 썸네일 미복구.
+- **해결** (`assets/js/app.js` togglePlay, +11/-1): 재생 재개(paused→play) 시 `play().then(() => this._forceRefreshArtwork())`로 artwork 복구 추가. 기존 복구 함수 재사용. play 비동기 resolve 후 복구.
+- **안전**: 일시정지 분기(`audio.pause()`)는 완전 무변경. 재생 시작에만 복구 추가. `_currentMetadata`는 플레이어 생존 시 메모리 유지되어 복구 가능. togglePlay 호출처 4곳(재생버튼/MediaSession play/외부) 모두 정상 — 잠금화면 재생 시에도 복구 이득.
+- ⚠️ FileStation 버전 유지 (v5.8.1j — 버그 수정, 같은 버전 재패키징)
 
 **추가 — [rhwp 0.7.12 → 0.7.13 업그레이드] (2026-05-26)**
 
@@ -763,6 +901,23 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
   - PHP 커스텀 로직 무변경 + 캐시 버스팅 보존 ✓
   - `@rhwp_version 0.7.13` (editor + viewer) ✓
 - ⚠️ FileStation 버전 유지 (v5.8.1j — 펜닐 룰, "버전 올려줘" 명시 없음, 재패키징)
+
+**추가 — [동영상 H264/MP4 영구 변환 기능 신규] (2026-05-26)**
+
+펜닐님 요청. 실시간 트랜스코딩은 매 재생마다 변환이라 탐색(스크롤) 불가 → 미리 H264/MP4로 영구 변환해두면 일반 재생(copy)으로 자유 탐색 가능. 단계적 구현 + 매 단계 종합 재검토.
+- **서버** (`api/FileManager.php` +284, `api.php` +19): `convertToH264Mp4()` + `convert_h264` SSE 액션
+  - 코덱 판별: H264 입력 → `-c:v copy`(화질/용량 원본 그대로), HEVC/WMV 등 → 재인코딩
+  - **HW(Intel QSV 등) 우선 → 실패 시 SW(libx264) 자동 폴백** (detectHwEncoder 동작확인 + stderr 에러패턴 감지, "CPU로 재시도" 안내). HW 화질조정 global_quality 20, SW libx264 -crf 18(화질 최대 보존)
+  - 이미 h264+mp4면 skip(변환 불필요 알림). 출력 충돌 시 `_h264` suffix. faststart(웹 탐색 최적화)
+  - 보안: requireLogin + checkFolderPermission + checkPermission(read/write) + isPathSafe(입출력) + escapeshellarg 전부. 7-Zip 백그라운드 패턴(bat+resultFile+SSE) 재사용. 임시파일 누수 방지(clientGone 폴링 계속), maxWait 1시간
+- **UI** (`assets/js/app.js` +220, `index.php` +2): 컨텍스트 메뉴(우클릭/롱프레스) + 작업 버튼 메뉴 "🎬 H264/MP4로 변환"
+  - **다중 순차 변환**: 선택 항목 중 변환 필요한 동영상만 필터(mp4 등 네이티브 제외), 하나씩 await 순차 처리, 진행률 "(N/M)" 표시, 완료 요약 토스트
+  - 변환 다이얼로그에 **"변환 후 원본 휴지통 이동" 체크박스** (체크 시 변환 성공+H264 검증 후에만 moveToTrash, 실패 파일 원본 보존)
+  - 진행률 모달(전용 conv-progress-* ID, 중첩 방지), `_convBatchRunning` 가드(finally 리셋), `_convertOneFile`로 단일 변환 분리
+- **i18n**: lang/ko·en.json convert_* 키 22개씩
+- **실측 검증** (SW 경로 — 컨테이너 GPU 없어 HW는 펜닐님 환경 테스트 필요): HEVC→H264 SSIM 0.999/PSNR 56.7dB(거의무손실), WMV→H264 SSIM 0.998(용량 1044KB→292KB 감소), H264→copy SSIM 1.000000(완전무손실), faststart 적용 + 5초 seek 성공(탐색 가능 = 핵심목적 달성)
+- **검토 중 발견·수정** (자체 결함): 임시파일 누수(clientGone), 변환가드 catch 미리셋, mp4 변환메뉴 노출(_needsTranscode), 작업버튼 메뉴 항목 누락, 다중선택 우클릭 메뉴 미표시(selectedItems.some), 진행률 모달 중첩, 서버 i18n 키 4개 누락
+- ⚠️ FileStation 버전 유지 (v5.8.1j — 신규 기능이나 "버전 올려줘" 명시 없음, 재패키징)
 
 **[2차 세션] 자막 컨트롤 iOS 작동 / 배지 용량 단위 / 재생 안정성 (펜닐님 보고)**
 
@@ -2320,5 +2475,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1j — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*FileStation v5.8.1k — 한국 사용자를 위한 자체호스팅 웹 NAS*
 *최종 업데이트: 2026-05-26 (rhwp 0.7.13 기준)*

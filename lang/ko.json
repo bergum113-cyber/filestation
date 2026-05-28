@@ -2889,5 +2889,7 @@
     "hls_streaming": "HLS 스트리밍",
     "hls_starting": "HLS 시작 중...",
     "hls_failed_fallback": "HLS 실패, 기존 방식으로 전환",
-    "buffering": "버퍼링..."
+    "buffering": "버퍼링...",
+    "convert_no_delete_perm": "삭제 권한이 없어 원본은 보존됨",
+    "no_delete_permission": "삭제 권한이 없습니다"
 }

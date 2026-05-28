@@ -2894,5 +2894,7 @@
     "hls_streaming": "HLS Streaming",
     "hls_starting": "Starting HLS...",
     "hls_failed_fallback": "HLS failed, falling back",
-    "buffering": "Buffering..."
+    "buffering": "Buffering...",
+    "convert_no_delete_perm": "Original kept (no delete permission)",
+    "no_delete_permission": "No delete permission"
 }

@@ -2867,8 +2867,10 @@ class FileManager {
         fclose($pipes[0]);
         
         // 첫 데이터 읽기 시도 (HW 인코더 실패 감지)
-        stream_set_blocking($pipes[1], true);
-        $firstChunk = fread($pipes[1], 65536);
+        // 타임아웃 적용: HW ffmpeg가 초기화에서 hang(데이터 안 줌+안 죽음)하면 무한 대기 방지.
+        //   6초 내 데이터 오면 읽고, 안 오면 '' 반환(=기존 폴백 로직 트리거).
+        //   정상 재생(데이터 즉시 옴)은 기존과 동일 — hang일 때만 새로 구제됨.
+        $firstChunk = $this->_readFirstChunkWithTimeout($pipes[1], 6);
         
         // HW 인코더 실패: 데이터 없음 → SW fallback
         if (($firstChunk === false || $firstChunk === '') && strpos($videoCodecArgs, 'libx264') === false && strpos($videoCodecArgs, 'copy') === false) {
@@ -2893,8 +2895,7 @@ class FileManager {
                 exit;
             }
             fclose($pipes[0]);
-            stream_set_blocking($pipes[1], true);
-            $firstChunk = fread($pipes[1], 65536);
+            $firstChunk = $this->_readFirstChunkWithTimeout($pipes[1], 6);
         }
         
         // MMS endstreaming 시 클라이언트가 일시적으로 읽기를 멈추므로
@@ -4168,6 +4169,39 @@ class FileManager {
         return 'unknown';
     }
     
+    /**
+     * ffmpeg stdout 파이프에서 첫 청크를 타임아웃과 함께 읽음.
+     * HW 인코더가 초기화에서 hang(데이터도 안 주고 죽지도 않음)할 때 무한 대기를 방지.
+     * - 데이터가 오면 즉시 반환 (정상 — 기존 blocking fread와 동일 결과)
+     * - ffmpeg가 종료(EOF)되면 '' 반환 (HW 실패 → 호출측 폴백 트리거)
+     * - $timeout초 내 아무 데이터도 없으면 '' 반환 (hang → 폴백 트리거, 무한 대기 차단)
+     * 반환 후 파이프는 다시 blocking 모드로 복구 (이후 스트리밍 루프는 기존대로 동작).
+     */
+    private function _readFirstChunkWithTimeout($pipe, int $timeout = 6): string {
+        if (!is_resource($pipe)) return '';
+        stream_set_blocking($pipe, false);
+        $waited = 0.0;
+        while ($waited < $timeout) {
+            $r = [$pipe]; $w = null; $e = null;
+            $sel = @stream_select($r, $w, $e, 1, 0); // 1초 단위
+            if ($sel === false) break; // select 오류 → 폴백
+            if ($sel > 0) {
+                $chunk = fread($pipe, 65536);
+                if ($chunk !== false && $chunk !== '') {
+                    stream_set_blocking($pipe, true);
+                    return $chunk; // 정상: 데이터 반환
+                }
+                if (feof($pipe)) { // ffmpeg 종료(실패)
+                    stream_set_blocking($pipe, true);
+                    return '';
+                }
+            }
+            $waited += 1.0;
+        }
+        stream_set_blocking($pipe, true);
+        return ''; // 타임아웃(hang) → 폴백 트리거
+    }
+
     private function detectHwEncoder(string $ffmpeg): string {
         // 캐시 파일로 매번 감지하지 않음
         $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
@@ -8476,9 +8510,18 @@ class FileManager {
 
                     // ★ 원본 휴지통 이동 (deleteOriginal=true일 때만 — 3단계에서 활성화)
                     $trashed = false;
+                    $trashSkippedNoPerm = false;
                     if ($deleteOriginal) {
-                        // 출력과 원본이 다른 파일일 때만 (안전장치)
-                        if (realpath($outPath) !== realpath($fullPath)) {
+                        // 삭제(휴지통 이동)는 can_delete 권한 필요 — write만으로 원본 제거 우회 차단.
+                        // 공유 스토리지에서 쓰기는 되나 삭제 권한 없는 사용자가 변환으로 원본을 치우는 것 방지.
+                        $cvParentDir = dirname($relativePath);
+                        if ($cvParentDir === '.' || $cvParentDir === DIRECTORY_SEPARATOR) $cvParentDir = '';
+                        $canDelete = $this->storage->checkPermission($storageId, 'can_delete')
+                            && $this->storage->checkFolderPermission($storageId, $cvParentDir ?: $relativePath, 'can_delete');
+                        if (!$canDelete) {
+                            $trashSkippedNoPerm = true; // 권한 없어 원본 보존됨 (UI 알림용)
+                        } elseif (realpath($outPath) !== realpath($fullPath)) {
+                            // 삭제 권한 있고 출력≠원본일 때만 휴지통 이동
                             $tr = $this->moveToTrash($storageId, $relativePath, $fullPath);
                             $trashed = !empty($tr['success']);
                         }
@@ -8489,6 +8532,7 @@ class FileManager {
                         'output_name' => $outName,
                         'size' => filesize($outPath),
                         'original_trashed' => $trashed,
+                        'trash_skipped_no_perm' => $trashSkippedNoPerm,
                         'mode' => ($isCopy ? 'copy' : ($curVArgs === $swVArgs ? 'libx264' : 'hw')),
                     ]);
                     return;
@@ -8505,9 +8549,16 @@ class FileManager {
                     $outMs = (int)end($om[1]);
                     $cur = $outMs / 1000000.0; // us → s
                     $percent = (int)min(99, max($lastPercent, ($cur / $durationSec) * 100));
+                    // ffmpeg -progress 파일의 speed= 값(배속) 파싱 (예: speed=2.5x)
+                    $speed = '';
+                    if (preg_match_all('/speed=\s*([\d.]+)x/', $pc, $sm) && !empty($sm[1])) {
+                        $speed = (string)end($sm[1]); // 가장 최근 값
+                    }
                     if ($percent > $lastPercent) {
                         $lastPercent = $percent;
-                        $sse('progress', ['percent' => $percent, 'stage' => __('convert_encoding', '변환 중...')]);
+                        $prog = ['percent' => $percent, 'stage' => __('convert_encoding', '변환 중...')];
+                        if ($speed !== '') $prog['speed'] = $speed; // 배속 (예: "2.5")
+                        $sse('progress', $prog);
                     }
                 }
             }
@@ -10978,8 +11029,7 @@ class FileManager {
         header('X-Accel-Buffering: no');
         
         // 첫 데이터 읽기 (HW 인코더 실패 감지)
-        stream_set_blocking($pipes[1], true);
-        $firstChunk = fread($pipes[1], 65536);
+        $firstChunk = $this->_readFirstChunkWithTimeout($pipes[1], 6);
         
         if ($firstChunk === false || $firstChunk === '') {
             // HW 실패 → SW fallback
@@ -10995,8 +11045,7 @@ class FileManager {
                 exit;
             }
             fclose($pipes[0]);
-            stream_set_blocking($pipes[1], true);
-            $firstChunk = fread($pipes[1], 65536);
+            $firstChunk = $this->_readFirstChunkWithTimeout($pipes[1], 6);
         }
         
         if ($firstChunk !== false && $firstChunk !== '') {

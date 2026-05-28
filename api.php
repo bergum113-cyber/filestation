@@ -5707,10 +5707,11 @@ try {
             session_write_close();
             $storageId = (int)($_GET['storage_id'] ?? 0);
             $path = $_GET['path'] ?? '';
-            // 폴더별 권한 체크 (transcode와 동일 패턴)
+            // 폴더별 권한 체크 — 변환은 파일 생성(+원본 휴지통 이동)하는 쓰기 작업이므로 can_write 필요
+            // (compress/rename 등 다른 쓰기 작업과 동일. transcode는 읽기 스트리밍이라 can_read였음)
             $cvDir = dirname($path);
             if ($cvDir === '.') $cvDir = '';
-            if (!$storage->checkFolderPermission($storageId, $cvDir ?: $path)) {
+            if (!$storage->checkFolderPermission($storageId, $cvDir ?: $path, 'can_write')) {
                 http_response_code(403);
                 echo json_encode(['error' => 'No permission']);
                 break;

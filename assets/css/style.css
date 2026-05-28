@@ -2667,9 +2667,51 @@ body.modal-open.trash-modal-active .transfer-progress {
     box-shadow: 0 4px 20px rgba(0,0,0,0.2);
     z-index: 6000;
     min-width: 180px;
-    overflow: visible;
+    max-height: 420px;
     overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    /* 메뉴 자체가 스크롤 영역 (작업버튼 메뉴와 동일 구조). max-height는 JS가 동적 설정 */
+    scrollbar-width: none; /* Firefox */
 }
+.context-menu::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* <ul>은 스크롤 영역 아님 — 그냥 흐름 (작업버튼의 .action-option 직접 배치와 동등) */
+.context-menu > ul {
+    overflow: visible;
+}
+
+/* ▲▼ 스크롤 인디케이터 (JS가 .scroll-up / .scroll-down 클래스로 표시 토글) */
+.context-menu .scroll-indicator {
+    display: none;
+    position: sticky;
+    left: 0;
+    right: 0;
+    height: 22px;
+    background: rgba(255,255,255,0.97);
+    color: #888;
+    text-align: center;
+    line-height: 22px;
+    font-size: 11px;
+    cursor: default;
+    user-select: none;
+    pointer-events: none;
+    z-index: 2;
+}
+.context-menu .scroll-indicator.scroll-up {
+    top: 0;
+    border-radius: var(--radius) var(--radius) 0 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.context-menu .scroll-indicator.scroll-down {
+    bottom: 0;
+    border-radius: 0 0 var(--radius) var(--radius);
+    box-shadow: 0 -2px 4px rgba(0,0,0,0.05);
+}
+.context-menu.has-scroll-up .scroll-indicator.scroll-up { display: block; }
+.context-menu.has-scroll-down .scroll-indicator.scroll-down { display: block; }
+/* max-height는 JS(showContextMenu)가 화면 높이에 맞춰 동적 인라인 설정 — 작업버튼 메뉴와 동일 */
 
 .context-menu ul { list-style: none; }
 
@@ -7594,13 +7636,48 @@ body.is-mobile .file-list {
     border-radius: 8px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     min-width: 185px;
-    max-height: calc(100vh - 120px);
+    max-height: 400px;
     overflow-y: auto;
+    overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
     z-index: 7600;
     margin-top: 4px;
+    /* 스크롤바 숨김 — ▲▼ 인디케이터로 대체 */
+    scrollbar-width: none; /* Firefox */
 }
+.toolbar-action-menu::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+/* ▲▼ 스크롤 인디케이터 (sticky로 메뉴 위/아래에 고정) */
+.toolbar-action-menu .scroll-indicator {
+    display: none;
+    position: sticky;
+    left: 0;
+    right: 0;
+    height: 22px;
+    background: rgba(255,255,255,0.95);
+    color: #888;
+    text-align: center;
+    line-height: 22px;
+    font-size: 11px;
+    cursor: default;
+    user-select: none;
+    pointer-events: none;
+    z-index: 1;
+}
+.toolbar-action-menu .scroll-indicator.scroll-up {
+    top: 0;
+    border-radius: 8px 8px 0 0;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.toolbar-action-menu .scroll-indicator.scroll-down {
+    bottom: 0;
+    border-radius: 0 0 8px 8px;
+    box-shadow: 0 -2px 4px rgba(0,0,0,0.05);
+}
+.toolbar-action-menu.has-scroll-up .scroll-indicator.scroll-up { display: block; }
+.toolbar-action-menu.has-scroll-down .scroll-indicator.scroll-down { display: block; }
+/* max-height는 JS(showToolbarActionMenu)가 화면 높이에 맞춰 동적 인라인 설정 — CSS 고정값 없음 */
 
 .toolbar-action-menu.show {
     display: block;
@@ -10360,12 +10437,17 @@ tr:hover,
         max-height: 66vh;
         border-radius: 16px 16px 0 0;
         box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+        overflow-y: auto; /* 메뉴 자체 스크롤 (PC와 통일) */
+        overflow-x: hidden;
         -webkit-overflow-scrolling: touch;
-        overflow-y: auto;
         overscroll-behavior: contain;
         touch-action: pan-y;
         padding-bottom: env(safe-area-inset-bottom, 8px);
         animation: slideUp 0.2s ease-out;
+    }
+    /* 모바일: <ul>은 스크롤 영역 아님 (PC와 동일) */
+    .context-menu > ul {
+        overflow: visible;
     }
     
     @keyframes slideUp {

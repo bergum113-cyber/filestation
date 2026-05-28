@@ -3007,7 +3007,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     // HLS 세션 정리 (시도했다가 실패한 경우)
                     if (window._shareNativeHlsSession) {
                         const tk = <?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
-                        fetch('share.php?t=' + encodeURIComponent(tk) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + window._shareNativeHlsSession).catch(() => {});
+                        fetch('share.php?t=' + encodeURIComponent(tk) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + window._shareNativeHlsSession, { keepalive: true }).catch(() => {});
                         window._shareNativeHlsSession = null;
                     }
                     try {

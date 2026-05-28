@@ -2220,7 +2220,17 @@ class FSAudioPlayer {
     // ── Playback controls ──
     togglePlay() {
         if (!this.audio.src) return;
-        this.audio.paused ? this.audio.play().catch(() => {}) : this.audio.pause();
+        if (this.audio.paused) {
+            // ★ v5.8.1j: 재생 재개 시 artwork 복구
+            //   정지 상태(탭 닫음/다른 앱 복귀 후 일시정지)에서 iOS가 metadata/artwork를
+            //   메모리 정리로 날린 경우, 재생을 눌러도 썸네일이 복구되지 않던 문제.
+            //   maintenance 타이머는 재생 중에만 동작하므로, 재생 재개 시점에 즉시 복구 필요.
+            this.audio.play().then(() => {
+                this._forceRefreshArtwork();
+            }).catch(() => {});
+        } else {
+            this.audio.pause();
+        }
     }
     prev() {
         if (!this.playlist.length) return;
@@ -4633,7 +4643,7 @@ const App = {
                     if (navigator.sendBeacon) {
                         navigator.sendBeacon(url);
                     } else {
-                        fetch(url).catch(() => {});
+                        fetch(url, { keepalive: true }).catch(() => {});
                     }
                 }
                 if (video._mmsAbort) video._mmsAbort.abort();
@@ -5966,6 +5976,7 @@ const App = {
         const ctxMenu = document.getElementById('context-menu');
         let ctxTouchMoved = false;
         let ctxTouchStartPos = { x: 0, y: 0 };
+        let ctxTouchEndTime = 0;
         ctxMenu.addEventListener('touchstart', function(e) {
             ctxTouchMoved = false;
             const touch = e.touches?.[0];
@@ -5978,13 +5989,15 @@ const App = {
             if (touch) {
                 const dx = Math.abs(touch.clientX - ctxTouchStartPos.x);
                 const dy = Math.abs(touch.clientY - ctxTouchStartPos.y);
-                // 10px 이상 이동해야 스크롤로 판정 (손가락 떨림 허용)
-                if (dx > 10 || dy > 10) {
+                // 20px 이상 이동해야 스크롤로 판정 (손가락 떨림/탭 허용 — 모바일 메뉴 스크롤 안정성)
+                // 수직 스크롤이 메뉴 주 동작이라 dy를 더 민감하게 (15px)
+                if (dx > 20 || dy > 15) {
                     ctxTouchMoved = true;
                 }
             }
         }, { passive: true });
         ctxMenu.addEventListener('touchend', function(e) {
+            ctxTouchEndTime = Date.now(); // click 합성 시점 추적용 (iOS는 touchend 직후 click 발사)
             if (ctxTouchMoved) return;
             e.preventDefault();
             e.stopPropagation();
@@ -5996,6 +6009,11 @@ const App = {
         });
         ctxMenu.addEventListener('click', function(e) {
             e.stopPropagation();
+            // 스크롤 후 발사되는 합성 click 차단 (touchend에서 ctxTouchMoved=true였으면 무시)
+            // iOS는 touchend 후 ~300ms 안에 click을 합성하므로, 그 시간 안의 click도 ctxTouchMoved 참조
+            if (ctxTouchMoved && (Date.now() - ctxTouchEndTime) < 500) {
+                return;
+            }
             const li = e.target.closest('li');
             if (li && li.dataset.action) {
                 App.handleContextAction(li.dataset.action);
@@ -6302,7 +6320,7 @@ const App = {
                 actionMenu.style.position = 'fixed';
                 actionMenu.style.top = (btnRect.bottom + 4) + 'px';
                 actionMenu.style.zIndex = '99999';
-                actionMenu.style.maxHeight = Math.min(vh - btnRect.bottom - 14, vh * 0.6) + 'px';
+                actionMenu.style.maxHeight = Math.min(415.2, vh - btnRect.bottom - 14, vh * 0.6) + 'px';
                 actionMenu.style.overflowY = 'auto';
                 // 임시로 보이게 해서 메뉴 너비 측정
                 actionMenu.style.left = '0';
@@ -7433,7 +7451,12 @@ const App = {
             switch (e.key) {
                 case 'Delete':
                     // 체크박스 또는 클릭 선택된 항목이 있으면 삭제
+                    // 삭제 권한 체크 (컨텍스트 메뉴와 일관 — 권한 없으면 동작 안 함)
                     if (this.getSelectedOrCheckedItems().length > 0) {
+                        if (this.currentPermissions && !this.currentPermissions.can_delete) {
+                            this.toast(t('no_delete_permission', '삭제 권한이 없습니다'), 'warning');
+                            break;
+                        }
                         this.deleteSelected();
                     }
                     break;
@@ -11626,6 +11649,72 @@ const App = {
     },
     
     // 컨텍스트 메뉴
+    /**
+     * 메뉴에 ▲▼ 스크롤 인디케이터 부착 (스크롤바 숨김 대체)
+     * - menuEl: 메뉴 컨테이너 (.context-menu / .toolbar-action-menu)
+     * - scrollEl: 실제 스크롤 영역 (context-menu의 <ul>, toolbar-action-menu 자체)
+     * - 페이지 로드 시 한 번만 호출. 메뉴 표시/숨김 토글마다 호출 불필요.
+     * - 스크롤 이벤트 + ResizeObserver(메뉴 표시될 때 콘텐츠 변화 감지)로 자동 갱신
+     */
+    _setupScrollArrows(menuEl, scrollEl) {
+        if (!menuEl || !scrollEl) return;
+        if (menuEl._scrollArrowsSetup) return; // 중복 부착 방지
+        menuEl._scrollArrowsSetup = true;
+
+        // ▲▼ 인디케이터 요소 동적 삽입 (HTML 무변경)
+        const upEl = document.createElement('div');
+        upEl.className = 'scroll-indicator scroll-up';
+        upEl.textContent = '▲';
+        const downEl = document.createElement('div');
+        downEl.className = 'scroll-indicator scroll-down';
+        downEl.textContent = '▼';
+
+        // ▲▼을 스크롤 영역(scrollEl) 안 첫/마지막에 sticky로 삽입 (작업버튼/컨텍스트 동일)
+        // 컨텍스트 메뉴: scrollEl=menuEl(.context-menu), <ul> 앞뒤로 배치
+        // 작업버튼 메뉴: scrollEl=menuEl(.toolbar-action-menu), .action-option 앞뒤로 배치
+        scrollEl.insertBefore(upEl, scrollEl.firstChild);
+        scrollEl.appendChild(downEl);
+
+        // 스크롤 상태에 따라 ▲▼ 표시 토글
+        const update = () => {
+            // 메뉴가 숨겨진 상태면 스킵 (clientHeight=0)
+            if (scrollEl.clientHeight === 0) {
+                menuEl.classList.remove('has-scroll-up', 'has-scroll-down');
+                return;
+            }
+            // ▲▼이 scrollEl 안에 있는 경우(작업버튼: menuEl===scrollEl, sticky)
+            // 표시중인 ▲▼ 높이가 scrollHeight를 부풀려 "끝까지 봐도 ▼ 안 사라짐" 발생.
+            // → 표시중인 ▲▼ 높이를 빼고 판정. (컨텍스트: ▲▼이 scrollEl 밖이라 보정값 0)
+            let arrowInScroll = 0;
+            if (upEl.parentNode === scrollEl && menuEl.classList.contains('has-scroll-up')) {
+                arrowInScroll += upEl.offsetHeight;
+            }
+            if (downEl.parentNode === scrollEl && menuEl.classList.contains('has-scroll-down')) {
+                arrowInScroll += downEl.offsetHeight;
+            }
+            const effectiveScrollHeight = scrollEl.scrollHeight - arrowInScroll;
+
+            const hasUp = scrollEl.scrollTop > 1;
+            const hasDown = (scrollEl.scrollTop + scrollEl.clientHeight) < (effectiveScrollHeight - 1);
+            menuEl.classList.toggle('has-scroll-up', hasUp);
+            menuEl.classList.toggle('has-scroll-down', hasDown);
+        };
+
+        scrollEl.addEventListener('scroll', update, { passive: true });
+
+        // 메뉴 표시/내용 변화 감지: ResizeObserver(콘텐츠 크기 변화 → 스크롤 가능 여부 갱신)
+        if (typeof ResizeObserver !== 'undefined') {
+            const ro = new ResizeObserver(() => update());
+            ro.observe(scrollEl);
+        }
+        // MutationObserver: 메뉴 display/style 변화(표시→숨김) 감지 → 표시 직후 update
+        if (typeof MutationObserver !== 'undefined') {
+            const mo = new MutationObserver(() => setTimeout(update, 0));
+            mo.observe(menuEl, { attributes: true, attributeFilter: ['style', 'class'] });
+        }
+        update(); // 초기 1회
+    },
+
     showContextMenu(x, y, emptySpace = false) {
         const menuEl = document.getElementById('context-menu');
         const perms = this.currentPermissions;
@@ -11885,11 +11974,14 @@ const App = {
             var viewWidth = window.innerWidth;
             var viewHeight = window.innerHeight;
             
-            // 메뉴가 화면 높이보다 크면 스크롤 가능하게
-            if (rect.height > viewHeight - padding * 2) {
-                menuEl.style.maxHeight = (viewHeight - padding * 2) + 'px';
+            // 메뉴가 화면 높이보다 크면 스크롤 가능하게 (작업버튼처럼 400px 상한 + 화면 안)
+            var menuMaxH = Math.min(420, viewHeight - padding * 2);
+            if (rect.height > menuMaxH) {
+                menuEl.style.maxHeight = menuMaxH + 'px';
                 menuEl.style.overflowY = 'auto';
-                menuEl.style.top = padding + 'px';
+                if (y + menuMaxH > viewHeight - padding) {
+                    menuEl.style.top = Math.max(padding, viewHeight - padding - menuMaxH) + 'px';
+                }
                 rect = menuEl.getBoundingClientRect();
             }
             
@@ -11905,7 +11997,7 @@ const App = {
                 var newTop = viewHeight - padding - rect.height;
                 if (newTop < padding) {
                     menuEl.style.top = padding + 'px';
-                    menuEl.style.maxHeight = (viewHeight - padding * 2) + 'px';
+                    menuEl.style.maxHeight = menuMaxH + 'px';
                     menuEl.style.overflowY = 'auto';
                 } else {
                     menuEl.style.top = newTop + 'px';
@@ -12673,7 +12765,10 @@ const App = {
             es.addEventListener('progress', (e) => {
                 try {
                     const d = JSON.parse(e.data);
-                    this.updateConvertProgress(d.percent || 0, prefix + (d.stage || ''));
+                    let stageText = prefix + (d.stage || '');
+                    // 변환 배속 표시 (ffmpeg speed= 값, 재인코딩 시에만 옴)
+                    if (d.speed) stageText += ' (' + d.speed + 'x)';
+                    this.updateConvertProgress(d.percent || 0, stageText);
                 } catch (_) {}
             });
             es.addEventListener('skip', (e) => {
@@ -12683,11 +12778,14 @@ const App = {
                 finish('skip');
             });
             es.addEventListener('done', (e) => {
-                let outName = '', trashed = false;
-                try { const d = JSON.parse(e.data); outName = d.output_name || ''; trashed = !!d.original_trashed; } catch (_) {}
+                let outName = '', trashed = false, trashSkipped = false;
+                try { const d = JSON.parse(e.data); outName = d.output_name || ''; trashed = !!d.original_trashed; trashSkipped = !!d.trash_skipped_no_perm; } catch (_) {}
                 if (total === 1) {
                     const baseMsg = t('convert_done', '변환 완료') + (outName ? ': ' + outName : '');
-                    this.toast(baseMsg + (trashed ? ' (' + t('convert_orig_trashed', '원본은 휴지통으로 이동됨') + ')' : ''), 'success');
+                    let suffix = '';
+                    if (trashed) suffix = ' (' + t('convert_orig_trashed', '원본은 휴지통으로 이동됨') + ')';
+                    else if (trashSkipped) suffix = ' (' + t('convert_no_delete_perm', '삭제 권한이 없어 원본은 보존됨') + ')';
+                    this.toast(baseMsg + suffix, trashSkipped ? 'info' : 'success');
                 }
                 finish('done');
             });
@@ -31029,9 +31127,20 @@ const App = {
                     // MMS 정리
                     if (v._mmsCleanup) v._mmsCleanup();
                     if (v._mmsAbort) v._mmsAbort.abort();
-                    // Pipe ffmpeg kill
+                    // Pipe ffmpeg kill — 모달 닫고 바로 재재생해도 확실히 도달하도록
+                    //   sendBeacon/keepalive 사용 (일반 fetch는 후속 정리/네비게이션 중 취소될 수 있어
+                    //   이전 ffmpeg가 안 죽고 새 재생 ffmpeg와 공존하는 문제 방지)
                     if (v._pipeSid) {
-                        fetch('api.php?action=transcode&pipe_kill=' + v._pipeSid).catch(() => {});
+                        const _killUrl = 'api.php?action=transcode&pipe_kill=' + v._pipeSid;
+                        try {
+                            if (navigator.sendBeacon) {
+                                navigator.sendBeacon(_killUrl);
+                            } else {
+                                fetch(_killUrl, { keepalive: true }).catch(() => {});
+                            }
+                        } catch(e) {
+                            try { fetch(_killUrl, { keepalive: true }).catch(() => {}); } catch(_) {}
+                        }
                         v._pipeSid = null;
                     }
                     // 자막 타이머 정리
@@ -33365,7 +33474,7 @@ const App = {
                 if (v._hlsStopSession) { v._hlsStopSession(); v._hlsStopSession = null; }
                 if (v._mmsCleanup) v._mmsCleanup();
                 if (v._mmsAbort) v._mmsAbort.abort();
-                if (v._pipeSid) { fetch('api.php?action=transcode&pipe_kill=' + v._pipeSid).catch(() => {}); v._pipeSid = null; }
+                if (v._pipeSid) { const _ku='api.php?action=transcode&pipe_kill='+v._pipeSid; try { if(navigator.sendBeacon) navigator.sendBeacon(_ku); else fetch(_ku,{keepalive:true}).catch(()=>{}); } catch(e){ try{ fetch(_ku,{keepalive:true}).catch(()=>{}); }catch(_){} } v._pipeSid = null; }
                 if (v._subTimer) clearInterval(v._subTimer);
                 v._switchingToTranscode = true; // 에러 핸들러 방지
                 v.pause();
@@ -35202,9 +35311,13 @@ const App = {
             window._activeAbort.abort();
             window._activeAbort = null;
         }
-        // 이전 pipe ffmpeg kill
+        // 이전 pipe ffmpeg kill (keepalive로 확실히 도달 — 끄고 바로 재생 시 취소 방지)
         if (video._pipeSid) {
-            fetch('api.php?action=transcode&pipe_kill=' + video._pipeSid).catch(() => {});
+            const _ku = 'api.php?action=transcode&pipe_kill=' + video._pipeSid;
+            try {
+                if (navigator.sendBeacon) navigator.sendBeacon(_ku);
+                else fetch(_ku, { keepalive: true }).catch(() => {});
+            } catch(e) { try { fetch(_ku, { keepalive: true }).catch(() => {}); } catch(_) {} }
             video._pipeSid = null;
         }
         // 이전 HLS 세션 정리
@@ -44922,7 +45035,7 @@ function closeModal() {
             if (v._pipeSid) {
                 const url = 'api.php?action=transcode&pipe_kill=' + v._pipeSid;
                 if (navigator.sendBeacon) navigator.sendBeacon(url);
-                else fetch(url).catch(() => {});
+                else fetch(url, { keepalive: true }).catch(() => {});
                 v._pipeSid = null;
             }
             // 자막 타이머 정리
@@ -45687,6 +45800,17 @@ document.addEventListener('DOMContentLoaded', () => {
     App.init();
     initModalDrag();
     initModalResize();
+
+    // ▲▼ 스크롤 인디케이터: PC 컨텍스트 메뉴 + 작업 버튼 메뉴 + 모바일 시트
+    // (스크롤바 숨김 + ▲▼로 대체 — 메뉴 표시/숨김 무관 한 번만 부착)
+    (function setupMenuScrollArrows() {
+        // 작업버튼 메뉴와 100% 동일 방식: 메뉴 자체가 스크롤 영역, ▲▼은 그 안에 sticky
+        const ctxMenu = document.getElementById('context-menu');
+        if (ctxMenu) App._setupScrollArrows(ctxMenu, ctxMenu);
+
+        const actionMenu = document.getElementById('toolbar-action-menu');
+        if (actionMenu) App._setupScrollArrows(actionMenu, actionMenu);
+    })();
 
     // ===== 맨 위로 버튼 =====
     const scrollTopBtn = document.getElementById('btn-scroll-top');
