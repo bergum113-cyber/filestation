@@ -1402,6 +1402,139 @@ class ShareManager {
     }
     
     /**
+     * 공유받은 폴더에 청크 업로드 (대용량 파일 지원)
+     * - validateInternalSharePath로 공유 권한 검증(write) 후,
+     *   검증된 FileManager::uploadChunk 코어(청크 조립 + 경쟁조건 락) 재사용.
+     * - 권한은 공유 체계로 이미 검증했으므로 uploadChunk의 스토리지 can_write 체크는 skip
+     *   (확장자/랜섬웨어/quota/경로 검증은 uploadChunk 내부에서 그대로 수행).
+     */
+    public function uploadToInternalShareChunk(int $shareId, string $subPath, array $data): array {
+        $v = $this->validateInternalSharePath($shareId, $subPath, 'write');
+        if (!$v['success']) return $v;
+        
+        $share = $v['share'];
+        $storageId = (int)$share['storage_id'];
+        
+        // 스토리지 루트 기준 상대경로 계산 (file_path + subPath)
+        // uploadChunk는 (storageId, relativePath)로 대상 폴더를 정함.
+        $filePath = str_replace(['\\', '/'], '/', trim($share['file_path'] ?? '', '/'));
+        $sub = str_replace(['\\', '/'], '/', trim($subPath, '/'));
+        $relativePath = $filePath;
+        if ($sub !== '') {
+            $relativePath = ($filePath !== '') ? ($filePath . '/' . $sub) : $sub;
+        }
+        
+        require_once __DIR__ . '/FileManager.php';
+        $fileManager = new FileManager();
+        // skipPermCheck=true: 공유 권한을 이미 검증했으므로 스토리지 권한 체크만 건너뜀
+        $result = $fileManager->uploadChunk($storageId, $relativePath, $data, true);
+        
+        // 조립 완료 시 공유 소유자 알림 정보 기록 (중복 조립 deduped 제외)
+        if (!empty($result['success']) && !empty($result['complete']) && empty($result['deduped'])) {
+            $this->db->update('internal_shares', ['id' => $shareId], [
+                'pending_uploads' => ($share['pending_uploads'] ?? 0) + 1,
+                'last_upload_at' => date('Y-m-d H:i:s'),
+                'last_upload_name' => $result['filename'] ?? ($data['filename'] ?? '')
+            ]);
+        }
+        return $result;
+    }
+    
+    /**
+     * 공유 업로드 알림 목록: 내 공유(shares=filedrop/download + internal_shares) 중
+     * pending_uploads > 0 인 것만 반환. 클라이언트 폴링용(가벼움).
+     */
+    public function getShareUploadNotifications(int $userId): array {
+        $list = [];
+        // 스토리지 id→name 맵 (알림에 스토리지명 표시용)
+        $storageNames = [];
+        foreach (($this->db->load('storages') ?: []) as $st) {
+            $storageNames[(int)$st['id']] = $st['name'] ?? '';
+        }
+        // 일반 공유(filedrop 등)
+        foreach (($this->db->load('shares') ?: []) as $s) {
+            if ((int)($s['created_by'] ?? 0) !== (int)$userId) continue;
+            if (($s['pending_uploads'] ?? 0) <= 0) continue;
+            $list[] = [
+                'id' => $s['id'],
+                'is_internal' => false,
+                'share_type' => $s['share_type'] ?? 'download',
+                'storage_id' => $s['storage_id'] ?? null,
+                'storage_name' => $storageNames[(int)($s['storage_id'] ?? 0)] ?? '',
+                'file_path' => $s['file_path'] ?? '',
+                'pending_uploads' => (int)$s['pending_uploads'],
+                'last_upload_name' => $s['last_upload_name'] ?? '',
+                'last_upload_at' => $s['last_upload_at'] ?? ''
+            ];
+        }
+        // 내부 공유 (소유자 필드 = shared_by)
+        foreach (($this->db->load('internal_shares') ?: []) as $s) {
+            if ((int)($s['shared_by'] ?? 0) !== (int)$userId) continue;
+            if (($s['pending_uploads'] ?? 0) <= 0) continue;
+            $list[] = [
+                'id' => $s['id'],
+                'is_internal' => true,
+                'share_type' => 'internal',
+                'storage_id' => $s['storage_id'] ?? null,
+                'storage_name' => $storageNames[(int)($s['storage_id'] ?? 0)] ?? '',
+                'file_path' => $s['file_path'] ?? '',
+                'pending_uploads' => (int)$s['pending_uploads'],
+                'last_upload_name' => $s['last_upload_name'] ?? '',
+                'last_upload_at' => $s['last_upload_at'] ?? ''
+            ];
+        }
+        return ['success' => true, 'notifications' => $list];
+    }
+    
+    /**
+     * 공유 업로드 알림 확인 처리 (소유자가 해당 폴더를 열면 미확인 업로드 수 초기화)
+     * - shareId 직접 지정 OR storageId+folderPath 매칭(일반 탐색기로 공유 폴더를 연 경우).
+     * - 소유자(created_by) 본인만 초기화 가능.
+     */
+    public function clearShareUploadNotify(int $userId, ?int $shareId = null, ?int $storageId = null, ?string $folderPath = null, bool $isInternal = false, bool $clearAll = false): array {
+        $cleared = 0;
+        if ($clearAll) {
+            // X(닫기) = 확인 처리: 내 모든 공유의 미확인 업로드 초기화
+            $tables = ['shares' => 'created_by', 'internal_shares' => 'shared_by'];
+            foreach ($tables as $table => $ownerField) {
+                foreach (($this->db->load($table) ?: []) as $s) {
+                    if ((int)($s[$ownerField] ?? 0) !== (int)$userId) continue;
+                    if (($s['pending_uploads'] ?? 0) <= 0) continue;
+                    $this->db->update($table, ['id' => $s['id']], ['pending_uploads' => 0]);
+                    $cleared++;
+                }
+            }
+        } elseif ($shareId) {
+            // 내부 공유는 internal_shares(소유자=shared_by), 그 외(filedrop)는 shares(소유자=created_by)
+            $table = $isInternal ? 'internal_shares' : 'shares';
+            $ownerField = $isInternal ? 'shared_by' : 'created_by';
+            $share = $this->db->find($table, ['id' => $shareId]);
+            if ($share && (int)($share[$ownerField] ?? 0) === (int)$userId && ($share['pending_uploads'] ?? 0) > 0) {
+                $this->db->update($table, ['id' => $shareId], ['pending_uploads' => 0]);
+                $cleared++;
+            }
+        } elseif ($storageId !== null && $folderPath !== null) {
+            // 일반 탐색기로 공유 대상 폴더를 연 경우: 양쪽 테이블에서 storage_id + file_path 일치하는 내 공유 초기화
+            $fp = str_replace(['\\', '/'], '/', trim($folderPath, '/'));
+            $tables = ['shares' => 'created_by', 'internal_shares' => 'shared_by'];
+            foreach ($tables as $table => $ownerField) {
+                $allShares = $this->db->load($table) ?: [];
+                foreach ($allShares as $s) {
+                    if ((int)($s[$ownerField] ?? 0) !== (int)$userId) continue;
+                    if ((int)($s['storage_id'] ?? -1) !== (int)$storageId) continue;
+                    if (($s['pending_uploads'] ?? 0) <= 0) continue;
+                    $sfp = str_replace(['\\', '/'], '/', trim($s['file_path'] ?? '', '/'));
+                    if ($sfp === $fp) {
+                        $this->db->update($table, ['id' => $s['id']], ['pending_uploads' => 0]);
+                        $cleared++;
+                    }
+                }
+            }
+        }
+        return ['success' => true, 'cleared' => $cleared];
+    }
+    
+    /**
      * 공유받은 폴더 내 파일/폴더 삭제 (전체 권한 필요)
      */
     public function deleteInInternalShare(int $shareId, string $subPath): array {
@@ -1663,6 +1796,77 @@ class ShareManager {
         ]);
         
         return ['success' => true, 'filename' => $filename];
+    }
+    
+    /**
+     * 파일 드롭 공유 링크로 청크 업로드 (대용량 파일 지원)
+     * - 외부 공개(비로그인)이므로 매 청크마다 토큰/만료/비밀번호/횟수 재검증.
+     * - 첫 청크에서 위험 확장자/파일명 차단(filedrop 고유 보안).
+     * - 검증 후 FileManager::uploadChunk 코어(청크 조립 + 경쟁조건 락) 재사용(skipPermCheck).
+     * - 조립 완료(complete) 시 업로드 횟수 1 증가.
+     */
+    public function uploadToFileDropChunk(string $token, array $data, ?string $password = null): array {
+        $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
+        if (!$share || ($share['share_type'] ?? '') !== 'filedrop') {
+            return ['success' => false, 'error' => __('ishare_invalid_filedrop', '유효하지 않은 파일 드롭 링크입니다.')];
+        }
+        // 만료 확인
+        if (!empty($share['expire_at']) && strtotime($share['expire_at']) < time()) {
+            $this->_cleanShareCache($share);
+            $this->db->delete('shares', ['id' => $share['id']]);
+            return ['success' => false, 'error' => __('api_err_share_expired', '만료된 공유 링크입니다.')];
+        }
+        // 비밀번호 확인
+        if (!empty($share['password'])) {
+            if (!$password || !password_verify($password, $share['password'])) {
+                return ['success' => false, 'error' => __('api_err_share_password_wrong', '비밀번호가 올바르지 않습니다.')];
+            }
+        }
+        // 업로드 횟수 제한 확인 (max_downloads를 max_uploads로 활용)
+        if (!empty($share['max_downloads']) && ($share['download_count'] ?? 0) >= $share['max_downloads']) {
+            return ['success' => false, 'error' => __('ishare_upload_limit', '업로드 횟수를 초과했습니다.')];
+        }
+        
+        // 파일명 안전성 + 위험 확장자 차단 (파일명 기반이라 데이터 불필요, 모든 청크 검증)
+        $filename = basename($data['filename'] ?? '');
+        $filename = preg_replace('/[\/\\\\]/', '', $filename);
+        if (empty($filename) || $filename === '.' || $filename === '..') {
+            return ['success' => false, 'error' => __('api_err_invalid_filename', '잘못된 파일명입니다.')];
+        }
+        $dangerousExts = DANGEROUS_EXTS;
+        $finalExt = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
+        if (in_array($finalExt, $dangerousExts)) {
+            return ['success' => false, 'error' => __('api_err_dangerous_ext', '보안상 허용되지 않는 파일 형식입니다.')];
+        }
+        $nameParts = explode('.', strtolower($filename));
+        if (count($nameParts) > 2) {
+            for ($i = 1; $i < count($nameParts) - 1; $i++) {
+                if (in_array($nameParts[$i], $dangerousExts)) {
+                    return ['success' => false, 'error' => __('api_err_dangerous_filename', '보안상 허용되지 않는 파일명입니다.')];
+                }
+            }
+        }
+        
+        // 대상: 공유의 storage_id + file_path (스토리지 루트 기준 상대경로)
+        $storageId = (int)$share['storage_id'];
+        $relativePath = str_replace(['\\', '/'], '/', trim($share['file_path'] ?? '', '/'));
+        
+        require_once __DIR__ . '/FileManager.php';
+        $fileManager = new FileManager();
+        // skipPermCheck=true: filedrop은 토큰으로 검증(스토리지 로그인 권한 체계 아님)
+        $result = $fileManager->uploadChunk($storageId, $relativePath, $data, true);
+        
+        // 조립 완료 시에만 업로드 횟수 증가 (중복 조립 deduped 제외)
+        if (!empty($result['success']) && !empty($result['complete']) && empty($result['deduped'])) {
+            $this->db->update('shares', ['token' => $token], [
+                'download_count' => ($share['download_count'] ?? 0) + 1,
+                // 공유 소유자 알림용: 미확인 업로드 수 + 마지막 업로드 정보
+                'pending_uploads' => ($share['pending_uploads'] ?? 0) + 1,
+                'last_upload_at' => date('Y-m-d H:i:s'),
+                'last_upload_name' => $result['filename'] ?? $filename
+            ]);
+        }
+        return $result;
     }
     
     /**

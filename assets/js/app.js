@@ -8390,6 +8390,7 @@ const App = {
         this._notifications = {};
         this.renderNotifications();
         this._stopBoardNotificationPolling();
+        this._stopShareUploadNotifyPolling();
         this._stopIndexSyncPolling();
         
         // 공지 팝업/배너 제거
@@ -8599,6 +8600,9 @@ const App = {
         // 게시판 댓글 알림 폴링 시작
         this._startBoardNotificationPolling();
         
+        // 내 공유 폴더에 외부/타인 업로드 알림 폴링 (30초마다)
+        this._startShareUploadNotifyPolling();
+        
         // 휴지통 카운트 폴링 (30초마다)
         this._startTrashPolling();
         
@@ -8684,6 +8688,8 @@ const App = {
                 App._dismissedNotifications = App._dismissedNotifications || {};
                 App._dismissedNotifications[id] = Date.now();
                 App.api('user_preferences_save', { dismissed_notifications: App._dismissedNotifications }).catch(() => {});
+                // 알림별 닫기 콜백 (예: 서버 상태 초기화) — 있을 때만
+                if (n.onDismiss) { try { n.onDismiss(); } catch(_) {} }
                 App.removeHeaderNotification(id);
                 App.closeNotifyDropdown();
             });
@@ -8742,6 +8748,100 @@ const App = {
             clearInterval(this._boardNotifTimer);
             this._boardNotifTimer = null;
         }
+    },
+    
+    _startShareUploadNotifyPolling() {
+        this._stopShareUploadNotifyPolling();
+        this._checkShareUploadNotify();
+        this._shareUploadNotifTimer = setInterval(() => this._checkShareUploadNotify(), 30000);
+    },
+    
+    _stopShareUploadNotifyPolling() {
+        if (this._shareUploadNotifTimer) {
+            clearInterval(this._shareUploadNotifTimer);
+            this._shareUploadNotifTimer = null;
+        }
+    },
+    
+    // 내 공유 폴더에 업로드된 미확인 파일 확인 → 헤더 알림 표시
+    async _checkShareUploadNotify() {
+        try {
+            const res = await this.api('share_upload_notify_list', {}, 'GET');
+            if (!res || !res.success || !Array.isArray(res.notifications)) return;
+            
+            const pending = res.notifications;
+            
+            // 이전 통합 알림(구버전) 잔재 제거
+            this.removeHeaderNotification('share-upload');
+            
+            // 현재 살아있어야 할 알림 id 집합
+            const aliveIds = new Set(pending.map(s => `share-upload-${s.is_internal ? 'i' : 's'}-${s.id}`));
+            
+            // 더 이상 pending 없는 공유의 알림 제거
+            if (this._notifications) {
+                Object.keys(this._notifications).forEach(nid => {
+                    if (nid.startsWith('share-upload-') && !aliveIds.has(nid)) {
+                        this.removeHeaderNotification(nid);
+                    }
+                });
+            }
+            
+            if (pending.length === 0) return;
+            
+            // 공유별로 개별 알림 표시
+            pending.forEach(share => {
+                const notifId = `share-upload-${share.is_internal ? 'i' : 's'}-${share.id}`;
+                // 스토리지명 + 전체 경로 (찾기 쉽게)
+                const fp = (share.file_path || '').replace(/[\\/]+$/, '').replace(/\\/g, '/');
+                const stName = share.storage_name || t('storage', '스토리지');
+                const loc = fp ? `${stName}/${fp}` : `${stName}/${t('storage_root', '루트')}`;
+                const typeLabel = share.is_internal ? t('share_type_internal', '내부 공유') : t('share_type_filedrop', '파일 드롭');
+                const nm = share.last_upload_name ? ` (${share.last_upload_name})` : '';
+                const text = `[${typeLabel}] ${loc} · ${t('share_upload_notify_short', '새 업로드')} ${share.pending_uploads}${t('items_count', '개')}${nm}`;
+                
+                this.showHeaderNotification(notifId, {
+                    icon: '📥',
+                    text: text,
+                    count: share.pending_uploads,
+                    action: t('open_folder', '폴더 열기'),
+                    onClick: () => this._openSharedUploadFolder(share),
+                    onDismiss: () => {
+                        // X(닫기) = 확인 처리: 해당 공유만 초기화
+                        this.api('share_clear_upload_notify', {
+                            share_id: share.id,
+                            is_internal: share.is_internal ? 1 : 0
+                        }, 'POST').catch(() => {});
+                    }
+                });
+            });
+        } catch(e) {}
+    },
+    
+    // 알림 클릭: 해당 공유 폴더 열기 (열면 서버에서 pending 초기화됨)
+    async _openSharedUploadFolder(share) {
+        try {
+            this.closeNotifyDropdown();
+            // 클릭한 공유의 알림을 명시적으로 초기화 (id로 직접 — 매칭 의존 제거)
+            await this.api('share_clear_upload_notify', {
+                share_id: share.id,
+                is_internal: share.is_internal ? 1 : 0
+            }, 'POST').catch(() => {});
+            
+            if (share.is_internal) {
+                // 내부 공유: 공유 폴더 뷰로
+                this.browseInternalShare(share.id);
+            } else {
+                // filedrop 등: 실제 스토리지 폴더로 이동 (검증된 네비게이션 패턴)
+                this.currentStorage = share.storage_id;
+                this.currentPath = share.file_path || '';
+                // 사이드바 스토리지 선택 표시 갱신
+                $('.storage-item').removeClass('active');
+                $(`.storage-item[data-id="${share.storage_id}"]`).addClass('active');
+                await this.loadFiles();
+            }
+            // 알림 갱신 (초기화 반영)
+            this._checkShareUploadNotify();
+        } catch(e) {}
     },
     
     // === 인덱스 자동 동기화 ===
@@ -9787,6 +9887,16 @@ const App = {
                 if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
                 else { this.toast(t('file_not_found', '파일을 찾을 수 없습니다.') + ': ' + fileName, 'warning'); }
             }, 800);
+        }
+        
+        // 공유 업로드 알림이 떠있을 때만, 현재 연 폴더가 내 공유 폴더면 알림 초기화
+        if (this._notifications && this._notifications['share-upload'] && this.currentStorage) {
+            this.api('share_clear_upload_notify', {
+                storage_id: this.currentStorage,
+                folder_path: this.currentPath || ''
+            }, 'POST').then(r => {
+                if (r && r.cleared > 0) this._checkShareUploadNotify();
+            }).catch(() => {});
         }
         
         return { success: true };
@@ -20316,6 +20426,11 @@ const App = {
             return;
         }
         
+        // 공유 소유자가 이 폴더를 열면 업로드 알림 초기화 (서버가 소유자 여부 확인)
+        this.api('share_clear_upload_notify', { share_id: id, is_internal: 1 }, 'POST')
+            .then(() => this._checkShareUploadNotify())
+            .catch(() => {});
+        
         const share = res.share;
         const items = res.items;
         const perm = share.permission || 'read';
@@ -20345,6 +20460,17 @@ const App = {
             </div>
         </div>`;
         
+        // 드래그 드롭존 + 진행률 UI (쓰기 권한 있을 때만)
+        if (canWrite) {
+            html += `<div id="ishare-dropzone" style="border:2px dashed #c5c9d6;border-radius:8px;padding:16px;text-align:center;color:#888;margin-bottom:12px;cursor:pointer;transition:all 0.2s;font-size:13px;">
+                    📥 ${t('ishare_drop_hint', '여기에 파일을 끌어놓거나 위의 업로드 버튼을 누르세요')}
+                </div>
+                <div id="ishare-progress" style="display:none;margin-bottom:12px;">
+                    <div style="height:8px;background:#eee;border-radius:4px;overflow:hidden;width:100%;"><div id="ishare-bar" style="height:100%;background:#667eea;border-radius:4px;transition:width 0.3s;width:0%;"></div></div>
+                    <p id="ishare-status" style="font-size:13px;color:#666;margin-top:5px;white-space:pre-line;"></p>
+                </div>`;
+        }
+        
         if (items.length === 0) {
             html += `<div style="text-align:center;padding:20px;color:#999;">${t('empty_folder', '빈 폴더입니다.')}</div>`;
         } else {
@@ -20369,6 +20495,45 @@ const App = {
         }
         
         container.html(html);
+        
+        // 드롭존 이벤트 (쓰기 권한 있을 때)
+        if (canWrite) {
+            const dz = document.getElementById('ishare-dropzone');
+            if (dz) {
+                dz.addEventListener('click', () => this.uploadToInternalShare(id, this._ishBrowseSubPath));
+                dz.addEventListener('dragover', e => {
+                    e.preventDefault();
+                    dz.style.borderColor = '#667eea';
+                    dz.style.background = '#f0f2ff';
+                });
+                dz.addEventListener('dragleave', e => {
+                    e.preventDefault();
+                    dz.style.borderColor = '#c5c9d6';
+                    dz.style.background = '';
+                });
+                dz.addEventListener('drop', async e => {
+                    e.preventDefault();
+                    dz.style.borderColor = '#c5c9d6';
+                    dz.style.background = '';
+                    const files = Array.from(e.dataTransfer.files || []);
+                    if (files.length === 0) return;
+                    // 기존 업로드 흐름(중복 체크) 재사용
+                    await this._ishHandleDroppedFiles(files, id, this._ishBrowseSubPath);
+                });
+            }
+        }
+    },
+    
+    // 드롭된 파일 처리 (uploadToInternalShare의 중복 체크 로직 재사용)
+    async _ishHandleDroppedFiles(fileArray, shareId, subPath) {
+        const listRes = await this.api('internal_share_list_folder', { id: shareId, sub_path: subPath });
+        const existingNames = new Set((listRes.items || []).map(f => f.name));
+        const duplicates = fileArray.filter(file => existingNames.has(file.name));
+        if (duplicates.length > 0) {
+            this._showIShareDuplicateModal(duplicates, fileArray, shareId, subPath);
+        } else {
+            await this._executeIShareUpload(fileArray, 'rename', shareId, subPath);
+        }
     },
     
     // 인덱스 기반 헬퍼
@@ -20482,26 +20647,52 @@ const App = {
     async _executeIShareUpload(files, duplicateAction, shareId, subPath) {
         let success = 0, fail = 0, skipped = 0;
         
-        for (const file of files) {
-            const fd = new FormData();
-            fd.append('share_id', shareId);
-            fd.append('sub_path', subPath);
-            fd.append('file', file);
-            fd.append('duplicateAction', duplicateAction);
-            fd.append('csrf_token', this.csrfToken);
-            
+        // 청크 크기 (일반 업로드와 동일: PC 10MB, 모바일 2MB)
+        const isMobile = window.innerWidth <= 1024;
+        const serverMax = (this.serverConfig && this.serverConfig.maxChunkSize) || 10 * 1024 * 1024;
+        const chunkSize = isMobile ? Math.min(2 * 1024 * 1024, serverMax) : serverMax;
+        const PARALLEL = isMobile ? 2 : 3;
+        
+        // 진행률 UI 요소 (폴더 뷰에 있을 때만)
+        const progEl = document.getElementById('ishare-progress');
+        const barEl = document.getElementById('ishare-bar');
+        const statusEl = document.getElementById('ishare-status');
+        const fmtSize = (b) => {
+            if (b < 1024) return b + ' B';
+            if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+            if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+            return (b/1073741824).toFixed(2) + ' GB';
+        };
+        if (progEl) progEl.style.display = 'block';
+        const totalFiles = files.length;
+        
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            const fileStartTime = Date.now();
             try {
-                const res = await fetch('api.php?action=internal_share_upload', { method: 'POST', body: fd, credentials: 'same-origin' });
-                const data = await res.json();
-                if (data.success) {
-                    if (data.skipped) skipped++;
-                    else success++;
+                const r = await this._uploadIShareChunked(file, duplicateAction, shareId, subPath, chunkSize, PARALLEL, (fileProgress) => {
+                    if (!barEl) return;
+                    const overall = ((i + fileProgress) / totalFiles) * 100;
+                    barEl.style.width = overall.toFixed(1) + '%';
+                    const uploaded = Math.min(file.size, Math.round(file.size * fileProgress));
+                    const pct = Math.round(fileProgress * 100);
+                    const elapsed = (Date.now() - fileStartTime) / 1000;
+                    let speedStr = '';
+                    if (elapsed > 0.5 && uploaded > 0) speedStr = ` · ${fmtSize(uploaded / elapsed)}/s`;
+                    let info = `${i+1}/${totalFiles}: ${file.name}\n${fmtSize(uploaded)} / ${fmtSize(file.size)} (${pct}%)${speedStr}`;
+                    if (totalFiles > 1) info += `\n${t('filedrop_total', '전체')} ${overall.toFixed(0)}%`;
+                    if (statusEl) statusEl.textContent = info;
+                });
+                if (r.success) {
+                    if (r.skipped) skipped++; else success++;
                 } else {
                     fail++;
-                    this.toast(`${file.name}: ${data.error}`, 'error');
+                    this.toast(`${file.name}: ${r.error || t('err_upload_failed', '업로드 실패')}`, 'error');
                 }
             } catch(e) { fail++; }
         }
+        
+        if (progEl) progEl.style.display = 'none';
         
         let msg = `${t('upload', '업로드')}: `;
         if (success > 0) msg += `${success}${t('count_success', '개 성공')}`;
@@ -20510,6 +20701,55 @@ const App = {
         
         this.toast(msg, fail > 0 ? 'error' : 'success');
         this.browseInternalShare(shareId, subPath);
+    },
+    
+    // 내부 공유: 파일 1개를 청크로 분할 전송 (검증된 서버 uploadChunk 코어 재사용)
+    async _uploadIShareChunked(file, duplicateAction, shareId, subPath, chunkSize, PARALLEL, onProgress) {
+        const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+        const uploadId = 'ishare_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        
+        const uploadOneChunk = async (chunkIndex) => {
+            const start = chunkIndex * chunkSize;
+            const end = Math.min(start + chunkSize, file.size);
+            const blob = file.slice(start, end);
+            
+            const fd = new FormData();
+            fd.append('share_id', shareId);
+            fd.append('sub_path', subPath);
+            fd.append('filename', file.name);
+            fd.append('chunkIndex', chunkIndex);
+            fd.append('totalChunks', totalChunks);
+            fd.append('totalSize', file.size);
+            fd.append('uploadId', uploadId);
+            fd.append('lastModified', file.lastModified || 0);
+            fd.append('duplicateAction', duplicateAction);
+            fd.append('chunk', blob, file.name);
+            fd.append('csrf_token', this.csrfToken);
+            
+            const res = await fetch('api.php?action=internal_share_chunk_upload', { method: 'POST', body: fd, credentials: 'same-origin' });
+            return await res.json();
+        };
+        
+        try {
+            let doneChunks = 0;
+            // 병렬 배치 전송 (마지막 청크 응답에 complete 포함)
+            for (let batch = 0; batch < totalChunks; batch += PARALLEL) {
+                const promises = [];
+                for (let j = 0; j < PARALLEL && batch + j < totalChunks; j++) {
+                    promises.push(uploadOneChunk(batch + j));
+                }
+                const results = await Promise.all(promises);
+                doneChunks += results.length;
+                if (onProgress) onProgress(Math.min(doneChunks, totalChunks) / totalChunks);
+                for (const r of results) {
+                    if (r.success === false) return r;
+                    if (r.complete) return { success: true, skipped: r.skipped };
+                }
+            }
+            return { success: true };
+        } catch (e) {
+            return { success: false, error: e.message };
+        }
     },
     
     // 공유 폴더에 새 폴더 생성
@@ -34831,7 +35071,7 @@ const App = {
                     }
                 });
                 vid.addEventListener('play', () => wrap.classList.add('playing'));
-                vid.addEventListener('pause', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); });
+                vid.addEventListener('pause', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); this._positionTranscodeDuration(wrap, vid); });
                 vid.addEventListener('ended', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); });
                 
                 // ★ 네이티브 비디오 재생 에러 핸들러 (코덱 미지원 감지)
@@ -35014,9 +35254,21 @@ const App = {
                 // PC/모바일 모두 wrap 안에 absolute — CSS .playing/:hover/.show-controls로 통합 제어
                 fsBtn.style.position = 'absolute';
                 fsBtn.style.top = 'auto';
-                fsBtn.style.right = '12px';
-                fsBtn.style.bottom = isMobile ? '100px' : '75px';
                 wrap.appendChild(fsBtn);
+                // 동영상 표시 영역(contain 여백 제외) 우하단 안쪽에 배치
+                this._positionFsBtn(wrap, vid, fsBtn);
+                const _repositionFs = () => this._positionFsBtn(wrap, vid, fsBtn);
+                vid.addEventListener('loadedmetadata', _repositionFs);
+                vid.addEventListener('resize', _repositionFs);
+                window.addEventListener('resize', _repositionFs);
+                window.addEventListener('orientationchange', _repositionFs);
+                document.addEventListener('fullscreenchange', _repositionFs);
+                document.addEventListener('webkitfullscreenchange', _repositionFs);
+                // pseudo-fullscreen 등 wrap class 변경 시에도 재계산 (토글 지점 자동 커버)
+                const _wrapClassObs = new MutationObserver(() => _repositionFs());
+                _wrapClassObs.observe(wrap, { attributes: true, attributeFilter: ['class'] });
+                setTimeout(_repositionFs, 300);
+                setTimeout(_repositionFs, 1000);
                 
                 // 모달 닫힐 때 정리
                 const previewModal = document.getElementById('modal-preview');
@@ -35024,6 +35276,11 @@ const App = {
                     const _fsCleanup = new MutationObserver(() => {
                         if (previewModal.style.display === 'none' || !document.body.contains(wrap)) {
                             fsBtn.remove();
+                            window.removeEventListener('resize', _repositionFs);
+                            window.removeEventListener('orientationchange', _repositionFs);
+                            document.removeEventListener('fullscreenchange', _repositionFs);
+                            document.removeEventListener('webkitfullscreenchange', _repositionFs);
+                            _wrapClassObs.disconnect();
                             _fsCleanup.disconnect();
                         }
                     });
@@ -35496,13 +35753,18 @@ const App = {
                         const durationText = formatTime(realDur);
                         
                         const ensureEl = () => {
-                            let el = video.parentElement?.querySelector('.transcode-duration');
-                            if (!el && video.parentElement) {
+                            // 전체화면 버튼과 동일한 기준(.video-player-wrap)에 붙임.
+                            //   자막 영상은 video가 .video-sub-wrapper로 한 번 더 감싸지는데,
+                            //   거기 붙이면 position 기준이 달라져 위치가 어긋나므로 wrap에 직접 붙인다.
+                            const host = video.closest('.video-player-wrap') || video.parentElement;
+                            let el = host?.querySelector('.transcode-duration');
+                            if (!el && host) {
                                 el = document.createElement('div');
                                 el.className = 'transcode-duration';
-                                video.parentElement.style.position = 'relative';
-                                video.parentElement.appendChild(el);
+                                host.appendChild(el);
                             }
+                            // 영상 영역 기준으로 위치 보정 (전체화면 버튼과 같은 줄)
+                            App._positionTranscodeDuration(host, video);
                             return el;
                         };
                         
@@ -35514,6 +35776,17 @@ const App = {
                             const el = ensureEl();
                             if (el) el.textContent = `0:00 / ${durationText}`;
                         });
+                        // 일시정지/재생/리사이즈 시에도 위치 재보정 (timeupdate가 멈춰도 위치 유지)
+                        //   video 자체 이벤트만 사용 → video 제거 시 자동 정리(누수 없음)
+                        const _repositionDur = () => App._positionTranscodeDuration(video.closest('.video-player-wrap') || video.parentElement, video);
+                        video.addEventListener('pause', _repositionDur);
+                        video.addEventListener('play', _repositionDur);
+                        video.addEventListener('resize', _repositionDur);
+                        // 재생 전 초기 상태에서도 보정 (HLS 레이아웃/메타데이터 지연 대응)
+                        ensureEl();
+                        setTimeout(_repositionDur, 300);
+                        setTimeout(_repositionDur, 1000);
+                        setTimeout(_repositionDur, 2500);
                     }
                 } catch (e) {
                     // console.warn('[EncoderDebug] info API error:', e.message || e);
@@ -37222,6 +37495,80 @@ const App = {
     },
     
     // 비디오 플레이어 이벤트 바인딩 (트랜스코딩 전환 후 새 비디오 요소에 재바인딩)
+    // 전체화면 버튼을 동영상 표시 영역(object-fit:contain 여백 제외) 우하단 안쪽에 배치.
+    //   기기 세로 길이가 달라도 항상 영상 영역 기준으로 일정하게 위치.
+    //   네이티브 컨트롤바와 겹치지 않도록 하단에 여유를 둠.
+    _positionFsBtn(wrap, vid, fsBtn) {
+        if (!wrap || !vid || !fsBtn) return;
+        // 전체화면(네이티브/유사) 상태에서는 CSS의 :fullscreen 규칙(bottom:80px 등)을 사용 —
+        //   inline 스타일을 비워 CSS가 적용되게 함. 영상영역 계산은 일반 재생 시에만.
+        const inFS = !!document.fullscreenElement || !!document.webkitFullscreenElement
+            || wrap.classList.contains('pseudo-fullscreen');
+        if (inFS) {
+            fsBtn.style.right = '';
+            fsBtn.style.bottom = '';
+            return;
+        }
+        // PC는 고정 위치 사용 (펜닐님 지시: right 5px / bottom 70px)
+        const isMobile = window.innerWidth <= 1024;
+        if (!isMobile) {
+            fsBtn.style.right = '5px';
+            fsBtn.style.bottom = '70px';
+            return;
+        }
+        const wrapW = wrap.clientWidth;
+        const wrapH = wrap.clientHeight;
+        const vw = vid.videoWidth;
+        const vh = vid.videoHeight;
+        const padRight = 5;    // 영상 우측 모서리에서 안쪽
+        const padBottom = 64;  // 영상 하단 모서리에서 위로 (재생바 침범 방지, 살짝 위)
+        
+        if (!vw || !vh || !wrapW || !wrapH) {
+            fsBtn.style.right = padRight + 'px';
+            fsBtn.style.bottom = padBottom + 'px';
+            return;
+        }
+        
+        const scale = Math.min(wrapW / vw, wrapH / vh);
+        const dispW = vw * scale;
+        const dispH = vh * scale;
+        const marginX = Math.max(0, (wrapW - dispW) / 2);
+        const marginY = Math.max(0, (wrapH - dispH) / 2);
+        
+        fsBtn.style.right = (marginX + padRight) + 'px';
+        fsBtn.style.bottom = (marginY + padBottom) + 'px';
+        // 노란 시간(transcode-duration)은 fsBtn 설정 직후 그 렌더 위치를 따라가게 함
+        this._positionTranscodeDuration(wrap, vid);
+    },
+    
+    // transcode-duration(재생 시간 표시)을 영상 표시 영역 기준으로 배치.
+    //   재생/일시정지/생성 등 어느 시점에 호출돼도 동일 위치 보장 (전체화면 버튼과 같은 줄).
+    _positionTranscodeDuration(wrap, vid) {
+        // 노란 시간을 전체화면 버튼의 "실제 렌더된 위치"에 맞춤.
+        //   전체화면 버튼은 동영상 종류와 무관하게 항상 올바른 위치에 있으므로(펜닐님 확인),
+        //   그 버튼의 실제 화면 위치(getBoundingClientRect)를 읽어 같은 높이에 노란 시간을 둠.
+        //   계산(marginY)이 아니라 렌더 결과를 복사하므로 CSS/inline 무엇이 적용되든 항상 일치.
+        if (!wrap) return;
+        const el = wrap.querySelector('.transcode-duration');
+        const fsBtn = wrap.querySelector('.video-fullscreen-btn');
+        if (!el || !fsBtn) return;
+        const inFS = !!document.fullscreenElement || !!document.webkitFullscreenElement
+            || wrap.classList.contains('pseudo-fullscreen');
+        const isMobile = window.innerWidth <= 1024;
+        if (inFS || !isMobile) {
+            // 전체화면/PC: CSS 기본 규칙 사용 (원래 동작 보존, inline 비움)
+            el.style.left = ''; el.style.bottom = '';
+            return;
+        }
+        const fr = fsBtn.getBoundingClientRect();
+        const wr = wrap.getBoundingClientRect();
+        if (!fr.height || !wr.height) return;
+        // 전체화면 버튼 하단과 동일한 높이(bottom), 좌측 정렬
+        const newBottom = Math.round(wr.bottom - fr.bottom);
+        el.style.left = '5px';
+        el.style.bottom = newBottom + 'px';
+    },
+    
     _bindVideoPlayerEvents() {
         const wrap = document.querySelector('.video-player-wrap');
         const vid = document.querySelector('#preview-content .preview-video');
@@ -37229,7 +37576,7 @@ const App = {
         
         // play/pause → 배지/오버레이 숨김
         vid.addEventListener('play', () => wrap.classList.add('playing'));
-        vid.addEventListener('pause', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); });
+        vid.addEventListener('pause', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); this._positionTranscodeDuration(wrap, vid); });
         vid.addEventListener('ended', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); });
         
         // 모바일 터치 컨트롤
@@ -37258,9 +37605,35 @@ const App = {
         const isMobile = window.innerWidth <= 1024;
         fsBtn.style.position = 'absolute';
         fsBtn.style.top = 'auto';
-        fsBtn.style.right = '12px';
-        fsBtn.style.bottom = isMobile ? '100px' : '75px';
         wrap.appendChild(fsBtn);
+        // 동영상 표시 영역(contain 여백 제외) 우하단 안쪽에 배치
+        this._positionFsBtn(wrap, vid, fsBtn);
+        const _repositionFs2 = () => this._positionFsBtn(wrap, vid, fsBtn);
+        vid.addEventListener('loadedmetadata', _repositionFs2);
+        vid.addEventListener('resize', _repositionFs2);
+        window.addEventListener('resize', _repositionFs2);
+        window.addEventListener('orientationchange', _repositionFs2);
+        document.addEventListener('fullscreenchange', _repositionFs2);
+        document.addEventListener('webkitfullscreenchange', _repositionFs2);
+        const _wrapClassObs2 = new MutationObserver(() => _repositionFs2());
+        _wrapClassObs2.observe(wrap, { attributes: true, attributeFilter: ['class'] });
+        setTimeout(_repositionFs2, 300);
+        setTimeout(_repositionFs2, 1000);
+        // 모달 닫힐 때 window 리스너 정리
+        const _previewModal2 = document.getElementById('modal-preview');
+        if (_previewModal2) {
+            const _fsCleanup2 = new MutationObserver(() => {
+                if (_previewModal2.style.display === 'none' || !document.body.contains(wrap)) {
+                    window.removeEventListener('resize', _repositionFs2);
+                    window.removeEventListener('orientationchange', _repositionFs2);
+                    document.removeEventListener('fullscreenchange', _repositionFs2);
+                    document.removeEventListener('webkitfullscreenchange', _repositionFs2);
+                    _wrapClassObs2.disconnect();
+                    _fsCleanup2.disconnect();
+                }
+            });
+            _fsCleanup2.observe(_previewModal2, { attributes: true, attributeFilter: ['style', 'class'] });
+        }
         
         fsBtn.addEventListener('click', (e) => {
             e.stopPropagation();

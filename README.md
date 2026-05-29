@@ -1,6 +1,6 @@
-# FileStation v5.8.1k
+# FileStation v5.8.1l
 
-![version](https://img.shields.io/badge/version-v5.8.1k-blue)
+![version](https://img.shields.io/badge/version-v5.8.1l-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
@@ -500,7 +500,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1k.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.1l.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -719,11 +719,69 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1k (rhwp 0.7.13 기반)
+**현재 버전**: v5.8.1l (rhwp 0.7.13 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1k (2026-05-27) ⭐ 현재
+#### v5.8.1l (2026-05-29) ⭐ 현재
+
+**[v5.8.1l 버그 수정] 청크 업로드 조립 경쟁 조건 — 큰 파일 1개가 2개로 중복 생성 (2026-05-29)**
+
+펜닐님 보고: 60MB 파일 1개를 드래그 업로드했는데 결과가 2개(`파일.zip` + `파일 (2).zip`) 생김. 무조건이 아니라 간헐적. 정밀 진단 → 소스 경쟁 조건(race condition) 확정·수정.
+
+- **원인**: 큰 파일은 청크(PC 10MB 단위)로 분할되어 PC 기준 3개씩 병렬 전송(`PARALLEL=3`). 서버 `uploadChunk`(api/FileManager.php)는 청크 도착마다 `count(glob('chunk_*'))`로 개수를 세서 "다 왔으면 조립"하는데, **이 완성 판정에 락이 없음**. 마지막 청크들이 거의 동시 도착하면 여러 요청이 모두 "완성" 판정 → **조립 중복 실행** → 같은 파일 2개(2번째에 `(2)` 자동 부여).
+  - 60MB = 6청크 → 마지막 배치(3개) 동시 전송 → 동시 도착 시 발생. 타이밍 의존이라 **간헐적**(펜닐님 "무조건 아님" 일치). 작은 파일(10MB 미만, 1청크)은 경쟁 없어 항상 정상.
+- **수정**: 완성 판정 직후 `fopen($tempDir.'/.assembling.lock', 'x')` **원자적 락**(파일 없을 때만 생성). 동시 도착해도 단 하나의 요청만 락 획득 → 그 요청만 조립. 락 못 잡은 요청은 조립 없이 완료 응답(`complete:true`). 파일 락이라 `cleanupChunks`(is_file→unlink)에서 정상 정리되고, `glob('chunk_*')` 청크 수 계산에도 안 걸림.
+  - **로컬 업로드(`uploadChunk`) + 원격 스토리지 업로드(`uploadChunkRemote`, FTP/SFTP/WebDAV 등) 양쪽 모두** 동일 경쟁 조건이 있어 둘 다 락 적용(전수 점검: `count(glob chunk_*) >= totalChunks` 판정 2곳 모두 보호).
+- **적용 범위 (전수 점검)**:
+  - 업로드 버튼 / 폴더 업로드 / 드래그 파일·폴더 업로드 → 모두 클라이언트 `uploadChunkedMulti`·`uploadChunked` → 서버 단일 `uploadChunk` 함수로 수렴 → **락 하나로 전부 보호**.
+  - 복사→붙여넣기 / 잘라내기→붙여넣기 → 서버 `$fileManager->copy()`/`move()`(PHP copy/rename) → **청크 조립 안 함, 경쟁 조건 무관**.
+  - 게시판 첨부 업로드 → 클라이언트 순차 전송(`await` 루프) → 동시 도착 없어 경쟁 조건 없음.
+- **안전성**: 기존 조립 로직 삭제 없이 락만 추가. 청크 저장(move_uploaded_file)은 락 체크 전 실행 → 데이터 손실 없음(락 잡은 요청이 모든 청크 조립). 클라이언트는 `complete:true`로 정상 처리(추가한 `deduped` 필드 몰라도 됨). 락은 uploadId별 고유 tempDir 안 → 다른 업로드와 무간섭, 죽은 요청의 락은 `cleanupOldChunks`(1일)가 정리 → deadlock 없음.
+- **검증**: PHP `php -l` OK. 멀쩡한 코드 보존(완성 판정·조립·cleanup 로직).
+- **테스트(실기기 필요)**: 10MB 이상 파일을 여러 번(10회+) 반복 드래그 업로드 → 항상 1개만 생성되는지. 경쟁 조건은 타이밍 의존이라 1~2회로는 확신 어려움(수정 전에도 운 좋으면 1개였음). 락은 동시 도착해도 원천 차단하므로 반복해도 1개여야 함.
+
+**[v5.8.1l 기능] 공유 업로드 청크화 — 내부 공유 + 외부 filedrop 대용량 지원 (2026-05-29)**
+
+기존 공유 업로드 2종(내부 공유 업로드, 외부 filedrop 업로드)은 청크 분할 없이 파일을 통째로 전송 → PHP `upload_max_filesize`/`post_max_size` 제한에 걸려 큰 파일 업로드 불가(`ini_set`은 이 값 변경 불가). 일반 업로드처럼 청크화하여 사실상 무제한(디스크/quota까지) 지원.
+
+- **재사용 설계 (안전)**: 검증된 `FileManager::uploadChunk`(청크 조립 + 경쟁조건 락) 코어를 그대로 재사용. uploadChunk에 `$skipPermCheck` 파라미터(기본 false) 추가 — **기존 일반 업로드는 인자 안 넘겨 동작 100% 불변**. 공유 경로만 자체 권한 검증 후 true로 호출(스토리지 can_write 체크만 skip, 확장자/랜섬웨어/quota/경로(isPathSafe) 검증은 그대로 수행).
+- **내부 공유** (`uploadToInternalShareChunk`): `validateInternalSharePath`로 공유 write 권한 검증 후, 공유의 storage_id + 상대경로(file_path+subPath)로 uploadChunk 호출. 클라이언트 `_executeIShareUpload`를 청크 분할(`_uploadIShareChunked`, 10MB·병렬3)로 교체.
+- **외부 filedrop** (`uploadToFileDropChunk`): 외부 공개(비로그인)라 **매 청크 토큰/만료/비밀번호/횟수 재검증** + 위험확장자/파일명 차단(DANGEROUS_EXTS) 후 uploadChunk 호출. 조립 완료(complete, deduped 제외) 시에만 업로드 횟수 +1. 클라이언트 share.php 업로드를 청크 분할로 교체.
+- **라우팅**: `internal_share_chunk_upload`(로그인 필요, CSRF 검증) + `filedrop_chunk_upload`(noAuth + CSRF 면제 — 외부인은 토큰 기반 인증) 추가. rate limit 면제 + 업로드 전용 rate limit 등록. (filedrop은 외부 공개라 csrfExclude 등록 필수 — 누락 시 외부인 업로드 차단됨.)
+- **경로 안전성**: filedrop은 외부 공개지만 uploadChunk 내부 `isPathSafe`로 경로 탐색(../) 차단. file_path는 관리자 생성 공유라 신뢰 + 검증 이중.
+- **안전성**: 기존 단일 업로드 함수/라우팅(uploadToInternalShare, uploadToFileDrop)은 **삭제 없이 보존**(ShareManager 삭제줄 0). 새 lang 키 불필요(기존 키 재사용). 청크 조립 락이 공유에도 자동 적용(중복 생성 방지).
+- **검증**: api.php/ShareManager/FileManager/share.php `php -l` OK, app.js `node --check` OK. 새 청크 함수가 기존 검증된 코어로 수렴.
+- **테스트(실기기 필요)**: ① 내부 공유 폴더에 10MB+ 파일 업로드 ② 외부 filedrop 링크로 10MB+ 파일 업로드(비밀번호/횟수 제한 포함) ③ 위험 확장자(.php 등) 차단 ④ 대용량 파일 중복 생성 없는지.
+
+**[v5.8.1l 기능] 공유 폴더 업로드 알림 — 소유자에게 헤더 알림 (2026-05-29)**
+
+공유 폴더(내부 공유 + 외부 filedrop)에 타인/외부인이 업로드해도, 공유 소유자가 그 폴더를 열어둔 상태에선 자동 갱신이 안 됨(실시간 폴링/푸시 없음 — 설계상 정상). 새로고침해야 보임. 기존 알림 폴링 인프라를 활용해 "내 공유에 업로드됨" 알림을 추가.
+
+- **방식**: 클라이언트 폴링(기존 30초 알림 폴링과 동일 인프라) + 헤더 알림(인덱스 재구축 알림과 같은 위치). SSE 실시간 푸시는 PHP(Windows+Apache) 환경에서 워커 점유 위험이 커 폴링 채택.
+- **서버**: 청크 업로드 완료(complete, deduped 제외) 시 공유 레코드에 `pending_uploads`(미확인 수) + `last_upload_at/name` 기록. 일반 공유=`shares`, 내부 공유=`internal_shares` 각각 기록. 통합 조회 `getShareUploadNotifications`(pending>0만) + 초기화 `clearShareUploadNotify`. 라우팅 `share_upload_notify_list`(GET) + `share_clear_upload_notify`(POST).
+- **클라이언트**: `_startShareUploadNotifyPolling`(30초) → pending 있으면 `showHeaderNotification('share-upload', …)`. 알림 클릭 시 해당 공유 폴더로 이동.
+- **알림 해제(소유자가 폴더 열면 꺼짐 — 게시판 댓글/쪽지와 동일 UX)**:
+  - 내부 공유: `browseInternalShare` 시 `share_clear_upload_notify(share_id, is_internal=1)`.
+  - 외부 filedrop: 소유자가 일반 탐색기로 그 폴더(storage_id+file_path 매칭)를 열면 초기화. 부담 최소화 위해 헤더 알림이 떠있을 때만 `loadFiles` 완료 후 호출.
+- **대상**: 공유 소유자 본인만(서버에서 소유자 검증). 내부 공유 소유자 필드는 `shared_by`, 일반 공유는 `created_by`로 정확히 구분.
+- **안전성**: 기존 알림/폴링 로직 삭제 없이 추가. 로그아웃 시 폴링 타이머 정리. db 메서드는 internal_shares에 기존 사용된 패턴과 동일. lang 키 4종(ko/en) 추가.
+- **검증**: 전체 `php -l`/`node --check`/JSON 파싱 OK. 멀쩡한 코드 보존(renderFiles 등).
+- **테스트(실기기 필요)**: ① 외부인이 내 filedrop 폴더에 업로드 → 30초 내 헤더 알림 ② 알림 클릭 → 폴더 이동 ③ 그 폴더 열면 알림 사라짐 ④ 내부 공유도 동일 ⑤ 여러 공유 동시 업로드 시 합산 표시.
+
+**[v5.8.1l 기능] 내부 공유 업로드 — 드래그 드롭 + 진행률바 추가 (2026-05-29)**
+
+내부 공유 폴더 업로드가 파일 선택 버튼만 있고 드래그 업로드/진행 표시가 없던 것을 보완(외부 filedrop과 동일 수준).
+
+- **드래그 드롭존**: 공유 폴더 뷰(쓰기 권한 시)에 점선 드롭존 추가. 파일 끌어놓기 + 클릭 업로드 모두 지원. dragover 시 강조 스타일. 드롭 시 기존 중복 체크 흐름(`_ishHandleDroppedFiles` → 중복 모달 or 업로드) 재사용.
+- **진행률바 + 정보**: 외부 filedrop과 동일하게 청크 단위 진행률바 + "N/M: 파일명 / 용량(%) · 속도" 표시. 여러 파일 시 "전체 %" 추가. `_executeIShareUpload`/`_uploadIShareChunked`에 onProgress 콜백 추가(청크 배치마다 갱신). 완료 후 browseInternalShare 재렌더 시 자동 정리.
+- **안전성**: 기존 업로드 버튼/중복 모달/청크 전송 로직 보존, onProgress는 선택 인자(미전달 시 기존 동작). lang 키 `ishare_drop_hint`/`filedrop_total`(ko/en) 추가. `node --check` OK.
+
+**캐시 무효화:** `APP_VERSION` `5.8.1k` → `5.8.1l`
+
+---
+
+#### v5.8.1k (2026-05-27)
 
 **[메뉴 ▲▼ 스크롤 인디케이터] PC + 모바일 컨텍스트 메뉴 / 작업 버튼 메뉴 (펜닐님 요청)**
 
@@ -935,6 +993,15 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 - **현상**: 전체화면 버튼이 200px(이전 세션 값)에서 세로로 긴 동영상의 영상 영역에 걸림.
 - **해결** (`assets/js/app.js` 2곳): `fsBtn.style.bottom = isMobile ? '200px' : '75px'` → `'100px' : '75px'`. PC 75px 무변경. 세로 모바일 CSS `bottom:8px`는 `!important` 없어 인라인 100px가 정상 우선.
+
+**🟢 B-2. 전체화면 버튼/시간표시 위치 — 영상 표시 영역 기준 + 기준 요소 수정 (2026-05-29)**
+
+- **전체화면 버튼(fsBtn) 위치 재설계** (`_positionFsBtn`, app.js): 고정 px 대신 동영상 표시 영역(object-fit:contain) 우하단 안쪽 기준으로 계산. 분기 3가지 — ①전체화면(네이티브/유사)=CSS `:fullscreen` 규칙 사용(inline 비움) ②PC(>1024px)=고정 `right:5px/bottom:70px`(펜닐님 지시, 영상영역 계산 안 함) ③모바일 세로=`marginX/Y + padRight:5 + padBottom:64`. 재계산 트리거: loadedmetadata/resize/orientationchange/fullscreenchange + wrap class MutationObserver(유사 전체화면) + setTimeout(300/1000). 모달 닫힐 때 리스너+observer 정리(add=remove).
+- **transcode-duration(노란 HLS 시간표시) 위치 — 장기 디버깅 끝 근본 원인 확정**:
+  - **증상**: 동영상마다, 재생 전/후/일시정지로 노란 시간 위치가 왔다갔다. `bottom` 계산값(예: 317px)이 영상 위 검은 공간에 뜸.
+  - **여러 헛수정 후 콘솔 로그(`[TD]`/`[FSB]`)로 확정한 진짜 원인**: 자막 있는 영상은 `<video>`가 `.video-sub-wrapper`로 한 번 더 감싸짐 → transcode-duration이 `video.parentElement`(=sub-wrapper)에 append되어 **position:absolute 기준 요소가 전체화면 버튼(.video-player-wrap 기준)과 달랐음**. 같은 `bottom:317px`라도 기준이 달라 전체화면 버튼은 영상 하단(렌더 bottom 553), 노란 시간은 위쪽(렌더 bottom 299)으로 그려짐. (계산식 자체는 처음부터 옳았고, 붙는 위치가 문제.)
+  - **해결**: ①노란 시간을 `video.closest('.video-player-wrap')`(=host)에 직접 append — 전체화면 버튼과 동일 기준 ②위치는 `_positionTranscodeDuration`이 전체화면 버튼의 실제 렌더 위치(getBoundingClientRect)를 읽어 `bottom = wrap.bottom - fsBtn.bottom`으로 맞춤(계산이 아닌 렌더 결과 복사 → CSS/inline 무엇이 적용되든 항상 같은 줄). left:5px(좌측), 전체화면 버튼은 right(우측) → 같은 높이 양끝. ③전체화면/PC는 inline 비워 CSS 사용. ④`_positionFsBtn` 끝에서 `_positionTranscodeDuration` 단방향 호출(무한루프 없음). ⑤재계산은 video 자체 이벤트(pause/play/resize)+생성 시(ensureEl)로 연결 — window 리스너 없어 video 제거 시 자동 정리(누수 없음).
+- **CSS**: `.transcode-duration { background: rgba(0,0,0,0.65) }` 주석 처리(펜닐님 요청). `.video-fullscreen-btn`/`.video-play-overlay`의 `rgba(0,0,0,0.55)`는 무관해 보존.
 
 **🟢 C. 일반 재생 배지 용량 단위 (트랜스코딩 배지 제외)**
 
@@ -2475,5 +2542,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1k — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*FileStation v5.8.1l — 한국 사용자를 위한 자체호스팅 웹 NAS*
 *최종 업데이트: 2026-05-26 (rhwp 0.7.13 기준)*

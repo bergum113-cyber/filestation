@@ -935,7 +935,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 
                 <div id="filedrop-list" class="filedrop-list" style="display:none;"></div>
                 <div id="filedrop-progress" style="display:none;margin-top:15px;">
-                    <div class="progress-bar"><div class="progress-fill" id="filedrop-bar"></div></div>
+                    <div class="fd-progress-track"><div class="fd-progress-fill" id="filedrop-bar"></div></div>
                     <p id="filedrop-status" style="font-size:13px;color:#666;margin-top:5px;"></p>
                 </div>
                 <button id="filedrop-submit" class="btn" style="display:none;margin-top:15px;">
@@ -953,8 +953,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 .filedrop-list { margin-top: 15px; text-align: left; max-height: 200px; overflow-y: auto; }
                 .filedrop-item { padding: 8px 12px; background: #f5f5f5; border-radius: 6px; margin-bottom: 5px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
                 .filedrop-item .remove { cursor: pointer; color: #e74c3c; font-weight: bold; }
-                .progress-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
-                .progress-fill { height: 100%; background: #667eea; border-radius: 4px; transition: width 0.3s; width: 0%; }
+                .fd-progress-track { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; width: 100%; }
+                .fd-progress-fill { height: 100%; background: #667eea; border-radius: 4px; transition: width 0.3s; width: 0%; }
                 .result-ok { color: #27ae60; } .result-err { color: #e74c3c; }
                 </style>
                 
@@ -1010,6 +1010,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 
                 async function startFileDropUpload() {
                     if (selectedFiles.length === 0) return;
+                    const tFdTotal = <?= json_encode(__('filedrop_total', '전체')) ?>;
                     const progress = document.getElementById('filedrop-progress');
                     const bar = document.getElementById('filedrop-bar');
                     const status = document.getElementById('filedrop-status');
@@ -1022,22 +1023,80 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     resultDiv.innerHTML = '';
                     
                     let success = 0, fail = 0;
+                    const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+                    const PARALLEL = 3;
+                    
+                    // 파일 1개를 청크로 분할 전송 (검증된 서버 uploadChunk 코어 재사용)
+                    const uploadFileChunked = async (f, onProgress) => {
+                        const totalChunks = Math.max(1, Math.ceil(f.size / CHUNK_SIZE));
+                        const uploadId = 'fd_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+                        
+                        const sendChunk = async (chunkIndex) => {
+                            const start = chunkIndex * CHUNK_SIZE;
+                            const end = Math.min(start + CHUNK_SIZE, f.size);
+                            const blob = f.slice(start, end);
+                            const fd = new FormData();
+                            fd.append('action', 'filedrop_chunk_upload');
+                            fd.append('token', token);
+                            if (password) fd.append('password', password);
+                            fd.append('filename', f.name);
+                            fd.append('chunkIndex', chunkIndex);
+                            fd.append('totalChunks', totalChunks);
+                            fd.append('totalSize', f.size);
+                            fd.append('uploadId', uploadId);
+                            fd.append('lastModified', f.lastModified || 0);
+                            fd.append('chunk', blob, f.name);
+                            const res = await fetch('api.php?action=filedrop_chunk_upload', { method: 'POST', body: fd });
+                            return await res.json();
+                        };
+                        
+                        let doneChunks = 0;
+                        for (let batch = 0; batch < totalChunks; batch += PARALLEL) {
+                            const promises = [];
+                            for (let j = 0; j < PARALLEL && batch + j < totalChunks; j++) {
+                                promises.push(sendChunk(batch + j));
+                            }
+                            const results = await Promise.all(promises);
+                            doneChunks += results.length;
+                            // 청크 단위 진행률 콜백 (큰 파일도 진행 상황 표시)
+                            if (onProgress) onProgress(Math.min(doneChunks, totalChunks) / totalChunks);
+                            for (const r of results) {
+                                if (r.success === false) return r;
+                                if (r.complete) return r;
+                            }
+                        }
+                        return { success: true };
+                    };
+                    
                     for (let i = 0; i < selectedFiles.length; i++) {
                         const f = selectedFiles[i];
+                        const fileStartTime = Date.now();
                         status.textContent = `${i+1}/${selectedFiles.length}: ${f.name}`;
-                        bar.style.width = ((i / selectedFiles.length) * 100) + '%';
-                        
-                        const fd = new FormData();
-                        fd.append('action', 'filedrop_upload');
-                        fd.append('token', token);
-                        fd.append('file', f);
-                        if (password) fd.append('password', password);
                         
                         try {
-                            const res = await fetch('api.php?action=filedrop_upload', { method: 'POST', body: fd });
-                            const data = await res.json();
+                            // 전체 진행률 = (완료 파일 수 + 현재 파일 청크 진행) / 전체 파일 수
+                            const data = await uploadFileChunked(f, (fileProgress) => {
+                                const overall = ((i + fileProgress) / selectedFiles.length) * 100;
+                                bar.style.width = overall.toFixed(1) + '%';
+                                // 진행 정보
+                                const uploaded = Math.min(f.size, Math.round(f.size * fileProgress));
+                                const pct = Math.round(fileProgress * 100);
+                                const elapsed = (Date.now() - fileStartTime) / 1000;
+                                let speedStr = '';
+                                if (elapsed > 0.5 && uploaded > 0) {
+                                    speedStr = ` · ${formatSize(uploaded / elapsed)}/s`;
+                                }
+                                // 1줄: 카운트 + 파일명 / 2줄: 현재 파일 용량(%) + 속도
+                                let info = `${i+1}/${selectedFiles.length}: ${f.name}\n${formatSize(uploaded)} / ${formatSize(f.size)} (${pct}%)${speedStr}`;
+                                // 여러 파일이면 전체 진행률도 표시
+                                if (selectedFiles.length > 1) {
+                                    info += `\n${tFdTotal} ${overall.toFixed(0)}%`;
+                                }
+                                status.textContent = info;
+                                status.style.whiteSpace = 'pre-line';
+                            });
                             if (data.success) {
-                                resultDiv.innerHTML += `<div class="result-ok">✅ ${esc(data.filename)}</div>`;
+                                resultDiv.innerHTML += `<div class="result-ok">✅ ${esc(data.filename || f.name)}</div>`;
                                 success++;
                             } else {
                                 resultDiv.innerHTML += `<div class="result-err">❌ ${esc(f.name)}: ${esc(data.error)}</div>`;

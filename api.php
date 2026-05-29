@@ -310,7 +310,7 @@ $rateLimitExclude = [
     // 파일 읽기/다운로드 (대량 연속 요청)
     'download', 'share_download', 'files', 'locked_files_get',
     // 업로드 (청크 단위 연속 요청 — 제한하면 대용량 업로드 불가)
-    'upload', 'upload_chunk', 'board_post_upload', 'board_post_upload_chunk', 'board_comment_upload_chunk',
+    'upload', 'upload_chunk', 'board_post_upload', 'board_post_upload_chunk', 'board_comment_upload_chunk', 'internal_share_chunk_upload', 'filedrop_chunk_upload',
     // 인증 및 초기화 (페이지 로드 시 즉시 호출)
     'me', 'logout', 'signup_status', 'csrf_token',
     // 초기화 시 호출되는 읽기 전용 API
@@ -377,7 +377,7 @@ if (!in_array($action, $rateLimitExclude)) {
 }
 
 // 업로드 계열 별도 Rate Limit (분당 1000회 — 폴더 드래그 + 청크 업로드 고려)
-$uploadRateLimitActions = ['upload', 'upload_chunk', 'filedrop_upload'];
+$uploadRateLimitActions = ['upload', 'upload_chunk', 'filedrop_upload', 'filedrop_chunk_upload', 'internal_share_chunk_upload'];
 if (in_array($action, $uploadRateLimitActions)) {
     $clientIP = getClientIP();
     if (strpos($clientIP, ',') !== false) {
@@ -412,7 +412,7 @@ $csrfExclude = [
     // 2FA 관련 (읽기 전용만 제외, 상태 변경은 CSRF 필요)
     '2fa_status', '2fa_verify',
     // 공유 링크 (외부 접근)
-    'share_access', 'share_download', 'filedrop_upload',
+    'share_access', 'share_download', 'filedrop_upload', 'filedrop_chunk_upload',
     // 파일 다운로드 (GET 요청 또는 세션만으로 보호)
     'download', 'temp_download',
     // 압축 스트리밍 (SSE)
@@ -1197,7 +1197,7 @@ try {
     }
     
     // Remember Me 토큰으로 자동 로그인 시도 (로그인 안 된 상태에서)
-    $noAuthActions = ['login', 'signup', 'signup_status', 'csrf_token', 'terms', 'server_config', '2fa_verify', 'password_reset_request', 'find_username', 'share_access', 'share_download', 'filedrop_upload', 'sso_config', 'sso_ldap_login', 'sso_oidc_auth', 'sso_oidc_callback', 'sso_oidc_silent_auth', 'sso_saml_auth', 'sso_saml_callback', 'sso_saml_metadata', 'debug_log'];
+    $noAuthActions = ['login', 'signup', 'signup_status', 'csrf_token', 'terms', 'server_config', '2fa_verify', 'password_reset_request', 'find_username', 'share_access', 'share_download', 'filedrop_upload', 'filedrop_chunk_upload', 'sso_config', 'sso_ldap_login', 'sso_oidc_auth', 'sso_oidc_callback', 'sso_oidc_silent_auth', 'sso_saml_auth', 'sso_saml_callback', 'sso_saml_metadata', 'debug_log'];
     if (!$auth->isLoggedIn() && !in_array($action, $noAuthActions)) {
         if (method_exists($auth, 'checkRememberToken')) {
             $auth->checkRememberToken();
@@ -8244,6 +8244,26 @@ try {
             $result = ['success' => true, 'shares' => $shareManager->getShares()];
             break;
         
+        case 'share_clear_upload_notify':
+            $auth->requireLogin();
+            $cu = $auth->getUser();
+            $result = $shareManager->clearShareUploadNotify(
+                (int)$cu['id'],
+                isset($input['share_id']) ? (int)$input['share_id'] : null,
+                isset($input['storage_id']) ? (int)$input['storage_id'] : null,
+                $input['folder_path'] ?? null,
+                !empty($input['is_internal']),
+                !empty($input['clear_all'])
+            );
+            break;
+        
+        case 'share_upload_notify_list':
+            $auth->requireLogin();
+            session_write_close();
+            $cu = $auth->getUser();
+            $result = $shareManager->getShareUploadNotifications((int)$cu['id']);
+            break;
+        
         case 'share_count':
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제
@@ -8456,6 +8476,29 @@ try {
             }
             break;
         
+        case 'internal_share_chunk_upload':
+            $auth->requireLogin();
+            if (empty($_FILES['chunk'])) {
+                $result = ['success' => false, 'error' => __('api_err_no_file', '파일이 없습니다.')];
+            } else {
+                $result = $shareManager->uploadToInternalShareChunk(
+                    (int)($_POST['share_id'] ?? 0),
+                    $_POST['sub_path'] ?? '',
+                    [
+                        'filename' => $_POST['filename'] ?? '',
+                        'chunkIndex' => $_POST['chunkIndex'] ?? 0,
+                        'totalChunks' => $_POST['totalChunks'] ?? 1,
+                        'totalSize' => $_POST['totalSize'] ?? 0,
+                        'uploadId' => $_POST['uploadId'] ?? '',
+                        'lastModified' => $_POST['lastModified'] ?? 0,
+                        'relativePath' => $_POST['relativePath'] ?? null,
+                        'duplicateAction' => $_POST['duplicateAction'] ?? 'rename',
+                        'file' => $_FILES['chunk'],
+                    ]
+                );
+            }
+            break;
+        
         case 'internal_share_delete_file':
             $auth->requireLogin();
             $result = $shareManager->deleteInInternalShare(
@@ -8521,6 +8564,29 @@ try {
                     $fdToken,
                     $_FILES['file'],
                     $fdPassword
+                );
+            }
+            break;
+        
+        case 'filedrop_chunk_upload':
+            // 로그인 불필요 (외부 링크 청크 업로드 — 대용량 지원)
+            if (empty($_FILES['chunk'])) {
+                $result = ['success' => false, 'error' => __('api_err_no_file', '파일이 없습니다.')];
+            } else {
+                $result = $shareManager->uploadToFileDropChunk(
+                    $_POST['token'] ?? '',
+                    [
+                        'filename' => $_POST['filename'] ?? '',
+                        'chunkIndex' => $_POST['chunkIndex'] ?? 0,
+                        'totalChunks' => $_POST['totalChunks'] ?? 1,
+                        'totalSize' => $_POST['totalSize'] ?? 0,
+                        'uploadId' => $_POST['uploadId'] ?? '',
+                        'lastModified' => $_POST['lastModified'] ?? 0,
+                        'relativePath' => null,
+                        'duplicateAction' => 'rename',
+                        'file' => $_FILES['chunk'],
+                    ],
+                    $_POST['password'] ?? null
                 );
             }
             break;

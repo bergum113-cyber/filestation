@@ -1579,8 +1579,10 @@ class FileManager {
     }
     
     // 청크 업로드 (대용량)
-    public function uploadChunk(int $storageId, string $relativePath, array $data): array {
-        if (!$this->storage->checkPermission($storageId, 'can_write')) {
+    public function uploadChunk(int $storageId, string $relativePath, array $data, bool $skipPermCheck = false): array {
+        // $skipPermCheck=true: 호출측이 이미 권한을 검증한 경우(내부 공유/외부 filedrop).
+        //   스토리지 can_write 체크만 건너뜀. 확장자/랜섬웨어/quota/경로 검증은 그대로 수행(보안 유지).
+        if (!$skipPermCheck && !$this->storage->checkPermission($storageId, 'can_write')) {
             return ['success' => false, 'error' => __('api_err_no_write_perm', '쓰기 권한이 없습니다.')];
         }
         
@@ -1691,6 +1693,23 @@ class FileManager {
         
         // 모든 청크가 업로드되었는지 확인
         if ($uploadedChunks >= $totalChunks) {
+            // ★ 조립 경쟁 조건 방지 (race condition):
+            //   병렬 청크 업로드 시 마지막 청크들이 거의 동시 도착하면, 여러 요청이 모두
+            //   "완성"으로 판정해 조립을 중복 실행 → 같은 파일이 2개 생기는 버그.
+            //   fopen 'x' 모드(파일 없을 때만 생성, 원자적)로 락을 잡아 단 하나만 조립.
+            //   파일 락이라 cleanupChunks(is_file→unlink)에서 정상 정리됨. glob('chunk_*')엔 안 걸림.
+            $assembleLock = $tempDir . '/.assembling.lock';
+            $lockFp = @fopen($assembleLock, 'x');
+            if ($lockFp === false) {
+                // 다른 요청이 이미 조립 중/완료 → 이 요청은 조립하지 않고 완료로 응답
+                return [
+                    'success' => true,
+                    'complete' => true,
+                    'filename' => $filename,
+                    'deduped' => true
+                ];
+            }
+            @fclose($lockFp);
             // 메타 정보 읽기
             $meta = json_decode(file_get_contents($metaFile), true);
             $dupAction = $meta['duplicateAction'] ?? 'rename';
@@ -1907,6 +1926,19 @@ class FileManager {
         
         // 모든 청크 완료
         if ($uploadedChunks >= $totalChunks) {
+            // ★ 조립 경쟁 조건 방지 (로컬 uploadChunk와 동일):
+            //   병렬 청크 동시 도착 시 중복 조립 → 파일 2개 생성 버그. 원자적 파일 락으로 단 하나만 조립.
+            $assembleLock = $tempDir . '/.assembling.lock';
+            $lockFp = @fopen($assembleLock, 'x');
+            if ($lockFp === false) {
+                return [
+                    'success' => true,
+                    'complete' => true,
+                    'filename' => $filename,
+                    'deduped' => true
+                ];
+            }
+            @fclose($lockFp);
             // 메타 정보 읽기
             $meta = json_decode(file_get_contents($metaFile), true);
             
