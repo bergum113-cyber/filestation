@@ -4,7 +4,7 @@
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
-![rhwp](https://img.shields.io/badge/rhwp-0.7.13-9cf)
+![rhwp](https://img.shields.io/badge/rhwp-0.7.14-9cf)
 ![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
@@ -663,9 +663,9 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.10
+버전: 0.7.14
 파일: assets/rhwp/
-업그레이드: rhwp_업그레이드_가이드_v5.md 참조
+업그레이드: rhwp_업그레이드_가이드_v6.md 참조
 ```
 
 ### WebDAV 서버
