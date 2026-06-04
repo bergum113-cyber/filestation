@@ -723,7 +723,7 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ### 주요 변경 이력
 
-#### v5.8.2 (2026-06-05) ⭐ 현재
+#### v5.8.2 (2026-05-29 ~ 2026-06-05) ⭐ 현재
 
 **[v5.8.2 버그 수정] 압축 내부 이미지 미리보기 — 7z/rar 등에서 안 뜨던 문제 (2026-06-05)**
 
@@ -755,286 +755,6 @@ HWP/HWPX 뷰어·편집기 엔진(rhwp)을 0.7.14로 업그레이드. 0.7.13 후
 - 커스텀 기능 16항목 보존 검증 통과(서버 저장/다른 이름으로 저장/Blob 캡처/MutationObserver/Ctrl+S/저장 중 동기화 일시중지/웹하드 자동 갱신 등). PHP 커스텀 로직은 파일명·버전 주석 외 무변경 확인.
 - canvaskit 동적 렌더러 파일은 0.7.13과 동일하게 제외(렌더 실패 시 기본 렌더러 폴백 존재, 실사용 검증된 상태 유지).
 - 알려진 한계: SVG/Canvas `preserveAspectRatio="none"`(과거 #335)은 코드상 잔존하나 실사용 재현 없음(0.7.8~0.7.13 동일).
-
-**[v5.8.2] PC 동영상 재생목록 — 전체/연관 모드 토글 (2026-06-05)**
-
-PC 동영상 재생목록 패널에 "전체/연관" 모드 토글 추가. 연관 모드는 같은 폴더에서 현재 재생 중인 영상과 같은 시리즈로 판단되는 파일만 필터링해 보여줌.
-
-- 연관 판정 3단계(`_vpIsRelated`): 비교 전 파일명 정규화(`_vpNorm` — 공백·구분자·특수문자 제거로 띄어쓰기 차이 무시) 후 → (1) 숫자→# 패턴 일치 / (2) 정규화 공통 접두사 다음 글자 분석 + 릴그룹 태그 배제 / (3) 핵심 단어 교집합(앞 번호 형식 보조).
-- 모드 영구 저장: 마지막 사용 모드(전체/연관)를 `localStorage 'fs_vp_mode'`에 저장(자동재생 토글과 동일 패턴). 새로고침·다른 영상 진입·재방문 후에도 유지.
-- 헤더 재구성: 모드 토글 + 자동재생 토글 세로 스택 + 라벨, 트랙 수를 제목 아래로 이동.
-- 검증: PotPlayer 재생목록(`.dpl`) 실측 대조로 회귀 방지 체계 확립. "파일명 기반 시리즈 100% 자동 분류는 원리적 불가"(mpv autoload 표준 코드로도 검증) → 전체/연관 토글로 보완.
-
-#### v5.8.1l (2026-05-29)
-
-**[v5.8.1l 버그 수정] 청크 업로드 조립 경쟁 조건 — 큰 파일 1개가 2개로 중복 생성 (2026-05-29)**
-
-펜닐님 보고: 60MB 파일 1개를 드래그 업로드했는데 결과가 2개(`파일.zip` + `파일 (2).zip`) 생김. 무조건이 아니라 간헐적. 정밀 진단 → 소스 경쟁 조건(race condition) 확정·수정.
-
-- **원인**: 큰 파일은 청크(PC 10MB 단위)로 분할되어 PC 기준 3개씩 병렬 전송(`PARALLEL=3`). 서버 `uploadChunk`(api/FileManager.php)는 청크 도착마다 `count(glob('chunk_*'))`로 개수를 세서 "다 왔으면 조립"하는데, **이 완성 판정에 락이 없음**. 마지막 청크들이 거의 동시 도착하면 여러 요청이 모두 "완성" 판정 → **조립 중복 실행** → 같은 파일 2개(2번째에 `(2)` 자동 부여).
-  - 60MB = 6청크 → 마지막 배치(3개) 동시 전송 → 동시 도착 시 발생. 타이밍 의존이라 **간헐적**(펜닐님 "무조건 아님" 일치). 작은 파일(10MB 미만, 1청크)은 경쟁 없어 항상 정상.
-- **수정**: 완성 판정 직후 `fopen($tempDir.'/.assembling.lock', 'x')` **원자적 락**(파일 없을 때만 생성). 동시 도착해도 단 하나의 요청만 락 획득 → 그 요청만 조립. 락 못 잡은 요청은 조립 없이 완료 응답(`complete:true`). 파일 락이라 `cleanupChunks`(is_file→unlink)에서 정상 정리되고, `glob('chunk_*')` 청크 수 계산에도 안 걸림.
-  - **로컬 업로드(`uploadChunk`) + 원격 스토리지 업로드(`uploadChunkRemote`, FTP/SFTP/WebDAV 등) 양쪽 모두** 동일 경쟁 조건이 있어 둘 다 락 적용(전수 점검: `count(glob chunk_*) >= totalChunks` 판정 2곳 모두 보호).
-- **적용 범위 (전수 점검)**:
-  - 업로드 버튼 / 폴더 업로드 / 드래그 파일·폴더 업로드 → 모두 클라이언트 `uploadChunkedMulti`·`uploadChunked` → 서버 단일 `uploadChunk` 함수로 수렴 → **락 하나로 전부 보호**.
-  - 복사→붙여넣기 / 잘라내기→붙여넣기 → 서버 `$fileManager->copy()`/`move()`(PHP copy/rename) → **청크 조립 안 함, 경쟁 조건 무관**.
-  - 게시판 첨부 업로드 → 클라이언트 순차 전송(`await` 루프) → 동시 도착 없어 경쟁 조건 없음.
-- **안전성**: 기존 조립 로직 삭제 없이 락만 추가. 청크 저장(move_uploaded_file)은 락 체크 전 실행 → 데이터 손실 없음(락 잡은 요청이 모든 청크 조립). 클라이언트는 `complete:true`로 정상 처리(추가한 `deduped` 필드 몰라도 됨). 락은 uploadId별 고유 tempDir 안 → 다른 업로드와 무간섭, 죽은 요청의 락은 `cleanupOldChunks`(1일)가 정리 → deadlock 없음.
-- **검증**: PHP `php -l` OK. 멀쩡한 코드 보존(완성 판정·조립·cleanup 로직).
-- **테스트(실기기 필요)**: 10MB 이상 파일을 여러 번(10회+) 반복 드래그 업로드 → 항상 1개만 생성되는지. 경쟁 조건은 타이밍 의존이라 1~2회로는 확신 어려움(수정 전에도 운 좋으면 1개였음). 락은 동시 도착해도 원천 차단하므로 반복해도 1개여야 함.
-
-**[v5.8.1l 기능] 공유 업로드 청크화 — 내부 공유 + 외부 filedrop 대용량 지원 (2026-05-29)**
-
-기존 공유 업로드 2종(내부 공유 업로드, 외부 filedrop 업로드)은 청크 분할 없이 파일을 통째로 전송 → PHP `upload_max_filesize`/`post_max_size` 제한에 걸려 큰 파일 업로드 불가(`ini_set`은 이 값 변경 불가). 일반 업로드처럼 청크화하여 사실상 무제한(디스크/quota까지) 지원.
-
-- **재사용 설계 (안전)**: 검증된 `FileManager::uploadChunk`(청크 조립 + 경쟁조건 락) 코어를 그대로 재사용. uploadChunk에 `$skipPermCheck` 파라미터(기본 false) 추가 — **기존 일반 업로드는 인자 안 넘겨 동작 100% 불변**. 공유 경로만 자체 권한 검증 후 true로 호출(스토리지 can_write 체크만 skip, 확장자/랜섬웨어/quota/경로(isPathSafe) 검증은 그대로 수행).
-- **내부 공유** (`uploadToInternalShareChunk`): `validateInternalSharePath`로 공유 write 권한 검증 후, 공유의 storage_id + 상대경로(file_path+subPath)로 uploadChunk 호출. 클라이언트 `_executeIShareUpload`를 청크 분할(`_uploadIShareChunked`, 10MB·병렬3)로 교체.
-- **외부 filedrop** (`uploadToFileDropChunk`): 외부 공개(비로그인)라 **매 청크 토큰/만료/비밀번호/횟수 재검증** + 위험확장자/파일명 차단(DANGEROUS_EXTS) 후 uploadChunk 호출. 조립 완료(complete, deduped 제외) 시에만 업로드 횟수 +1. 클라이언트 share.php 업로드를 청크 분할로 교체.
-- **라우팅**: `internal_share_chunk_upload`(로그인 필요, CSRF 검증) + `filedrop_chunk_upload`(noAuth + CSRF 면제 — 외부인은 토큰 기반 인증) 추가. rate limit 면제 + 업로드 전용 rate limit 등록. (filedrop은 외부 공개라 csrfExclude 등록 필수 — 누락 시 외부인 업로드 차단됨.)
-- **경로 안전성**: filedrop은 외부 공개지만 uploadChunk 내부 `isPathSafe`로 경로 탐색(../) 차단. file_path는 관리자 생성 공유라 신뢰 + 검증 이중.
-- **안전성**: 기존 단일 업로드 함수/라우팅(uploadToInternalShare, uploadToFileDrop)은 **삭제 없이 보존**(ShareManager 삭제줄 0). 새 lang 키 불필요(기존 키 재사용). 청크 조립 락이 공유에도 자동 적용(중복 생성 방지).
-- **검증**: api.php/ShareManager/FileManager/share.php `php -l` OK, app.js `node --check` OK. 새 청크 함수가 기존 검증된 코어로 수렴.
-- **테스트(실기기 필요)**: ① 내부 공유 폴더에 10MB+ 파일 업로드 ② 외부 filedrop 링크로 10MB+ 파일 업로드(비밀번호/횟수 제한 포함) ③ 위험 확장자(.php 등) 차단 ④ 대용량 파일 중복 생성 없는지.
-
-**[v5.8.1l 기능] 공유 폴더 업로드 알림 — 소유자에게 헤더 알림 (2026-05-29)**
-
-공유 폴더(내부 공유 + 외부 filedrop)에 타인/외부인이 업로드해도, 공유 소유자가 그 폴더를 열어둔 상태에선 자동 갱신이 안 됨(실시간 폴링/푸시 없음 — 설계상 정상). 새로고침해야 보임. 기존 알림 폴링 인프라를 활용해 "내 공유에 업로드됨" 알림을 추가.
-
-- **방식**: 클라이언트 폴링(기존 30초 알림 폴링과 동일 인프라) + 헤더 알림(인덱스 재구축 알림과 같은 위치). SSE 실시간 푸시는 PHP(Windows+Apache) 환경에서 워커 점유 위험이 커 폴링 채택.
-- **서버**: 청크 업로드 완료(complete, deduped 제외) 시 공유 레코드에 `pending_uploads`(미확인 수) + `last_upload_at/name` 기록. 일반 공유=`shares`, 내부 공유=`internal_shares` 각각 기록. 통합 조회 `getShareUploadNotifications`(pending>0만) + 초기화 `clearShareUploadNotify`. 라우팅 `share_upload_notify_list`(GET) + `share_clear_upload_notify`(POST).
-- **클라이언트**: `_startShareUploadNotifyPolling`(30초) → pending 있으면 `showHeaderNotification('share-upload', …)`. 알림 클릭 시 해당 공유 폴더로 이동.
-- **알림 해제(소유자가 폴더 열면 꺼짐 — 게시판 댓글/쪽지와 동일 UX)**:
-  - 내부 공유: `browseInternalShare` 시 `share_clear_upload_notify(share_id, is_internal=1)`.
-  - 외부 filedrop: 소유자가 일반 탐색기로 그 폴더(storage_id+file_path 매칭)를 열면 초기화. 부담 최소화 위해 헤더 알림이 떠있을 때만 `loadFiles` 완료 후 호출.
-- **대상**: 공유 소유자 본인만(서버에서 소유자 검증). 내부 공유 소유자 필드는 `shared_by`, 일반 공유는 `created_by`로 정확히 구분.
-- **안전성**: 기존 알림/폴링 로직 삭제 없이 추가. 로그아웃 시 폴링 타이머 정리. db 메서드는 internal_shares에 기존 사용된 패턴과 동일. lang 키 4종(ko/en) 추가.
-- **검증**: 전체 `php -l`/`node --check`/JSON 파싱 OK. 멀쩡한 코드 보존(renderFiles 등).
-- **테스트(실기기 필요)**: ① 외부인이 내 filedrop 폴더에 업로드 → 30초 내 헤더 알림 ② 알림 클릭 → 폴더 이동 ③ 그 폴더 열면 알림 사라짐 ④ 내부 공유도 동일 ⑤ 여러 공유 동시 업로드 시 합산 표시.
-
-**[v5.8.1l 기능] 내부 공유 업로드 — 드래그 드롭 + 진행률바 추가 (2026-05-29)**
-
-내부 공유 폴더 업로드가 파일 선택 버튼만 있고 드래그 업로드/진행 표시가 없던 것을 보완(외부 filedrop과 동일 수준).
-
-- **드래그 드롭존**: 공유 폴더 뷰(쓰기 권한 시)에 점선 드롭존 추가. 파일 끌어놓기 + 클릭 업로드 모두 지원. dragover 시 강조 스타일. 드롭 시 기존 중복 체크 흐름(`_ishHandleDroppedFiles` → 중복 모달 or 업로드) 재사용.
-- **진행률바 + 정보**: 외부 filedrop과 동일하게 청크 단위 진행률바 + "N/M: 파일명 / 용량(%) · 속도" 표시. 여러 파일 시 "전체 %" 추가. `_executeIShareUpload`/`_uploadIShareChunked`에 onProgress 콜백 추가(청크 배치마다 갱신). 완료 후 browseInternalShare 재렌더 시 자동 정리.
-- **안전성**: 기존 업로드 버튼/중복 모달/청크 전송 로직 보존, onProgress는 선택 인자(미전달 시 기존 동작). lang 키 `ishare_drop_hint`/`filedrop_total`(ko/en) 추가. `node --check` OK.
-
-**캐시 무효화:** `APP_VERSION` `5.8.1k` → `5.8.1l`
-
----
-
-#### v5.8.1k (2026-05-27)
-
-**[메뉴 ▲▼ 스크롤 인디케이터] PC + 모바일 컨텍스트 메뉴 / 작업 버튼 메뉴 (펜닐님 요청)**
-
-펜닐님 분석: 모니터가 커도 메뉴가 화면 가득 차면 불편, 작아도 잘림. 스크롤바는 모양이 메뉴와 안 어울려 어색. 항목은 다 필요해서 못 줄이고, 서브메뉴화는 Windows 11처럼 숨김 불편 발생. 결론 — **고정 높이 + 스크롤바 숨김 + ▲▼로 "더 있음" 인지**. macOS Finder 검증된 패턴.
-
-- **CSS** (`assets/css/style.css` +96/-4):
-  - PC `.context-menu` / `.toolbar-action-menu`: max-height **500px** 고정 (모니터 크기 무관 일관)
-  - 스크롤바 완전 숨김: `::-webkit-scrollbar { display:none }` + `scrollbar-width: none` (Chrome/Edge/Firefox/Safari 모두)
-  - 컨텍스트 메뉴: 스크롤을 `<ul>`로 이동(메뉴 자체 overflow visible — ▲▼이 잘리지 않게), ▲▼은 메뉴 박스에 `position: absolute`로 부착
-  - 작업 버튼 메뉴: 메뉴 자체가 스크롤 영역, ▲▼은 `position: sticky`로 첫/마지막에 부착
-  - `.scroll-indicator`: 높이 22px, 흰 배경 95% 불투명, 회색 화살표(▲▼), `pointer-events: none`(항목 클릭 방해 X)
-  - `.has-scroll-up` / `.has-scroll-down` 클래스로 표시 토글
-  - 모바일 시트(`@media`): 기존 하단시트/그립바/slideUp 유지하되, 메뉴 자체 `overflow-y:auto` → `<ul>`로 이동 (PC와 통일된 ▲▼ 로직). ▲ 위치는 그립바 아래(top:14px)로 조정해 충돌 방지
-  - 작업 버튼 메뉴 max-height `calc(100vh - 120px)` → 500px (큰 모니터 가득참 해소)
-- **JS** (`assets/js/app.js` +82/-1): `_setupScrollArrows(menuEl, scrollEl)` 신규 헬퍼
-  - ▲▼ 인디케이터 요소 동적 삽입 (HTML 무변경)
-  - `scroll` 이벤트 + `ResizeObserver`(콘텐츠 크기 변화) + `MutationObserver`(메뉴 display/class 변화) 3중 감지로 ▲▼ 자동 토글
-  - `scrollTop > 1` → ▲ / `scrollTop + clientHeight < scrollHeight - 1` → ▼
-  - 페이지 로드 시 `App.init()` 직후 한 번만 부착 — 메뉴 표시/숨김 토글마다 호출 불필요
-  - `_scrollArrowsSetup` 플래그로 중복 부착 방지
-  - sticky(toolbar)/absolute(context) 두 가지 구조 자동 분기
-- **삭제된 4줄 (의도된 이동/대체)**:
-  - toolbar `max-height: calc(100vh - 120px)` → 500px
-  - 모바일 context-menu `-webkit-overflow-scrolling`/`overflow-y:auto`/`overscroll-behavior` 3줄 → `<ul>`로 이동 (스크롤 영역 분리)
-- **안전성**:
-  - 기존 메뉴 토글 로직 무변경 (showContextMenu 본체 등 일절 안 건드림)
-  - ▲▼ 동적 삽입 → HTML 파일 무변경
-  - `pointer-events: none` → 항목 클릭 절대 방해 안 함
-  - 메뉴 짧을 때(빈화면 메뉴 등) 자동으로 ▲▼ 안 뜸 (scrollHeight ≤ clientHeight 조건)
-- **회귀 검증**: app.js `node --check` OK, PHP 문법 OK. 메뉴 토글 함수 일절 미변경
-
-**[v5.8.1k 후속 수정] 펜닐님 테스트 보고 3건 (2026-05-27)**
-
-▲▼ 인디케이터 1차 적용 후 펜닐님 테스트로 발견된 문제 3건 정밀 수정. 데이터/코드 흐름으로 원인 확정 후 처리.
-
-- **1. 모바일 ▲▼이 첫/마지막 메뉴 항목 가림** (`style.css`)
-  - 원인: 모바일 시트에서 ▲(top:14px)/▼(bottom)이 22px 높이로 ul 영역과 겹침. ul은 ▲▼ 표시 시 회피 padding 없었음.
-  - 수정: `.context-menu.has-scroll-up > ul { padding-top }` / `.has-scroll-down > ul { padding-bottom }` 동적 padding. ▲▼ 안 떴을 때는 padding 0 (회귀 없음). PC 22px, 모바일 24/28px(env safe-area 고려).
-- **3. PC 메뉴 최대 높이 500 → 400px** (`style.css`)
-  - 펜닐님 판단: 500px 다소 김. 400px(약 11~12개 항목)로 축소.
-  - 적용: `.context-menu`(2670), `.context-menu > ul`(2677), `.toolbar-action-menu`(7640) 3곳. `.trash-list`(휴지통)은 메뉴 아님 → 500px 보존(건드리면 안 되는 멀쩡한 코드).
-- **4. 모바일 컨텍스트 메뉴 스크롤 중 메뉴 항목 잘못 눌림** (`assets/js/app.js`)
-  - 원인 (코드 흐름 확정): touch 임계값 10px이 작아 손가락 떨림 허용폭 부족 + **`click` 핸들러가 `ctxTouchMoved` 플래그 무시**(touchend는 막아도 iOS가 합성 발사하는 click이 그대로 통과해 액션 실행).
-  - 수정 ①: 임계값 `dx>10||dy>10` → `dx>20||dy>15` (수직이 메뉴 주 스크롤이라 dy 더 민감). 손가락 떨림 허용폭↑.
-  - 수정 ②: `click` 핸들러에 `if (ctxTouchMoved && Date.now()-ctxTouchEndTime < 500) return` 추가. iOS가 touchend 후 ~300ms 안에 합성하는 click을 차단(500ms 여유). touchend 직후의 합성 click만 정확히 막고, 일반 마우스 click(데스크탑)에는 영향 없음(`ctxTouchMoved`가 항상 false).
-  - `ctxTouchEndTime` 변수 추가로 click과 touchend 시간 상관관계 추적.
-- **검증**: app.js `node --check` OK / config.php `php -l` OK / `.trash-list`(500px) 보존 확인 / 멀쩡한 코드 무변경(이번 새 삭제 1줄 = 임계값 10px의 의도된 교체)
-
-**[v5.8.1k 후속 수정 2차] 메뉴 길이 통일 + ▼ 버그 + 컨텍스트 메뉴 구조 통일 (2026-05-28)**
-
-펜닐님 테스트 보고로 발견. 처음 ▲▼ 구현에서 컨텍스트 메뉴(absolute, `<ul>` 스크롤)와 작업버튼 메뉴(sticky, 메뉴 자체 스크롤)를 **다른 구조로 만든 것이 근본 원인**이었음. 여러 증상(항목 가림, ▼ 안 사라짐, 길이 차이)이 모두 여기서 파생. 최종적으로 두 메뉴를 100% 동일 구조로 통일하여 해결.
-
-- **▼ 버그 (다 봤는데 ▼ 안 사라짐)** (`assets/js/app.js`):
-  - 원인 (확정): ▲▼이 스크롤 영역(scrollEl) 안에 있어 그 높이(각 22px)가 `scrollHeight`에 포함됨 → 끝까지 스크롤해도 `scrollHeight > clientHeight`라 ▼ 유지.
-  - 수정: `update()`에서 표시 중인 ▲▼ 높이를 뺀 `effectiveScrollHeight`로 끝 도달 판정. (▲▼이 scrollEl 안이고 has-scroll 클래스일 때만 보정 → 컨텍스트/작업버튼 양쪽 동일 적용)
-- **컨텍스트 메뉴를 작업버튼 메뉴와 100% 동일 구조로 통일** (`style.css` + `app.js`):
-  - 기존: 컨텍스트만 `<ul>` 스크롤 + ▲▼ absolute → 기존 PC 위치조정 JS(menuEl 스크롤 전제)와 충돌해 max-height/▲▼ 위치 어긋남.
-  - 변경: 컨텍스트도 **메뉴 자체 스크롤**(overflow-y auto, `<ul>`은 흐름) + **▲▼ sticky**(scrollEl 안 첫/마지막) + 스크롤바 숨김. `_setupScrollArrows(ctxMenu, ctxMenu)`로 작업버튼과 동일 호출.
-  - 모바일 시트도 같은 구조로 정리(메뉴 자체 스크롤), 하단 시트/그립바/slideUp 디자인은 유지.
-- **메뉴 길이 (펜닐님 개발자도구 실측값)**:
-  - 컨텍스트 메뉴 max-height **420px** (CSS + JS `Math.min(420, viewHeight - 20)`)
-  - 작업버튼 메뉴 max-height **415.2px** (JS `Math.min(415.2, vh - btnRect.bottom - 14, vh*0.6)`)
-  - 둘 다 `Math.min`이라 작은 화면에선 화면에 맞게 자동 축소(메뉴 화면 밖 방지)
-- **안전성**:
-  - ▲▼ `pointer-events: none` + 클릭 핸들러 `closest('li')`/`data-action` 미존재로 무시 → 항목 클릭 이중 안전
-  - `_scrollArrowsSetup` 중복 부착 방지
-  - absolute 시절 잔재 CSS(padding-top/max-height 보정 등) 완전 제거 — 시행착오 흔적 정리됨
-- **검증**: app.js `node --check` OK / CSS 중괄호 균형 OK / `.trash-list`(500px) + 다른 400px 8곳 보존 / 두 메뉴 sticky·overflow-y 동일 확인 / 펜닐님 PC·모바일 테스트 "잘 된다" 확인
-- ⚠️ 솔직한 기록: 이번 메뉴 작업은 시행착오가 많았음(처음 두 메뉴를 다른 구조로 만든 것이 원인). 펜닐님 반복 테스트로 올바른 해법(동일 구조 통일)에 도달. 처음부터 동일 구조로 했어야 함.
-
-**[v5.8.1k 보안 수정] 동영상 변환 권한 체크 강화 (2026-05-28)**
-
-펜닐님 권한 검토로 발견. 변환 기능에 권한 허점 2건 — 공유 스토리지 환경에서 문제될 수 있어 수정.
-
-- **허점 1: 폴더별 쓰기 권한 우회** (`api.php`):
-  - 변환은 파일 생성(쓰기 작업)인데 라우팅이 `checkFolderPermission`을 `can_read`로만 체크(transcode 패턴 복사 실수). 스토리지 write는 있으나 특정 폴더만 read-only인 사용자가 그 폴더에서 변환(파일 생성) 가능했음.
-  - 수정: `can_read` → `can_write` (compress/rename 등 다른 쓰기 작업과 동일).
-- **허점 2: 삭제 권한 우회 (원본 휴지통 이동)** (`api/FileManager.php`):
-  - "변환 후 원본 휴지통 이동"이 `can_delete` 체크 없이 write 권한만으로 동작. 공유 스토리지에서 **쓰기는 되나 삭제 권한 없는 사용자가 변환을 통해 원본을 치우는** 우회 가능했음.
-  - 수정: deleteOriginal 시 `checkPermission(can_delete)` + `checkFolderPermission(can_delete)` 체크. 권한 없으면 변환은 정상 진행하되 **원본 보존**(moveToTrash 안 함).
-  - UI: 권한 없어 원본 보존된 경우 "삭제 권한이 없어 원본은 보존됨" 토스트 알림(`trash_skipped_no_perm` + i18n convert_no_delete_perm). 체크박스는 그대로 두되 서버가 권한으로 최종 판단(서버 차단이 핵심).
-- **변환 권한 체계 (최종, 다른 기능과 일관)**:
-  - 변환 실행: read + write (스토리지 + 폴더 레벨)
-  - 원본 휴지통 이동: can_delete (스토리지 + 폴더 레벨)
-  - UI 메뉴 표시: can_write
-- **검증**: PHP `php -l` OK / app.js `node --check` OK / JSON OK. 변경 = api.php 1곳(can_write) + FileManager.php deleteOriginal 권한 블록 + app.js done 토스트 + i18n 2키.
-
-**[v5.8.1k 보안 수정 2] 키보드 Del 키 삭제 권한 체크 (2026-05-28)**
-
-펜닐님 권한 검토 연장. 변환 권한을 점검하다 발견 — 컨텍스트 메뉴/작업버튼은 `can_delete` 없으면 삭제 항목을 숨기는데, **키보드 Del 키는 권한 체크 없이 `deleteSelected()` 직접 호출**하던 불일치.
-
-- **원인**: Del 키 핸들러가 선택 항목 있으면 바로 삭제 진행. 서버(api.php delete 라우팅)가 `can_delete`로 최종 차단하므로 **보안은 안전했으나**, 클라이언트가 미리 안 막아 헛된 요청 + 어색한 실패(확인 다이얼로그 후 서버 거부).
-- **수정** (`assets/js/app.js` Del 핸들러): `this.currentPermissions.can_delete` 체크 추가. 권한 없으면 "삭제 권한이 없습니다"(i18n no_delete_permission) 알림 후 동작 안 함. 컨텍스트 메뉴와 완전 일관.
-- **삭제 권한 3중 체계 (최종)**: ① UI 메뉴 표시(can_delete) ② 키보드 Del(can_delete, 이번 추가) ③ 서버 라우팅(checkFolderPermission can_delete)
-- **안전성**: Del 키 1곳만 변경. F2(이름변경) 등 다른 키 미변경. 서버 차단은 기존 유지(보안 변화 없음, UX 일관성 개선).
-- **검증**: app.js `node --check` OK / JSON OK / i18n no_delete_permission 2키 추가
-
-**[v5.8.1k 개선] 동영상 변환 진행률에 배속(speed) 표시 (2026-05-28)**
-
-펜닐님 제안. 변환 중 진행률(%)만 있고 속도 정보가 없어, ffmpeg의 실제 변환 배속을 표시. 저사양 환경에서 "얼마나 빠른지/오래 걸릴지" 가늠 가능.
-
-- **서버** (`api/FileManager.php`): ffmpeg `-progress` 파일에서 `speed=2.5x` 값 파싱(out_time_ms 파싱과 같은 자리) → `progress` 이벤트에 `speed` 추가. speed 있을 때만 전송(copy 모드는 인코딩 안 해 거의 없음).
-- **UI** (`assets/js/app.js`): progress 핸들러에서 `d.speed` 있으면 진행 문구에 "(2.5x)" 표시. 단일·다중 변환 공통(같은 `_convertOneFile` 핸들러).
-- **의미**: 2.5x=실시간의 2.5배 빠름, 0.6x=실시간보다 느림(시간 오래 걸림 신호). HW/SW 폴백 시 각 모드 실제 속도 표시.
-- **안전성**: H264 변환 경로만 변경. vault 등 무관한 `_updateConvertProgress`(언더스코어) 함수 미변경. speed 없으면 기존과 동일(하위 호환).
-- **검증**: PHP `php -l` OK / app.js `node --check` OK. (컨테이너 GPU 없어 SW libx264 speed만 실측 — HW QSV speed는 실기기 확인 필요)
-
-**[v5.8.1k 안정화] 동영상 실시간 트랜스코딩 — hang 타임아웃 + ffmpeg 종료 경로 keepalive (2026-05-28)**
-
-펜닐님 보고(개발 중 ffmpeg 2개 누적/종료 안 됨, 직접 죽여야 했음)를 정밀 코드 점검으로 진단 → 소스 문제 2건 확정·수정.
-
-- **문제 1: HW hang 시 첫 청크 blocking read 무한 대기** (`api/FileManager.php`):
-  - `transcodeStream`(미리보기) + `transcodeShareStream`(공유)의 첫 청크 읽기가 `stream_set_blocking(true)+fread`로 타임아웃 없음. HW ffmpeg가 초기화에서 hang(데이터도 안 주고 죽지도 않음)하면 PHP가 무한 대기 → `register_shutdown_function` 안 불림 → ffmpeg 잔존(직접 죽여야 함).
-  - 수정: `_readFirstChunkWithTimeout($pipe, 6)` 클래스 메서드 신설. non-blocking + `stream_select`로 6초 대기 → 데이터 오면 반환(정상, 기존과 동일), EOF/타임아웃이면 `''` 반환(=기존 폴백 로직 트리거). 모든 종료 경로에서 blocking 모드 복구 보장.
-  - 양쪽 함수 HW/SW 첫 청크 4곳 적용. 메인 스트리밍 루프(while feof)·폴백 판정 로직은 보존.
-  - 타임아웃 6초: HW 초기화(보통 1~3초)보다 충분, hang 시 체감 지연 최소화. 빠른 전환(끄고 바로 재생) 시 pipe_kill로 ffmpeg 죽으면 select가 EOF 감지해 즉시 탈출(6초 안 기다림).
-- **문제 2: ffmpeg 종료 요청(pipe_kill/stop)이 일반 fetch라 취소됨** (`assets/js/app.js`, `share.php`):
-  - 모달 닫기/새 재생 직전 이전 ffmpeg를 죽이는 호출이 일반 `fetch`로 된 곳이 미리보기 3곳(hideModal·preview 정리·새 재생 직전) + 공유 1곳(HLS→MMS 폴백 stop). "어 이상하네 하고 바로 끄고 다시 재생" 시 후속 정리/네비게이션 중 fetch가 취소 → 이전 ffmpeg 안 죽고 새 것과 공존(누적).
-  - 수정: 해당 경로 모두 `sendBeacon` 우선 + `fetch(keepalive)` 폴백으로 통일(페이지 정리 중에도 도달 보장). 기존 sendBeacon 경로(pagehide 등)의 폴백도 keepalive로 일관화.
-  - 최종: 미리보기 순수 일반 fetch pipe_kill 0개, 공유 순수 일반 fetch stop 0개.
-- **미수정(투명)**: ② proc_terminate 후 proc_get_status 미확인 — SIGKILL이 대부분 죽여 위험 낮아 안 건드림. 배지(HW/SW/fail) 로직 — 정교한 폴백 상태머신이고 명백한 버그 없어 보존(펜닐님 "거의 고쳐서 문제없다" 확인).
-- **검증**: app.js `node --check` OK / share.php·FileManager.php `php -l` OK. share.php 정확히 1줄 변경. 멀쩡한 코드 보존(스트리밍 루프·폴백 판정·배지 로직).
-- **테스트(실기기 필요, 컨테이너 GPU 없어 미실측)**: 미리보기/공유 각각 재생→바로 끄고 재생 반복 시 ffmpeg 누적 없는지, HW hang 시 6초 후 SW 폴백.
-
-**캐시 무효화:** `APP_VERSION` `5.8.1j` → `5.8.1k`
-
----
-
-#### v5.8.1j (2026-05-18)
-
-**추가 — [음악 플레이어 iOS 썸네일: 재생 재개 시 복구] (2026-05-26)**
-
-펜닐님 보고. 추측 수정 금지 — 코드 흐름으로 원인 확정 후 수정.
-- **증상**: 재생 중 탭 닫음/다른 앱(유튜브 등) 갔다가 FileStation 탭 복귀 → 플레이어는 살아있어 이어듣기 가능하나, 재생 누를 시 iOS 잠금화면/제어센터 썸네일이 안 나오거나 갱신 안 됨. (잠금/백그라운드가 아닌, 정지 상태 후 재생 재개 케이스)
-- **원인** (확정): 정지 상태 동안 iOS가 MediaSession metadata/artwork를 메모리 정리로 유실. artwork maintenance 타이머는 `audio.paused`면 동작 안 함(`_startArtworkMaintenance`/`_checkAndRestoreArtwork` 둘 다 paused return). 게다가 `togglePlay()`가 재생 재개 시 `audio.play()`만 호출하고 artwork 복구 트리거가 없었음 → 재생해도 썸네일 미복구.
-- **해결** (`assets/js/app.js` togglePlay, +11/-1): 재생 재개(paused→play) 시 `play().then(() => this._forceRefreshArtwork())`로 artwork 복구 추가. 기존 복구 함수 재사용. play 비동기 resolve 후 복구.
-- **안전**: 일시정지 분기(`audio.pause()`)는 완전 무변경. 재생 시작에만 복구 추가. `_currentMetadata`는 플레이어 생존 시 메모리 유지되어 복구 가능. togglePlay 호출처 4곳(재생버튼/MediaSession play/외부) 모두 정상 — 잠금화면 재생 시에도 복구 이득.
-- ⚠️ FileStation 버전 유지 (v5.8.1j — 버그 수정, 같은 버전 재패키징)
-
-**추가 — [rhwp 0.7.12 → 0.7.13 업그레이드] (2026-05-26)**
-
-펜닐님 요청. 펜닐 룰 부합 (npm 정식 배포 후 진행, 검증된 절차):
-- **npm @rhwp/core 0.7.13 tarball** 다운로드 (shasum 검증: f9fd6a31...) — 진본 확인
-- **GitHub v0.7.13 태그** clone — rhwp-studio 빌드 입력으로 사용
-- **rhwp-studio 빌드** (npm install + tsc + vite build)
-  - `vite.config.ts`에 `base: './'` 안전 추가 (옵션 B) — PWA 플러그인 + 커스텀 `serve-samples-dir` 플러그인 + alias(@/@wasm) 보존
-- **파일 교체** (assets/rhwp/):
-  - core: `rhwp.js` + `rhwp_bg.wasm` (5.06MB, npm tarball md5 일치 — 진본)
-  - studio: `index-EQbwmbnL.js` → `index-B0ptdqhv.js`, `index-C_SbAHsx.css` → `index-Dp_1IBLX.css`, `rhwp_bg-BSNi2Fvg.wasm` → `rhwp_bg-CWgV9Qnr.wasm`
-  - 정적 자산: favicon.ico + fonts (37파일) + images (1파일) 0.7.13 빌드로 동기화
-  - 이전 해시 파일 자동 정리 (각 1개씩만 잔존)
-- **패치** (이전 0.7.10~0.7.12 작업과 동일):
-  - J1 (Ctrl+S file:save 매핑 제거): ✅ 1개 매칭, 메뉴 정의 유지
-  - J2 (Ctrl+P file:print 매핑 제거): ✅ 1개 매칭
-  - P2 (CSS url 경로): ✅ `url(../images/)` → `url(images/)` (P1은 0건)
-  - 다른 단축키 매핑 15개(Ctrl+Z/Y/A/E/O/B 등) 보존 — 의도한 2개만 제거 확인
-- **rhwp_editor.php / rhwp_viewer.php**:
-  - editor: studio 파일명 갱신 (3줄) + `@rhwp_version 0.7.13`
-  - viewer: `@rhwp_version 0.7.13` (1줄)
-  - 커스텀 로직(save/save-as/Blob 캡처/Ctrl+S 핸들러/MutationObserver/notifyParentFileChanged) 무변경 — 백업 대비 diff로 확인
-- **0.7.13 변경 사항** (CHANGELOG 사전 점검 — 0.7.12 후속 patch 사이클):
-  - HWPX → HWP 저장 호환성 대폭 보강 (표/셀 axis, gradient BORDER_FILL, 메모 컨트롤, 목차 필드 등)
-  - HWPX 렌더링 정합 (바탕쪽/머리말꼬리말/문단번호/글상자, exam_kor/exam_social/hwp3-sample16 한컴 변환본 SVG 시각 정합)
-  - 페이지네이션·조판 정정 (treat_as_char LINE_SEG, 중첩 표 분할, 그림 pushdown/vpos)
-  - rhwp-studio: TAC 도형 커서 이동 개선, Chrome 확장 file:// 접근 안내 (#1131/#1132)
-  - 외부 PR #1077/#1078/#1080/#1117/#1120/#1125 등 cherry-pick
-  - 이미지 비율 회귀(0.7.6 PR #335류) 신규 없음 — 정정 위주, 렌더링 회귀 없음
-- **ABI 호환성**: viewer.php import 심볼(HwpDocument, version, renderPageSvg) 0.7.13 core에 모두 존재 ✓
-- **검증** (16/16 통과):
-  - editor.php 참조 파일명 ↔ 실제 studio 파일 일치 ✓
-  - file:save 메뉴 정의 유지 (마우스 클릭 동작) ✓
-  - J1/J2 패치 매칭 + HWPX canExecute 차단 유지(`sourceFormat!==hwpx`) ✓
-  - CSS 참조 이미지(icon_small_ko.svg) 실제 존재 ✓
-  - url(images/) 정규형 ✓
-  - PHP 커스텀 로직 무변경 + 캐시 버스팅 보존 ✓
-  - `@rhwp_version 0.7.13` (editor + viewer) ✓
-- ⚠️ FileStation 버전 유지 (v5.8.1j — 펜닐 룰, "버전 올려줘" 명시 없음, 재패키징)
-
-**추가 — [동영상 H264/MP4 영구 변환 기능 신규] (2026-05-26)**
-
-펜닐님 요청. 실시간 트랜스코딩은 매 재생마다 변환이라 탐색(스크롤) 불가 → 미리 H264/MP4로 영구 변환해두면 일반 재생(copy)으로 자유 탐색 가능. 단계적 구현 + 매 단계 종합 재검토.
-- **서버** (`api/FileManager.php` +284, `api.php` +19): `convertToH264Mp4()` + `convert_h264` SSE 액션
-  - 코덱 판별: H264 입력 → `-c:v copy`(화질/용량 원본 그대로), HEVC/WMV 등 → 재인코딩
-  - **HW(Intel QSV 등) 우선 → 실패 시 SW(libx264) 자동 폴백** (detectHwEncoder 동작확인 + stderr 에러패턴 감지, "CPU로 재시도" 안내). HW 화질조정 global_quality 20, SW libx264 -crf 18(화질 최대 보존)
-  - 이미 h264+mp4면 skip(변환 불필요 알림). 출력 충돌 시 `_h264` suffix. faststart(웹 탐색 최적화)
-  - 보안: requireLogin + checkFolderPermission + checkPermission(read/write) + isPathSafe(입출력) + escapeshellarg 전부. 7-Zip 백그라운드 패턴(bat+resultFile+SSE) 재사용. 임시파일 누수 방지(clientGone 폴링 계속), maxWait 1시간
-- **UI** (`assets/js/app.js` +220, `index.php` +2): 컨텍스트 메뉴(우클릭/롱프레스) + 작업 버튼 메뉴 "🎬 H264/MP4로 변환"
-  - **다중 순차 변환**: 선택 항목 중 변환 필요한 동영상만 필터(mp4 등 네이티브 제외), 하나씩 await 순차 처리, 진행률 "(N/M)" 표시, 완료 요약 토스트
-  - 변환 다이얼로그에 **"변환 후 원본 휴지통 이동" 체크박스** (체크 시 변환 성공+H264 검증 후에만 moveToTrash, 실패 파일 원본 보존)
-  - 진행률 모달(전용 conv-progress-* ID, 중첩 방지), `_convBatchRunning` 가드(finally 리셋), `_convertOneFile`로 단일 변환 분리
-- **i18n**: lang/ko·en.json convert_* 키 22개씩
-- **실측 검증** (SW 경로 — 컨테이너 GPU 없어 HW는 펜닐님 환경 테스트 필요): HEVC→H264 SSIM 0.999/PSNR 56.7dB(거의무손실), WMV→H264 SSIM 0.998(용량 1044KB→292KB 감소), H264→copy SSIM 1.000000(완전무손실), faststart 적용 + 5초 seek 성공(탐색 가능 = 핵심목적 달성)
-- **검토 중 발견·수정** (자체 결함): 임시파일 누수(clientGone), 변환가드 catch 미리셋, mp4 변환메뉴 노출(_needsTranscode), 작업버튼 메뉴 항목 누락, 다중선택 우클릭 메뉴 미표시(selectedItems.some), 진행률 모달 중첩, 서버 i18n 키 4개 누락
-- ⚠️ FileStation 버전 유지 (v5.8.1j — 신규 기능이나 "버전 올려줘" 명시 없음, 재패키징)
-
-**[2차 세션] 자막 컨트롤 iOS 작동 / 배지 용량 단위 / 재생 안정성 (펜닐님 보고)**
-
-펜닐님 보고 다건을 정밀 진단 후 수정. 모두 데이터/실측으로 원인 확정, 추측 수정 0건.
-
-**🟢 A. 자막 크기/위치 조절 4개 버튼 iOS 작동 안 됨**
-
-- **현상**: 일반 동영상 미리보기에서 iOS만 자막 컨트롤 4개 버튼(A-/A+/▲/▼) 무반응. PC는 정상. 같은 영역 싱크 버튼(-0.5s/+0.5s/↺)은 iOS도 정상.
-- **원인** (펜닐님 "싱크는 됨" 정보로 확정): 모바일 `@media (max-width:1024px) .subtitle-overlay { font-size: 0.95em !important; bottom: 15% !important }`가 JS의 inline style을 우선순위로 무력화. JS 핸들러는 정상 작동했으나 `overlay.style.fontSize`/`bottom` 변경이 CSS `!important`에 눌려 화면 미반영. 싱크 버튼은 `video._subSyncOffset`/`textContent`만 건드려 무관 → 정상.
-- **해결** (`assets/js/app.js` 자막 초기화/핸들러 5곳): `overlay.style.fontSize = ...` → `overlay.style.setProperty('font-size', ..., 'important')`, `bottom`도 동일. inline `!important`가 CSS `!important`를 이김. 버튼 안 누르면 모바일 기본값 유지 → 회귀 없음.
-- **자막 첫 기본 위치 분기**: `subBottom` 저장값 없을 때 모바일(≤1024px) 15% / PC 8% (CSS 모바일 기본 15%와 일치). 저장값은 `localStorage !== null`로 판정해 0% 저장도 정상 복원(기존 `||'8'`의 falsy 버그 해소). 한 번이라도 ▲/▼ 조정 시 저장값 우선(모바일/PC/전체화면 공통).
-- **자막 A+ 최대 크기**: `Math.min(2.5, ...)` → `Math.min(4.0, ...)` (기본 1.1em 대비 약 3.6배까지).
-
-**🟢 B. 모바일 세로 전체화면 버튼 위치**
-
-- **현상**: 전체화면 버튼이 200px(이전 세션 값)에서 세로로 긴 동영상의 영상 영역에 걸림.
-- **해결** (`assets/js/app.js` 2곳): `fsBtn.style.bottom = isMobile ? '200px' : '75px'` → `'100px' : '75px'`. PC 75px 무변경. 세로 모바일 CSS `bottom:8px`는 `!important` 없어 인라인 100px가 정상 우선.
 
 **🟢 B-2. 전체화면 버튼/시간표시 위치 — 영상 표시 영역 기준 + 기준 요소 수정 (2026-05-29)**
 
@@ -1178,6 +898,277 @@ PC 동영상 재생목록 패널에 "전체/연관" 모드 토글 추가. 연관
 - **메인앱 해결** (`assets/js/app.js`): `(fileSize/1024^3).toFixed(1)+'GB'` → `this.formatSize(fileSize)` (코드베이스 공용 함수, B/KB/MB/GB 자동). 100MB→"100.0 MB".
 - **공유 페이지 추가** (`share.php` 일반재생 배지): `(코덱 해상도)` → `(코덱 해상도 용량)`. `config.php`의 전역 `formatFileSize($fileSize)` 재사용(share.php가 config.php require). `$fileSize`는 항상 초기화 + `htmlspecialchars` 이스케이프. PHP 실행테스트 5케이스 warning 0.
 - **트랜스코딩 배지는 양쪽 제외** (펜닐님 결정). 메인앱 트랜스코딩 배지 실제 표시는 `⚡ HLS 스트리밍 HW : Intel`(인코더 정보만, 코덱/해상도/용량 없음).
+
+#### v5.8.1l (2026-05-29)
+
+**[v5.8.1l 버그 수정] 청크 업로드 조립 경쟁 조건 — 큰 파일 1개가 2개로 중복 생성 (2026-05-29)**
+
+펜닐님 보고: 60MB 파일 1개를 드래그 업로드했는데 결과가 2개(`파일.zip` + `파일 (2).zip`) 생김. 무조건이 아니라 간헐적. 정밀 진단 → 소스 경쟁 조건(race condition) 확정·수정.
+
+- **원인**: 큰 파일은 청크(PC 10MB 단위)로 분할되어 PC 기준 3개씩 병렬 전송(`PARALLEL=3`). 서버 `uploadChunk`(api/FileManager.php)는 청크 도착마다 `count(glob('chunk_*'))`로 개수를 세서 "다 왔으면 조립"하는데, **이 완성 판정에 락이 없음**. 마지막 청크들이 거의 동시 도착하면 여러 요청이 모두 "완성" 판정 → **조립 중복 실행** → 같은 파일 2개(2번째에 `(2)` 자동 부여).
+  - 60MB = 6청크 → 마지막 배치(3개) 동시 전송 → 동시 도착 시 발생. 타이밍 의존이라 **간헐적**(펜닐님 "무조건 아님" 일치). 작은 파일(10MB 미만, 1청크)은 경쟁 없어 항상 정상.
+- **수정**: 완성 판정 직후 `fopen($tempDir.'/.assembling.lock', 'x')` **원자적 락**(파일 없을 때만 생성). 동시 도착해도 단 하나의 요청만 락 획득 → 그 요청만 조립. 락 못 잡은 요청은 조립 없이 완료 응답(`complete:true`). 파일 락이라 `cleanupChunks`(is_file→unlink)에서 정상 정리되고, `glob('chunk_*')` 청크 수 계산에도 안 걸림.
+  - **로컬 업로드(`uploadChunk`) + 원격 스토리지 업로드(`uploadChunkRemote`, FTP/SFTP/WebDAV 등) 양쪽 모두** 동일 경쟁 조건이 있어 둘 다 락 적용(전수 점검: `count(glob chunk_*) >= totalChunks` 판정 2곳 모두 보호).
+- **적용 범위 (전수 점검)**:
+  - 업로드 버튼 / 폴더 업로드 / 드래그 파일·폴더 업로드 → 모두 클라이언트 `uploadChunkedMulti`·`uploadChunked` → 서버 단일 `uploadChunk` 함수로 수렴 → **락 하나로 전부 보호**.
+  - 복사→붙여넣기 / 잘라내기→붙여넣기 → 서버 `$fileManager->copy()`/`move()`(PHP copy/rename) → **청크 조립 안 함, 경쟁 조건 무관**.
+  - 게시판 첨부 업로드 → 클라이언트 순차 전송(`await` 루프) → 동시 도착 없어 경쟁 조건 없음.
+- **안전성**: 기존 조립 로직 삭제 없이 락만 추가. 청크 저장(move_uploaded_file)은 락 체크 전 실행 → 데이터 손실 없음(락 잡은 요청이 모든 청크 조립). 클라이언트는 `complete:true`로 정상 처리(추가한 `deduped` 필드 몰라도 됨). 락은 uploadId별 고유 tempDir 안 → 다른 업로드와 무간섭, 죽은 요청의 락은 `cleanupOldChunks`(1일)가 정리 → deadlock 없음.
+- **검증**: PHP `php -l` OK. 멀쩡한 코드 보존(완성 판정·조립·cleanup 로직).
+- **테스트(실기기 필요)**: 10MB 이상 파일을 여러 번(10회+) 반복 드래그 업로드 → 항상 1개만 생성되는지. 경쟁 조건은 타이밍 의존이라 1~2회로는 확신 어려움(수정 전에도 운 좋으면 1개였음). 락은 동시 도착해도 원천 차단하므로 반복해도 1개여야 함.
+
+**[v5.8.1l 기능] 공유 업로드 청크화 — 내부 공유 + 외부 filedrop 대용량 지원 (2026-05-29)**
+
+기존 공유 업로드 2종(내부 공유 업로드, 외부 filedrop 업로드)은 청크 분할 없이 파일을 통째로 전송 → PHP `upload_max_filesize`/`post_max_size` 제한에 걸려 큰 파일 업로드 불가(`ini_set`은 이 값 변경 불가). 일반 업로드처럼 청크화하여 사실상 무제한(디스크/quota까지) 지원.
+
+- **재사용 설계 (안전)**: 검증된 `FileManager::uploadChunk`(청크 조립 + 경쟁조건 락) 코어를 그대로 재사용. uploadChunk에 `$skipPermCheck` 파라미터(기본 false) 추가 — **기존 일반 업로드는 인자 안 넘겨 동작 100% 불변**. 공유 경로만 자체 권한 검증 후 true로 호출(스토리지 can_write 체크만 skip, 확장자/랜섬웨어/quota/경로(isPathSafe) 검증은 그대로 수행).
+- **내부 공유** (`uploadToInternalShareChunk`): `validateInternalSharePath`로 공유 write 권한 검증 후, 공유의 storage_id + 상대경로(file_path+subPath)로 uploadChunk 호출. 클라이언트 `_executeIShareUpload`를 청크 분할(`_uploadIShareChunked`, 10MB·병렬3)로 교체.
+- **외부 filedrop** (`uploadToFileDropChunk`): 외부 공개(비로그인)라 **매 청크 토큰/만료/비밀번호/횟수 재검증** + 위험확장자/파일명 차단(DANGEROUS_EXTS) 후 uploadChunk 호출. 조립 완료(complete, deduped 제외) 시에만 업로드 횟수 +1. 클라이언트 share.php 업로드를 청크 분할로 교체.
+- **라우팅**: `internal_share_chunk_upload`(로그인 필요, CSRF 검증) + `filedrop_chunk_upload`(noAuth + CSRF 면제 — 외부인은 토큰 기반 인증) 추가. rate limit 면제 + 업로드 전용 rate limit 등록. (filedrop은 외부 공개라 csrfExclude 등록 필수 — 누락 시 외부인 업로드 차단됨.)
+- **경로 안전성**: filedrop은 외부 공개지만 uploadChunk 내부 `isPathSafe`로 경로 탐색(../) 차단. file_path는 관리자 생성 공유라 신뢰 + 검증 이중.
+- **안전성**: 기존 단일 업로드 함수/라우팅(uploadToInternalShare, uploadToFileDrop)은 **삭제 없이 보존**(ShareManager 삭제줄 0). 새 lang 키 불필요(기존 키 재사용). 청크 조립 락이 공유에도 자동 적용(중복 생성 방지).
+- **검증**: api.php/ShareManager/FileManager/share.php `php -l` OK, app.js `node --check` OK. 새 청크 함수가 기존 검증된 코어로 수렴.
+- **테스트(실기기 필요)**: ① 내부 공유 폴더에 10MB+ 파일 업로드 ② 외부 filedrop 링크로 10MB+ 파일 업로드(비밀번호/횟수 제한 포함) ③ 위험 확장자(.php 등) 차단 ④ 대용량 파일 중복 생성 없는지.
+
+**[v5.8.1l 기능] 공유 폴더 업로드 알림 — 소유자에게 헤더 알림 (2026-05-29)**
+
+공유 폴더(내부 공유 + 외부 filedrop)에 타인/외부인이 업로드해도, 공유 소유자가 그 폴더를 열어둔 상태에선 자동 갱신이 안 됨(실시간 폴링/푸시 없음 — 설계상 정상). 새로고침해야 보임. 기존 알림 폴링 인프라를 활용해 "내 공유에 업로드됨" 알림을 추가.
+
+- **방식**: 클라이언트 폴링(기존 30초 알림 폴링과 동일 인프라) + 헤더 알림(인덱스 재구축 알림과 같은 위치). SSE 실시간 푸시는 PHP(Windows+Apache) 환경에서 워커 점유 위험이 커 폴링 채택.
+- **서버**: 청크 업로드 완료(complete, deduped 제외) 시 공유 레코드에 `pending_uploads`(미확인 수) + `last_upload_at/name` 기록. 일반 공유=`shares`, 내부 공유=`internal_shares` 각각 기록. 통합 조회 `getShareUploadNotifications`(pending>0만) + 초기화 `clearShareUploadNotify`. 라우팅 `share_upload_notify_list`(GET) + `share_clear_upload_notify`(POST).
+- **클라이언트**: `_startShareUploadNotifyPolling`(30초) → pending 있으면 `showHeaderNotification('share-upload', …)`. 알림 클릭 시 해당 공유 폴더로 이동.
+- **알림 해제(소유자가 폴더 열면 꺼짐 — 게시판 댓글/쪽지와 동일 UX)**:
+  - 내부 공유: `browseInternalShare` 시 `share_clear_upload_notify(share_id, is_internal=1)`.
+  - 외부 filedrop: 소유자가 일반 탐색기로 그 폴더(storage_id+file_path 매칭)를 열면 초기화. 부담 최소화 위해 헤더 알림이 떠있을 때만 `loadFiles` 완료 후 호출.
+- **대상**: 공유 소유자 본인만(서버에서 소유자 검증). 내부 공유 소유자 필드는 `shared_by`, 일반 공유는 `created_by`로 정확히 구분.
+- **안전성**: 기존 알림/폴링 로직 삭제 없이 추가. 로그아웃 시 폴링 타이머 정리. db 메서드는 internal_shares에 기존 사용된 패턴과 동일. lang 키 4종(ko/en) 추가.
+- **검증**: 전체 `php -l`/`node --check`/JSON 파싱 OK. 멀쩡한 코드 보존(renderFiles 등).
+- **테스트(실기기 필요)**: ① 외부인이 내 filedrop 폴더에 업로드 → 30초 내 헤더 알림 ② 알림 클릭 → 폴더 이동 ③ 그 폴더 열면 알림 사라짐 ④ 내부 공유도 동일 ⑤ 여러 공유 동시 업로드 시 합산 표시.
+
+**[v5.8.1l 기능] 내부 공유 업로드 — 드래그 드롭 + 진행률바 추가 (2026-05-29)**
+
+내부 공유 폴더 업로드가 파일 선택 버튼만 있고 드래그 업로드/진행 표시가 없던 것을 보완(외부 filedrop과 동일 수준).
+
+- **드래그 드롭존**: 공유 폴더 뷰(쓰기 권한 시)에 점선 드롭존 추가. 파일 끌어놓기 + 클릭 업로드 모두 지원. dragover 시 강조 스타일. 드롭 시 기존 중복 체크 흐름(`_ishHandleDroppedFiles` → 중복 모달 or 업로드) 재사용.
+- **진행률바 + 정보**: 외부 filedrop과 동일하게 청크 단위 진행률바 + "N/M: 파일명 / 용량(%) · 속도" 표시. 여러 파일 시 "전체 %" 추가. `_executeIShareUpload`/`_uploadIShareChunked`에 onProgress 콜백 추가(청크 배치마다 갱신). 완료 후 browseInternalShare 재렌더 시 자동 정리.
+- **안전성**: 기존 업로드 버튼/중복 모달/청크 전송 로직 보존, onProgress는 선택 인자(미전달 시 기존 동작). lang 키 `ishare_drop_hint`/`filedrop_total`(ko/en) 추가. `node --check` OK.
+
+**캐시 무효화:** `APP_VERSION` `5.8.1k` → `5.8.1l`
+
+---
+
+#### v5.8.1k (2026-05-26 ~ 2026-05-28)
+
+**추가 — [음악 플레이어 iOS 썸네일: 재생 재개 시 복구] (2026-05-26)**
+
+펜닐님 보고. 추측 수정 금지 — 코드 흐름으로 원인 확정 후 수정.
+- **증상**: 재생 중 탭 닫음/다른 앱(유튜브 등) 갔다가 FileStation 탭 복귀 → 플레이어는 살아있어 이어듣기 가능하나, 재생 누를 시 iOS 잠금화면/제어센터 썸네일이 안 나오거나 갱신 안 됨. (잠금/백그라운드가 아닌, 정지 상태 후 재생 재개 케이스)
+- **원인** (확정): 정지 상태 동안 iOS가 MediaSession metadata/artwork를 메모리 정리로 유실. artwork maintenance 타이머는 `audio.paused`면 동작 안 함(`_startArtworkMaintenance`/`_checkAndRestoreArtwork` 둘 다 paused return). 게다가 `togglePlay()`가 재생 재개 시 `audio.play()`만 호출하고 artwork 복구 트리거가 없었음 → 재생해도 썸네일 미복구.
+- **해결** (`assets/js/app.js` togglePlay, +11/-1): 재생 재개(paused→play) 시 `play().then(() => this._forceRefreshArtwork())`로 artwork 복구 추가. 기존 복구 함수 재사용. play 비동기 resolve 후 복구.
+- **안전**: 일시정지 분기(`audio.pause()`)는 완전 무변경. 재생 시작에만 복구 추가. `_currentMetadata`는 플레이어 생존 시 메모리 유지되어 복구 가능. togglePlay 호출처 4곳(재생버튼/MediaSession play/외부) 모두 정상 — 잠금화면 재생 시에도 복구 이득.
+- ⚠️ FileStation 버전 유지 (v5.8.1j — 버그 수정, 같은 버전 재패키징)
+
+**추가 — [rhwp 0.7.12 → 0.7.13 업그레이드] (2026-05-26)**
+
+펜닐님 요청. 펜닐 룰 부합 (npm 정식 배포 후 진행, 검증된 절차):
+- **npm @rhwp/core 0.7.13 tarball** 다운로드 (shasum 검증: f9fd6a31...) — 진본 확인
+- **GitHub v0.7.13 태그** clone — rhwp-studio 빌드 입력으로 사용
+- **rhwp-studio 빌드** (npm install + tsc + vite build)
+  - `vite.config.ts`에 `base: './'` 안전 추가 (옵션 B) — PWA 플러그인 + 커스텀 `serve-samples-dir` 플러그인 + alias(@/@wasm) 보존
+- **파일 교체** (assets/rhwp/):
+  - core: `rhwp.js` + `rhwp_bg.wasm` (5.06MB, npm tarball md5 일치 — 진본)
+  - studio: `index-EQbwmbnL.js` → `index-B0ptdqhv.js`, `index-C_SbAHsx.css` → `index-Dp_1IBLX.css`, `rhwp_bg-BSNi2Fvg.wasm` → `rhwp_bg-CWgV9Qnr.wasm`
+  - 정적 자산: favicon.ico + fonts (37파일) + images (1파일) 0.7.13 빌드로 동기화
+  - 이전 해시 파일 자동 정리 (각 1개씩만 잔존)
+- **패치** (이전 0.7.10~0.7.12 작업과 동일):
+  - J1 (Ctrl+S file:save 매핑 제거): ✅ 1개 매칭, 메뉴 정의 유지
+  - J2 (Ctrl+P file:print 매핑 제거): ✅ 1개 매칭
+  - P2 (CSS url 경로): ✅ `url(../images/)` → `url(images/)` (P1은 0건)
+  - 다른 단축키 매핑 15개(Ctrl+Z/Y/A/E/O/B 등) 보존 — 의도한 2개만 제거 확인
+- **rhwp_editor.php / rhwp_viewer.php**:
+  - editor: studio 파일명 갱신 (3줄) + `@rhwp_version 0.7.13`
+  - viewer: `@rhwp_version 0.7.13` (1줄)
+  - 커스텀 로직(save/save-as/Blob 캡처/Ctrl+S 핸들러/MutationObserver/notifyParentFileChanged) 무변경 — 백업 대비 diff로 확인
+- **0.7.13 변경 사항** (CHANGELOG 사전 점검 — 0.7.12 후속 patch 사이클):
+  - HWPX → HWP 저장 호환성 대폭 보강 (표/셀 axis, gradient BORDER_FILL, 메모 컨트롤, 목차 필드 등)
+  - HWPX 렌더링 정합 (바탕쪽/머리말꼬리말/문단번호/글상자, exam_kor/exam_social/hwp3-sample16 한컴 변환본 SVG 시각 정합)
+  - 페이지네이션·조판 정정 (treat_as_char LINE_SEG, 중첩 표 분할, 그림 pushdown/vpos)
+  - rhwp-studio: TAC 도형 커서 이동 개선, Chrome 확장 file:// 접근 안내 (#1131/#1132)
+  - 외부 PR #1077/#1078/#1080/#1117/#1120/#1125 등 cherry-pick
+  - 이미지 비율 회귀(0.7.6 PR #335류) 신규 없음 — 정정 위주, 렌더링 회귀 없음
+- **ABI 호환성**: viewer.php import 심볼(HwpDocument, version, renderPageSvg) 0.7.13 core에 모두 존재 ✓
+- **검증** (16/16 통과):
+  - editor.php 참조 파일명 ↔ 실제 studio 파일 일치 ✓
+  - file:save 메뉴 정의 유지 (마우스 클릭 동작) ✓
+  - J1/J2 패치 매칭 + HWPX canExecute 차단 유지(`sourceFormat!==hwpx`) ✓
+  - CSS 참조 이미지(icon_small_ko.svg) 실제 존재 ✓
+  - url(images/) 정규형 ✓
+  - PHP 커스텀 로직 무변경 + 캐시 버스팅 보존 ✓
+  - `@rhwp_version 0.7.13` (editor + viewer) ✓
+- ⚠️ FileStation 버전 유지 (v5.8.1j — 펜닐 룰, "버전 올려줘" 명시 없음, 재패키징)
+
+**추가 — [동영상 H264/MP4 영구 변환 기능 신규] (2026-05-26)**
+
+펜닐님 요청. 실시간 트랜스코딩은 매 재생마다 변환이라 탐색(스크롤) 불가 → 미리 H264/MP4로 영구 변환해두면 일반 재생(copy)으로 자유 탐색 가능. 단계적 구현 + 매 단계 종합 재검토.
+- **서버** (`api/FileManager.php` +284, `api.php` +19): `convertToH264Mp4()` + `convert_h264` SSE 액션
+  - 코덱 판별: H264 입력 → `-c:v copy`(화질/용량 원본 그대로), HEVC/WMV 등 → 재인코딩
+  - **HW(Intel QSV 등) 우선 → 실패 시 SW(libx264) 자동 폴백** (detectHwEncoder 동작확인 + stderr 에러패턴 감지, "CPU로 재시도" 안내). HW 화질조정 global_quality 20, SW libx264 -crf 18(화질 최대 보존)
+  - 이미 h264+mp4면 skip(변환 불필요 알림). 출력 충돌 시 `_h264` suffix. faststart(웹 탐색 최적화)
+  - 보안: requireLogin + checkFolderPermission + checkPermission(read/write) + isPathSafe(입출력) + escapeshellarg 전부. 7-Zip 백그라운드 패턴(bat+resultFile+SSE) 재사용. 임시파일 누수 방지(clientGone 폴링 계속), maxWait 1시간
+- **UI** (`assets/js/app.js` +220, `index.php` +2): 컨텍스트 메뉴(우클릭/롱프레스) + 작업 버튼 메뉴 "🎬 H264/MP4로 변환"
+  - **다중 순차 변환**: 선택 항목 중 변환 필요한 동영상만 필터(mp4 등 네이티브 제외), 하나씩 await 순차 처리, 진행률 "(N/M)" 표시, 완료 요약 토스트
+  - 변환 다이얼로그에 **"변환 후 원본 휴지통 이동" 체크박스** (체크 시 변환 성공+H264 검증 후에만 moveToTrash, 실패 파일 원본 보존)
+  - 진행률 모달(전용 conv-progress-* ID, 중첩 방지), `_convBatchRunning` 가드(finally 리셋), `_convertOneFile`로 단일 변환 분리
+- **i18n**: lang/ko·en.json convert_* 키 22개씩
+- **실측 검증** (SW 경로 — 컨테이너 GPU 없어 HW는 펜닐님 환경 테스트 필요): HEVC→H264 SSIM 0.999/PSNR 56.7dB(거의무손실), WMV→H264 SSIM 0.998(용량 1044KB→292KB 감소), H264→copy SSIM 1.000000(완전무손실), faststart 적용 + 5초 seek 성공(탐색 가능 = 핵심목적 달성)
+- **검토 중 발견·수정** (자체 결함): 임시파일 누수(clientGone), 변환가드 catch 미리셋, mp4 변환메뉴 노출(_needsTranscode), 작업버튼 메뉴 항목 누락, 다중선택 우클릭 메뉴 미표시(selectedItems.some), 진행률 모달 중첩, 서버 i18n 키 4개 누락
+- ⚠️ FileStation 버전 유지 (v5.8.1j — 신규 기능이나 "버전 올려줘" 명시 없음, 재패키징)
+
+**[메뉴 ▲▼ 스크롤 인디케이터] PC + 모바일 컨텍스트 메뉴 / 작업 버튼 메뉴 (펜닐님 요청)**
+
+펜닐님 분석: 모니터가 커도 메뉴가 화면 가득 차면 불편, 작아도 잘림. 스크롤바는 모양이 메뉴와 안 어울려 어색. 항목은 다 필요해서 못 줄이고, 서브메뉴화는 Windows 11처럼 숨김 불편 발생. 결론 — **고정 높이 + 스크롤바 숨김 + ▲▼로 "더 있음" 인지**. macOS Finder 검증된 패턴.
+
+- **CSS** (`assets/css/style.css` +96/-4):
+  - PC `.context-menu` / `.toolbar-action-menu`: max-height **500px** 고정 (모니터 크기 무관 일관)
+  - 스크롤바 완전 숨김: `::-webkit-scrollbar { display:none }` + `scrollbar-width: none` (Chrome/Edge/Firefox/Safari 모두)
+  - 컨텍스트 메뉴: 스크롤을 `<ul>`로 이동(메뉴 자체 overflow visible — ▲▼이 잘리지 않게), ▲▼은 메뉴 박스에 `position: absolute`로 부착
+  - 작업 버튼 메뉴: 메뉴 자체가 스크롤 영역, ▲▼은 `position: sticky`로 첫/마지막에 부착
+  - `.scroll-indicator`: 높이 22px, 흰 배경 95% 불투명, 회색 화살표(▲▼), `pointer-events: none`(항목 클릭 방해 X)
+  - `.has-scroll-up` / `.has-scroll-down` 클래스로 표시 토글
+  - 모바일 시트(`@media`): 기존 하단시트/그립바/slideUp 유지하되, 메뉴 자체 `overflow-y:auto` → `<ul>`로 이동 (PC와 통일된 ▲▼ 로직). ▲ 위치는 그립바 아래(top:14px)로 조정해 충돌 방지
+  - 작업 버튼 메뉴 max-height `calc(100vh - 120px)` → 500px (큰 모니터 가득참 해소)
+- **JS** (`assets/js/app.js` +82/-1): `_setupScrollArrows(menuEl, scrollEl)` 신규 헬퍼
+  - ▲▼ 인디케이터 요소 동적 삽입 (HTML 무변경)
+  - `scroll` 이벤트 + `ResizeObserver`(콘텐츠 크기 변화) + `MutationObserver`(메뉴 display/class 변화) 3중 감지로 ▲▼ 자동 토글
+  - `scrollTop > 1` → ▲ / `scrollTop + clientHeight < scrollHeight - 1` → ▼
+  - 페이지 로드 시 `App.init()` 직후 한 번만 부착 — 메뉴 표시/숨김 토글마다 호출 불필요
+  - `_scrollArrowsSetup` 플래그로 중복 부착 방지
+  - sticky(toolbar)/absolute(context) 두 가지 구조 자동 분기
+- **삭제된 4줄 (의도된 이동/대체)**:
+  - toolbar `max-height: calc(100vh - 120px)` → 500px
+  - 모바일 context-menu `-webkit-overflow-scrolling`/`overflow-y:auto`/`overscroll-behavior` 3줄 → `<ul>`로 이동 (스크롤 영역 분리)
+- **안전성**:
+  - 기존 메뉴 토글 로직 무변경 (showContextMenu 본체 등 일절 안 건드림)
+  - ▲▼ 동적 삽입 → HTML 파일 무변경
+  - `pointer-events: none` → 항목 클릭 절대 방해 안 함
+  - 메뉴 짧을 때(빈화면 메뉴 등) 자동으로 ▲▼ 안 뜸 (scrollHeight ≤ clientHeight 조건)
+- **회귀 검증**: app.js `node --check` OK, PHP 문법 OK. 메뉴 토글 함수 일절 미변경
+
+**[v5.8.1k 후속 수정] 펜닐님 테스트 보고 3건 (2026-05-27)**
+
+▲▼ 인디케이터 1차 적용 후 펜닐님 테스트로 발견된 문제 3건 정밀 수정. 데이터/코드 흐름으로 원인 확정 후 처리.
+
+- **1. 모바일 ▲▼이 첫/마지막 메뉴 항목 가림** (`style.css`)
+  - 원인: 모바일 시트에서 ▲(top:14px)/▼(bottom)이 22px 높이로 ul 영역과 겹침. ul은 ▲▼ 표시 시 회피 padding 없었음.
+  - 수정: `.context-menu.has-scroll-up > ul { padding-top }` / `.has-scroll-down > ul { padding-bottom }` 동적 padding. ▲▼ 안 떴을 때는 padding 0 (회귀 없음). PC 22px, 모바일 24/28px(env safe-area 고려).
+- **3. PC 메뉴 최대 높이 500 → 400px** (`style.css`)
+  - 펜닐님 판단: 500px 다소 김. 400px(약 11~12개 항목)로 축소.
+  - 적용: `.context-menu`(2670), `.context-menu > ul`(2677), `.toolbar-action-menu`(7640) 3곳. `.trash-list`(휴지통)은 메뉴 아님 → 500px 보존(건드리면 안 되는 멀쩡한 코드).
+- **4. 모바일 컨텍스트 메뉴 스크롤 중 메뉴 항목 잘못 눌림** (`assets/js/app.js`)
+  - 원인 (코드 흐름 확정): touch 임계값 10px이 작아 손가락 떨림 허용폭 부족 + **`click` 핸들러가 `ctxTouchMoved` 플래그 무시**(touchend는 막아도 iOS가 합성 발사하는 click이 그대로 통과해 액션 실행).
+  - 수정 ①: 임계값 `dx>10||dy>10` → `dx>20||dy>15` (수직이 메뉴 주 스크롤이라 dy 더 민감). 손가락 떨림 허용폭↑.
+  - 수정 ②: `click` 핸들러에 `if (ctxTouchMoved && Date.now()-ctxTouchEndTime < 500) return` 추가. iOS가 touchend 후 ~300ms 안에 합성하는 click을 차단(500ms 여유). touchend 직후의 합성 click만 정확히 막고, 일반 마우스 click(데스크탑)에는 영향 없음(`ctxTouchMoved`가 항상 false).
+  - `ctxTouchEndTime` 변수 추가로 click과 touchend 시간 상관관계 추적.
+- **검증**: app.js `node --check` OK / config.php `php -l` OK / `.trash-list`(500px) 보존 확인 / 멀쩡한 코드 무변경(이번 새 삭제 1줄 = 임계값 10px의 의도된 교체)
+
+**[v5.8.1k 후속 수정 2차] 메뉴 길이 통일 + ▼ 버그 + 컨텍스트 메뉴 구조 통일 (2026-05-28)**
+
+펜닐님 테스트 보고로 발견. 처음 ▲▼ 구현에서 컨텍스트 메뉴(absolute, `<ul>` 스크롤)와 작업버튼 메뉴(sticky, 메뉴 자체 스크롤)를 **다른 구조로 만든 것이 근본 원인**이었음. 여러 증상(항목 가림, ▼ 안 사라짐, 길이 차이)이 모두 여기서 파생. 최종적으로 두 메뉴를 100% 동일 구조로 통일하여 해결.
+
+- **▼ 버그 (다 봤는데 ▼ 안 사라짐)** (`assets/js/app.js`):
+  - 원인 (확정): ▲▼이 스크롤 영역(scrollEl) 안에 있어 그 높이(각 22px)가 `scrollHeight`에 포함됨 → 끝까지 스크롤해도 `scrollHeight > clientHeight`라 ▼ 유지.
+  - 수정: `update()`에서 표시 중인 ▲▼ 높이를 뺀 `effectiveScrollHeight`로 끝 도달 판정. (▲▼이 scrollEl 안이고 has-scroll 클래스일 때만 보정 → 컨텍스트/작업버튼 양쪽 동일 적용)
+- **컨텍스트 메뉴를 작업버튼 메뉴와 100% 동일 구조로 통일** (`style.css` + `app.js`):
+  - 기존: 컨텍스트만 `<ul>` 스크롤 + ▲▼ absolute → 기존 PC 위치조정 JS(menuEl 스크롤 전제)와 충돌해 max-height/▲▼ 위치 어긋남.
+  - 변경: 컨텍스트도 **메뉴 자체 스크롤**(overflow-y auto, `<ul>`은 흐름) + **▲▼ sticky**(scrollEl 안 첫/마지막) + 스크롤바 숨김. `_setupScrollArrows(ctxMenu, ctxMenu)`로 작업버튼과 동일 호출.
+  - 모바일 시트도 같은 구조로 정리(메뉴 자체 스크롤), 하단 시트/그립바/slideUp 디자인은 유지.
+- **메뉴 길이 (펜닐님 개발자도구 실측값)**:
+  - 컨텍스트 메뉴 max-height **420px** (CSS + JS `Math.min(420, viewHeight - 20)`)
+  - 작업버튼 메뉴 max-height **415.2px** (JS `Math.min(415.2, vh - btnRect.bottom - 14, vh*0.6)`)
+  - 둘 다 `Math.min`이라 작은 화면에선 화면에 맞게 자동 축소(메뉴 화면 밖 방지)
+- **안전성**:
+  - ▲▼ `pointer-events: none` + 클릭 핸들러 `closest('li')`/`data-action` 미존재로 무시 → 항목 클릭 이중 안전
+  - `_scrollArrowsSetup` 중복 부착 방지
+  - absolute 시절 잔재 CSS(padding-top/max-height 보정 등) 완전 제거 — 시행착오 흔적 정리됨
+- **검증**: app.js `node --check` OK / CSS 중괄호 균형 OK / `.trash-list`(500px) + 다른 400px 8곳 보존 / 두 메뉴 sticky·overflow-y 동일 확인 / 펜닐님 PC·모바일 테스트 "잘 된다" 확인
+- ⚠️ 솔직한 기록: 이번 메뉴 작업은 시행착오가 많았음(처음 두 메뉴를 다른 구조로 만든 것이 원인). 펜닐님 반복 테스트로 올바른 해법(동일 구조 통일)에 도달. 처음부터 동일 구조로 했어야 함.
+
+**[v5.8.1k 보안 수정] 동영상 변환 권한 체크 강화 (2026-05-28)**
+
+펜닐님 권한 검토로 발견. 변환 기능에 권한 허점 2건 — 공유 스토리지 환경에서 문제될 수 있어 수정.
+
+- **허점 1: 폴더별 쓰기 권한 우회** (`api.php`):
+  - 변환은 파일 생성(쓰기 작업)인데 라우팅이 `checkFolderPermission`을 `can_read`로만 체크(transcode 패턴 복사 실수). 스토리지 write는 있으나 특정 폴더만 read-only인 사용자가 그 폴더에서 변환(파일 생성) 가능했음.
+  - 수정: `can_read` → `can_write` (compress/rename 등 다른 쓰기 작업과 동일).
+- **허점 2: 삭제 권한 우회 (원본 휴지통 이동)** (`api/FileManager.php`):
+  - "변환 후 원본 휴지통 이동"이 `can_delete` 체크 없이 write 권한만으로 동작. 공유 스토리지에서 **쓰기는 되나 삭제 권한 없는 사용자가 변환을 통해 원본을 치우는** 우회 가능했음.
+  - 수정: deleteOriginal 시 `checkPermission(can_delete)` + `checkFolderPermission(can_delete)` 체크. 권한 없으면 변환은 정상 진행하되 **원본 보존**(moveToTrash 안 함).
+  - UI: 권한 없어 원본 보존된 경우 "삭제 권한이 없어 원본은 보존됨" 토스트 알림(`trash_skipped_no_perm` + i18n convert_no_delete_perm). 체크박스는 그대로 두되 서버가 권한으로 최종 판단(서버 차단이 핵심).
+- **변환 권한 체계 (최종, 다른 기능과 일관)**:
+  - 변환 실행: read + write (스토리지 + 폴더 레벨)
+  - 원본 휴지통 이동: can_delete (스토리지 + 폴더 레벨)
+  - UI 메뉴 표시: can_write
+- **검증**: PHP `php -l` OK / app.js `node --check` OK / JSON OK. 변경 = api.php 1곳(can_write) + FileManager.php deleteOriginal 권한 블록 + app.js done 토스트 + i18n 2키.
+
+**[v5.8.1k 보안 수정 2] 키보드 Del 키 삭제 권한 체크 (2026-05-28)**
+
+펜닐님 권한 검토 연장. 변환 권한을 점검하다 발견 — 컨텍스트 메뉴/작업버튼은 `can_delete` 없으면 삭제 항목을 숨기는데, **키보드 Del 키는 권한 체크 없이 `deleteSelected()` 직접 호출**하던 불일치.
+
+- **원인**: Del 키 핸들러가 선택 항목 있으면 바로 삭제 진행. 서버(api.php delete 라우팅)가 `can_delete`로 최종 차단하므로 **보안은 안전했으나**, 클라이언트가 미리 안 막아 헛된 요청 + 어색한 실패(확인 다이얼로그 후 서버 거부).
+- **수정** (`assets/js/app.js` Del 핸들러): `this.currentPermissions.can_delete` 체크 추가. 권한 없으면 "삭제 권한이 없습니다"(i18n no_delete_permission) 알림 후 동작 안 함. 컨텍스트 메뉴와 완전 일관.
+- **삭제 권한 3중 체계 (최종)**: ① UI 메뉴 표시(can_delete) ② 키보드 Del(can_delete, 이번 추가) ③ 서버 라우팅(checkFolderPermission can_delete)
+- **안전성**: Del 키 1곳만 변경. F2(이름변경) 등 다른 키 미변경. 서버 차단은 기존 유지(보안 변화 없음, UX 일관성 개선).
+- **검증**: app.js `node --check` OK / JSON OK / i18n no_delete_permission 2키 추가
+
+**[v5.8.1k 개선] 동영상 변환 진행률에 배속(speed) 표시 (2026-05-28)**
+
+펜닐님 제안. 변환 중 진행률(%)만 있고 속도 정보가 없어, ffmpeg의 실제 변환 배속을 표시. 저사양 환경에서 "얼마나 빠른지/오래 걸릴지" 가늠 가능.
+
+- **서버** (`api/FileManager.php`): ffmpeg `-progress` 파일에서 `speed=2.5x` 값 파싱(out_time_ms 파싱과 같은 자리) → `progress` 이벤트에 `speed` 추가. speed 있을 때만 전송(copy 모드는 인코딩 안 해 거의 없음).
+- **UI** (`assets/js/app.js`): progress 핸들러에서 `d.speed` 있으면 진행 문구에 "(2.5x)" 표시. 단일·다중 변환 공통(같은 `_convertOneFile` 핸들러).
+- **의미**: 2.5x=실시간의 2.5배 빠름, 0.6x=실시간보다 느림(시간 오래 걸림 신호). HW/SW 폴백 시 각 모드 실제 속도 표시.
+- **안전성**: H264 변환 경로만 변경. vault 등 무관한 `_updateConvertProgress`(언더스코어) 함수 미변경. speed 없으면 기존과 동일(하위 호환).
+- **검증**: PHP `php -l` OK / app.js `node --check` OK. (컨테이너 GPU 없어 SW libx264 speed만 실측 — HW QSV speed는 실기기 확인 필요)
+
+**[v5.8.1k 안정화] 동영상 실시간 트랜스코딩 — hang 타임아웃 + ffmpeg 종료 경로 keepalive (2026-05-28)**
+
+펜닐님 보고(개발 중 ffmpeg 2개 누적/종료 안 됨, 직접 죽여야 했음)를 정밀 코드 점검으로 진단 → 소스 문제 2건 확정·수정.
+
+- **문제 1: HW hang 시 첫 청크 blocking read 무한 대기** (`api/FileManager.php`):
+  - `transcodeStream`(미리보기) + `transcodeShareStream`(공유)의 첫 청크 읽기가 `stream_set_blocking(true)+fread`로 타임아웃 없음. HW ffmpeg가 초기화에서 hang(데이터도 안 주고 죽지도 않음)하면 PHP가 무한 대기 → `register_shutdown_function` 안 불림 → ffmpeg 잔존(직접 죽여야 함).
+  - 수정: `_readFirstChunkWithTimeout($pipe, 6)` 클래스 메서드 신설. non-blocking + `stream_select`로 6초 대기 → 데이터 오면 반환(정상, 기존과 동일), EOF/타임아웃이면 `''` 반환(=기존 폴백 로직 트리거). 모든 종료 경로에서 blocking 모드 복구 보장.
+  - 양쪽 함수 HW/SW 첫 청크 4곳 적용. 메인 스트리밍 루프(while feof)·폴백 판정 로직은 보존.
+  - 타임아웃 6초: HW 초기화(보통 1~3초)보다 충분, hang 시 체감 지연 최소화. 빠른 전환(끄고 바로 재생) 시 pipe_kill로 ffmpeg 죽으면 select가 EOF 감지해 즉시 탈출(6초 안 기다림).
+- **문제 2: ffmpeg 종료 요청(pipe_kill/stop)이 일반 fetch라 취소됨** (`assets/js/app.js`, `share.php`):
+  - 모달 닫기/새 재생 직전 이전 ffmpeg를 죽이는 호출이 일반 `fetch`로 된 곳이 미리보기 3곳(hideModal·preview 정리·새 재생 직전) + 공유 1곳(HLS→MMS 폴백 stop). "어 이상하네 하고 바로 끄고 다시 재생" 시 후속 정리/네비게이션 중 fetch가 취소 → 이전 ffmpeg 안 죽고 새 것과 공존(누적).
+  - 수정: 해당 경로 모두 `sendBeacon` 우선 + `fetch(keepalive)` 폴백으로 통일(페이지 정리 중에도 도달 보장). 기존 sendBeacon 경로(pagehide 등)의 폴백도 keepalive로 일관화.
+  - 최종: 미리보기 순수 일반 fetch pipe_kill 0개, 공유 순수 일반 fetch stop 0개.
+- **미수정(투명)**: ② proc_terminate 후 proc_get_status 미확인 — SIGKILL이 대부분 죽여 위험 낮아 안 건드림. 배지(HW/SW/fail) 로직 — 정교한 폴백 상태머신이고 명백한 버그 없어 보존(펜닐님 "거의 고쳐서 문제없다" 확인).
+- **검증**: app.js `node --check` OK / share.php·FileManager.php `php -l` OK. share.php 정확히 1줄 변경. 멀쩡한 코드 보존(스트리밍 루프·폴백 판정·배지 로직).
+- **테스트(실기기 필요, 컨테이너 GPU 없어 미실측)**: 미리보기/공유 각각 재생→바로 끄고 재생 반복 시 ffmpeg 누적 없는지, HW hang 시 6초 후 SW 폴백.
+
+**캐시 무효화:** `APP_VERSION` `5.8.1j` → `5.8.1k`
+
+---
+
+#### v5.8.1j (2026-05-18)
+
+**[2차 세션] 자막 컨트롤 iOS 작동 / 배지 용량 단위 / 재생 안정성 (펜닐님 보고)**
+
+펜닐님 보고 다건을 정밀 진단 후 수정. 모두 데이터/실측으로 원인 확정, 추측 수정 0건.
+
+**🟢 A. 자막 크기/위치 조절 4개 버튼 iOS 작동 안 됨**
+
+- **현상**: 일반 동영상 미리보기에서 iOS만 자막 컨트롤 4개 버튼(A-/A+/▲/▼) 무반응. PC는 정상. 같은 영역 싱크 버튼(-0.5s/+0.5s/↺)은 iOS도 정상.
+- **원인** (펜닐님 "싱크는 됨" 정보로 확정): 모바일 `@media (max-width:1024px) .subtitle-overlay { font-size: 0.95em !important; bottom: 15% !important }`가 JS의 inline style을 우선순위로 무력화. JS 핸들러는 정상 작동했으나 `overlay.style.fontSize`/`bottom` 변경이 CSS `!important`에 눌려 화면 미반영. 싱크 버튼은 `video._subSyncOffset`/`textContent`만 건드려 무관 → 정상.
+- **해결** (`assets/js/app.js` 자막 초기화/핸들러 5곳): `overlay.style.fontSize = ...` → `overlay.style.setProperty('font-size', ..., 'important')`, `bottom`도 동일. inline `!important`가 CSS `!important`를 이김. 버튼 안 누르면 모바일 기본값 유지 → 회귀 없음.
+- **자막 첫 기본 위치 분기**: `subBottom` 저장값 없을 때 모바일(≤1024px) 15% / PC 8% (CSS 모바일 기본 15%와 일치). 저장값은 `localStorage !== null`로 판정해 0% 저장도 정상 복원(기존 `||'8'`의 falsy 버그 해소). 한 번이라도 ▲/▼ 조정 시 저장값 우선(모바일/PC/전체화면 공통).
+- **자막 A+ 최대 크기**: `Math.min(2.5, ...)` → `Math.min(4.0, ...)` (기본 1.1em 대비 약 3.6배까지).
+
+**🟢 B. 모바일 세로 전체화면 버튼 위치**
+
+- **현상**: 전체화면 버튼이 200px(이전 세션 값)에서 세로로 긴 동영상의 영상 영역에 걸림.
+- **해결** (`assets/js/app.js` 2곳): `fsBtn.style.bottom = isMobile ? '200px' : '75px'` → `'100px' : '75px'`. PC 75px 무변경. 세로 모바일 CSS `bottom:8px`는 `!important` 없어 인라인 100px가 정상 우선.
 
 **🟢 D. 재생 버튼 더블클릭 / 마우스 채터링 방어 (일반/공유 공통)**
 
