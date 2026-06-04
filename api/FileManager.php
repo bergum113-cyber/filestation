@@ -389,7 +389,7 @@ class FileManager {
             'ods' => ['application/vnd.oasis.opendocument.spreadsheet'],
             // 압축
             'zip' => ['application/zip', 'application/x-zip-compressed'],
-            'rar' => ['application/x-rar-compressed', 'application/vnd.rar'],
+            'rar' => ['application/x-rar-compressed', 'application/vnd.rar', 'application/x-rar'],
             '7z' => ['application/x-7z-compressed'],
             'tar' => ['application/x-tar'],
             'gz' => ['application/gzip', 'application/x-gzip'],
@@ -460,8 +460,40 @@ class FileManager {
             return true;
         }
         
-        // 실제 MIME이 허용 목록에 있는지 확인
-        return in_array($realMime, $allowedMimes[$ext], true);
+        // ★ MIME 검증 정책 (v5.8.2 — 펜닐 결정): "서버 실행 파일만 빼고 다 허용"에 맞춤
+        //   기존: 화이트리스트 MIME과 정확히 일치해야 통과 → finfo 변형 MIME(rar의 application/x-rar 등)
+        //         이 누락되면 정상 파일도 거부되는 문제 (확장자별 MIME을 무한정 등록해야 하는 땜질).
+        //   변경: ① 화이트리스트 일치 → 통과 (기존 동작 100% 보존, 정상 파일 영향 0)
+        //         ② 불일치해도 — 위장된 실행 파일(PHP/스크립트, 또는 바이너리 확장자에 숨긴 HTML)만 차단,
+        //            그 외(정상 파일의 MIME 변형)는 통과.
+        //   ※ 서버 실행 확장자(php/jsp/asp 등)는 checkUploadSettings의 serverExecExts에서 이미 항상 차단됨.
+        //      이 함수는 "안전한 확장자로 위장한 위험 내용"을 보조 차단하는 역할.
+
+        // ① 화이트리스트 정확 일치 → 통과 (기존과 동일)
+        if (in_array($realMime, $allowedMimes[$ext], true)) {
+            return true;
+        }
+
+        // ② 불일치 — 위장 실행 파일만 차단
+        // 서버/브라우저에서 코드로 실행될 수 있는 위험 MIME
+        $dangerousMimes = [
+            'application/x-httpd-php', 'application/x-php', 'text/x-php',
+            'application/x-httpd-php-source', 'application/x-httpd-php5',
+            'application/x-php-source',
+        ];
+        // 내용이 텍스트/마크업이어도 정상인 확장자 (HTML 내용 허용)
+        $textExts = ['txt', 'html', 'htm', 'css', 'js', 'json', 'xml', 'md', 'csv', 'sql',
+            'py', 'java', 'c', 'cpp', 'h', 'svg'];
+
+        if (in_array($realMime, $dangerousMimes, true)) {
+            return false;   // PHP 등 실행 스크립트가 다른 확장자로 위장 → 차단
+        }
+        if ($realMime === 'text/html' && !in_array($ext, $textExts, true)) {
+            return false;   // 바이너리 확장자(이미지/미디어/압축 등)에 HTML 내용 → 위장 차단
+        }
+
+        // 그 외 — 정상 파일의 MIME 변형(rar=application/x-rar 등)으로 간주, 통과
+        return true;
     }
     
     /**
@@ -6658,7 +6690,7 @@ class FileManager {
             $resultFile = sys_get_temp_dir() . '\\fs_7z_cresult_' . md5($zipFullPath . time()) . '.txt';
             @unlink($resultFile);
             // resultFile과 batFile은 서버 생성 경로 (md5) - 특수문자 없어서 안전
-            $batContent = "@echo off\r\nchcp 65001 >nul\r\n" . $bgCmd . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
+            $batContent = "@echo off\r\nsetlocal disabledelayedexpansion\r\nchcp 65001 >nul\r\n" . $bgCmd . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
             file_put_contents($batFile, $batContent);
             pclose(popen('start /b cmd /c "' . $batFile . '"', 'r'));
         } else {
@@ -6912,7 +6944,7 @@ class FileManager {
             $batFile = sys_get_temp_dir() . '\\fs_7z_ex_' . md5(uniqid()) . '.bat';
             // 7z 실행 후 exitcode를 result 파일에 기록
             // resultFile/batFile은 서버 생성 경로(md5) - 안전
-            $batContent = "@echo off\r\nchcp 65001 >nul\r\n" . $cmd . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
+            $batContent = "@echo off\r\nsetlocal disabledelayedexpansion\r\nchcp 65001 >nul\r\n" . $cmd . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
             file_put_contents($batFile, $batContent);
             pclose(popen('start /b cmd /c "' . $batFile . '"', 'r'));
         } else {
@@ -7152,7 +7184,7 @@ class FileManager {
         if (DIRECTORY_SEPARATOR === '\\') {
             $batFile = sys_get_temp_dir() . '\\fs_7z_e7_' . md5(uniqid()) . '.bat';
             // resultFile/batFile은 서버 생성 md5 경로 - 안전
-            $batContent = "@echo off\r\nchcp 65001 >nul\r\n" . $cmd . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
+            $batContent = "@echo off\r\nsetlocal disabledelayedexpansion\r\nchcp 65001 >nul\r\n" . $cmd . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
             file_put_contents($batFile, $batContent);
             pclose(popen('start /b cmd /c "' . $batFile . '"', 'r'));
         } else {
@@ -8327,9 +8359,21 @@ class FileManager {
             @flush();
         };
 
+        // ★ 변환 진단 로그 (data/convert_debug.log) — 실패 시에만 기록(가볍게)
+        $_cvLog = function($msg) use ($relativePath) {
+            $line = '[' . date('Y-m-d H:i:s') . '] [' . $relativePath . '] ' . $msg . "\n";
+            @file_put_contents(DATA_PATH . '/convert_debug.log', $line, FILE_APPEND | LOCK_EX);
+        };
+
+        // 변환 ffmpeg 식별용 고유 sid (취소/새로고침 시 wmic로 찾아 taskkill — 트랜스코딩 pipesid와 동일 방식)
+        $convSid = bin2hex(random_bytes(8));
+        // 클라이언트에 sid 전달 (취소 버튼/새로고침 시 kill 요청에 사용)
+        $sse('convsid', ['sid' => $convSid]);
+
         // 권한
         if (!$this->storage->checkPermission($storageId, 'can_read') ||
             !$this->storage->checkPermission($storageId, 'can_write')) {
+            $_cvLog('FAIL: 권한 없음');
             $sse('error', ['error' => __('no_permission', '권한이 없습니다')]);
             return;
         }
@@ -8337,26 +8381,40 @@ class FileManager {
         // 원격 스토리지는 미지원 (로컬 ffmpeg 필요)
         $basePath = $this->storage->getRealPath($storageId);
         if (!$basePath) {
+            $_cvLog('FAIL: 원격 스토리지 미지원');
             $sse('error', ['error' => __('convert_remote_unsupported', '원격 스토리지는 변환을 지원하지 않습니다')]);
             return;
         }
 
         $fullPath = $this->buildPath($basePath, $relativePath);
         if (!$this->isPathSafe($basePath, $fullPath) || !is_file($fullPath)) {
+            $_cvLog('FAIL: 파일 없음 fullPath=' . ($fullPath ?? '?'));
             $sse('error', ['error' => __('file_not_found', '파일을 찾을 수 없습니다')]);
             return;
         }
 
         $ffmpeg = $this->findFfmpeg();
         if (!$ffmpeg) {
+            $_cvLog('FAIL: ffmpeg 못 찾음');
             $sse('error', ['error' => __('ffmpeg_not_found', 'ffmpeg를 찾을 수 없습니다')]);
             return;
         }
 
         $sse('progress', ['percent' => 0, 'stage' => __('convert_probing', '코덱 분석 중...')]);
 
+        // Windows escapeshellarg()는 보안상 '!'와 '%'를 공백으로 치환하는 버그가 있어
+        //   (느낌표 포함 파일명이 깨져 ffmpeg가 "Illegal byte sequence"로 실패).
+        //   → Windows에서는 큰따옴표로 직접 감싼다. .bat의 setlocal disabledelayedexpansion이
+        //     '!'를 리터럴로 보존하고, 경로 내 '"'는 Windows 파일명에 못 쓰이므로 안전.
+        $cvArg = function($s) {
+            if (PHP_OS_FAMILY === 'Windows') {
+                return '"' . str_replace('"', '', (string)$s) . '"';
+            }
+            return escapeshellarg($s);
+        };
+
         // 1) 코덱/길이 프로브
-        $probeOut = @shell_exec(escapeshellarg($ffmpeg) . ' -i ' . escapeshellarg($fullPath) . ' 2>&1') ?? '';
+        $probeOut = @shell_exec($cvArg($ffmpeg) . ' -i ' . $cvArg($fullPath) . ' 2>&1') ?? '';
         $videoCodec = '';
         $audioCodec = '';
         if (preg_match('/Stream\s+#\d+:\d+.*Video:\s*(\w+)/i', $probeOut, $vm)) {
@@ -8400,8 +8458,26 @@ class FileManager {
         }
         // 출력 경로도 안전성 검증
         if (!$this->isPathSafe($basePath, $outPath)) {
+            $_cvLog('FAIL: 출력경로 unsafe outPath=' . ($outPath ?? '?'));
             $sse('error', ['error' => __('convert_output_unsafe', '출력 경로가 올바르지 않습니다')]);
             return;
+        }
+
+        // ffmpeg는 dotfile 임시 출력(.{이름}.converting)에 쓰고, 완료+검증 후 최종 outPath로 rename.
+        //   목록 조회가 dotfile('.'시작)을 자동 제외하므로, 변환 중/중단된 미완성 파일은 목록에 안 보임.
+        //   (취소/새로고침/브라우저 닫힘으로 중단돼도 임시파일만 남고, 그것도 정리됨 — 목록엔 영향 없음)
+        $tmpOut = $dir . DIRECTORY_SEPARATOR . '.' . $outName . '.' . $convSid . '.converting';
+        if (!$this->isPathSafe($basePath, $tmpOut)) {
+            $sse('error', ['error' => __('convert_output_unsafe', '출력 경로가 올바르지 않습니다')]);
+            return;
+        }
+        // 비정상 종료(PHP 강제 kill 등)로 남은 오래된 .converting 잔재 정리 — 1시간+ 된 것만.
+        //   (진행 중인 변환은 ffmpeg가 출력에 계속 써서 mtime이 최근이라 보존됨. dotfile이라 목록엔 안 보이지만 디스크 누적 방지.)
+        foreach (@scandir($dir) ?: [] as $_sf) {
+            if ($_sf[0] === '.' && substr($_sf, -11) === '.converting') {
+                $_sp = $dir . DIRECTORY_SEPARATOR . $_sf;
+                if (is_file($_sp) && (time() - @filemtime($_sp)) > 3600) @unlink($_sp);
+            }
         }
 
         // 4) 코덱 인자 결정
@@ -8433,14 +8509,20 @@ class FileManager {
         $progressFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_conv_prog_' . md5($outPath . microtime(true)) . '.txt';
 
         // 변환 명령 빌더 (vArgs만 다르게)
-        $buildConvCmd = function($vArgs) use ($ffmpeg, $fullPath, $aArgs, $progressFile, $outPath) {
-            return escapeshellarg($ffmpeg)
-                . ' -y -i ' . escapeshellarg($fullPath)
-                . ' -map 0:v:0 -map 0:a? '
-                . $vArgs . ' ' . $aArgs
+        $buildConvCmd = function($vArgs, $aArgsOverride = null) use ($ffmpeg, $fullPath, $aArgs, $progressFile, $tmpOut, $cvArg, $convSid) {
+            $aUse = ($aArgsOverride !== null) ? $aArgsOverride : $aArgs; // copy 폴백 시 오디오도 재인코딩(-c:a aac)
+            return $cvArg($ffmpeg)
+                . ' -y'
+                . ' -analyzeduration 2000000 -probesize 2000000'  // 트랜스코딩과 동일 — 복잡/손상 .ts 스트림 분석 견딤
+                . ' -fflags +genpts+igndts+fastseek+discardcorrupt'  // discardcorrupt: 손상 패킷 버림(copy 모드에서 MP4 muxer Invalid data 회피)
+                . ' -i ' . $cvArg($fullPath)
+                . ' -map 0:v:0 -map 0:a? -sn '                     // -sn: 자막/데이터 스트림 무시(손상 stream 회피) — 트랜스코딩 일관
+                . $vArgs . ' ' . $aUse
+                . ' -metadata comment=convsid_' . $convSid        // 취소/새로고침 시 wmic로 이 ffmpeg 찾아 kill
                 . ' -movflags +faststart'
-                . ' -progress ' . escapeshellarg($progressFile)
-                . ' ' . escapeshellarg($outPath);
+                . ' -f mp4'                                        // 출력 포맷 명시 — 임시 확장자(.converting)라 ffmpeg가 확장자로 포맷 추론 못 하므로 필수
+                . ' -progress ' . $cvArg($progressFile)
+                . ' ' . $cvArg($tmpOut);                          // dotfile 임시 출력 (완료 시 outPath로 rename)
         };
 
         // 첫 시도: copy면 copy, HW 가능하면 HW, 아니면 SW
@@ -8451,17 +8533,17 @@ class FileManager {
             'mode' => $firstMode, 'src_codec' => $videoCodec]);
 
         // 5) 백그라운드 실행 클로저 (vArgs 받아 실행, resultFile/stderrLog 반환)
-        $runConv = function($vArgs) use ($buildConvCmd, $outPath, $progressFile) {
+        $runConv = function($vArgs, $aArgsOverride = null) use ($buildConvCmd, $tmpOut, $progressFile, $outPath) {
             @unlink($progressFile);
-            @unlink($outPath);
-            $cmd = $buildConvCmd($vArgs);
+            @unlink($tmpOut);
+            $cmd = $buildConvCmd($vArgs, $aArgsOverride);
             $resultFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_conv_result_' . md5($outPath . microtime(true)) . '.txt';
             $stderrLog  = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_conv_err_' . md5($outPath . microtime(true)) . '.txt';
             @unlink($resultFile);
             @unlink($stderrLog);
             if (PHP_OS_FAMILY === 'Windows') {
                 $batFile = sys_get_temp_dir() . '\\fs_conv_' . md5(uniqid()) . '.bat';
-                $batContent = "@echo off\r\nchcp 65001 >nul\r\n" . $cmd . ' 2>"' . $stderrLog . '"' . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
+                $batContent = "@echo off\r\nsetlocal disabledelayedexpansion\r\nchcp 65001 >nul\r\n" . $cmd . ' 2>"' . $stderrLog . '"' . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
                 @file_put_contents($batFile, $batContent);
                 pclose(popen('start /b cmd /c "' . $batFile . '"', 'r'));
             } else {
@@ -8484,26 +8566,72 @@ class FileManager {
 
         // 첫 실행 (copy/HW/SW). HW로 시작했으면 실패 시 SW 폴백 가능.
         $curVArgs = $firstVArgs;
-        $triedSw = $isCopy || !$hwAvailable; // copy거나 처음부터 SW면 폴백 불필요
+        $triedSw = $isCopy || !$hwAvailable; // copy거나 처음부터 SW면 (HW→SW) 폴백 불필요
+        $triedReencode = false;  // copy 실패 → 재인코딩 폴백 1회 플래그 (손상 .ts 구제)
+        $reencFallbackAArgs = '-c:a aac -b:a 192k';  // copy 폴백 시 오디오 재인코딩 인자 (폴백 블록 + 진단 로그 공유)
         list($resultFile, $stderrLog) = $runConv($curVArgs);
 
         // 6) 진행률 폴링 (ffmpeg -progress 파일의 out_time_ms 사용)
         $startTime = time();
         $maxWait = 3600; // 최대 1시간
         $lastPercent = 1;
+        $lastSpeed = ''; // 마지막 유효 배속 캐시 — percent 갱신 순간 speed가 N/A면 직전값 사용(타이밍 누락 보완)
+        // ffmpeg kill 헬퍼 (convsid 마커로 wmic 검색 후 taskkill — 트랜스코딩 pipe_kill과 동일 방식)
+        $killConvFfmpeg = function() use ($convSid) {
+            if (PHP_OS_FAMILY === 'Windows') {
+                $output = @shell_exec('wmic process where "name=\'ffmpeg.exe\'" get processid,commandline /format:csv 2>NUL');
+                if ($output) {
+                    foreach (explode("\n", $output) as $line) {
+                        if (strpos($line, 'convsid_' . $convSid) !== false && preg_match('/,(\d+)\s*$/', trim($line), $m)) {
+                            @exec('taskkill /F /PID ' . (int)$m[1] . ' 2>NUL');
+                        }
+                    }
+                }
+            } else {
+                @exec('pkill -f ' . escapeshellarg('convsid_' . $convSid) . ' 2>/dev/null');
+            }
+        };
+
         $clientGone = false;
         while (true) {
             if (!$clientGone && connection_aborted()) {
-                // 클라이언트 끊김 — SSE 전송은 멈추지만, ffmpeg 완료/임시파일 정리를 위해 폴링은 계속
-                // (ignore_user_abort(true) 설정되어 있어 PHP는 계속 실행됨)
+                // 클라이언트 끊김(새로고침/탭 종료/취소) — 진행 중인 ffmpeg를 kill해 CPU/GPU 자원 낭비 방지.
+                //   (이전엔 ffmpeg가 끝까지 돌아 자원 점유. 이제 끊기면 즉시 중단.)
                 $clientGone = true;
+                $killConvFfmpeg();
+                // taskkill 후 ffmpeg가 출력 파일 핸들을 놓을 때까지 잠시 대기 (Windows 파일 잠금 → 즉시 unlink 실패 방지)
+                usleep(800000); // 0.8s
+                // 임시파일 정리
+                @unlink($progressFile);
+                @unlink($resultFile);
+                @unlink($stderrLog);
+                // 미완성 출력(.converting dotfile) 삭제 — ffmpeg 종료 지연으로 잠겨 있을 수 있어 최대 5회 재시도
+                for ($i = 0; $i < 5; $i++) {
+                    clearstatcache();
+                    if (!is_file($tmpOut)) break;
+                    if (@unlink($tmpOut)) break;
+                    usleep(400000); // 0.4s 후 재시도 (핸들 해제 대기)
+                }
+                break;
             }
             // 완료 감지
             if (file_exists($resultFile)) {
                 clearstatcache();
                 $code = trim(@file_get_contents($resultFile) ?: '');
                 @unlink($resultFile);
-                $okOutput = ($code === '0' && is_file($outPath) && filesize($outPath) > 0);
+                $okOutput = ($code === '0' && is_file($tmpOut) && filesize($tmpOut) > 0);
+
+                // ★ 실행 결과 진단 로그 — 실패 시에만 기록(성공은 로그 안 남김)
+                if (!$okOutput) {
+                    // mode 판정: curVArgs가 swVArgs면 재인코딩(libx264) — copy 폴백 후에도 정확히 표시
+                    $_cvModeStr = ($curVArgs === $swVArgs) ? ($triedReencode ? 'libx264(reencode-fallback)' : 'libx264') : ($isCopy ? 'copy' : 'hw');
+                    $_cvLog('FAIL 실행결과 mode=' . $_cvModeStr . ' code=[' . $code . '] tmpOut_exists=' . (is_file($tmpOut) ? '1' : '0')
+                        . ' size=' . (is_file($tmpOut) ? filesize($tmpOut) : 'N/A'));
+                    // cmd 로그: 재인코딩 폴백 시 오디오 오버라이드(aac) 반영 — 실제 실행 명령과 일치
+                    $_cvLog('cmd=' . $buildConvCmd($curVArgs, $triedReencode ? $reencFallbackAArgs : null));
+                    $_seDbg = @file_get_contents($stderrLog) ?: '';
+                    $_cvLog('stderr_tail=' . mb_substr(trim($_seDbg), -1500));
+                }
 
                 // HW 실패 → SW(libx264) 1회 폴백 (아직 SW 안 써봤을 때만)
                 if (!$okOutput && !$triedSw) {
@@ -8526,15 +8654,46 @@ class FileManager {
                         continue;
                     }
                 }
+                // copy 실패 → 재인코딩(libx264 + aac) 1회 폴백
+                //   원인: 손상 .ts의 깨진 패킷이 copy 모드로 그대로 MP4 muxer에 전달 → Invalid data 거부.
+                //   트랜스코딩(재생)은 항상 재인코딩이라 디코드→재인코드로 손상 흡수 → 됨.
+                //   따라서 copy 실패 시 비디오+오디오 모두 재인코딩하면 트랜스코딩과 동일하게 성공.
+                if (!$okOutput && $isCopy && !$triedReencode) {
+                    $triedReencode = true;
+                    $curVArgs = $swVArgs;                 // 비디오 재인코딩(libx264)
+                    $reencAArgs = $reencFallbackAArgs;    // 오디오도 재인코딩(copy 오디오 손상 회피)
+                    $lastPercent = 1;
+                    @unlink($stderrLog);
+                    if (!$clientGone) {
+                        $sse('progress', ['percent' => 1, 'stage' => __('convert_reencode_fallback', '손상 감지 — 재인코딩으로 재시도...'), 'mode' => 'libx264']);
+                    }
+                    list($resultFile, $stderrLog) = $runConv($curVArgs, $reencAArgs);
+                    $startTime = time(); // 타임아웃 리셋
+                    usleep(500000);
+                    continue;
+                }
+                // ★ 실패 진단용: stderr 마지막 부분 저장 (삭제 전에 읽어둠)
+                $convStderrTail = '';
+                $_se = @file_get_contents($stderrLog) ?: '';
+                if ($_se !== '') {
+                    $_se = trim($_se);
+                    $convStderrTail = mb_substr($_se, -800); // 마지막 800자
+                }
                 @unlink($stderrLog);
                 @unlink($progressFile);
                 if ($okOutput) {
-                    // 검증: 출력이 실제로 h264인지 확인
-                    $verifyOut = @shell_exec(escapeshellarg($ffmpeg) . ' -i ' . escapeshellarg($outPath) . ' 2>&1') ?? '';
+                    // 검증: 출력(임시 dotfile)이 실제로 h264인지 확인
+                    $verifyOut = @shell_exec($cvArg($ffmpeg) . ' -i ' . $cvArg($tmpOut) . ' 2>&1') ?? '';
                     $okH264 = (bool)preg_match('/Video:\s*h264/i', $verifyOut);
                     if (!$okH264) {
-                        @unlink($outPath);
+                        @unlink($tmpOut);
                         $sse('error', ['error' => __('convert_verify_fail', '변환 결과 검증 실패 (H264 아님)')]);
+                        return;
+                    }
+                    // 검증 통과 → 임시 dotfile을 최종 outPath로 rename (이 순간 목록에 정상 mp4로 나타남)
+                    if (!@rename($tmpOut, $outPath)) {
+                        @unlink($tmpOut);
+                        $sse('error', ['error' => __('convert_failed', '변환 실패') . ' (rename)']);
                         return;
                     }
                     $outRel = ltrim(str_replace($basePath, '', $outPath), '/\\');
@@ -8567,10 +8726,17 @@ class FileManager {
                         'trash_skipped_no_perm' => $trashSkippedNoPerm,
                         'mode' => ($isCopy ? 'copy' : ($curVArgs === $swVArgs ? 'libx264' : 'hw')),
                     ]);
+                    @unlink($progressFile); @unlink($resultFile); @unlink($stderrLog); // 완료 후 임시파일 정리
                     return;
                 } else {
-                    @unlink($outPath); // 실패 시 불완전 출력 제거
-                    $sse('error', ['error' => __('convert_failed', '변환 실패') . ' (code=' . $code . ')']);
+                    @unlink($tmpOut); // 실패 시 불완전 임시 출력 제거 (rename 전이라 tmpOut)
+                    @unlink($progressFile); @unlink($resultFile); // 실패 후 임시파일 정리(stderrLog는 아래 진단 후 정리)
+                    // ★ 진단: ffmpeg stderr 마지막 부분을 함께 전달 (실패 원인 파악용)
+                    $sse('error', [
+                        'error' => __('convert_failed', '변환 실패') . ' (code=' . $code . ')',
+                        'detail' => $convStderrTail,
+                    ]);
+                    @unlink($stderrLog); // 진단 detail 추출 후 임시파일 정리
                     return;
                 }
             }
@@ -8581,23 +8747,36 @@ class FileManager {
                     $outMs = (int)end($om[1]);
                     $cur = $outMs / 1000000.0; // us → s
                     $percent = (int)min(99, max($lastPercent, ($cur / $durationSec) * 100));
-                    // ffmpeg -progress 파일의 speed= 값(배속) 파싱 (예: speed=2.5x)
+                    // ffmpeg -progress 파일의 speed= 값(배속) 파싱 (예: speed=2.5x, 빠른 변환은 지수표기 speed=2.9e+03x)
                     $speed = '';
-                    if (preg_match_all('/speed=\s*([\d.]+)x/', $pc, $sm) && !empty($sm[1])) {
-                        $speed = (string)end($sm[1]); // 가장 최근 값
+                    if (preg_match_all('/speed=\s*([\d.]+(?:e[+-]?\d+)?)x/i', $pc, $sm) && !empty($sm[1])) {
+                        $raw = (string)end($sm[1]); // 가장 최근 값
+                        // 지수 표기(2.9e+03)면 일반 숫자로 변환(2900). 일반 표기는 그대로.
+                        if (stripos($raw, 'e') !== false) {
+                            $raw = (string)round((float)$raw); // 지수 → 정수 (빠른 변환은 수백~수천 배)
+                        }
+                        $speed = $raw;
+                        if ($speed !== '') $lastSpeed = $speed; // 유효 배속 캐시 갱신
                     }
                     if ($percent > $lastPercent) {
                         $lastPercent = $percent;
                         $prog = ['percent' => $percent, 'stage' => __('convert_encoding', '변환 중...')];
-                        if ($speed !== '') $prog['speed'] = $speed; // 배속 (예: "2.5")
+                        // 현재 speed가 비었으면(N/A 등) 직전 유효 배속 사용 — percent 갱신과 speed 출현 타이밍 어긋남 보완
+                        $useSpeed = ($speed !== '') ? $speed : $lastSpeed;
+                        if ($useSpeed !== '') $prog['speed'] = $useSpeed; // 배속 (예: "2.5")
                         $sse('progress', $prog);
                     }
                 }
             }
             if (time() - $startTime > $maxWait) {
+                $killConvFfmpeg(); // 시간 초과 — 매달린 ffmpeg 정리
+                @unlink($progressFile); @unlink($tmpOut);
                 $sse('error', ['error' => __('convert_timeout', '변환 시간 초과')]);
                 return;
             }
+            // keepalive(SSE 주석) — percent 정체 구간에도 출력하여 connection_aborted를 매 폴링 감지
+            //   (클라이언트 끊김 시 ffmpeg kill이 빠르게 발동되도록). 주석(:)이라 클라이언트 무영향.
+            if (!$clientGone) { echo ": ka\n\n"; @flush(); }
             usleep(500000); // 0.5s
         }
     }

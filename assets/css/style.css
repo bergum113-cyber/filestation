@@ -1699,6 +1699,7 @@ body {
 .file-list {
     flex: 1;
     overflow-y: auto;
+    scrollbar-gutter: stable; /* 스크롤바 토글로 인한 폭 진동(그리드 부들부들 떨림) 방지 — 스크롤바 공간 항상 확보 */
     -webkit-overflow-scrolling: touch;
     overscroll-behavior: contain;
 
@@ -4526,6 +4527,21 @@ body.board-mode #transfer-progress {
     max-width: 180px;
 }
 
+.playback-mode-select {
+    background: rgba(0, 0, 0, 0.7);
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 12px;
+    cursor: pointer;
+    max-width: 120px;
+}
+.playback-mode-select:hover {
+    background: rgba(0, 0, 0, 0.85);
+    border-color: rgba(255,255,255,0.5);
+}
+
 .video-player-wrap {
     position: relative;
     width: 100%;
@@ -5432,6 +5448,39 @@ video::cue {
     padding: 1px 6px;
     border-radius: 8px;
 }
+/* ★ 재생목록 검색 입력창 + 검색 일치 하이라이트 (스크롤 이동 방식) */
+.fap-playlist-search {
+    flex: 1;
+    min-width: 0;
+    margin-left: 8px;
+    font-size: 11px !important;
+    height: 28px;
+    box-sizing: border-box;
+    line-height: normal;
+    padding: 0 8px 0 26px !important;
+    background: rgba(255,255,255,0.08) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.5)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>") no-repeat 8px center;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    outline: none;
+}
+.fap-playlist-search::placeholder { color: rgba(255,255,255,0.4); }
+.fap-playlist-search:focus { border-color: rgba(255,255,255,0.5); background-color: rgba(255,255,255,0.12); }
+.fap-pl-item.fap-pl-search-hit {
+    background: rgba(255, 215, 0, 0.18) !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.4);
+}
+/* ap-fixed / soundcloud(밝은 흰색 스킨)용: 어두운 글자/테두리/아이콘 — 흰 배경에서 묻히지 않게 */
+.fap-skin-ap-fixed .fap-playlist-search,
+.fap-skin-soundcloud .fap-playlist-search {
+    background: #fff url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>") no-repeat 8px center;
+    color: #333;
+    border: 1px solid #ddd;
+}
+.fap-skin-ap-fixed .fap-playlist-search::placeholder,
+.fap-skin-soundcloud .fap-playlist-search::placeholder { color: #999; }
+.fap-skin-ap-fixed .fap-playlist-search:focus,
+.fap-skin-soundcloud .fap-playlist-search:focus { border-color: #999; background-color: #fff; }
 .fap-playlist-list {
     list-style: none;
     margin: 0;
@@ -6397,7 +6446,7 @@ video::cue {
     display: flex !important;
     align-items: center !important;
     gap: 12px !important;
-    height: 60px !important;
+    height: 48px !important;
 }
 .fap-skin-ap-fixed .fap-pl-item:hover { background: #f5f5f5 !important; }
 .fap-skin-ap-fixed .fap-pl-item.active,
@@ -6418,8 +6467,8 @@ video::cue {
 }
 /* 각 아이템의 커버 아트를 명확히 표시 */
 .fap-skin-ap-fixed .fap-pl-cover {
-    width: 40px !important;
-    height: 40px !important;
+    width: 36px !important;
+    height: 36px !important;
     border-radius: 3px !important;
     flex-shrink: 0 !important;
     overflow: hidden !important;
@@ -10685,7 +10734,7 @@ tr:hover,
         padding: 3px 8px !important;
         max-width: 100% !important;
         background: rgba(0, 0, 0, 0.7) !important;
-        border-radius: 14px !important;
+        border-radius: 4px !important;
         border: 1px solid rgba(255,255,255,0.25) !important;
     }
     /* 모바일: 셀렉트 앞에 스피커 아이콘 */
@@ -10723,6 +10772,7 @@ tr:hover,
        - 일반 재생 배지(.native): audio-select 요소 자체가 생성 안 됨(audioSelectHtml='')
          → :empty로 못 잡으므로 .video-stream-badge.native 존재로 감지 (펜닐님 보고: 일반재생 안 됨) */
     .video-player-wrap:has(.video-audio-select:empty) .video-quality-select,
+    .video-player-wrap:not(:has(.video-audio-select)) .video-quality-select,
     .video-player-wrap:has(.video-stream-badge.native) .video-quality-select {
         top: 6px !important;
     }
@@ -10744,16 +10794,18 @@ tr:hover,
         padding: 3px 8px !important;
         max-width: 100% !important;
         background: rgba(0, 0, 0, 0.7) !important;
-        border-radius: 14px !important;
+        border-radius: 4px !important;
+        border: 1px solid rgba(255,255,255,0.25) !important;
+    }
+    .playback-mode-select {
+        font-size: 11px !important;
+        padding: 3px 8px !important;
+        max-width: 100% !important;
+        background: rgba(0, 0, 0, 0.7) !important;
+        border-radius: 4px !important;
         border: 1px solid rgba(255,255,255,0.25) !important;
     }
     /* 모바일: 셀렉트 앞에 화질 아이콘 */
-    .video-quality-select::before {
-        content: '🎬';
-        font-size: 13px;
-        margin-right: 3px;
-        line-height: 1;
-    }
     /* 빈 quality 셀렉트 숨김 */
     .video-quality-select:empty {
         display: none !important;
@@ -15823,9 +15875,35 @@ body.video-pseudo-fs {
     gap: 10px;
     flex-shrink: 0;
 }
-.fs-vp-header .fs-vp-icon { font-size: 20px; }
-.fs-vp-header .fs-vp-title { color: #fff; font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fs-vp-header .fs-vp-count { color: #888; font-size: 12px; flex-shrink: 0; }
+/* 동영상 목록 검색창 (음악 재생목록 검색 B-9와 동일 방식 — 스크롤 이동+하이라이트) */
+.fs-vp-search {
+    flex-shrink: 0;
+    margin: 8px 16px;
+    height: 30px;
+    box-sizing: border-box;
+    font-size: 12px;
+    line-height: normal;
+    padding: 0 10px 0 30px;
+    background: rgba(255,255,255,0.08) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='13' height='13' viewBox='0 0 24 24' fill='none' stroke='rgba(255,255,255,0.5)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><circle cx='11' cy='11' r='7'/><line x1='21' y1='21' x2='16.65' y2='16.65'/></svg>") no-repeat 10px center;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 4px;
+    outline: none;
+}
+.fs-vp-search::placeholder { color: rgba(255,255,255,0.4); }
+.fs-vp-search:focus { border-color: rgba(255,255,255,0.5); background-color: rgba(255,255,255,0.12); }
+.fs-vp-item.fs-vp-search-hit {
+    background: rgba(255, 215, 0, 0.18) !important;
+    box-shadow: inset 0 0 0 1px rgba(255, 215, 0, 0.4);
+}
+.fs-vp-header .fs-vp-icon { font-size: 20px; flex-shrink: 0; }
+.fs-vp-header .fs-vp-title { color: #fff; font-size: 14px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 제목 영역 (제목 + 트랙수 세로) — 아이콘은 밖에 있으므로 padding 불필요 */
+.fs-vp-header .fs-vp-header-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; max-width: 45%; margin-right: 15px; }
+.fs-vp-header .fs-vp-count { color: #888; font-size: 11px; flex-shrink: 0; }
+/* 토글 행 (라벨 + 토글) */
+.fs-vp-header .fs-vp-toggle-row { display: flex; align-items: center; gap: 6px; }
+.fs-vp-header .fs-vp-toggle-label { color: #aaa; font-size: 10px; font-weight: 600; white-space: nowrap; min-width: 44px; text-align: right; }
 .fs-vp-header .fs-vp-close {
     background: none;
     border: none;
@@ -15835,6 +15913,7 @@ body.video-pseudo-fs {
     padding: 0 4px;
     line-height: 1;
     flex-shrink: 0;
+    margin-left: auto;
 }
 .fs-vp-header .fs-vp-close:hover { color: #fff; }
 /* ★ 자동 다음 재생 토글 스위치 (v5.8.1g) — 사이드 패널 헤더에 표시
@@ -15843,7 +15922,7 @@ body.video-pseudo-fs {
    OFF 상태: 회색 트랙 + 좌측 동그라미 + 우측 "OFF" 텍스트 */
 .fs-vp-header .fs-vp-autonext {
     position: relative;
-    width: 44px;
+    width: 52px;
     height: 18px;
     background: #555;
     border: none;
@@ -15868,14 +15947,14 @@ body.video-pseudo-fs {
     transition: left 0.2s ease, background 0.2s ease;
     z-index: 2;
 }
-/* ON/OFF 텍스트 — OFF 상태 (기본) */
+/* 자동재생 OFF = 수동 (기본) */
 .fs-vp-header .fs-vp-autonext::after {
-    content: 'OFF';
+    content: '수동';
     position: absolute;
     top: 50%;
-    right: 4px;
+    right: 6px;
     transform: translateY(-50%);
-    font-size: 8px;
+    font-size: 9px;
     font-weight: 700;
     color: #ddd;
     letter-spacing: 0.3px;
@@ -15883,18 +15962,18 @@ body.video-pseudo-fs {
     transition: opacity 0.2s ease;
     z-index: 1;
 }
-/* ON 상태 */
+/* 자동재생 ON = 자동 */
 .fs-vp-header .fs-vp-autonext.on {
     background: #ffc107;
 }
 .fs-vp-header .fs-vp-autonext.on::before {
-    left: 28px;
+    left: 36px;
     background: #fff;
 }
 .fs-vp-header .fs-vp-autonext.on::after {
-    content: 'ON';
+    content: '자동';
     right: auto;
-    left: 5px;
+    left: 7px;
     color: #1a1a1a;
 }
 /* hover */
@@ -15903,6 +15982,78 @@ body.video-pseudo-fs {
 }
 .fs-vp-header .fs-vp-autonext.on:hover {
     background: #ffca2c;
+}
+/* 토글 세로 스택 (자동재생 + 모드) */
+.fs-vp-header .fs-vp-toggles {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-end;
+    flex-shrink: 0;
+    margin-right: 6px;
+}
+.fs-vp-header .fs-vp-toggles .fs-vp-autonext {
+    margin-right: 0;
+}
+/* 모드 토글 (전체 ↔ 연관) — 자동재생 토글과 동일 스타일, 폭만 넓힘 */
+.fs-vp-header .fs-vp-mode {
+    position: relative;
+    width: 52px;
+    height: 18px;
+    background: #555;
+    border: none;
+    border-radius: 9px;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+    transition: background 0.2s ease;
+    overflow: hidden;
+}
+.fs-vp-header .fs-vp-mode::before {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    background: #ddd;
+    border-radius: 50%;
+    transition: left 0.2s ease, background 0.2s ease;
+    z-index: 2;
+}
+/* 기본 = 전체 */
+.fs-vp-header .fs-vp-mode::after {
+    content: '전체';
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    transform: translateY(-50%);
+    font-size: 9px;
+    font-weight: 700;
+    color: #ddd;
+    letter-spacing: 0.3px;
+    line-height: 1;
+    z-index: 1;
+}
+/* 연관 상태 */
+.fs-vp-header .fs-vp-mode.related {
+    background: #4caf50;
+}
+.fs-vp-header .fs-vp-mode.related::before {
+    left: 36px;
+    background: #fff;
+}
+.fs-vp-header .fs-vp-mode.related::after {
+    content: '연관';
+    right: auto;
+    left: 7px;
+    color: #fff;
+}
+.fs-vp-header .fs-vp-mode:hover {
+    background: #666;
+}
+.fs-vp-header .fs-vp-mode.related:hover {
+    background: #5cb860;
 }
 .fs-vp-body {
     flex: 1 1 auto;

@@ -499,6 +499,7 @@ class FSAudioPlayer {
                 <div class="fap-playlist-header">
                     <span class="fap-playlist-title">${isKo ? '재생 목록' : 'Playlist'}</span>
                     <span class="fap-playlist-count">${this.playlist.length}</span>
+                    <input type="text" class="fap-playlist-search" placeholder="${isKo ? '검색...' : 'Search...'}" />
                 </div>
                 <ul class="fap-playlist-list"><div class="fap-pl-virtual-spacer"></div></ul>
             </div>
@@ -549,6 +550,7 @@ class FSAudioPlayer {
             volLevel: this.container.querySelector('.fap-vol-level'),
             volThumb: this.container.querySelector('.fap-vol-thumb'),
             plList: this.container.querySelector('.fap-playlist-list'),
+            plSearch: this.container.querySelector('.fap-playlist-search'),
             visualizer: this.container.querySelector('.fap-visualizer'),
             lyricsWrap: this.container.querySelector('.fap-lyrics-wrap'),
             lyricsScroll: this.container.querySelector('.fap-lyrics-scroll'),
@@ -2086,6 +2088,9 @@ class FSAudioPlayer {
         
         // iOS: MediaElementSource 연결 시 백그라운드 재생이 끊기는 이슈 있음
         // 백그라운드 재생 + MediaSession이 비주얼보다 중요하므로 iOS에서는 비활성화
+        // (iOS 26.5 실기기 재확인: 잠금화면 시 재생 끊김 + 스크롤 무반응 → 차단 유지)
+        // ★ 주의: 이 파일(fs-audio-player.js=공유)과 app.js(본체)에 FSAudioPlayer가 2개로 분리됨.
+        //   비주얼라이저 관련 수정 시 양쪽 파일 모두 손봐야 일반/공유 동작이 일치함.
         if (this._isIOS) {
             this._visFailed = true;
             this.$.visualizer.style.display = 'none';
@@ -3417,6 +3422,67 @@ class FSAudioPlayer {
         this._vsItems = [];
         list.addEventListener('scroll', () => this._vsRender(), { passive: true });
         this._vsRender();
+
+        // ★ 재생목록 검색 (스크롤 이동 방식 — 목록 유지, 일치 곡으로 이동 + 하이라이트)
+        const _search = this.$.plSearch;
+        if (_search) {
+            this._plSearchMatches = [];
+            this._plSearchPos = -1;
+            const _doSearch = (moveNext) => {
+                const q = (_search.value || '').trim().toLowerCase();
+                if (!q) {
+                    this._plSearchMatches = [];
+                    this._plSearchPos = -1;
+                    this._plSearchHighlight(-1);
+                    return;
+                }
+                const matches = [];
+                for (let i = 0; i < this.playlist.length; i++) {
+                    const nm = (this.playlist[i] && this.playlist[i].name || '').toLowerCase();
+                    if (nm.indexOf(q) !== -1) matches.push(i);
+                }
+                this._plSearchMatches = matches;
+                if (!matches.length) { this._plSearchPos = -1; this._plSearchHighlight(-1); return; }
+                if (moveNext) {
+                    this._plSearchPos = (this._plSearchPos + 1) % matches.length;
+                } else {
+                    this._plSearchPos = 0;
+                }
+                const idx = matches[this._plSearchPos];
+                const targetTop = idx * this._VS_ITEM_H;
+                const viewH = list.clientHeight;
+                list.scrollTop = Math.max(0, targetTop - viewH / 2 + this._VS_ITEM_H / 2);
+                this._vsRender();
+                this._plSearchHighlight(idx);
+            };
+            _search.addEventListener('input', () => _doSearch(false));
+            // 한글 IME 조합 중 keydown은 key='Process'/keyCode=229로 와서 Enter 감지 불가.
+            //   조합 확정 후엔 keyup에서 정상적으로 Enter가 잡히므로 keyup으로 순회 처리.
+            _search.addEventListener('keyup', (e) => {
+                if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+                if (this._plSearchMatches && this._plSearchMatches.length) {
+                    this._plSearchPos = (this._plSearchPos + 1) % this._plSearchMatches.length;
+                    const idx = this._plSearchMatches[this._plSearchPos];
+                    const targetTop = idx * this._VS_ITEM_H;
+                    const viewH = list.clientHeight;
+                    list.scrollTop = Math.max(0, targetTop - viewH / 2 + this._VS_ITEM_H / 2);
+                    this._vsRender();
+                    this._plSearchHighlight(idx);
+                } else {
+                    _doSearch(false);
+                }
+            });
+        }
+    }
+
+    // 검색 일치 곡 하이라이트 (가상 스크롤 — 현재 렌더된 아이템에만 적용)
+    _plSearchHighlight(idx) {
+        const list = this.$.plList;
+        if (!list) return;
+        list.querySelectorAll('.fap-pl-item.fap-pl-search-hit').forEach(el => el.classList.remove('fap-pl-search-hit'));
+        if (idx < 0) return;
+        const item = list.querySelector('.fap-pl-item[data-index="' + idx + '"]');
+        if (item) item.classList.add('fap-pl-search-hit');
     }
 
     _vsRender() {

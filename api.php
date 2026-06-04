@@ -6822,22 +6822,39 @@ try {
                 foreach ($szPaths2 as $_p) { if (file_exists($_p)) { $szBin2 = $_p; break; } }
                 
                 if ($szBin2) {
-                    // 7z e -so: stdout으로 추출
+                    // 임시 디렉토리로 추출 후 읽기 (stdout 파이프 미사용).
+                    //   이유: Windows에서 shell_exec로 바이너리(이미지)를 stdout(-so)으로 받으면
+                    //         cmd 파이프가 바이너리를 깨뜨려 추출 실패함(목록=텍스트는 정상, 이미지=바이너리만 실패).
+                    //         파일로 추출 후 file_get_contents로 읽으면 바이너리 안전 + 크로스플랫폼.
                     // Windows 7-zip은 백슬래시 경로
                     $entryPath = $entryName;
                     if (DIRECTORY_SEPARATOR === '\\') {
                         $entryPath = str_replace('/', '\\', $entryPath);
                     }
+                    // 동시 요청 충돌 방지용 고유 임시 디렉토리
+                    $extractDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7zext_' . md5($archiveReal . $entryName . microtime(true) . mt_rand());
+                    @mkdir($extractDir, 0700, true);
+                    // 7z e: flat 추출(경로 무시하고 파일명만), -y: 덮어쓰기, -o: 출력 디렉토리
                     // 보안: escapeshellarg로 command injection 방지
-                    $cmd2 = escapeshellarg($szBin2) . ' e -so ' . escapeshellarg($archiveReal) . ' ' . escapeshellarg($entryPath);
-                    $fileData = shell_exec($cmd2 . ' 2>nul');
-                    if ($fileData === null || strlen($fileData) === 0) {
-                        // Linux stderr redirect
-                        $fileData = shell_exec($cmd2 . ' 2>/dev/null');
+                    $cmd2 = escapeshellarg($szBin2) . ' e -y ' . escapeshellarg($archiveReal)
+                          . ' ' . escapeshellarg($entryPath)
+                          . ' -o' . escapeshellarg($extractDir);
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        // Windows: 한글/유니코드 경로 대응 위해 UTF-8 콘솔(chcp 65001) 후 실행 (archive_check_password와 동일 패턴)
+                        @shell_exec('chcp 65001 >nul && ' . $cmd2 . ' 2>nul');
+                    } else {
+                        @shell_exec($cmd2 . ' 2>/dev/null');
                     }
-                    if ($fileData && strlen($fileData) > $maxPreviewSize) {
-                        $fileData = null; // 크기 초과
+                    // flat 추출이므로 basename으로 읽음
+                    $extractedFile = $extractDir . DIRECTORY_SEPARATOR . basename($entryName);
+                    if (is_file($extractedFile)) {
+                        if (@filesize($extractedFile) <= $maxPreviewSize) {
+                            $fileData = @file_get_contents($extractedFile);
+                        }
+                        @unlink($extractedFile);
                     }
+                    @rmdir($extractDir);
+                    if ($fileData === false) $fileData = null;
                 }
             }
             

@@ -854,6 +854,7 @@ class FSAudioPlayer {
                 <div class="fap-playlist-header">
                     <span class="fap-playlist-title">${isKo ? '재생 목록' : 'Playlist'}</span>
                     <span class="fap-playlist-count">${this.playlist.length}</span>
+                    <input type="text" class="fap-playlist-search" placeholder="${isKo ? '검색...' : 'Search...'}" />
                 </div>
                 <ul class="fap-playlist-list"><div class="fap-pl-virtual-spacer"></div></ul>
             </div>
@@ -904,6 +905,7 @@ class FSAudioPlayer {
             volLevel: this.container.querySelector('.fap-vol-level'),
             volThumb: this.container.querySelector('.fap-vol-thumb'),
             plList: this.container.querySelector('.fap-playlist-list'),
+            plSearch: this.container.querySelector('.fap-playlist-search'),
             visualizer: this.container.querySelector('.fap-visualizer'),
             lyricsWrap: this.container.querySelector('.fap-lyrics-wrap'),
             lyricsScroll: this.container.querySelector('.fap-lyrics-scroll'),
@@ -2403,6 +2405,9 @@ class FSAudioPlayer {
         
         // iOS: MediaElementSource 연결 시 백그라운드 재생이 끊기는 이슈 있음
         // 백그라운드 재생 + MediaSession이 비주얼보다 중요하므로 iOS에서는 비활성화
+        // (iOS 26.5 실기기 재확인: 비주얼라이저 켜면 잠금화면 시 재생 끊김 + 스크롤 무반응 → 차단 유지)
+        // ★ 주의: 음악 플레이어(FSAudioPlayer)는 app.js(본체)와 fs-audio-player.js(공유) 2개로 분리됨.
+        //   비주얼라이저 관련 수정 시 양쪽 파일 모두 손봐야 일반/공유 동작이 일치함.
         if (this._isIOS) {
             this._visFailed = true;
             this.$.visualizer.style.display = 'none';
@@ -3746,6 +3751,71 @@ class FSAudioPlayer {
         this._vsItems = [];
         list.addEventListener('scroll', () => this._vsRender(), { passive: true });
         this._vsRender();
+
+        // ★ 재생목록 검색 (스크롤 이동 방식 — 목록 유지, 일치 곡으로 이동 + 하이라이트)
+        const _search = this.$.plSearch;
+        if (_search) {
+            this._plSearchMatches = [];
+            this._plSearchPos = -1;
+            const _doSearch = (moveNext) => {
+                const q = (_search.value || '').trim().toLowerCase();
+                if (!q) {
+                    this._plSearchMatches = [];
+                    this._plSearchPos = -1;
+                    this._plSearchHighlight(-1);
+                    return;
+                }
+                // 일치 곡 인덱스 목록 (파일명 track.name 기준)
+                const matches = [];
+                for (let i = 0; i < this.playlist.length; i++) {
+                    const nm = (this.playlist[i] && this.playlist[i].name || '').toLowerCase();
+                    if (nm.indexOf(q) !== -1) matches.push(i);
+                }
+                this._plSearchMatches = matches;
+                if (!matches.length) { this._plSearchPos = -1; this._plSearchHighlight(-1); return; }
+                // moveNext면 다음 일치로, 아니면 첫 일치로
+                if (moveNext) {
+                    this._plSearchPos = (this._plSearchPos + 1) % matches.length;
+                } else {
+                    this._plSearchPos = 0;
+                }
+                const idx = matches[this._plSearchPos];
+                // 해당 곡 위치로 스크롤 (가상 스크롤: scrollTop 변경 → _vsRender가 그림)
+                const targetTop = idx * this._VS_ITEM_H;
+                const viewH = list.clientHeight;
+                list.scrollTop = Math.max(0, targetTop - viewH / 2 + this._VS_ITEM_H / 2);
+                this._vsRender();
+                this._plSearchHighlight(idx);
+            };
+            _search.addEventListener('input', () => _doSearch(false));
+            // 한글 IME 조합 중 keydown은 key='Process'/keyCode=229로 와서 Enter 감지 불가(로그 확정).
+            //   조합 확정 후엔 keyup에서 정상적으로 Enter가 잡히므로 keyup으로 순회 처리.
+            _search.addEventListener('keyup', (e) => {
+                if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+                // 이미 검색된 상태면 다음 곡으로 순회, 아니면 첫 검색
+                if (this._plSearchMatches && this._plSearchMatches.length) {
+                    this._plSearchPos = (this._plSearchPos + 1) % this._plSearchMatches.length;
+                    const idx = this._plSearchMatches[this._plSearchPos];
+                    const targetTop = idx * this._VS_ITEM_H;
+                    const viewH = list.clientHeight;
+                    list.scrollTop = Math.max(0, targetTop - viewH / 2 + this._VS_ITEM_H / 2);
+                    this._vsRender();
+                    this._plSearchHighlight(idx);
+                } else {
+                    _doSearch(false);
+                }
+            });
+        }
+    }
+
+    // 검색 일치 곡 하이라이트 (가상 스크롤 — 현재 렌더된 아이템에만 적용)
+    _plSearchHighlight(idx) {
+        const list = this.$.plList;
+        if (!list) return;
+        list.querySelectorAll('.fap-pl-item.fap-pl-search-hit').forEach(el => el.classList.remove('fap-pl-search-hit'));
+        if (idx < 0) return;
+        const item = list.querySelector('.fap-pl-item[data-index="' + idx + '"]');
+        if (item) item.classList.add('fap-pl-search-hit');
     }
 
     _vsRender() {
@@ -4632,6 +4702,10 @@ const App = {
         
         // 페이지 떠날 때 / 백그라운드 전환 시 ffmpeg 정리
         const killActivePipe = () => {
+            // ★ PiP(Picture-in-Picture) 재생 중이면 정리 건너뜀 — PiP는 다른 탭/백그라운드에서도
+            //   계속 재생돼야 하므로 ffmpeg/HLS를 죽이면 안 됨. (PiP 종료/탭 닫기 시엔 별도 경로로 정리)
+            //   일반(비PiP) 백그라운드 전환은 기존대로 정리하여 orphan 세션 누수 방지.
+            if (document.pictureInPictureElement) return;
             const video = document.querySelector('#preview-content .preview-video');
             if (video) {
                 // HLS 정리
@@ -4708,7 +4782,9 @@ const App = {
                 currentStorage: this.currentStorage ?? null
             });
             
-            if (elapsed > threshold) {
+            // 변환 진행 중에는 자동 새로고침 스킵 — 목록 재로드 시 스크롤이 튀므로.
+            //   (변환 완료 후 convertToH264 finally에서 어차피 갱신 → 변환 중 갱신 불필요)
+            if (elapsed > threshold && !this._convBatchRunning) {
                 this._debugLog('visibility_auto_refresh_start', {
                     currentStorage: this.currentStorage ?? null,
                     currentPath: this.currentPath ?? null
@@ -4719,9 +4795,19 @@ const App = {
                     this._debugLog('visibility_auto_refresh_loadStorages_error', String(e));
                 }
                 try {
-                    // 현재 폴더가 있으면 파일 목록도 갱신
+                    // 현재 폴더가 있으면 파일 목록도 갱신 (스크롤 위치 보존 — 탭 복귀 시 맨 위로 튀지 않게)
                     if (this.currentStorage) {
-                        this.loadFiles && this.loadFiles(false);
+                        const _visFl = document.getElementById('file-list');
+                        const _visScroll = _visFl ? _visFl.scrollTop : 0;
+                        const _visP = this.loadFiles && this.loadFiles(false);
+                        if (_visScroll > 0) {
+                            Promise.resolve(_visP).then(() => {
+                                requestAnimationFrame(() => {
+                                    const _visFl2 = document.getElementById('file-list');
+                                    if (_visFl2) _visFl2.scrollTop = _visScroll;
+                                });
+                            });
+                        }
                     }
                 } catch(e) {
                     this._debugLog('visibility_auto_refresh_loadFiles_error', String(e));
@@ -12823,12 +12909,24 @@ const App = {
                 const r = await this._convertOneFile(tgt, deleteOriginal, i + 1, total);
                 if (r === 'done') okCount++;
                 else if (r === 'skip') skipCount++;
+                else if (r === 'cancel') break; // 취소 — 나머지 파일 변환 중단
                 else failCount++;
             }
         } finally {
             this._convBatchRunning = false;
             this.hideConvertProgressModal();
-            this.loadFiles();
+            // 변환 완료 — 같은 폴더 재로드이므로 스크롤 위치 보존(폴더 이동과 달리 맨 위로 튀지 않게).
+            //   (미완성 출력은 .converting dotfile이라 목록에 안 보이므로 취소 시에도 즉시 갱신 OK)
+            //   loadFiles는 범용 함수라 항상 최상위로 리셋 → 변환 후엔 직전 위치 복원.
+            const _convFl = document.getElementById('file-list');
+            const _convScroll = _convFl ? _convFl.scrollTop : 0;
+            await this.loadFiles();
+            if (_convScroll > 0) {
+                requestAnimationFrame(() => {
+                    const _fl2 = document.getElementById('file-list');
+                    if (_fl2) _fl2.scrollTop = _convScroll;
+                });
+            }
         }
 
         // 결과 요약 토스트
@@ -12864,6 +12962,7 @@ const App = {
             }
             this._convEventSource = es;
             let settled = false;
+            let convCancelled = false;
             const finish = (result) => {
                 if (settled) return;
                 settled = true;
@@ -12871,6 +12970,21 @@ const App = {
                 this._convEventSource = null;
                 resolve(result);
             };
+
+            // 변환 sid 수신 (취소 시 사용 — 서버가 connection_aborted 감지하면 이 sid의 ffmpeg를 kill)
+            es.addEventListener('convsid', (e) => {
+                try { const d = JSON.parse(e.data); this._convSid = d.sid || null; } catch (_) {}
+            });
+
+            // 취소 버튼 — es.close()하면 서버가 connection_aborted를 감지해 ffmpeg를 kill하고 출력 정리
+            const cancelBtn = document.getElementById('conv-progress-cancel');
+            if (cancelBtn) {
+                cancelBtn.onclick = () => {
+                    convCancelled = true;
+                    this.toast(t('convert_cancelled', '변환을 취소했습니다.'), 'info');
+                    finish('cancel'); // es.close() → 서버 connection_aborted → ffmpeg kill
+                };
+            }
 
             es.addEventListener('progress', (e) => {
                 try {
@@ -12901,8 +13015,16 @@ const App = {
             });
             es.addEventListener('error', (e) => {
                 let msg = t('convert_failed', '변환 실패');
-                try { const d = JSON.parse(e.data); if (d.error) msg = d.error; } catch (_) {}
-                if (total === 1) this.toast(msg, 'error');
+                let detail = '';
+                try { const d = JSON.parse(e.data); if (d.error) msg = d.error; if (d.detail) detail = d.detail; } catch (_) {}
+                if (detail) {
+                    // 진단용: ffmpeg stderr 마지막 부분을 콘솔에 출력 + 토스트에 일부 표시
+                    console.error('[변환 실패 상세]', detail);
+                    const _short = detail.length > 200 ? detail.slice(-200) : detail;
+                    if (total === 1) this.toast(msg + '\n' + _short, 'error');
+                } else {
+                    if (total === 1) this.toast(msg, 'error');
+                }
                 finish('fail');
             });
             es.onerror = () => {
@@ -12920,10 +13042,10 @@ const App = {
         if (old) old.remove();
         const html = `
             <div id="conv-progress-modal" class="modal-overlay" style="display:flex; align-items:center; justify-content:center; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:10000;">
-                <div style="background:white; border-radius:12px; padding:30px; min-width:400px; max-width:90%; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                <div style="background:white; border-radius:12px; padding:30px; width:550px; max-width:90%; box-sizing:border-box; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
                     <h3 style="margin:0 0 20px; font-size:18px;">🎬 ${t('converting','변환 중...')}</h3>
                     <div style="margin-bottom:15px;">
-                        <div style="font-size:14px; color:#666; margin-bottom:5px;">
+                        <div style="font-size:14px; color:#666; margin-bottom:5px; word-break:break-all; overflow-wrap:anywhere;">
                             <span id="conv-progress-filename" style="font-weight:500;">${this.escapeHtml(filename)}</span>
                         </div>
                         <div style="background:#e0e0e0; border-radius:10px; height:20px; overflow:hidden;">
@@ -12934,7 +13056,10 @@ const App = {
                             <span id="conv-progress-percent">0%</span>
                         </div>
                     </div>
-                    <p style="text-align:center;margin:12px 0 0;font-size:12px;color:#aaa;">⚠️ ${t('convert_no_cancel','변환 중에는 취소할 수 없습니다. 영상 길이/화질에 따라 시간이 걸릴 수 있습니다.')}</p>
+                    <p style="text-align:center;margin:12px 0 0;font-size:12px;color:#aaa;">${t('convert_time_notice','영상 길이/화질에 따라 시간이 걸릴 수 있습니다.')}</p>
+                    <div style="text-align:center;margin-top:16px;">
+                        <button type="button" id="conv-progress-cancel" style="padding:8px 24px;font-size:14px;border:1px solid #ccc;border-radius:6px;background:#f5f5f5;cursor:pointer;">${t('cancel','취소')}</button>
+                    </div>
                 </div>
             </div>
         `;
@@ -31150,6 +31275,8 @@ const App = {
     },
     
     hideModal(id, options) {
+        // ★ PiP로 숨겨둔 모달을 실제로 닫는 경우: PiP 숨김 플래그 리셋 (다음 PiP와 꼬임 방지)
+        if (this._pipModalHidden) { this._pipModalHidden = false; }
         // ★ 옵션: keepOpen=true면 모달 display 유지 (트랙 전환 깜빡임 방지, 펜닐님 결정)
         //   사이드 패널에서 다른 트랙 선택 시: hideModal({keepOpen:true}) → 정리만, 화면 유지
         //   즉시 showPreview 호출 시 모달이 그대로 열려있어 깜빡임 0
@@ -33496,6 +33623,13 @@ const App = {
     _showPreviewImpl(item) {
         // 이전 미디어 체크 플래그 초기화
         this._checkMediaInfo = false;
+        // ★ 현재 미리보기 item 저장 (대용량 동영상 '네이티브로 전환' 버튼이 재생 재시작에 사용)
+        this._currentPreviewItem = item;
+        // ★ 재생방식 셀렉트 표시 플래그: mp4가 아닌 영상으로 넘어갈 때만 false로 정리
+        //   (mp4는 메인 분기가 정확히 판정 — 무조건 false로 하면 화질 변경 재시작 시
+        //    media_info 미재호출로 메인 분기가 안 타서 셀렉트가 사라지는 버그 발생)
+        const _navExtInit = (item.name || item.path || '').split('.').pop().toLowerCase();
+        if (_navExtInit !== 'mp4') this._showNativeBtn = false;
         
         // ★ [HLS_DIAG] 미리보기 시작 (window._hlsDiag = true 시 활성)
         if (window._diagLog) {
@@ -33541,6 +33675,12 @@ const App = {
             window._vdStopInterval = () => clearInterval(_vdInterval);
         }
         
+        // ★ PiP 상태 정리: 이전 영상의 PiP가 켜져 있으면 새 파일 열 때 무의미하므로 정리
+        //   (안 하면 _pipModalHidden 플래그가 남아, 나중에 PiP 종료 시 엉뚱한 모달 복원 → 검은 화면)
+        this._pipModalHidden = false;
+        if (document.pictureInPictureElement) {
+            try { document.exitPictureInPicture(); } catch(e) {}
+        }
         // ★ 우선: 모달이 열려있으면 이전 비디오 즉시 정리 (브라우저 연결 풀 고갈 방지)
         // 10번 빠르게 클릭 시 이전 비디오의 다운로드가 계속되어 연결 부족 현상 해결
         const _preCleanContent = document.getElementById('preview-content');
@@ -33842,31 +33982,34 @@ const App = {
                 const hasVideoPlaylist = folderVideos.length >= 2;
                 this._fsVpFolderVideos = hasVideoPlaylist ? folderVideos : null;
                 this._fsVpCurrentPath = hasVideoPlaylist ? item.path : null;
+                this._fsVpViewVideos = hasVideoPlaylist ? folderVideos : null; // 현재 보이는 목록 (모드 전환 시 갱신)
+                // 모드: localStorage 'fs_vp_mode' 영구 저장 (자동재생과 동일 패턴, 기본 'all')
+                this._fsVpMode = (localStorage.getItem('fs_vp_mode') === 'related') ? 'related' : 'all';
 
                 let playlistHtml = '';
                 let toggleBtnHtml = '';
                 if (hasVideoPlaylist) {
-                    const curIdx = folderVideos.findIndex(f => f.path === item.path);
-                    const itemsHtml = folderVideos.map((f, i) => {
-                        const isCurrent = (i === curIdx);
-                        const fname = this.escapeHtml(f.name);
-                        const fext = this.escapeHtml((f.extension || (f.name || '').split('.').pop() || '').toUpperCase());
-                        const fsize = this.formatSize(f.size || 0);
-                        return `<div class="fs-vp-item${isCurrent ? ' current' : ''}" data-path="${this.escapeHtml(f.path)}" data-index="${i}">
-                            <span class="fs-vp-num">${i + 1}.</span>
-                            <span class="fs-vp-name" title="${fname}"><span class="fs-vp-name-inner">${fname}</span></span>
-                            <span class="fs-vp-meta">${fext} · ${fsize}</span>
-                            <span class="fs-vp-play-icon">${isCurrent ? '▶' : '·'}</span>
-                        </div>`;
-                    }).join('');
+                    const itemsHtml = this._vpBuildItemsHtml(folderVideos, item.path);
                     playlistHtml = `<aside class="fs-vp-panel" id="fs-vp-panel" aria-hidden="true">
                         <div class="fs-vp-header">
                             <span class="fs-vp-icon">🎬</span>
-                            <span class="fs-vp-title">${t('share_video_folder', '동영상 폴더')}</span>
-                            <span class="fs-vp-count">${folderVideos.length}${t('tracks_unit', '개 트랙')}</span>
-                            <button type="button" class="fs-vp-autonext" id="fs-vp-autonext" title="${t('autonext_toggle', '자동 다음 재생')}" aria-label="${t('autonext_toggle', '자동 다음 재생')}"></button>
+                            <div class="fs-vp-header-main">
+                                <span class="fs-vp-title">${t('share_video_folder', '동영상 폴더')}</span>
+                                <span class="fs-vp-count" id="fs-vp-count">${folderVideos.length}${t('tracks_unit', '개 트랙')}</span>
+                            </div>
+                            <div class="fs-vp-toggles">
+                                <div class="fs-vp-toggle-row">
+                                    <span class="fs-vp-toggle-label">${t('autonext_label', '다음재생')}</span>
+                                    <button type="button" class="fs-vp-autonext" id="fs-vp-autonext" title="${t('autonext_toggle', '자동 다음 재생')}" aria-label="${t('autonext_toggle', '자동 다음 재생')}"></button>
+                                </div>
+                                <div class="fs-vp-toggle-row">
+                                    <span class="fs-vp-toggle-label">${t('range_label', '범위')}</span>
+                                    <button type="button" class="fs-vp-mode" id="fs-vp-mode" title="${t('playlist_mode_toggle', '목록 범위 (전체/연관)')}" aria-label="${t('playlist_mode_toggle', '목록 범위 (전체/연관)')}"></button>
+                                </div>
+                            </div>
                             <button type="button" class="fs-vp-close" id="fs-vp-close" title="${t('close', '닫기')}">✕</button>
                         </div>
+                        <input type="text" class="fs-vp-search" id="fs-vp-search" placeholder="${t('search', '검색...')}" />
                         <div class="fs-vp-body" id="fs-vp-body">${itemsHtml}</div>
                     </aside>`;
                     toggleBtnHtml = `<button type="button" class="fs-vp-toggle" id="fs-vp-toggle" title="${t('playlist_toggle', '목록 열기/닫기')}">📋 ${t('playlist', '목록')}</button>`;
@@ -34669,10 +34812,12 @@ const App = {
                         const _isMobileF2 = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && ('ontouchend' in document);
                         const _itemSize2 = info.file_size || item.size || 0;
                         const _MOBILE_LIMIT2 = 500 * 1024 * 1024;
-                        const _shouldTranscodeF2 = _isMobileF2 && _itemSize2 > _MOBILE_LIMIT2;
+                        const _shouldTranscodeF2 = !App._forceNativePlayback && _isMobileF2 && _itemSize2 > _MOBILE_LIMIT2;
+                        App._forceNativePlayback = false; App._forceTranscode = false; // 1회성 — 사용 후 리셋
                         
                         if (_shouldTranscodeF2) {
                             // 모바일 + 대용량: 트랜스코딩 폴백
+                            App._showNativeBtn = false; // media_info 실패라 코덱 불명 → 네이티브 버튼 미표시
                             if (window._videoDebug) console.log('[VD INFO-FAIL] transcoding fallback (mobile+large)');
                             
                             // ★ video의 <source> 태그 정리 (정상 트랜스코딩 분기는 video 요소 자체를 교체하지만,
@@ -34720,14 +34865,24 @@ const App = {
                 const codecName = (info.video_codec || '').toUpperCase();
                 
                 // 모바일 감지
-                const isMobileDevice = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && ('ontouchend' in document);
+                // 신형 iPad(iPadOS 13+)는 UA가 'Macintosh'로 위장되므로 MacIntel+멀티터치로 보강 판정
+                //   (코드 내 라인 356/397/635 등에서 쓰는 기존 iPadOS 감지 패턴과 동일)
+                const isMobileDevice = (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+                    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+                    && ('ontouchend' in document);
                 const MOBILE_SIZE_LIMIT = 500 * 1024 * 1024; // 500MB
                 const fileSize = info.file_size || 0;
                 
                 // 트랜스코딩 필요 여부: 코덱 미지원 OR (모바일 + 대용량)
                 const needsTranscodeByCodec = (info.can_play_native === false);
-                const needsTranscodeBySize = isMobileDevice && fileSize > MOBILE_SIZE_LIMIT;
-                const shouldTranscode = needsTranscodeByCodec || needsTranscodeBySize;
+                // ★ '네이티브로 전환' 버튼으로 강제 시 대용량 사유는 무시 (코덱 미지원은 네이티브 불가라 유지)
+                const _forceNative = !!this._forceNativePlayback;
+                this._forceNativePlayback = false; // 1회성 — 사용 후 즉시 리셋
+                const needsTranscodeBySize = !_forceNative && isMobileDevice && fileSize > MOBILE_SIZE_LIMIT;
+                // ★ 재생방식 셀렉트 '트랜스코딩' 선택 시 강제 트랜스코딩 (500MB 이하도) — 1회성
+                const _forceTrans = !!this._forceTranscode;
+                this._forceTranscode = false;
+                const shouldTranscode = needsTranscodeByCodec || needsTranscodeBySize || _forceTrans;
                 
                 if (!shouldTranscode) {
                     // 네이티브 재생 가능
@@ -34746,6 +34901,16 @@ const App = {
                         const _nw = _nativeVid.closest('.video-player-wrap');
                         if (_nw) _nw.classList.remove('video-not-ready');
                         if (window._videoDebug) console.log('[VD PRE-UNSET] _isReady=true (native play OK)');
+                    }
+                    // ★ 네이티브 재생(코덱 OK)인 mp4 → 재생방식 셀렉트 표시 (크기 무관, 모바일 한정)
+                    //   여기는 트랜스코딩 블록과 분리된 early-return 경로라 _showNativeBtn을 여기서도 설정해야 함.
+                    //   타이밍: 화질 셀렉트(33986 setTimeout)와 media_info 응답 순서가 둘 다 가능하므로,
+                    //   이미 빌드돼 있으면 _ensure로 셀렉트를 보장(없으면 33986의 _ensure가 처리).
+                    const _navExtN = (item.name || item.path || '').split('.').pop().toLowerCase();
+                    this._showNativeBtn = (_navExtN === 'mp4'); // PC+모바일 공통 (PC도 버퍼링/렉 시 트랜스코딩 선택 가능)
+                    if (this._showNativeBtn) {
+                        const _qDivN = document.getElementById('video-quality-select');
+                        if (_qDivN) this._ensureQualityNativeBtn(_qDivN, /* nativeMode = */ true);
                     }
                     return;
                 }
@@ -34809,6 +34974,12 @@ const App = {
                     badgeParent.className = 'video-stream-badge';
                     badgeParent.textContent = `⚡ ${transcodeReason}`;
                 }
+                // ★ '재생방식' 셀렉트 표시 플래그 — 모바일 + mp4 + 코덱 네이티브 가능
+                //   코덱 미지원(HEVC 등)은 네이티브로 못 트므로 셀렉트 없음.
+                //   mp4 한정 — webm/ogg 등 다른 네이티브 포맷에는 셀렉트 미표시(펜닐님 요청).
+                //   크기 무관(500MB 이하도) — 작은 mp4가 버벅일 때 트랜스코딩 선택 가능하도록(펜닐님 요청).
+                const _navExt = (item.name || item.path || '').split('.').pop().toLowerCase();
+                this._showNativeBtn = (!needsTranscodeByCodec && _navExt === 'mp4'); // PC+모바일 공통
                 const wrap = document.querySelector('.video-player-wrap');
                 if (wrap && !wrap.querySelector('#video-audio-select')) {
                     const audioDiv = document.createElement('div');
@@ -34853,10 +35024,12 @@ const App = {
                 const _isMobileFb = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && ('ontouchend' in document);
                 const _itemSize = item.size || 0;
                 const _MOBILE_LIMIT = 500 * 1024 * 1024;
-                const _shouldTranscodeFb = _isMobileFb && _itemSize > _MOBILE_LIMIT;
+                const _shouldTranscodeFb = !App._forceNativePlayback && _isMobileFb && _itemSize > _MOBILE_LIMIT;
+                App._forceNativePlayback = false; App._forceTranscode = false; // 1회성 — 사용 후 리셋
                 
                 if (_shouldTranscodeFb) {
                     // 모바일 + 대용량: 트랜스코딩 폴백
+                    App._showNativeBtn = false; // media_info 실패라 코덱 불명 → 네이티브 버튼 미표시
                     if (window._videoDebug) console.log('[VD CATCH-FALLBACK] transcoding fallback (mobile+large)');
                     
                     // ★ video의 <source> 태그 정리 (정상 트랜스코딩 분기는 video 요소 자체를 교체하지만,
@@ -37213,7 +37386,50 @@ const App = {
      *                   - true: 'original' = 네이티브 재생 유지, 다른 값 = 트랜스코딩 전환
      *                   - false: 항상 트랜스코딩 모드 (다른 quality 세션으로 재시작)
      */
-    _buildQualitySelectUI(baseUrl, nativeMode = false) {
+    // 화질 드롭다운 앞 '재생방식'(일반재생/트랜스코딩) 셀렉트 보장 (모바일 대용량 전용)
+    //   _showNativeBtn=true(모바일 대용량, 코덱 네이티브 가능)면 셀렉트 추가, false면 잔재 제거.
+    //   일반재생 선택 → 네이티브 강제 재생, 트랜스코딩 선택 → 자동 트랜스코딩.
+    //   showPreview 재시작 메커니즘을 재사용하므로 화질 change 로직(CASE 2/3)은 건드리지 않음.
+    _ensureQualityNativeBtn(qDiv, nativeMode) {
+        if (!qDiv) return;
+        const existing = qDiv.querySelector('.playback-mode-select');
+        if (this._showNativeBtn) {
+            if (existing) {
+                // 이미 있으면 초기값만 현재 모드에 맞게 갱신 (재호출 시 트랜스코딩↔네이티브 반영)
+                existing.value = nativeMode ? 'native' : 'transcode';
+                return;
+            }
+            const _isKoQ = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+            const _sel = document.createElement('select');
+            _sel.className = 'playback-mode-select';
+            _sel.title = _isKoQ ? '재생 방식 (일반재생: 원본 그대로 / 트랜스코딩: 변환 스트리밍)' : 'Playback mode';
+            const _optN = document.createElement('option');
+            _optN.value = 'native';
+            _optN.textContent = _isKoQ ? '일반재생' : 'Native';
+            const _optT = document.createElement('option');
+            _optT.value = 'transcode';
+            _optT.textContent = _isKoQ ? '트랜스코딩' : 'Transcode';
+            _sel.appendChild(_optN);
+            _sel.appendChild(_optT);
+            // nativeMode=true면 네이티브 재생 중, false면 트랜스코딩 중 → 실제 상태로 초기값
+            _sel.value = nativeMode ? 'native' : 'transcode';
+            _sel.addEventListener('change', (e) => {
+                e.stopPropagation();
+                const mode = e.target.value;
+                // 일반재생 → 네이티브 강제 / 트랜스코딩 → 강제 트랜스코딩(500MB 이하도 트랜스코딩되도록)
+                App._forceNativePlayback = (mode === 'native');
+                App._forceTranscode = (mode === 'transcode');
+                if (App._currentPreviewItem) App.showPreview(App._currentPreviewItem);
+            });
+            // 화질 셀렉트 앞(맨 앞)에 배치: [재생방식 ▼] [화질 ▼]
+            qDiv.insertBefore(_sel, qDiv.firstChild);
+        } else {
+            // 모바일 대용량 사유가 아니면 이전 영상의 잔재 셀렉트 제거
+            if (existing) existing.remove();
+        }
+    },
+    
+    _buildQualitySelectUI(baseUrl, _origNativeMode = false) {
         const wrap = document.querySelector('.video-player-wrap');
         if (!wrap) return;
         
@@ -37258,6 +37474,9 @@ const App = {
         }
         // ★ 이중 빌드 방어: 이미 빌드되어있으면 스킵 (네이티브 → 트랜스코딩 전환 시 재호출 케이스)
         if (qDiv.querySelector('select#quality-picker')) {
+            // 단, '네이티브 재생' 버튼은 최신 _showNativeBtn 기준으로 보장
+            //   (첫 호출이 네이티브 경로라 버튼을 못 만들었어도, 트랜스코딩 재호출 시 여기서 추가)
+            this._ensureQualityNativeBtn(qDiv, _origNativeMode);
             return;
         }
         
@@ -37270,6 +37489,11 @@ const App = {
         });
         html += '</select>';
         qDiv.innerHTML = html;
+        
+        // ★ 대용량(코덱은 네이티브 가능) 전용: 화질 드롭다운 옆에 '네이티브 재생' 버튼
+        //   qDiv는 flex(gap:6px, right:10px 기준)라 버튼이 화질 셀렉트와 나란히 붙어 함께 이동.
+        //   배지는 HW/SW 정보로 innerHTML 갱신되어 자식이 지워지므로 여기(화질 셀렉트 옆)에 둠.
+        this._ensureQualityNativeBtn(qDiv, _origNativeMode);
         
         // ★ 위치 통일 (v5.8.1c) — audio 셀렉터가 이미 있으면 좌측 이동 클래스 부여
         //   _buildAudioTrackUI가 먼저 실행됐어도, 여기서 다시 한 번 보장
@@ -37306,6 +37530,12 @@ const App = {
             //   - 비-original 선택 + 현재 네이티브 → 트랜스코딩 모드로 전환 (새 quality 세션 시작)
             //   - 비-original 선택 + 현재 트랜스코딩 → 새 quality 세션으로 재시작
             const isCurrentlyTranscoding = !!video.getAttribute('data-transcode-base');
+            
+            // ★ 재생방식 셀렉트가 있으면(mp4 대용량) 그 값으로 네이티브 여부 판단 — nativeMode 클로저는
+            //   네이티브 선시도 흔적으로 true 고정될 수 있어, 트랜스코딩 중 원본 클릭이 잘못 네이티브로 감.
+            //   재생방식 '트랜스코딩'이면 원본도 트랜스코딩 원본화질(CASE 4), '일반재생'이면 네이티브(CASE 3).
+            const _pbModeSel = document.querySelector('#video-quality-select .playback-mode-select');
+            const nativeMode = _pbModeSel ? (_pbModeSel.value === 'native') : _origNativeMode;
             
             // CASE 1: 네이티브 → 네이티브 (original 유지) → 변화 없음
             if (nativeMode && newQuality === 'original' && !isCurrentlyTranscoding) {
@@ -37375,6 +37605,15 @@ const App = {
                     try { video._hlsStopSession(); } catch(e) {}
                     video._hlsStopSession = null;
                 }
+                // ★ ffmpeg pipe 세션 종료 (원본 전환 시 누락되어 있던 정리 — ffmpeg orphan 누수 방지)
+                if (video._pipeSid) {
+                    const _ku = 'api.php?action=transcode&pipe_kill=' + video._pipeSid;
+                    try {
+                        if (navigator.sendBeacon) navigator.sendBeacon(_ku);
+                        else fetch(_ku, { keepalive: true }).catch(() => {});
+                    } catch(e) { try { fetch(_ku, { keepalive: true }).catch(() => {}); } catch(_) {} }
+                    video._pipeSid = null;
+                }
                 if (video._mmsCleanup) { try { video._mmsCleanup(); } catch(e) {} }
                 if (video._mmsAbort) { try { video._mmsAbort.abort(); } catch(e) {} }
                 
@@ -37395,6 +37634,23 @@ const App = {
                 src.type = 'video/mp4';
                 video.appendChild(src);
                 try { video.load(); } catch(e) {}
+                
+                // ★ 재생방식 셀렉트 동기화 — 원본(네이티브) 전환이므로 '일반재생'으로 표시
+                const _pbSel = document.querySelector('#video-quality-select .playback-mode-select');
+                if (_pbSel) _pbSel.value = 'native';
+                // ★ 이전 트랜스코딩 abort — 안 하면 직전 화질(720p 등) 트랜스코딩의 비동기 콜백이
+                //   늦게 도착해 배지를 '⚡ HLS 스트리밍'으로 다시 덮어씀 (네이티브인데 HLS 배지 잔류)
+                if (window._transcodeAbort) {
+                    try { window._transcodeAbort.abort(); } catch(e) {}
+                    window._transcodeAbort = null;
+                }
+                // ★ 배지를 네이티브(일반 재생)로 갱신 — abort는 미래 콜백만 막으므로,
+                //   이미 'HLS 스트리밍'으로 써진 배지는 여기서 명시적으로 바꿔줘야 함
+                const _ncBadge = document.querySelector('.video-stream-badge');
+                if (_ncBadge) {
+                    _ncBadge.className = 'video-stream-badge native';
+                    _ncBadge.innerHTML = '▶ ' + t('native_playback', '일반 재생');
+                }
                 
                 // 시점 복원 + race-safe 자동 재생 (★ 절대 원본 시점 사용)
                 video.addEventListener('loadedmetadata', () => {
@@ -37767,12 +38023,11 @@ const App = {
     //   _fsVpAutoNextBound 플래그로 중복 바인딩 방지
     //   조건: 현재 폴더 비디오 목록이 있고, 마지막 트랙이 아닌 경우만 다음 트랙 자동 재생
     _fsVpBindAutoNext() {
-        const folderVideos = this._fsVpFolderVideos || [];
+        const folderVideos = this._fsVpViewVideos || this._fsVpFolderVideos || []; // 보이는 목록(전체/연관) 기준
         if (folderVideos.length < 2) return;  // 단일 영상은 자동 재생 무관
         const video = document.querySelector('#preview-content .preview-video');
         if (!video || video._fsVpAutoNextBound) return;
         video._fsVpAutoNextBound = true;
-        const curIdx = folderVideos.findIndex(f => f.path === this._fsVpCurrentPath);
         video.addEventListener('ended', () => {
             // ★ 작은 화면(1024px 이하)에서는 자동 재생 비활성화 (v5.8.1g 펜닐님 결정)
             //   이유: 모바일/작은 태블릿에서는 사이드 패널 자체가 숨김(display: none) → 토글 버튼도 안 보임
@@ -37783,8 +38038,11 @@ const App = {
             // ★ 자동 다음 재생 토글 체크 (v5.8.1g) — OFF면 다음 트랙으로 안 넘어감
             //   기본 ON (펜닐님 룰), localStorage 영구 저장
             if ((localStorage.getItem('fs_vp_auto_next') ?? '1') !== '1') return;
-            if (curIdx >= 0 && curIdx < folderVideos.length - 1) {
-                const nextFile = folderVideos[curIdx + 1];
+            // ended 실행 시점의 최신 보이는 목록 + 현재 경로 기준 (모드 전환 후에도 정확)
+            const list = this._fsVpViewVideos || this._fsVpFolderVideos || [];
+            const curIdx = list.findIndex(f => f.path === this._fsVpCurrentPath);
+            if (curIdx >= 0 && curIdx < list.length - 1) {
+                const nextFile = list[curIdx + 1];
                 if (nextFile) {
                     // 스크롤 위치 보존 (패널이 살아있을 때만)
                     try {
@@ -37884,6 +38142,114 @@ const App = {
     //   - 트랙 클릭 시 모달 닫고 새 트랙으로 showPreview 재호출 (하이브리드)
     //   - 자동 다음 재생 (트랙 끝나면 다음 트랙으로 이동)
     //   - share.php 패턴 모방 (sessionStorage 패널 상태 유지, 마퀴, 툴팁, ESC 닫기)
+    // 파일명 정규화: 확장자 + 모든 구분자/특수문자(공백 - _ . + () [] 등) 제거 → 순수 문자+숫자만
+    //   '천원짜리 변호사' 와 '천원짜리변호사'(띄어쓰기 차이)를 같게 처리 (PotPlayer 동작 일치)
+    _vpNorm(name) {
+        return (name || '').replace(/\.[^.]+$/, '').replace(/[^0-9a-z가-힣]/gi, '').toLowerCase();
+    },
+
+    // 정규화 후 숫자 묶음을 #으로 치환한 패턴 (에피소드 번호만 다른 시리즈 판별용)
+    _vpSeriesPattern(name) {
+        return this._vpNorm(name).replace(/\d+/g, '#');
+    },
+
+    // 핵심 단어 토큰 (3자+ 영문/한글, 흔한 메타·일반어 제외) — 번호가 앞에 붙어 접두사로 못 잡는 경우 보조 판별
+    _vpKeyTokens(name) {
+        const STOP = new Set(['eng','subs','sub','keanu','reeves','action','chapter','part','disc','bluray',
+            'web','webrip','aac','flac','dubbed','multi','dual','complete','season','episode','자막','더빙','완결','무자막',
+            'the','and','for','with','from','x264','x265','h264','h265']);
+        const toks = (name || '').replace(/\.[^.]+$/, '').toLowerCase().match(/[a-z]{2,}|[가-힣]{2,}/g) || [];
+        return toks.filter(t => !STOP.has(t) && t.length >= 3);
+    },
+
+    // 두 파일이 같은 시리즈인지 (PotPlayer식):
+    //   (1) 정규화 후 숫자 패턴 일치: 'BD-1화' vs 'BD-10화' → 'bd#화'
+    //   (2) 정규화 후 공통 접두사 분석: 공통 뒤가 양쪽 숫자(번호 차이)거나, 한쪽이 끝(접두사가 곧 다른쪽 제목)이거나, 한쪽이라도 숫자로 이어지면(부제 차이) 시리즈
+    //   (3) 핵심 단어 교집합: 앞 번호(01/02..)로 접두사가 막히는 경우, 메타 제외 핵심단어가 2개+ & 절반 이상 공통이면 시리즈
+    //   ※ 원본 기준 공통접두사가 닫는괄호 ']' ')' 로 끝나면 = 릴그룹 태그만 공통 → 다른 작품(번호 차이 아니면 배제)
+    _vpIsRelated(aName, bName) {
+        const a = this._vpNorm(aName);
+        const b = this._vpNorm(bName);
+        if (!a || !b) return false;
+        if (a === b) return true;
+        if (this._vpSeriesPattern(aName) === this._vpSeriesPattern(bName)) return true; // (1) 숫자 패턴 일치
+        let i = 0;
+        const n = Math.min(a.length, b.length);
+        while (i < n && a[i] === b[i]) i++;                          // (2) 정규화 공통 접두사
+        let related = false;
+        if (i >= 3) {
+            const aN = a[i], bN = b[i];
+            const isDigit = c => c !== undefined && /[0-9]/.test(c);
+            if (isDigit(aN) && isDigit(bN)) related = true;         // 공통 뒤 양쪽 숫자 → 번호 차이
+            else if (aN === undefined || bN === undefined) related = true; // 한쪽 끝 → 접두사가 곧 다른쪽 제목
+            else if (isDigit(aN) || isDigit(bN)) related = true;    // 한쪽 숫자로 이어짐 → 부제 차이
+        }
+        if (related) {
+            // 원본 기준 릴그룹 태그만 공통인지 배제 (예: '[XXX] A편' vs '[XXX] B편')
+            const ra = (aName || '').replace(/\.[^.]+$/, ''), rb = (bName || '').replace(/\.[^.]+$/, '');
+            let j = 0; while (j < Math.min(ra.length, rb.length) && ra[j] === rb[j]) j++;
+            if (/[)\]]\s*$/.test(ra.slice(0, j))) {
+                const an = ra.slice(j).replace(/^[\s\-_.]+/, ''), bn = rb.slice(j).replace(/^[\s\-_.]+/, '');
+                if (!(/^\d/.test(an) && /^\d/.test(bn)) && this._vpNorm(an).slice(0, 3) !== this._vpNorm(bn).slice(0, 3)) related = false;
+            }
+        }
+        if (related) return true;
+        // (3) 핵심 단어 교집합 (앞 번호 등으로 접두사가 막힌 경우 보조)
+        const ta = new Set(this._vpKeyTokens(aName)), tb = this._vpKeyTokens(bName);
+        if (ta.size === 0 || tb.length === 0) return false;
+        const common = tb.filter(t => ta.has(t));
+        const minlen = Math.min(ta.size, tb.length);
+        return common.length >= 2 && common.length / minlen >= 0.5;
+    },
+
+    // 재생목록 아이템 HTML 생성 (패널 최초 생성 + 모드 전환 재렌더 공유)
+    _vpBuildItemsHtml(videos, curPath) {
+        const curIdx = videos.findIndex(f => f.path === curPath);
+        return videos.map((f, i) => {
+            const isCurrent = (i === curIdx);
+            const fname = this.escapeHtml(f.name);
+            const fext = this.escapeHtml((f.extension || (f.name || '').split('.').pop() || '').toUpperCase());
+            const fsize = this.formatSize(f.size || 0);
+            return `<div class="fs-vp-item${isCurrent ? ' current' : ''}" data-path="${this.escapeHtml(f.path)}" data-index="${i}">
+                <span class="fs-vp-num">${i + 1}.</span>
+                <span class="fs-vp-name" title="${fname}"><span class="fs-vp-name-inner">${fname}</span></span>
+                <span class="fs-vp-meta">${fext} · ${fsize}</span>
+                <span class="fs-vp-play-icon">${isCurrent ? '▶' : '·'}</span>
+            </div>`;
+        }).join('');
+    },
+
+    // 모드(전체/연관) 적용 — 보이는 목록 갱신 + body 재렌더 + 카운트 갱신 + 검색 초기화
+    _vpApplyMode() {
+        const all = this._fsVpFolderVideos || [];
+        const curPath = this._fsVpCurrentPath;
+        let videos = all;
+        if (this._fsVpMode === 'related' && curPath) {
+            const curFile = all.find(f => f.path === curPath);
+            if (curFile) {
+                videos = all.filter(f => this._vpIsRelated(curFile.name, f.name));
+                if (videos.length === 0) videos = [curFile]; // 안전장치: 최소 자기 자신
+                // 연관 모드는 파일명 자연정렬 (E2가 E10보다 앞에). filter 결과는 새 배열이라 전체 목록엔 영향 없음
+                videos = videos.slice().sort((a, b) =>
+                    (a.name || '').localeCompare((b.name || ''), undefined, { numeric: true, sensitivity: 'base' })
+                );
+            }
+        }
+        this._fsVpViewVideos = videos;
+        const body = document.getElementById('fs-vp-body');
+        if (body) body.innerHTML = this._vpBuildItemsHtml(videos, curPath);
+        const cnt = document.getElementById('fs-vp-count');
+        if (cnt) {
+            const unit = (typeof window.t === 'function') ? window.t('tracks_unit', '개 트랙') : '개 트랙';
+            cnt.textContent = videos.length + unit;
+        }
+        // 모드 전환 시 검색 상태 초기화 (목록이 바뀌어 이전 매치 무효)
+        const sb = document.getElementById('fs-vp-search');
+        if (sb) sb.value = '';
+        this._vpSearchMatches = [];
+        this._vpSearchPos = -1;
+    },
+
     _setupVideoPlaylistPanel() {
         const panel = document.getElementById('fs-vp-panel');
         const toggleBtn = document.getElementById('fs-vp-toggle');
@@ -37934,7 +38300,29 @@ const App = {
                 localStorage.setItem(AUTONEXT_KEY, nowOn ? '1' : '0');
             });
         }
-        
+
+        // ★ 목록 범위 토글 (전체 ↔ 연관) — 재생 파일명 뼈대가 같은 것만 묶기 (PotPlayer식)
+        const modeBtn = document.getElementById('fs-vp-mode');
+        if (modeBtn) {
+            modeBtn.classList.toggle('related', this._fsVpMode === 'related');
+            modeBtn.setAttribute('aria-pressed', this._fsVpMode === 'related' ? 'true' : 'false');
+            modeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this._fsVpMode = (this._fsVpMode === 'related') ? 'all' : 'related';
+                modeBtn.classList.toggle('related', this._fsVpMode === 'related');
+                modeBtn.setAttribute('aria-pressed', this._fsVpMode === 'related' ? 'true' : 'false');
+                localStorage.setItem('fs_vp_mode', this._fsVpMode); // 영구 저장 (자동재생과 동일)
+                this._vpApplyMode();
+                // 재렌더 후 현재 트랙으로 스크롤
+                if (this._fsVpScrollToCurrent) this._fsVpScrollToCurrent();
+                this._fsVpCheckOverflow && this._fsVpCheckOverflow();
+            });
+        }
+        // 패널 진입 시 모드가 related로 남아있으면 초기 필터 반영
+        if (this._fsVpMode === 'related') {
+            this._vpApplyMode();
+        }
+
         // 토글 버튼
         toggleBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -37988,8 +38376,9 @@ const App = {
             const item = e.target.closest('.fs-vp-item');
             if (!item) return;
             const idx = parseInt(item.dataset.index, 10);
-            if (isNaN(idx) || idx < 0 || idx >= folderVideos.length) return;
-            const targetFile = folderVideos[idx];
+            const viewList = this._fsVpViewVideos || folderVideos; // 현재 보이는 목록(전체/연관) 기준
+            if (isNaN(idx) || idx < 0 || idx >= viewList.length) return;
+            const targetFile = viewList[idx];
             if (!targetFile) return;
             // ★ 스크롤 위치 저장 (펜닐님 결정 옵션 B — 새 패널 생성 후 복원)
             //   showPreview가 #preview-content.html(content) 호출하면 사이드 패널 DOM 새로 생성됨
@@ -38077,6 +38466,51 @@ const App = {
             flexEl.addEventListener('mouseenter', () => {
                 // CSS transition (0.25s) 끝난 후 측정
                 setTimeout(() => this._fsVpCheckOverflow(), 280);
+            });
+        }
+
+        // ★ 목록 검색 (음악 재생목록 검색 B-9와 동일 방식 — 스크롤 이동+하이라이트, 파일명만, 필터링 아님)
+        //   동영상 패널은 가상스크롤 아닌 일반 DOM 목록이라 scrollIntoView 사용
+        const _vpSearch = document.getElementById('fs-vp-search');
+        if (_vpSearch) {
+            this._vpSearchMatches = [];
+            this._vpSearchPos = -1;
+            const _vpHighlight = (idx) => {
+                body.querySelectorAll('.fs-vp-item.fs-vp-search-hit').forEach(el => el.classList.remove('fs-vp-search-hit'));
+                if (idx < 0) return;
+                const item = body.querySelector('.fs-vp-item[data-index="' + idx + '"]');
+                if (item) {
+                    item.classList.add('fs-vp-search-hit');
+                    item.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                }
+            };
+            const _vpDoSearch = () => {
+                const q = (_vpSearch.value || '').trim().toLowerCase();
+                if (!q) { this._vpSearchMatches = []; this._vpSearchPos = -1; _vpHighlight(-1); return; }
+                const matches = [];
+                const items = body.querySelectorAll('.fs-vp-item');
+                items.forEach(it => {
+                    const nm = (it.querySelector('.fs-vp-name-inner')?.textContent || '').toLowerCase();
+                    if (nm.indexOf(q) !== -1) {
+                        const idx = parseInt(it.dataset.index, 10);
+                        if (!isNaN(idx)) matches.push(idx);
+                    }
+                });
+                this._vpSearchMatches = matches;
+                if (!matches.length) { this._vpSearchPos = -1; _vpHighlight(-1); return; }
+                this._vpSearchPos = 0;
+                _vpHighlight(matches[0]);
+            };
+            _vpSearch.addEventListener('input', _vpDoSearch);
+            // 한글 IME 조합 중 keydown은 key='Process'/keyCode=229라 Enter 감지 불가 → keyup으로 순회(B-9와 동일)
+            _vpSearch.addEventListener('keyup', (e) => {
+                if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+                if (this._vpSearchMatches && this._vpSearchMatches.length) {
+                    this._vpSearchPos = (this._vpSearchPos + 1) % this._vpSearchMatches.length;
+                    _vpHighlight(this._vpSearchMatches[this._vpSearchPos]);
+                } else {
+                    _vpDoSearch();
+                }
             });
         }
     },
@@ -38272,20 +38706,60 @@ const App = {
             });
         });
         
-        // PIP
+        // PIP (B-1: 진입 시 모달 숨김→정리 안 함, 종료 시 모달 복원. ffmpeg/HLS는 실제 모달 닫을 때만 정리)
         const pipBtn = container.querySelector('#vec-pip');
         if (pipBtn) {
             if (document.pictureInPictureEnabled) {
                 pipBtn.addEventListener('click', async () => {
                     try {
-                        if (document.pictureInPictureElement) await document.exitPictureInPicture();
-                        else await video.requestPictureInPicture();
+                        if (document.pictureInPictureElement) {
+                            await document.exitPictureInPicture();
+                        } else {
+                            await video.requestPictureInPicture();
+                        }
                     } catch(e) {}
                 });
+                // PiP 진입: 미리보기 모달을 화면에서 숨김(영상/ffmpeg는 유지 — DOM 제거 아님)
+                //   (중복 바인딩 방지: _bindVideoExtraControls가 여러 번 호출될 수 있음)
+                if (!video._pipEvtBound) {
+                    video._pipEvtBound = true;
+                    video.addEventListener('enterpictureinpicture', () => {
+                        App._hidePreviewForPip();
+                    });
+                    // PiP 종료(X든 탭복귀든 동일 이벤트): 모달 복원(B-1). 영상 계속 재생.
+                    video.addEventListener('leavepictureinpicture', () => {
+                        App._restorePreviewFromPip();
+                    });
+                }
             } else {
                 pipBtn.style.display = 'none';
             }
         }
+    },
+    
+    // PiP 진입 시 미리보기 모달을 화면에서 숨김 (정리하지 않음 — 영상/ffmpeg 유지)
+    _hidePreviewForPip() {
+        const modal = document.getElementById('modal-preview');
+        if (!modal) return;
+        // 현재 표시 상태 기억 후 숨김 (정리 없이 화면에서만 감춤)
+        this._pipPrevModalDisplay = modal.style.display || '';
+        modal.style.display = 'none';
+        const ovl = document.getElementById('modal-overlay');
+        if (ovl) { this._pipOverlayHidden = (ovl.style.display !== 'none'); ovl.style.display = 'none'; }
+        document.body.classList.remove('modal-open');
+        this._pipModalHidden = true;
+    },
+    
+    // PiP 종료 시 미리보기 모달을 다시 표시 (영상 계속 재생 중)
+    _restorePreviewFromPip() {
+        if (!this._pipModalHidden) return;
+        this._pipModalHidden = false;
+        const modal = document.getElementById('modal-preview');
+        if (!modal) return;
+        modal.style.display = this._pipPrevModalDisplay || 'flex';
+        const ovl = document.getElementById('modal-overlay');
+        if (ovl && this._pipOverlayHidden) ovl.style.display = '';
+        document.body.classList.add('modal-open');
     },
     
     // 자막 파일 로드 및 비디오에 적용

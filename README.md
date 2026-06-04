@@ -1,6 +1,6 @@
-# FileStation v5.8.1l
+# FileStation v5.8.2
 
-![version](https://img.shields.io/badge/version-v5.8.1l-blue)
+![version](https://img.shields.io/badge/version-v5.8.2-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
@@ -15,7 +15,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.13 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.14 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -200,7 +200,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.13 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.14 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -488,7 +488,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.13** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.14** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -500,7 +500,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.1l.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.2.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -684,7 +684,7 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.13의 베타 단계 제한, HWP 형식만 저장 가능
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.14의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -719,11 +719,53 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.1l (rhwp 0.7.13 기반)
+**현재 버전**: v5.8.2 (rhwp 0.7.14 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.1l (2026-05-29) ⭐ 현재
+#### v5.8.2 (2026-06-05) ⭐ 현재
+
+**[v5.8.2 버그 수정] 압축 내부 이미지 미리보기 — 7z/rar 등에서 안 뜨던 문제 (2026-06-05)**
+
+zip 압축은 내부 이미지 미리보기가 되는데 7z/rar 등은 목록만 보이고 이미지가 안 뜨던 문제. 정밀 진단 → Windows 바이너리 stdout 파이프 문제 확정·수정.
+
+- 원인: `archive_preview`가 7z/rar 내부 이미지를 `7z e -so`(stdout 파이프)로 추출하는데, Windows에서 `shell_exec`로 **바이너리(이미지) stdout**을 받으면 cmd 파이프가 데이터를 깨뜨려 추출 실패. zip은 `ZipArchive`(PHP 내장)이라 shell을 안 거쳐 정상, 7z/rar 목록은 **텍스트** 출력이라 정상 → "zip만 됨 + 7z/rar는 목록만 보이고 이미지만 실패" 증상과 일치. 파일명(숫자/영문/한글) 무관하게 모든 이미지 실패.
+- 수정: stdout 파이프(`-so`) → **임시 디렉토리로 추출 후 `file_get_contents`로 읽기**로 변경. 바이너리 안전 + 크로스플랫폼. 동시 요청 충돌 방지용 고유 임시 디렉토리(md5+microtime+rand), 읽은 뒤 즉시 정리. Windows는 한글/유니코드 경로 대응 위해 `chcp 65001`(UTF-8 콘솔) 후 실행(`archive_check_password`와 동일 검증된 패턴).
+- 안전성: zip 경로(PHP 내장)는 그대로라 영향 0. 7z 바이너리 탐색 로직·크기 제한(10MB)·경로 트래버설 방어 모두 유지. command injection은 `escapeshellarg`로 방어.
+- 검증: PHP `php -l` OK. 새 추출 로직 실측 — 루트/하위폴더/숫자/한글 파일명 전부 정상 추출 확인(Linux). Windows 실기기 확인 필요.
+
+**[v5.8.2 버그 수정] 업로드 MIME 검증 — 정상 파일 거부 문제 근본 개선 (2026-06-05)**
+
+"모든 파일 허용" 모드인데도 rar 등 일부 파일이 업로드 거부되던 문제. 정밀 진단 → MIME 검증 로직의 구조적 결함 확정·수정.
+
+- 원인: `validateMimeType`이 확장자별 MIME 화이트리스트와 **정확히 일치**해야 통과시키는 구조. PHP `finfo`가 반환하는 실제 MIME이 목록에 없으면(예: rar의 finfo 값은 `application/x-rar`인데 목록엔 `application/x-rar-compressed`·`application/vnd.rar`만 있음) 정상 파일도 거부됨. "모든 파일 허용"은 확장자 제한만 푸는 것이고 MIME 검증은 별개로 동작 → 화이트리스트에 등록된 확장자가 오히려 더 엄격히 검사받는 모순. finfo 변형 MIME을 확장자마다 무한정 등록해야 하는 땜질 구조였음.
+- 수정: "정확 일치 안 하면 거부" → "위장된 실행 파일만 거부"로 전환. ① 화이트리스트 일치 → 통과(기존 동작 100% 보존) ② 불일치해도 위험 MIME(`application/x-httpd-php`·`text/x-php` 등 PHP/스크립트, 또는 바이너리 확장자에 숨긴 `text/html`)만 차단, 그 외 정상 파일의 MIME 변형은 통과. 텍스트/마크업 확장자(txt/html/svg 등)는 HTML 내용 허용.
+- 보안: 서버 실행 확장자(php/jsp/asp 등)는 `serverExecExts`에서 MIME과 무관하게 항상 차단(불변). 이 함수는 "안전한 확장자로 위장한 위험 내용" 보조 차단 역할 유지 — jpg로 위장한 php/html은 차단됨.
+- 안전성: 화이트리스트 일치 경로는 그대로라 기존 정상 파일 영향 0. 일반 업로드(1493)·청크 업로드(1808) 양쪽 동일 함수라 함께 적용.
+- 검증: PHP `php -l` OK. 리플렉션 실측 — 정상 rar/zip 통과, php·html 위장 차단, txt 내 html 통과 전부 확인.
+
+**[v5.8.2] rhwp 0.7.13 → 0.7.14 업그레이드 (2026-06-05)**
+
+HWP/HWPX 뷰어·편집기 엔진(rhwp)을 0.7.14로 업그레이드. 0.7.13 후속 patch 사이클 — 미주(해설) 흐름·간격 정합, 수식 렌더링 정밀화, 표 셀 안 그림 편집(삽입·복사·hit-test) 한컴 정합, HWPX 저장 계약 확장, 외부 기여자 PR 다수 흡수. 공개 API 하위 호환 유지(PATCH) — `HwpDocument`/`renderPageSvg`/`version` ABI 보존으로 뷰어 호환.
+
+- npm `@rhwp/core@0.7.14` tarball shasum 진본 검증 후 빌드. 빌드 결과: `index-DEFSFLZA.js`, `index-C9eG_4qi.css`, `rhwp_bg-DaWO6n11.wasm`.
+- studio 패치 매 업그레이드 재적용: J1(file:save Ctrl+S 매핑 제거 — 커스텀 서버저장 우선) 1건, J2(file:print Ctrl+P 매핑 제거 — 브라우저 인쇄 fallback) 1건, P2(CSS `../images/` → `images/`) 1건 적용. P1(절대경로) 0건은 정상.
+- vite 빌드 시 PWA·커스텀 플러그인 보존 위해 `base: './'`만 안전 추가(통째 덮어쓰기 회피).
+- 신규 폰트 `NotoSansKR-ExtraLight.woff2` 추가(한컴 돋움 폴백 정합, rhwp #1234).
+- 커스텀 기능 16항목 보존 검증 통과(서버 저장/다른 이름으로 저장/Blob 캡처/MutationObserver/Ctrl+S/저장 중 동기화 일시중지/웹하드 자동 갱신 등). PHP 커스텀 로직은 파일명·버전 주석 외 무변경 확인.
+- canvaskit 동적 렌더러 파일은 0.7.13과 동일하게 제외(렌더 실패 시 기본 렌더러 폴백 존재, 실사용 검증된 상태 유지).
+- 알려진 한계: SVG/Canvas `preserveAspectRatio="none"`(과거 #335)은 코드상 잔존하나 실사용 재현 없음(0.7.8~0.7.13 동일).
+
+**[v5.8.2] PC 동영상 재생목록 — 전체/연관 모드 토글 (2026-06-05)**
+
+PC 동영상 재생목록 패널에 "전체/연관" 모드 토글 추가. 연관 모드는 같은 폴더에서 현재 재생 중인 영상과 같은 시리즈로 판단되는 파일만 필터링해 보여줌.
+
+- 연관 판정 3단계(`_vpIsRelated`): 비교 전 파일명 정규화(`_vpNorm` — 공백·구분자·특수문자 제거로 띄어쓰기 차이 무시) 후 → (1) 숫자→# 패턴 일치 / (2) 정규화 공통 접두사 다음 글자 분석 + 릴그룹 태그 배제 / (3) 핵심 단어 교집합(앞 번호 형식 보조).
+- 모드 영구 저장: 마지막 사용 모드(전체/연관)를 `localStorage 'fs_vp_mode'`에 저장(자동재생 토글과 동일 패턴). 새로고침·다른 영상 진입·재방문 후에도 유지.
+- 헤더 재구성: 모드 토글 + 자동재생 토글 세로 스택 + 라벨, 트랙 수를 제목 아래로 이동.
+- 검증: PotPlayer 재생목록(`.dpl`) 실측 대조로 회귀 방지 체계 확립. "파일명 기반 시리즈 100% 자동 분류는 원리적 불가"(mpv autoload 표준 코드로도 검증) → 전체/연관 토글로 보완.
+
+#### v5.8.1l (2026-05-29)
 
 **[v5.8.1l 버그 수정] 청크 업로드 조립 경쟁 조건 — 큰 파일 1개가 2개로 중복 생성 (2026-05-29)**
 
@@ -1003,7 +1045,134 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
   - **해결**: ①노란 시간을 `video.closest('.video-player-wrap')`(=host)에 직접 append — 전체화면 버튼과 동일 기준 ②위치는 `_positionTranscodeDuration`이 전체화면 버튼의 실제 렌더 위치(getBoundingClientRect)를 읽어 `bottom = wrap.bottom - fsBtn.bottom`으로 맞춤(계산이 아닌 렌더 결과 복사 → CSS/inline 무엇이 적용되든 항상 같은 줄). left:5px(좌측), 전체화면 버튼은 right(우측) → 같은 높이 양끝. ③전체화면/PC는 inline 비워 CSS 사용. ④`_positionFsBtn` 끝에서 `_positionTranscodeDuration` 단방향 호출(무한루프 없음). ⑤재계산은 video 자체 이벤트(pause/play/resize)+생성 시(ensureEl)로 연결 — window 리스너 없어 video 제거 시 자동 정리(누수 없음).
 - **CSS**: `.transcode-duration { background: rgba(0,0,0,0.65) }` 주석 처리(펜닐님 요청). `.video-fullscreen-btn`/`.video-play-overlay`의 `rgba(0,0,0,0.55)`는 무관해 보존.
 
-**🟢 C. 일반 재생 배지 용량 단위 (트랜스코딩 배지 제외)**
+**🟢 B-3. PiP(Picture-in-Picture) 모달 연동 개선 — B-1 방식 (2026-05-31)**
+
+- **배경**: 메인 미리보기는 영상이 모달(`modal-preview`) 안에 있어, PiP 켜도 모달이 화면을 가려 파일 작업 불가. 또 모달을 닫으면 영상 정리(ffmpeg/HLS)가 실행돼 PiP도 멈춤. (공유 페이지 `share.php`는 영상이 본문에 직접 있어 가릴 모달이 없으므로 수정 불필요 — 그대로 보존.)
+- **표준 확인**(W3C/MDN): `leavepictureinpicture`는 "X 종료"와 "탭으로 돌아가기"를 구분하지 못함(동일 이벤트). 일반 video PiP에선 자동 구분 불가 → **B-1 방식**(둘 다 모달 복원) 채택.
+- **B-1 동작** (`assets/js/app.js`): ①PiP 버튼 → `enterpictureinpicture` → `_hidePreviewForPip()`로 모달을 화면에서 **숨김만**(`display:none`, video는 DOM 유지 — W3C상 DOM 제거 시 PiP 끊김) ②PiP 종료(X/탭복귀) → `leavepictureinpicture` → `_restorePreviewFromPip()`로 모달 복원(`display:flex`, 영상 계속) ③모달 진짜 닫기 → 기존 `hideModal` 정리. 중복 바인딩 방지 `video._pipEvtBound` 가드(PiP 버튼은 매번 새로 생성돼 click은 중복 없음).
+- **버그1 수정 (PiP 중 다른 파일 열기 → 검은 화면)**: 새 파일 열 때 `_showPreviewImpl`의 `_preClean`은 `hideModal`을 안 거쳐 `_pipModalHidden` 플래그가 안 풀려, 나중에 PiP 종료 시 엉뚱한(이미 닫힌) 모달을 복원 → 검은 화면. → `_preClean` 시작에서 `_pipModalHidden=false` + 이전 PiP `exitPictureInPicture()` 정리.
+- **버그2 수정 (모바일: 다른 탭 갔다 PiP 복귀 시 재생 오류)**: `pagehide`/`beforeunload`의 `killActivePipe`가 무조건 ffmpeg/HLS를 죽이는데, 모바일은 탭 전환 시 `pagehide` 발생 → PiP 영상 소스 끊김. → `killActivePipe` 맨 앞에 `if (document.pictureInPictureElement) return;` 추가(PiP 중이면 정리 건너뜀). 일반(비PiP) 백그라운드 정리는 그대로 보존(orphan 세션 누수 방지 유지).
+- **트레이드오프**: PiP 중 페이지를 완전히 닫으면 ffmpeg가 잠깐 orphan으로 남을 수 있으나, 서버측 orphan 자동 청소 로직이 백업으로 정리(드문 케이스).
+- **안전성**: PiP 이벤트는 video 이벤트(미리보기마다 video 재생성 시 자동 정리, window 리스너 추가 없음). `killActivePipe` 본체(HLS/Pipe/MMS 정리)·기존 모달 정리 로직 전부 보존. 무한루프 없음. 일반/공유 양쪽 실기기 동작 확인됨(메인 PiP/버그1/버그2, 공유 PiP).
+
+**🟢 B-4. 모바일 대용량 mp4 재생방식 선택 셀렉트 (일반재생/트랜스코딩) (2026-06-01)**
+
+- **배경**: 모바일은 대용량 mp4(500MB 초과, H.264 등 네이티브 가능 코덱)를 자동 트랜스코딩(HLS)함 — 과거 결정(3GB+ H.264 네이티브 재생 시 모바일 메모리 부족·버벅임). 사용자가 원하면 원본 그대로(일반재생) 볼 수 있게 선택권 제공.
+- **UI**: 화질 셀렉트(`#video-quality-select`) 안에 `[재생방식 ▼: 일반재생/트랜스코딩]`을 화질 셀렉트 앞에 배치 → `[재생방식][화질]`. flex 컨테이너(gap:6px, right:10px)라 화질 셀렉트와 함께 이동.
+- **표시 조건** (`_showNativeBtn`, app.js): `needsTranscodeBySize && !needsTranscodeByCodec && _navExt === 'mp4'` — 모바일+500MB초과+코덱 네이티브 가능+**mp4 한정**. 코덱 미지원(HEVC 등)은 네이티브 불가라 미표시, webm/ogg 등 다른 포맷도 미표시(펜닐님 요청). media_info 실패 폴백(F2/Fb)은 코덱 불명이라 `_showNativeBtn=false`.
+- **동작**: 셀렉트 change → `_forceNativePlayback`(일반재생=true/트랜스코딩=false) 설정 후 `showPreview(현재 item)` 재시작. 메인 분기에서 `_forceNative`면 `needsTranscodeBySize`를 무시(코덱 미지원은 유지)하여 네이티브 재생. `showPreview` 재시작이 기존 트랜스코딩 정리(ffmpeg/HLS)를 수행하므로 화질 change 로직(CASE 1~4)은 건드리지 않음. `_forceNativePlayback`은 1회성(메인+F2+Fb 3곳에서 사용 후 리셋).
+- **셀렉트 초기값**: `_buildQualitySelectUI`의 `nativeMode` 파라미터로 결정(트랜스코딩 경로=`transcode`, 네이티브 경로=`native`). 초기값이 실제 상태와 같아야 같은 값 재선택 시 change 미발생 문제가 없음(초기값이 어긋나면 일반재생을 못 고르던 버그를 이 방식으로 해결).
+- **버튼 누락 버그 수정**: 화질 UI가 2경로(네이티브 선시도→트랜스코딩 전환)로 빌드되어, 첫 호출 때 `_showNativeBtn=false`면 셀렉트를 못 만들고 재호출은 이중 빌드 방어(`select#quality-picker` 존재 시 return)에 막혀 영영 누락됨. → `_ensureQualityNativeBtn(qDiv, nativeMode)` 헬퍼로 분리, 이중 방어 return 전과 정상 경로 양쪽에서 호출하여 어느 경로든 보장.
+- **디자인**: 모바일에서 화질 셀렉트와 동일 스타일(11px, `border-radius:14px` 알약형, 동일 배경/테두리). 모바일 화질 셀렉트 앞 `🎬` `::before` 아이콘 제거(셀렉트 2개라 거슬림). **PC는 무변경**(PC는 `🎬 화질:` label 유지).
+- **비-mp4 잔재 제거** (`_showPreviewImpl` 시작): 매 영상마다 `_navExtInit !== 'mp4'`일 때만 `_showNativeBtn=false` 리셋. 무조건 false로 하면 화질 변경 재시작 시 media_info 미재호출로 메인 분기를 안 타 셀렉트가 사라지는 버그가 생기므로, mp4가 아닐 때만 정리(mp4는 메인 분기/이전값 유지).
+- **재생방식 vs 화질 독립 동작 (nativeMode 재정의)**: mp4 대용량은 네이티브 선시도(`nativeMode=true`)가 먼저 화질 change 핸들러를 만들어 `nativeMode`가 true로 고정됨 → 트랜스코딩 중 화질 '원본' 클릭이 CASE 3(네이티브 전환)으로 잘못 빠짐. → change 핸들러에서 `nativeMode`를 **재생방식 셀렉트의 현재 값**으로 재정의(`_pbModeSel.value === 'native'`, 셀렉트 없으면 `_origNativeMode`). 결과: 트랜스코딩 중 원본=트랜스코딩 원본화질(CASE 4 유지), 일반재생=네이티브(CASE 3). 파라미터명 `nativeMode`→`_origNativeMode`로 변경.
+- **CASE 3(원본→네이티브) 정리 누락 4종 추가** (ffmpeg 누수·배지·상태 불일치 수정): ①`_pipeSid` ffmpeg kill — `_startTranscode`/`_preClean`엔 있으나 CASE 3에 누락되어 원본 클릭마다 ffmpeg orphan 누적(누수 주범). ②`window._transcodeAbort.abort()` — 직전 화질 트랜스코딩의 비동기 콜백이 늦게 도착해 배지를 '⚡ HLS 스트리밍'으로 덮어쓰는 경쟁 조건 차단(배지 쓰는 콜백 6+곳이 `aborted()` 미체크가 근본). ③배지 `video-stream-badge native` + `▶ 일반 재생` 명시 갱신(abort는 미래 콜백만 막으므로). ④재생방식 셀렉트 `value='native'` 동기화.
+- **셀렉트 위치(top) 수정**: 일반재생→트랜스코딩 동적 전환 시 오디오 셀렉트 요소가 없어(`audioSelectHtml=''`) 기존 `:has(.video-audio-select:empty)`/`.native` 조건이 다 깨져 기본 `top:44px`로 내려감 → `.video-player-wrap:not(:has(.video-audio-select)) .video-quality-select { top:6px }` 추가(오디오 셀렉트 요소 자체가 없으면 top:6px). 멀티오디오(요소 채워짐)만 top:44px 유지.
+- **알려진 한계/회귀 주의**: 검토 중 "일반재생 중 720p 선택 시 셀렉트 표시 어긋남"을 의심해 `_ensure` 셀렉트값을 실제 상태(`data-transcode-base`) 기반으로 바꿨으나 동작이 틀어져 **원복**함(CASE 2가 setAttribute 후 _startTranscode라 기존 `nativeMode` 기반으로도 정상). 셀렉트 표시값은 `nativeMode`(원래 방식) 유지.
+- **500MB 이하 mp4로 확장 (2026-06-02)**: 작은 mp4가 일부 기기에서 버벅일 때 트랜스코딩으로 볼 수 있도록 크기 제한 제거. ①`_showNativeBtn` 조건에서 `needsTranscodeBySize` 제거 → `isMobileDevice && !needsTranscodeByCodec && _navExt === 'mp4'`(크기 무관). ②네이티브 재생 블록은 early-return 경로라 `_showNativeBtn`이 설정 안 되던 문제 → 네이티브 블록 return 직전에도 `_showNativeBtn` 설정 + `_ensureQualityNativeBtn(qDiv, true)` 호출 추가(화질 셀렉트 빌드 setTimeout과 media_info 응답 순서 무관하게 셀렉트 보장). ③500MB 이하는 `shouldTranscode=false`라 '트랜스코딩' 선택해도 트랜스코딩 안 되던 문제 → **`_forceTranscode` 플래그 신설**: 재생방식 '트랜스코딩' 선택 시 `_forceTranscode=true` → `shouldTranscode = needsTranscodeByCodec || needsTranscodeBySize || _forceTranscode`(1회성, 메인분기+폴백 2곳 리셋). 결과: 모든 모바일 mp4에서 일반재생↔트랜스코딩 자유 전환(크기 무관). 버벅임은 iOS(특정 mp4+모바일 디코딩 성능)에서 주로 발생, 트랜스코딩 전환으로 해소 확인(PC는 미발생).
+- **신형 iPad 판정 보강 (2026-06-02)**: `isMobileDevice`가 UA만 검사해 신형 iPad(iPadOS 13+, UA가 'Macintosh'로 위장)를 PC로 오판 → 재생방식 셀렉트/트랜스코딩이 iPad에서 안 떴음. `|| (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)` 추가(코드 내 기존 iPadOS 감지 패턴 356/397/635행과 동일). 신형 iPad도 실제 iOS라 폰과 동일 동작.
+- **PC 확장 (2026-06-02) — 일반(app.js)**: PC도 동영상 버퍼링/렉이 발생해 PC에도 재생방식 셀렉트 추가. `_showNativeBtn` 표시 조건 2곳에서 `isMobileDevice` 제거 → PC도 mp4면 셀렉트 표시(34864 `_navExtN==='mp4'`, 34936 `!needsTranscodeByCodec && _navExt==='mp4'`). `isMobileDevice`는 다른 5곳(`needsTranscodeBySize` 등) 유지 → PC 자동 트랜스코딩은 안 함(셀렉트로 선택 시에만 `_forceTranscode`로 동작). 모바일 무영향.
+- **PC 확장 (2026-06-02) — 공유(share.php)**: PC는 공유에서 네이티브 분기(UA 비모바일)로 가서 재생방식 셀렉트가 없었음. ①네이티브 분기 화질 wrap에 재생방식 셀렉트 UI 추가(기본 'native'). ②PHP에 `force_transcode=1` 파라미터 처리(트랜스코딩 강제 렌더). ③네이티브 분기 재생방식 핸들러(`_pbModeNat`): '트랜스코딩' 선택 시 `force_transcode=1`로 새로고침 → 트랜스코딩 분기 재사용(기존 CASE 2 안 건드림, reload 방식, 5MB 세그먼트라 처음부터가 구조에 맞음). PC+모바일 500MB 이하 공통.
+- **공유 일반재생→화질변경 배지/멀티오디오 누락 수정 (2026-06-02, 콘솔로 확정)**: force_transcode로 트랜스코딩 분기 렌더 후 '일반재생' 선택(`_shareNativeMode=true`) → 화질 변경 시 **트랜스코딩 분기 2667 핸들러의 `_shareNativeMode` 경로**를 타는데, 트랜스코딩 시작(MANIFEST_PARSED) 후 인코더 정보 배지 업데이트 + 멀티오디오 처리가 **누락**되어 배지가 "⚡ 실시간 변환 재생"(임시)에서 안 바뀌고 오디오 셀렉트도 안 떴음. → 2667 핸들러 MANIFEST_PARSED에 `_fetchShareInfo()` 호출 추가(같은 트랜스코딩 분기라 호출 가능, 배지+멀티오디오 둘 다 처리). 임시 배지 `_badge2`는 네이티브 분기 배지에 `id` 없어 `getElementById`→`querySelector('.stream-badge')` 수정. 진단 경위: 처음 네이티브 분기(2902/CASE2)를 의심해 거기 인코더 배지 추가했으나, 콘솔 로그(`force_transcode=1`+`[QCHG]`)로 실제는 트랜스코딩 분기(2667)임을 확정해 정정. (네이티브 분기 2902의 인코더 배지 코드도 PC mp4 네이티브 경로 대비 유지.)
+
+**🟢 B-5. iOS 음악 비주얼라이저 차단 재확인 (iOS 26.5 실기기) (2026-06-02)**
+
+- **현상**: 음악 플레이어 비주얼라이저는 iOS에서 비활성화되어 있음(`_initVisualizer`에서 `if (this._isIOS)` 시 `_visFailed=true` + `display:none` + return). 안드로이드/PC는 정상 작동.
+- **이유**: 비주얼라이저는 `AudioContext` + `createMediaElementSource()`로 오디오 신호를 분석해야 하는데, iOS(WebKit)에서 이 연결 시 백그라운드/잠금화면 재생이 끊기는 제약이 있음. 백그라운드 재생 + 잠금화면 MediaSession이 비주얼보다 중요하여 iOS만 차단.
+- **iOS 26.5 재확인 결과**: 차단을 임시 해제한 테스트 빌드로 직접 검증 → 잠금화면 시 음악 끊김 + 스크롤 무반응 재현 확인. iOS 26.5에서도 WebKit 제약 미해결 → **차단 유지가 정답**. 코드 주석에도 26.5 재확인 메모 추가.
+- **안드로이드**: 엔진(Blink)이 달라 iOS WebKit 제약과 무관, 동일 문제 접수 이력 없음 → 현 상태(비주얼라이저 작동) 유지. (안드로이드 실기기 부재로 직접 테스트는 못 했으나 문제 보고 없음.)
+
+**🟢 B-6. 동영상 변환 — 느낌표(!) 포함 파일명 실패 수정 (2026-06-02)**
+
+- **현상**: H264/MP4 변환 시 파일명에 `!`(느낌표) 포함된 파일만 실패. 원본 재생·웹하드는 정상. ffmpeg stderr에 `Error opening input: Illegal byte sequence`.
+- **진짜 원인 (디버그 로그로 확정)**: PHP `escapeshellarg()`가 **Windows에서 보안상 `!`와 `%`를 공백으로 치환**하는 동작 때문. ffmpeg에 전달된 경로의 `!`가 공백으로 바뀌어(예: "발산합니다! "→"발산합니다  ") 실제 파일과 다른 경로가 되어 입력 파일을 못 엶. (처음 `.bat` 지연확장 `!` 문제로 오진단해 `setlocal`을 넣었으나 무관 — 진짜는 escapeshellarg 단계. `data/convert_debug.log` 추가로 cmd 실제 내용 확인해 확정.)
+- **수정**: `convertToH264Mp4`의 인자 이스케이프를 OS 분기 헬퍼 `$cvArg`로 교체. Windows는 escapeshellarg 대신 큰따옴표로 직접 감쌈 → `!`/`%` 보존. Linux는 기존 escapeshellarg 유지. 적용: probe(코덱분석)/buildConvCmd(변환)/verify(H264검증) 3곳.
+- **진단 로그**: `data/convert_debug.log` — **실패 시에만 기록(가볍게)**. 조기실패(권한/원격/파일없음/ffmpeg/출력경로) + 실행실패 시 `FAIL 실행결과 code·outPath·size` + 실제 `cmd` + `stderr_tail`. 성공 시엔 로그 안 남김(파일 안 커짐). SSE error에 detail(stderr) 포함→클라 콘솔 `[변환 실패 상세]`.
+- **결과**: `!` 포함 파일명 변환 **성공 확인**(실기기, code=0/okOutput=1, `Illegal byte sequence` 0건). 과거 myComix `archive_handler.php`의 Windows 큰따옴표 `escapeArg`와 동일 검증된 접근.
+- **남은 가능성**: `%` 파일명도 큰따옴표로 해결되나 `.bat` 내 `%`는 별도 이스케이프 필요할 수 있어 추후 확인(보안 아닌 기능 한계). 분할압축/7zip(`createSplitZip`/`extractSplitZip`/`extract7zip`)도 동일 escapeshellarg 패턴이라 `!`/`%` 파일에서 같은 문제 잠재 — 변환만 수정함(보고 시 동일 `$cvArg` 적용 예정).
+
+**🟢 B-6.5. 동영상 변환 개선 — 배속 표기/변환창/손상 .ts/스크롤 보존 (2026-06-03)**
+
+- **배속 누락 (진단 로그로 확정)**: h264/mp4 변환 진행률의 ffmpeg `speed=` 배속이 어떤 영상은 나오고 어떤 건 안 나옴(같은 확장자도 들쭉날쭉). 처음 "타이밍 레이스"로 추정해 `$lastSpeed` 캐싱 추가했으나 여전히 누락 → `data/convert_debug.log`에 raw speed 1회 기록하는 진단으로 실측한 결과 **빠른 변환은 ffmpeg가 지수 표기 출력**(`speed=2.9e+03x` = 2900배)이고, 기존 패턴 `/speed=\s*([\d.]+)x/`가 `e`/`+`를 못 잡아 빈 값이었음(느린 재인코딩은 `2.5x` 일반표기라 정상이었던 것). → 패턴을 `/speed=\s*([\d.]+(?:e[+-]?\d+)?)x/i`로 확장 + 지수 표기면 `round((float))`로 일반 숫자 변환(`2.9e+03`→`2900`, 그대로 표시하면 "2.9e+03x"로 보임). `$lastSpeed` 캐싱은 N/A 순간 누락 보완용으로 유지. 적용: api/FileManager.php convertToH264Mp4 진행률 루프(speed 파싱 1곳만, 다른 진행률 루프 무영향). 클라이언트(app.js `d.speed + 'x'`) 무변경.
+- **변환창 너비 고정**: 변환 진행률 모달이 `min-width:400px; max-width:90%`인데 파일명 span에 줄바꿈이 없어 긴 파일명이 한 줄로 늘어나 박스가 90%까지 커졌음. → 박스 `width:550px` 고정(+`box-sizing:border-box`), 파일명 div `word-break:break-all; overflow-wrap:anywhere`로 줄바꿈. 긴 파일명이어도 박스 너비 일정. (압축/해제 모달은 별개 요소라 미변경.)
+- **손상 .ts 변환 실패 해결 (트랜스코딩은 되는데 변환만 실패 — 콘솔/로그로 단계 확정)**: 일부 .ts 변환 시 `code=-1094995529 Invalid data / Error submitting a packet to the muxer / corrupt input packet in stream 1` 실패. **재생(트랜스코딩)은 되는데 변환(저장)만 실패**가 단서. 단계적 진단: ①"소스 손상이라 어쩔 수 없다"(부족) → ②트랜스코딩과 입력 옵션 맞춤(`-analyzeduration 2000000 -probesize 2000000` + `-fflags +genpts+igndts+fastseek` + `-sn` 자막 무시) 했으나 여전히 실패(로그 `subtitle:0KiB`로 -sn 효과 확인됐으나 muxer 에러 지속) → ③`-fflags +discardcorrupt`(손상 패킷 버림) 추가했으나 여전히 실패 → ④**진짜 원인 확정**: 이 .ts는 H264+AAC라 변환이 **비디오·오디오 모두 copy**(`$isCopy = videoCodec==='h264'`, `$aArgs`가 aac면 `-c:a copy`)인데, 손상 패킷이 copy로 그대로 MP4 muxer에 전달되어 거부됨. **트랜스코딩은 항상 재인코딩**(libx264/HW + `-c:a aac`)이라 디코드→재인코드로 손상 흡수 → 됐던 것. → **해결: copy 실패 시 재인코딩(libx264+aac) 1회 자동 폴백 추가**(`$triedReencode` 플래그). buildConvCmd/runConv에 오디오 오버라이드 파라미터 추가(폴백 시 비디오+오디오 모두 재인코딩). 흐름: copy 시도(빠름, discardcorrupt 포함) → 실패 시 "손상 감지 — 재인코딩으로 재시도..." → 재인코딩(트랜스코딩과 동일 방식이라 성공). 멀쩡한 파일은 copy로 끝나 폴백 미발생(무영향). 기존 HW→SW 폴백 로직과 별개 조건. 재인코딩 출력은 libx264=h264라 기존 출력 검증(okH264) 통과. *진단 경위: 소스손상→옵션맞춤→discardcorrupt→copy vs 재인코딩까지 단계적으로 좁혔고, "트랜스코딩은 되는데"/"여전히 실패" 피드백이 매 단계 방향을 잡아줌.*
+- **변환 완료 후 스크롤 위치 보존**: 변환 완료 시 `loadFiles()`가 폴더를 재로드하는데, 이 함수는 (폴더 이동 대비) 항상 스크롤을 최상위로 리셋 → 변환은 같은 폴더 재로드라 맨 위로 튀었음. → 변환 완료 부분(convertToH264 finally)에서만 재로드 전 `#file-list` scrollTop 저장 → `await loadFiles()` 후 `requestAnimationFrame`으로 복원. loadFiles 함수 자체는 범용이라 미변경, 폴더 이동 등 다른 경로 무영향. (원본 삭제 옵션 시 목록 항목 1개 감소로 px 위치 미세 차이 가능하나 같은 폴더라 거의 동일 위치 유지.)
+- **변환 진행 중 탭 전환 시 스크롤 튐 — 자동 새로고침 스킵 (원인 정정)**: 여러 개 변환(5분+ 소요) 중 브라우저 다른 탭 갔다 오면 목록이 맨 위로 튐. 처음 `_lastRefresh=0` 초기값 탓으로 추정했으나 **오진단**(4762에서 이미 `Date.now()`로 초기화됨). 진짜 원인: visibility 자동 새로고침(5분 경과 시 `loadFiles(false)`)이 변환 중 발동 → 스크롤 보존(저장→복원) 방식이 loadFiles 렌더 타이밍을 못 맞춰 가끔 맨 위. → 근본 해결: **변환 진행 중(`_convBatchRunning`)에는 visibility 자동 새로고침 자체를 스킵**(`if (elapsed > threshold && !this._convBatchRunning)`). 목록을 안 그리니 스크롤이 움직일 일 없음(타이밍 비의존). 변환 완료 후 finally에서 어차피 갱신. (visibility 자동 새로고침 시 스크롤 보존 코드는 변환 외 상황 위해 유지.)
+- **변환 진단 로그 정확화 (기능 무관)**: copy→재인코딩 폴백 시 실패 진단 로그(`data/convert_debug.log`)가 부정확했음 — mode가 `$isCopy` 우선 판정이라 재인코딩 폴백인데 'copy'로 표시, cmd 로그도 오디오 오버라이드 미반영(copy로 표시). → mode 판정을 `$curVArgs === $swVArgs` 우선으로 바꿔 `libx264(reencode-fallback)` 정확 표시, cmd 로그에 `$triedReencode`면 재인코딩 오디오 인자 반영. 오디오 문자열은 `$reencFallbackAArgs` 변수로 빼서 폴백 블록 + 진단 로그 공유(중복 방지). 실제 ffmpeg 실행은 원래 정확했고 로그 표시만 정확화(기능 영향 없음).
+- **변환 ffmpeg 자원 정리 + 취소 버튼 + 미완성 파일 처리 (2026-06-03)**:
+  - **문제**: 변환 ffmpeg는 `start /b` 백그라운드 독립 프로세스라, 변환 중 새로고침/탭종료/브라우저 닫기로 중단해도 ffmpeg가 안 죽고 CPU/GPU 자원을 끝까지 점유(트랜스코딩은 proc_terminate 있었으나 변환은 kill 메커니즘 없었음). 또 미완성 출력(.mp4)이 목록에 남음.
+  - **ffmpeg kill**: ffmpeg 커맨드에 `-metadata comment=convsid_{고유sid}` 마커 심고(트랜스코딩 pipesid와 동일 방식), 클라이언트 끊김(`connection_aborted`) 감지 시 `wmic`로 그 마커의 ffmpeg.exe 찾아 `taskkill`(Linux는 pkill). SSE 루프에 keepalive(`: ka` 주석) 매 0.5초 출력 → connection_aborted 빠른 감지. clientGone/timeout 시 kill + 미완성 정리 + 중단.
+  - **취소 버튼**: 변환 모달에 취소 버튼 추가(안내문도 "취소 불가" → "시간 걸릴 수 있음"). 취소 시 `es.close()` → 서버 connection_aborted 감지 → ffmpeg kill. 여러 개 변환 중 취소 시 나머지도 중단(break).
+  - **dotfile 임시 출력 (미완성 파일 목록 노출 방지)**: ffmpeg를 최종 `.mp4`가 아닌 **`.{이름}.mp4.converting` dotfile**에 쓰고, 완료+H264검증 후 `rename`으로 최종 `.mp4`로 전환. 목록 조회(listFiles 161행)가 dotfile('.'시작)을 자동 제외하므로 변환 중/중단된 미완성 파일은 목록에 안 보임(새로고침/취소/브라우저닫힘 모두). rename은 같은 폴더라 빠름. **주의: `.converting` 확장자라 ffmpeg가 출력 포맷 추론 못 함 → `-f mp4` 명시 필수**(이거 빠뜨려서 변환 깨졌다가 수정함). 중단/실패/timeout 시 dotfile 정리(잠금 대비 최대 5회 재시도).
+  - **임시파일 정리**: 완료(done)/실패(error)/중단(clientGone)/timeout 모든 경로에서 progressFile/resultFile/stderrLog 정리.
+  - **HLS는 무관**: 트랜스코딩(HLS)은 기존에 sendBeacon stop + 서버 taskkill(pid.txt)로 브라우저 닫을 때 이미 정리됨("30분 lazy"는 stop 못 받은 예외의 백업일 뿐 — 초기 오진단 정정).
+  - **동시 변환 충돌 방지 + 잔재 정리 (엣지 보강)**: tmpOut 이름에 convSid 포함(`.{이름}.mp4.{convSid}.converting`) — 다른 탭/사용자가 동시에 같은 파일을 변환해도 임시파일이 안 겹침. convSid 고유화로 이전의 고정-이름 덮어쓰기 정리가 무효가 되므로, 변환 시작 시 같은 폴더의 **1시간+ 오래된 .converting 잔재**를 scandir로 정리(비정상 PHP 종료 잔재 누적 방지 — 진행 중 변환은 ffmpeg가 계속 써서 mtime 최근이라 보존).
+
+**🟢 B-7. 동영상 변환/압축 .bat 지연확장 비활성화 (2026-06-02)**
+
+- `convertToH264Mp4`/`createSplitZip`/`extractSplitZip`/`extract7zip`의 Windows `.bat`에 `setlocal disabledelayedexpansion` 추가(무해한 방어적 추가). 단 B-6 실제 원인은 escapeshellarg였음.
+
+**🟢 B-8. 공유 페이지 재생방식 셀렉트 적용 (2026-06-02)**
+
+- **배경**: 본체(app.js)에 추가한 재생방식 셀렉트(일반재생/트랜스코딩)를 공유 페이지(share.php)에도 적용. 공유는 본체와 완전히 독립 구조(PHP가 `$needsTranscode`로 HTML을 미리 분기 렌더링 + 자체 인라인 JS)라 단순 복사 불가, 공유 구조에 맞춰 단계적 구현.
+- **1단계 (트랜스코딩 → 일반재생)**: 트랜스코딩 영상(모바일 500MB+)의 화질 셀렉트 wrap에 재생방식 셀렉트 추가. '일반재생' 선택 시 HLS 정리(기존 quality change 패턴 재사용) + 네이티브 `src` 설정(`data-transcode-url`에서 `&transcode=1` 제거) + 재생 + 배지를 네이티브로(코덱/해상도/용량 포함, 원본 배지와 동일 형식). `loaded`가 이미 true라 네이티브 play 시 `startTranscode` 재호출 안 됨(기존 메커니즘 활용). '트랜스코딩' 재선택은 `location.reload()`로 원복.
+- **2단계 (일반재생 중 화질 변경 → 트랜스코딩)**: 본체 CASE 2/3 로직 적용. 1단계 네이티브 전환 시 `player._shareNativeMode=true` 설정. 화질 change 핸들러 맨 앞에서 네이티브 모드 분기 — '원본'이면 네이티브 유지(return), 비-original이면 `_shareNativeMode=false` + 재생방식 셀렉트 'transcode' 동기화 + 배지 '⚡ 실시간 변환 재생' + dataset.hlsUrl의 quality 리셋 후 아래 기존 HLS 시작 로직으로 진행. 기존 '트랜스코딩 중 화질 변경'은 미수정(네이티브 분기만 앞에 추가).
+- **셀렉트 디자인**: 모바일 셀렉트(재생방식/화질/오디오)를 본체와 동일하게 PC처럼 각진 디자인(`border-radius:4px`)으로 통일(이전 알약형 14px에서 변경). 본체 style.css 3곳(`audio-track-select`/`quality-select`/`playback-mode-select`) + 공유 share.php 모두. 공유 화질 라벨 '🎬 화질:'는 모바일에서 `.share-q-label span` `display:none`으로 숨김(본체 모바일과 통일), PC는 라벨 유지.
+- **실기기 확인**: 모바일 공유에서 트랜스코딩↔일반재생 전환, 일반재생 중 화질 변경→트랜스코딩 전환, 배지 표시 모두 정상 확인. 본체와 동등 동작.
+- **검토 완료 — 아래 3건은 의도적으로 현 상태 유지가 정답 (2026-06-02 펜닐님 결정)**:
+  1. **음악 비주얼라이저 `FSAudioPlayer` 코드가 app.js(본체)와 fs-audio-player.js(공유) 2개로 분리** — '중복 실수'가 아니라 일반/공유가 각각 쓰는 의도된 구조(공유는 본체 통째로 안 불러오고 가벼운 별도 파일 사용). 둘 다 동일한 iOS 비주얼라이저 차단 로직 보유 확인. → 유지. (단, 음악 플레이어 비주얼라이저 수정 시 두 파일 모두 손봐야 일반/공유 동작 일치함을 기억할 것.)
+  2. **처음부터 네이티브로 시작하는 영상(500MB 이하 등)의 공유 재생방식 셀렉트 미적용** — 공유는 트랜스코딩 영상(모바일 500MB+) 위주로 적용. 네이티브 시작 영상은 기존 `_shareNativeQualitySetup`(화질→트랜스코딩)이 담당. 필요 보고 없어 현 상태 유지.
+  3. **재생방식 '트랜스코딩' 직접 재선택 = `location.reload()`(처음부터 재생)** — 이어서 재생(seek 유지)으로 개선 안 함. 트랜스코딩이 5MB HLS 세그먼트 방식이라 처음부터 시작이 구조에 맞고, seek 지점부터 변환 세션 맞추는 건 복잡·불안정. reload가 오히려 깔끔하고 안정적 → **개선 안 하는 게 정답**(펜닐님 결정).
+
+**🟢 B-9. 음악 플레이어 재생목록 검색 (일반+공유) (2026-06-02)**
+
+- **방식**: 검색어와 일치하는 곡으로 **스크롤 이동 + 하이라이트**(필터링 아님 — 목록/재생 인덱스 그대로 유지). 가상 스크롤 핵심(`_vsRender`) 안 건드리고 `scrollTop`만 변경하는 안전한 방식(펜닐님 선택).
+- **대상**: 파일명(`track.name`)만. 일치 시 해당 곡 위치로 스크롤(가운데 정렬) + 노란 하이라이트(`fap-pl-search-hit`).
+- **순회**: Enter로 다음 일치 곡 순환(마지막→처음). `input` 이벤트(첫 일치) / Enter(다음 순회) 분리, 캐시된 `_plSearchMatches`로 pos 유지.
+- **한글 IME 버그 수정 (로그로 확정)**: `keydown`에선 한글 조합 중 Enter가 `key='Process'`/`keyCode=229`로 와서 감지 불가 → **`keyup`으로 변경**(조합 확정 후 keyup에서 정상 Enter 감지). `isComposing`/229 가드 추가.
+- **적용 범위**: 일반(app.js + style.css) + 공유(fs-audio-player.js + fs-audio-player.css) 양쪽 동일. FSAudioPlayer가 2개 파일로 분리돼 있어 양쪽 다 적용(B-8 메모 참조). 헤더 검색창 UI(`fap-playlist-search`) + `_plSearchHighlight` 헬퍼 + `data-index`/`fap-pl-item` 기존 요소 재사용.
+- **실기기 확인**: 일반 검색/스크롤/하이라이트/한글·영문 Enter 순회 정상. 기존 재생목록 스크롤/클릭 재생 회귀 없음 확인.
+- **디자인 보강 (2026-06-02)**: 검색창에 돋보기 SVG 아이콘(왼쪽, `background-image data:svg`) 추가 + 높이 28px 고정(`box-sizing:border-box`, 위아래 커지는 문제 해결). **흰 배경 스킨에서 검색창 안 보임 수정** — 검색창 기본이 흰 글자+투명 흰 배경이라 밝은 스킨에서 묻힘 → 흰 배경 스킨 2개(`ap-fixed`, `soundcloud`)에 어두운 글자(#333)/테두리(#ddd)/회색 아이콘 오버라이드. (pixel 스킨도 밝은 연두 배경이나 펜닐님 결정으로 미적용 — 2개만.) 양쪽(style.css + fs-audio-player.css) 일치. 참고: 개발 중 CSS 변경은 APP_VERSION 미변경 시 브라우저 캐시로 즉시 반영 안 됨 → 강력 새로고침(Ctrl+Shift+R) 필요.
+- **모바일 일반 검색창 아이콘+글자 겹침 수정 (2026-06-02)**: 메인 페이지의 전역 스타일이 검색창 `padding-left`(26→12px)·`font-size`(11→13px)를 덮어 아이콘 위에 글자가 겹침(콘솔 computed로 확정, 공유는 그 전역 스타일 없어 정상이었음). → `.fap-playlist-search`의 `padding`/`font-size`에 `!important`로 의도값 보호(검색창에만 적용, 안전).
+- **ap-fixed 재생목록 썸네일 정렬 수정 (2026-06-02)**: ap-fixed만 `.fap-pl-item` `height:60px` + 썸네일 `40px`로 달라, 가상 스크롤(`_VS_ITEM_H=48px` 간격 배치)과 어긋나 썸네일이 줄 안에서 세로 정렬이 틀어지고 아이템이 겹쳤음(다른 스킨은 48px라 정상). → ap-fixed도 `height:48px`/썸네일 `36px`로 다른 스킨과 통일(방법 A, 펜닐님 결정). `* {box-sizing:border-box}` 전역이라 48px 안에 padding 흡수됨. 가상 스크롤 핵심 미수정. 일반/공유·PC/모바일 공통 문제였고 양쪽 적용. (ap-fixed 검색창 우측 여백 margin-right은 PC 스킨버튼 겹침 대비 140→110px 시도했으나 최종 불필요로 제거 — 펜닐님 실기기 확인.)
+
+**🟢 B-10. PC 동영상 목록 패널 검색 (2026-06-03)**
+
+- **배경**: PC 동영상 폴더 재생 시 사이드 패널(`fs-vp-panel`, 영상 2개 이상일 때)에 음악 재생목록 검색(B-9)과 같은 검색 기능 추가 요청.
+- **방식**: B-9와 동일 — **스크롤 이동 + 하이라이트**(필터링 아님, 목록 유지), **파일명만**(`.fs-vp-name-inner` 텍스트) 검색. Enter로 다음 일치 순환, 한글 IME는 `keyup`+`isComposing`/229 가드(B-9와 동일 이유).
+- **음악과 구조 차이**: 음악 재생목록은 가상 스크롤(`_vsRender`, scrollTop 계산)이지만, 동영상 패널은 **일반 DOM 목록(전부 렌더)**이라 `scrollIntoView({block:'center', behavior:'smooth'})` 사용(더 간단·부드러움). 동작/UX는 동일.
+- **UI**: 헤더(`fs-vp-header`)가 아이콘+제목+카운트+버튼들로 꽉 차서, 검색창은 **헤더 아래 별도 줄**(`fs-vp-search`). 어두운 패널 테마에 맞춰 흰 글자+돋보기 아이콘+높이 30px. 일치 항목 노란 하이라이트(`fs-vp-search-hit`).
+- **변수 독립**: 음악(`_plSearchMatches`/`_plSearchPos`)과 별개로 `_vpSearchMatches`/`_vpSearchPos` 사용 — 충돌 없음. 기존 패널 기능(클릭 재생, 자동 다음, 토글, 스크롤 위치 저장) 미변경, 검색 핸들러만 `_setupVideoPlaylistPanel`에 추가. PC 한정(패널 자체가 PC 폴더 재생용).
+
+**🟢 B-11. 그리드 모드 폴더 떨림(부들부들) — 스크롤바 토글 진동 (2026-06-03)**
+
+- **증상**: 그리드 모드에서 가만히 있어도 폴더가 가끔 부들부들 떨림(아무 폴더나, 항목 적어도 — 폴더 4개 폴더에서도). 펜닐님이 "탐색기 스크롤바가 진동" 관찰.
+- **원인**: `.file-list { overflow-y: auto }` — 콘텐츠 높이가 뷰포트 경계에 걸치면 세로 스크롤바가 생김↔사라짐 반복 → 가로 폭 변동 → 그리드 `grid-template-columns: repeat(auto-fill, minmax(140px, 1fr))`의 `1fr` 재계산 → 아이템 높이 미세 변동 → 콘텐츠 높이 변동 → 스크롤바 토글 반복(무한 진동). 항목이 적어도 1행↔2행 재배치로 경계 걸치면 발생.
+- **해결**: `.file-list`에 `scrollbar-gutter: stable` 추가 — 스크롤바 공간을 항상 확보해 스크롤바 유무와 무관하게 가로 폭 고정 → 진동 차단. `overflow-y: auto`(스크롤 동작)는 유지. 모바일은 `body.is-mobile .file-list { overflow-y: visible }`(스크롤 컨테이너 아님)이라 scrollbar-gutter 무효 → PC만 적용, 모바일 무영향.
+- **트레이드오프**: PC에서 스크롤 불필요한(항목 적은) 폴더도 우측에 스크롤바 너비(약 8px) 여백 상시 확보. 미미함. (대안: `overflow-y: scroll`은 스크롤바 상시 표시 — scrollbar-gutter가 더 깔끔.)
+- **검증 한계**: 증상 기반 추정(어쩌다 떨려 재현 어려움). scrollbar-gutter:stable은 스크롤바 토글이 원인이면 무조건 차단하는 방식이라 적용해두고 일상 사용하며 관찰 권장. 여전히 떨면 F12로 진동 요소 실측 예정.
+
+**🟢 B-12. PC 동영상 재생목록 전체/연관 모드 + 헤더 재구성 (2026-06-03)**
+
+- **배경**: PC 동영상 폴더 사이드 패널(`fs-vp-panel`)에 PotPlayer의 "비슷한 파일 / 모든 파일" 모드처럼, 폴더 전체 동영상(`전체`)과 재생 중 파일의 시리즈만(`연관`) 전환하는 토글 요청.
+- **모드 토글 UI**: 헤더에 토글 2개를 세로 스택(`fs-vp-toggles`). 자동재생(`fs-vp-autonext`, 수동↔자동)과 모드(`fs-vp-mode`, 전체↔연관, 초록 #4caf50) 동일 스타일(폭 52px, 슬라이더). 각 토글 좌측에 라벨(`fs-vp-toggle-label`: "다음재생"/"범위", min-width 44px 우측정렬).
+- **모드 영구 저장**: 마지막 사용 모드(전체/연관)를 `localStorage 'fs_vp_mode'`에 저장(자동재생 `fs_vp_auto_next`와 동일 패턴, 기본 'all'). 패널 생성 시 복원 → 버튼 상태 반영 → related면 즉시 필터 적용. 새로고침·다른 영상 진입·재방문 후에도 마지막 모드 유지(매번 다시 켤 필요 없음). 토글 클릭 시 `localStorage.setItem`으로 즉시 저장.
+- **연관 판정 로직** (`_vpSeriesPattern` + `_vpIsRelated`, 2단계 — PotPlayer 동작에 맞춤):
+  - (1) **숫자→# 패턴 일치**: 파일명의 연속 숫자묶음을 `#`로 치환해 패턴이 같으면 시리즈 (한자리/두자리 에피소드 번호 섞여도 OK. 예: `...-1화` vs `...-10화` 둘 다 `...-#화`).
+  - (2) **공통 접두사 분석**: 공통 시작부분 다음이 ① 양쪽 다 숫자(번호 차이) 또는 ② 공통이 4자 이상이고 양쪽이 구분자/끝으로 이어지면 시리즈. **단, 공통접두사가 닫는괄호 `]` `)`로 끝나면**(릴그룹/태그만 공통, 예 `[XXX] A편` vs `[XXX] B편`) **다른 작품으로 간주해 제외** — 같은 릴그룹의 다른 시리즈가 잘못 묶이는 것 방지.
+  - **진화 경위(오진단 정정 반복)**: 처음 "숫자+구분자 모두 제거한 뼈대"→릴그룹/화질 메타가 섞여 시리즈가 쪼개짐 / "첫 숫자 앞까지"→`M`+숫자로 시작하는 파일에서 키 1글자로 깨짐 / "마지막 숫자 앞까지"→뒤에 날짜·화질 메타 많으면 깨짐 / "숫자→# 패턴"→한자리/두자리 섞이면 일부 빠짐 해결했으나 부제가 다른 긴 파일명은 패턴 달라 안 묶임 / "공통접두사 비율 50%"→97자 파일에서 공통 26자(27%)라 걸러짐 / "공통 단어로 묶기"→릴그룹만 같은 다른 작품까지 과도하게 묶임. **최종: 숫자패턴 + 공통접두사 다음글자 판정(릴그룹 태그 배제)**. 각 단계마다 콘솔 진단로그로 실제 파일명/패턴 확정 후 수정(추측 금지).
+  - **정규화 추가 (`_vpNorm`)**: 비교 전에 파일명을 확장자 제거 + 모든 구분자/특수문자(공백·`-`·`_`·`.`·`+`·괄호 등) 제거해 순수 문자+숫자만 남김. 같은 시리즈인데 한 파일만 띄어쓰기가 다른 경우(제목 붙임 vs 띄움)에 글자단위 공통접두사가 깨져 대부분 누락되던 회귀를 해결 — PotPlayer가 띄어쓰기/구분자를 무시하고 묶는 동작과 일치. 패턴·접두사 비교 모두 정규화 문자열 기준이고, 릴그룹 태그 배제만 원본 기준으로 판정(괄호 정보 필요).
+  - **대량 검증 방법(회귀 방지)**: 실제 시리즈를 PotPlayer 재생목록(`.dpl`)으로 내보내 "팟플이 실제로 묶은 목록"을 기준 정답으로 삼고, app.js의 `_vpIsRelated`를 그 파일명들에 돌려 일치율을 자동 대조 + 기존 시리즈 케이스 회귀까지 한 번에 확인하는 방식 확립(눈으로 일일이 비교 불필요). 한 시리즈 12개 중 1개만 매칭되던 회귀를 이 방법으로 즉시 발견·수정함. (`.dpl`/파일목록의 실제 파일명은 검증용으로만 사용, 코드·문서엔 미기록.)
+  - **(3) 핵심 단어 교집합 보조 (`_vpKeyTokens`)**: 번호가 **맨 앞에 붙은** 형식(`01 제목 - 부제 …`, `02 제목 - 다른부제 …`)은 공통 접두사가 앞 번호에서 끊기고(`0`만 공통) 중간 부제도 달라 (1)패턴·(2)접두사로 못 잡음. → (1)(2)로 비연관일 때만 작동하는 보조 조건으로, 메타 토큰(eng/subs/1080p/연도/릴그룹명 등 STOP 목록) 제외한 핵심 단어가 **2개 이상 AND 짧은쪽의 50% 이상 공통**이면 시리즈로 판정. 부작용(단어 하나 겹쳐 과하게 묶임) 방지 위해 "2개+ & 50%+"로 엄격. 다른 작품(공통 핵심단어 부족)은 배제 확인.
+  - **연관 판정 최종 구조 (3단계)**: 모든 비교는 `_vpNorm`(구분자·특수문자 제거) 후 → (1) 숫자→# 패턴 일치 / (2) 정규화 공통접두사 다음글자 분석(양쪽 숫자·한쪽 끝·한쪽 숫자) + 릴그룹 태그(`]``)`) 배제 / (3) 핵심단어 교집합. 검증 표본 7종(실제 .dpl 2종 + 테스트 5종) 전부 PotPlayer와 일치, 회귀 0.
+  - **알려진 한계**: "비슷함" 판정은 정답이 없어 100% 자동 불가(PotPlayer도 동일, 그래서 전체/연관 토글 제공). 새 파일명 형식이 나오면 `.dpl` 대량검증으로 빠르게 발견·보강하는 운영 방식. 시즌 구분(시즌1/시즌2)·앞자리 연도 시작 등은 케이스 나올 때 대응.
+- **`_vpApplyMode`**: `related` 모드 시 `all.filter(f => _vpIsRelated(curFile.name, f.name))`, 매칭 0이면 자기 자신만. **연관 목록은 파일명 자연정렬**(`localeCompare numeric:true` → 2화가 10화 앞). `filter` 결과는 `slice()` 복사라 전체 목록(`_fsVpFolderVideos`)은 원래 순서(수정날짜순) 유지. body innerHTML 재렌더 + 카운트(`fs-vp-count`) 갱신 + 검색 초기화.
+- **연동 처리**: 클릭 핸들러·자동 다음 재생(`_fsVpBindAutoNext`)이 `_fsVpViewVideos`(현재 보이는 목록, 전체/연관) 기준 인덱스 참조 — ended 핸들러는 실행 시점에 목록 재계산(모드 전환 후에도 정확). 검색(B-10)은 DOM 기준이라 재렌더 자동 반영 + 모드 전환 시 초기화. 트랙 전환 시 패널 재생성되며 모드 유지 + 새 파일 기준 재필터.
+- **헤더 재구성**: 아이콘(`fs-vp-icon`)을 헤더 직속으로 빼고, 제목+트랙수를 세로 스택(`fs-vp-header-main`, max-width 45%, margin-right 15px)으로 묶어 트랙수를 제목 아래로 이동. 닫기(`fs-vp-close`)는 `margin-left:auto`로 우측 고정. 토글 묶음은 제목과 X 사이.
+- **검증**: 여러 파일명 형식(릴그룹 태그 유무, 부제 차이, 한자리/두자리 번호, 한글/영문 시리즈, 단품 영화) 조합으로 그룹이 끼리끼리 정확히 분리되고 다른 작품은 안 섞이는 것 확인. 동일 릴그룹의 다른 작품 배제 확인. 문법/CSS 균형/진단 잔재 0.
+- **정직한 한계**: "비슷함" 판정은 정답이 없어 100% 자동 불가(PotPlayer도 동일, 그래서 전체/연관 토글 제공). 추가 번호(`_2` 등)나 화질 태그가 파일마다 다르면 분리될 수 있음. 안 맞는 케이스는 실제 사례 확인 후 보강 방침.
+
+
 
 - **현상**: 일반 재생 배지 용량이 항상 GB 고정 → 100MB가 0.1GB, 100MB 이하 0.0GB로 표시.
 - **메인앱 해결** (`assets/js/app.js`): `(fileSize/1024^3).toFixed(1)+'GB'` → `this.formatSize(fileSize)` (코드베이스 공용 함수, B/KB/MB/GB 자동). 100MB→"100.0 MB".
@@ -1431,7 +1600,7 @@ v5.8.1f에서 4:3/1:1 영상 세로 잘림 해결 위해 `.preview-video`의 `wi
 - 기본값: ON (펜닐님 기존 동작 유지)
 
 **저장 정책 (펜닐님 결정):**
-- 일반 페이지: `localStorage` `fs_vp_auto_next` (영구 저장)
+- 일반 페이지: `localStorage` `fs_vp_auto_next` (자동재생, 영구 저장) + `localStorage` `fs_vp_mode` (전체/연관 모드, 영구 저장 — 동일 패턴)
 - 공유 페이지: `sessionStorage` `share_auto_next` (세션 한정 — 공유는 외부 일회성 사용이라 영구 저장 불필요)
 - 두 페이지가 다른 키 이름 사용 → 정책 분리 명확
 
@@ -2542,5 +2711,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.1l — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-05-26 (rhwp 0.7.13 기준)*
+*FileStation v5.8.2 — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-06-05 (rhwp 0.7.14 기준)*

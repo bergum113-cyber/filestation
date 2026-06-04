@@ -710,6 +710,27 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 right: 4px !important;
                 left: auto !important;
             }
+            /* 모바일: 재생방식/화질 셀렉트 — PC처럼 각진 디자인(4px) 통일 + '🎬 화질:' 라벨 숨김 */
+            #share-playback-mode, #share-quality-select {
+                border-radius: 4px !important;
+                font-size: 11px !important;
+                padding: 3px 8px !important;
+            }
+            #share-quality-wrap .share-q-label { display: none !important; }
+        }
+        /* 재생방식/화질 셀렉트 공통 베이스 (본체 .playback-mode-select와 동일 톤) */
+        #share-playback-mode, #share-quality-select {
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 4px;
+            padding: 3px 8px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        #share-playback-mode:hover, #share-quality-select:hover {
+            background: rgba(0, 0, 0, 0.85);
+            border-color: rgba(255,255,255,0.5);
         }
         .player-wrap:fullscreen .transcode-duration,
         .player-wrap:-webkit-full-screen .transcode-duration { bottom: 75px; }
@@ -1296,6 +1317,11 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                             $needsTranscode = true;
                         }
                     }
+                    // ★ 재생방식 셀렉트 '트랜스코딩' 선택 시(force_transcode=1로 새로고침) 강제 트랜스코딩
+                    //   (PC/모바일 공통 — 네이티브 분기에서 사용자가 트랜스코딩 선택한 경우)
+                    if (!$needsTranscode && isset($_GET['force_transcode']) && $_GET['force_transcode'] === '1') {
+                        $needsTranscode = true;
+                    }
                 }
                 $_codecLog('=== 최종 needsTranscode: ' . ($needsTranscode ? 'TRUE' : 'FALSE') . ' ===');
                 
@@ -1462,7 +1488,12 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 </div>
                 <!-- ★ Quality 셀렉터 (v5.8.1c) — 트랜스코딩 영상 / 위치 통일: top:4px right:4px -->
                 <div id="share-quality-wrap" style="display:none;position:absolute;top:4px;right:4px;z-index:14;opacity:0;transition:opacity 0.3s;">
-                    <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;">🎬 <?= __('quality_label', '화질') ?>:
+                    <!-- ★ 재생방식 셀렉트 (트랜스코딩 영상 — 일반재생으로 전환 가능) -->
+                    <select id="share-playback-mode" style="font-size:12px;max-width:110px;margin-right:4px;vertical-align:middle;">
+                        <option value="transcode" selected><?= __('playback_transcode', '트랜스코딩') ?></option>
+                        <option value="native"><?= __('playback_native', '일반재생') ?></option>
+                    </select>
+                    <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;"><span class="share-q-label">🎬 <?= __('quality_label', '화질') ?>:</span>
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
@@ -1482,7 +1513,12 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 <div class="stream-badge native">▶ <?= __('native_playback', '일반 재생') ?><?php if ($videoCodec): ?> (<?= htmlspecialchars(strtoupper($videoCodec)) ?><?php if ($videoResolution): ?> <?= htmlspecialchars($videoResolution) ?><?php endif; ?><?php if ($fileSize > 0): ?> <?= htmlspecialchars(formatFileSize($fileSize)) ?><?php endif; ?>)<?php endif; ?></div>
                 <!-- ★ Quality 셀렉터 (v5.8.1c) — 네이티브 재생 영상에도 표시 -->
                 <div id="share-quality-wrap" style="display:none;position:absolute;top:4px;right:4px;z-index:14;opacity:0;transition:opacity 0.3s;">
-                    <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;">🎬 <?= __('quality_label', '화질') ?>:
+                    <!-- ★ 재생방식 셀렉트 (네이티브 영상 — PC/모바일에서 트랜스코딩으로 전환 가능) -->
+                    <select id="share-playback-mode" style="font-size:12px;max-width:110px;margin-right:4px;vertical-align:middle;">
+                        <option value="native" selected><?= __('playback_native', '일반재생') ?></option>
+                        <option value="transcode"><?= __('playback_transcode', '트랜스코딩') ?></option>
+                    </select>
+                    <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;"><span class="share-q-label">🎬 <?= __('quality_label', '화질') ?>:</span>
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
@@ -2633,6 +2669,22 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                             qSel.blur();
                             
                             const newQuality = qSel.value;
+
+                            // ★ 네이티브 재생 중(일반재생 선택 상태)에서 화질 변경 — 본체 CASE 2/3 로직 적용
+                            if (player._shareNativeMode) {
+                                if (newQuality === 'original') {
+                                    // 원본 = 네이티브 유지 (이미 일반 재생 중) → 변화 없음
+                                    return;
+                                }
+                                // 비-original → 트랜스코딩 모드로 전환 (재생방식 셀렉트/배지 동기화 후 아래 HLS 로직 진행)
+                                player._shareNativeMode = false;
+                                const _pbSel2 = document.getElementById('share-playback-mode');
+                                if (_pbSel2) _pbSel2.value = 'transcode';
+                                const _badge2 = document.querySelector('.stream-badge');
+                                if (_badge2) { _badge2.className = 'stream-badge transcode'; _badge2.innerHTML = '⚡ <?= __('realtime_converting', '실시간 변환 재생') ?>'; }
+                                // dataset.hlsUrl의 quality를 original로 리셋 → 아래에서 newQuality와 다르게 인식되어 전환 진행
+                                player.dataset.hlsUrl = (player.dataset.hlsUrl || '').replace(/&quality=[^&]*/g, '');
+                            }
                             const curUrl = player.dataset.hlsUrl || '';
                             const curQuality = (() => {
                                 const m = curUrl.match(/[?&]quality=([^&]+)/);
@@ -2715,6 +2767,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                                                 player.play().catch(e => console.warn('[ShareQualityChange] play failed:', e?.message));
                                             }, 100);
                                         }
+                                        // ★ 인코더 정보 배지 + 멀티오디오 처리 (일반재생→화질변경 시 누락되던 것)
+                                        //   _fetchShareInfo는 같은 트랜스코딩 분기에 정의됨 → 호출 가능
+                                        try { if (typeof _fetchShareInfo === 'function') _fetchShareInfo(); } catch(e) {}
                                     });
                                     _qHls.on(Hls.Events.ERROR, (event, data) => {
                                         if (!data.fatal) return;
@@ -2736,6 +2791,60 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                                 console.error('[ShareQualityChange] error:', e);
                             }
                         });
+                    }
+
+                    // ★ 재생방식 셀렉트 (1단계): 트랜스코딩 영상 → '일반재생'(네이티브) 전환
+                    //   loaded는 이미 true(트랜스코딩 시작됨)라 네이티브 play 시 startTranscode 재호출 안 됨.
+                    //   '트랜스코딩' 재선택은 페이지 새로고침으로 원복(2단계에서 매끄럽게 개선 예정).
+                    {
+                        const _pbModeSel = document.getElementById('share-playback-mode');
+                        if (_pbModeSel) {
+                            let _pbReady = false;
+                            setTimeout(() => { _pbReady = true; }, 1500);
+                            _pbModeSel.addEventListener('change', () => {
+                                if (!_pbReady) return;
+                                _pbModeSel.blur();
+                                const _mode = _pbModeSel.value;
+                                if (_mode === 'transcode') {
+                                    // 트랜스코딩 재선택 → 새로고침으로 처음부터 트랜스코딩 재생 복귀.
+                                    //   ★ 의도적 설계(펜닐님 결정): 이어서 재생(seek 유지)으로 개선 안 함.
+                                    //   트랜스코딩은 5MB HLS 세그먼트 방식이라 처음부터 시작이 구조에 맞고,
+                                    //   seek 지점부터 변환 세션 맞추는 건 복잡·불안정. reload가 깔끔·안정적.
+                                    try { location.reload(); } catch(e) {}
+                                    return;
+                                }
+                                // === '일반재생'(네이티브) 전환 ===
+                                const _natUrl = (player.dataset.transcodeUrl || '').replace('&transcode=1', '');
+                                if (!_natUrl) return;
+                                const _wasPaused = player.paused;
+                                // HLS 인스턴스 정리
+                                if (_shareHlsInstance) { try { _shareHlsInstance.destroy(); } catch(e) {} _shareHlsInstance = null; }
+                                // HLS 서버 세션 stop
+                                if (_shareHlsSession) {
+                                    const _tok = <?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+                                    const _stop = 'share.php?t=' + encodeURIComponent(_tok) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + _shareHlsSession;
+                                    try { if (navigator.sendBeacon) navigator.sendBeacon(_stop); else fetch(_stop, { keepalive: true }).catch(() => {}); } catch(e) {}
+                                    _shareHlsSession = null;
+                                }
+                                window._shareHlsSwRetried = false;
+                                // 네이티브 src 설정 (source 자식 제거 후)
+                                player._switchingToTranscode = false;
+                                try { player.pause(); } catch(e) {}
+                                player.removeAttribute('src');
+                                while (player.firstChild) player.removeChild(player.firstChild);
+                                player.src = _natUrl;
+                                try { player.load(); } catch(e) {}
+                                if (!_wasPaused) { setTimeout(() => { player.play().catch(() => {}); }, 100); }
+                                // ★ 네이티브 모드 플래그 — 화질 변경 핸들러가 '네이티브 중'임을 알도록(2단계)
+                                player._shareNativeMode = true;
+                                // 배지 → 일반 재생 (코덱/해상도/용량 — 원본 네이티브 배지와 동일 형식)
+                                const _badge = document.getElementById('stream-badge');
+                                if (_badge) {
+                                    _badge.className = 'stream-badge native';
+                                    _badge.innerHTML = <?= json_encode('▶ ' . __('native_playback', '일반 재생') . ($videoCodec ? ' (' . htmlspecialchars(strtoupper($videoCodec)) . ($videoResolution ? ' ' . htmlspecialchars($videoResolution) : '') . ($fileSize > 0 ? ' ' . htmlspecialchars(formatFileSize($fileSize)) : '') . ')' : ''), JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE) ?>;
+                                }
+                            });
+                        }
                     }
                 }
                 
@@ -2816,7 +2925,6 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 
                 // CASE 2: 네이티브 → 트랜스코딩 (비-original 선택)
                 if (newQuality !== 'original' && !isTranscoding) {
-                    // console.log('[ShareQualityChange] native → transcode at', absoluteTime.toFixed(1) + 's (abs), quality=' + newQuality);
                     
                     // 배지 갱신
                     const badge = document.querySelector('.stream-badge');
@@ -2866,6 +2974,22 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                                 if (!wasPaused) {
                                     setTimeout(() => player.play().catch(() => {}), 100);
                                 }
+                                // ★ 인코더 정보 배지 업데이트 (⚡ HLS 스트리밍 HW:Intel) — 트랜스코딩 분기와 동일 형식
+                                (async () => {
+                                    try {
+                                        const _tu = player.dataset.transcodeUrl;
+                                        if (!_tu) return;
+                                        const _ir = await fetch(_tu + '&info=1');
+                                        const _info = await _ir.json();
+                                        const _b = document.querySelector('.stream-badge');
+                                        if (_b && _info.encoder) {
+                                            const _names = {'h264_nvenc':'NVIDIA','h264_qsv':'Intel','h264_amf':'AMD','libx264':'CPU','libx264 (CPU)':'CPU'};
+                                            const _isHw = !_info.encoder.includes('libx264');
+                                            const _name = _names[_info.encoder] || _info.encoder;
+                                            _b.innerHTML = '⚡ HLS <?= __('streaming', '스트리밍') ?> <span class="encoder-info">' + (_isHw ? 'HW' : 'SW') + ' : ' + _name + '</span>';
+                                        }
+                                    } catch(e) {}
+                                })();
                             });
                             hls.on(Hls.Events.ERROR, (ev, data) => {
                                 if (data.fatal) { try { hls.destroy(); } catch(e) {} }
@@ -2999,6 +3123,33 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     console.error('[ShareQualityChange] transcode→transcode error:', e);
                 }
             });
+
+            // ★ 재생방식 셀렉트 (네이티브 분기 — PC/모바일): '트랜스코딩' 선택 시 force_transcode로 새로고침
+            //   기존 CASE 2(화질 전환)를 건드리지 않고, 트랜스코딩 분기를 재사용(reload 방식).
+            //   5MB HLS 세그먼트라 처음부터 재생이 구조에 맞음(트랜스코딩 분기와 일관).
+            {
+                const _pbModeNat = document.getElementById('share-playback-mode');
+                if (_pbModeNat) {
+                    let _pbNatReady = false;
+                    setTimeout(() => { _pbNatReady = true; }, 1500);
+                    _pbModeNat.addEventListener('change', () => {
+                        if (!_pbNatReady) return;
+                        _pbModeNat.blur();
+                        if (_pbModeNat.value === 'transcode') {
+                            try {
+                                const _u = new URL(window.location.href);
+                                _u.searchParams.set('force_transcode', '1');
+                                window.location.href = _u.toString();
+                            } catch(e) {
+                                // URL API 실패 시 단순 추가
+                                const _sep = window.location.href.indexOf('?') === -1 ? '?' : '&';
+                                window.location.href = window.location.href + _sep + 'force_transcode=1';
+                            }
+                        }
+                        // 'native'는 이미 네이티브 재생 중이므로 무동작
+                    });
+                }
+            }
         })();
         
         // === 네이티브 재생 실패 → 트랜스코딩 자동 전환 ===
