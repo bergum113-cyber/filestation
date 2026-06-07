@@ -1,5 +1,6 @@
 <?php
 require_once __DIR__ . '/php_version_check.php';
+require_once __DIR__ . '/api/RarNative.php';
 /**
  * API Router - REST API 엔드포인트
  */
@@ -6566,6 +6567,19 @@ try {
                 if (file_exists($_7zp)) { $sevenZipBin = $_7zp; break; }
             }
             
+            // UnRAR 바이너리 탐색 (rar 전용 — 7-zip이 못 읽는 rar 처리)
+            $unrarBin = null;
+            $unrarPaths = [
+                'C:\\Program Files\\WinRAR\\UnRAR.exe',
+                'C:\\Program Files (x86)\\WinRAR\\UnRAR.exe',
+                'C:\\Program Files\\WinRAR\\Rar.exe',
+                'C:\\Program Files (x86)\\WinRAR\\Rar.exe',
+                '/usr/bin/unrar', '/usr/local/bin/unrar', '/usr/bin/unrar-nonfree'
+            ];
+            foreach ($unrarPaths as $_urp) {
+                if (file_exists($_urp)) { $unrarBin = $_urp; break; }
+            }
+            
             // PHP 내장으로 처리 가능한 형식은 PHP 우선 (안정적)
             $phpNativeFormats = ['zip', 'tar', 'gz', 'tgz', 'bz2', 'tbz2'];
             
@@ -6625,7 +6639,12 @@ try {
                 $tmpFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7z_' . md5($archiveFullPath) . '.txt';
                 // 보안: escapeshellarg로 경로 이스케이프 (command injection 방지)
                 $cmd = escapeshellarg($sevenZipBin) . ' l -slt ' . escapeshellarg($archiveFullPath);
-                $shellOutput = shell_exec($cmd . ' 2>&1');
+                // Windows: 한글/일본어/중국어 등 유니코드 파일명 정확 처리를 위해 UTF-8 콘솔(chcp 65001). (UnRAR 목록·미리보기 추출과 동일 패턴)
+                if (DIRECTORY_SEPARATOR === '\\') {
+                    $shellOutput = shell_exec('chcp 65001 >nul && ' . $cmd . ' 2>&1');
+                } else {
+                    $shellOutput = shell_exec($cmd . ' 2>&1');
+                }
                 if ($shellOutput !== null && $shellOutput !== false) {
                     @file_put_contents($tmpFile, $shellOutput);
                 }
@@ -6713,6 +6732,101 @@ try {
                 $output = $debugLines;
             }
             
+            // 방법 2.5: PHP 네이티브 RAR 파싱 (최우선 — 환경/콘솔 인코딩과 무관, 반디집 방식)
+            // 7-Zip/UnRAR CLI는 Windows 콘솔 코드페이지에 의존해 한글/유니코드 파일명이 깨질 수 있다.
+            // RAR 헤더를 직접 읽으면 LANG/chcp 설정과 무관하게 항상 정확하다.
+            // 성공하면 7-Zip 목록을 교체하고 아래 UnRAR 폴백은 건너뛴다.
+            $nativeRarUsed = false;
+            if ($archiveExt === 'rar') {
+                $nat = @fs_rar_native_list($archiveFullPath);
+                if ($nat && !empty($nat['items'])) {
+                    $natItems = [];
+                    $natEncrypted = false;
+                    $maxItemsN = 50000;
+                    foreach ($nat['items'] as $ni) {
+                        if (count($natItems) >= $maxItemsN) break;
+                        $nm = $ni['name'];
+                        // RAR4 비유니코드 이름은 OEM(CP949 등)일 수 있음 → UTF-8 아니면 CP949 변환
+                        if (!mb_check_encoding($nm, 'UTF-8')) {
+                            $conv = @mb_convert_encoding($nm, 'UTF-8', 'CP949');
+                            if ($conv !== false && $conv !== '') $nm = $conv;
+                        }
+                        if ($ni['encrypted']) $natEncrypted = true;
+                        $natItems[] = [
+                            'name'       => $ni['is_dir'] ? rtrim($nm, '/') : $nm,
+                            'size'       => (int)$ni['size'],
+                            'compressed' => 0,
+                            'modified'   => $ni['modified'] ?? '',
+                            'is_dir'     => $ni['is_dir'],
+                            'encrypted'  => $ni['encrypted'],
+                            'index'      => count($natItems),
+                        ];
+                    }
+                    if (!empty($natItems)) {
+                        $items = $natItems;
+                        $method = 'rar';
+                        if ($natEncrypted) $isEncrypted = true;
+                        $nativeRarUsed = true;
+                    }
+                }
+            }
+
+            // 방법 3: UnRAR 폴백 (네이티브 파싱이 실패했을 때만 — 7-zip의 rar 지원 한계 보완)
+            // rar이고 UnRAR 있으면: 7-Zip이 rar 한글/유니코드 파일명을 깨뜨릴 수 있으므로 UnRAR 목록을 우선 사용 (RAR 공식 도구가 정확). UnRAR이 목록을 못 만들면 7-Zip 결과 유지(자동 폴백).
+            if ($archiveExt === 'rar' && $unrarBin && !$nativeRarUsed) {
+                // unrar lt: technical list. stdin 차단으로 비밀번호 프롬프트 멈춤 방지.
+                // 보안: escapeshellarg로 command injection 방지
+                $urCmd = escapeshellarg($unrarBin) . ' lt ' . escapeshellarg($archiveFullPath);
+                if (DIRECTORY_SEPARATOR === '\\') {
+                    $urOut = @shell_exec('chcp 65001 >nul && ' . $urCmd . ' 2>&1 < nul');
+                } else {
+                    $urOut = @shell_exec($urCmd . ' 2>&1 < /dev/null');
+                }
+                if ($urOut) {
+                    $cur = [];
+                    $maxItems = 50000;
+                    $urItems = [];      // UnRAR 결과 임시 (성공 시 7-Zip 목록 교체)
+                    $urEncrypted = false;
+                    // unrar lt 출력은 "Key: value" 형식, 항목은 빈 줄로 구분
+                    $saveUr = function() use (&$cur, &$urItems, &$urEncrypted, $maxItems) {
+                        if (empty($cur['Name']) || count($urItems) >= $maxItems) return;
+                        $isDir = (isset($cur['Type']) && stripos($cur['Type'], 'Directory') !== false);
+                        $nm = str_replace('\\', '/', $cur['Name']);
+                        // Windows unrar 출력이 CP949일 수 있음 → UTF-8 변환
+                        if (!mb_check_encoding($nm, 'UTF-8')) {
+                            $conv = @mb_convert_encoding($nm, 'UTF-8', 'CP949');
+                            if ($conv) $nm = $conv;
+                        }
+                        $enc = (isset($cur['Flags']) && stripos($cur['Flags'], 'encrypt') !== false);
+                        if ($enc) $urEncrypted = true;
+                        $urItems[] = [
+                            'name' => $isDir ? rtrim($nm, '/') : $nm,
+                            'size' => (int)preg_replace('/[^0-9]/', '', $cur['Size'] ?? '0'),
+                            'compressed' => (int)preg_replace('/[^0-9]/', '', $cur['Packed size'] ?? '0'),
+                            'modified' => preg_replace('/\.\d+$/', '', $cur['mtime'] ?? ''),
+                            'is_dir' => $isDir,
+                            'encrypted' => $enc,
+                            'index' => count($urItems)
+                        ];
+                    };
+                    foreach (explode("\n", $urOut) as $ln) {
+                        $tl = trim($ln);
+                        if ($tl === '') { $saveUr(); $cur = []; continue; }
+                        $cp = strpos($tl, ': ');
+                        if ($cp !== false) {
+                            $cur[substr($tl, 0, $cp)] = substr($tl, $cp + 2);
+                        }
+                    }
+                    $saveUr();
+                    // UnRAR이 목록을 만들었으면 7-Zip 결과를 교체 (rar 한글 파일명 정확)
+                    if (!empty($urItems)) {
+                        $items = $urItems;
+                        $method = 'unrar';
+                        if ($urEncrypted) $isEncrypted = true;
+                    }
+                }
+            }
+            
             // 모든 방법 실패
             if (empty($items) && $method === 'none') {
                 $result = [
@@ -6785,7 +6899,7 @@ try {
             
             // 이미지 확장자 체크
             $entryExt = strtolower(pathinfo($entryName, PATHINFO_EXTENSION));
-            $imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico'];
+            $imageExts = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'];
             if (!in_array($entryExt, $imageExts)) {
                 http_response_code(400);
                 echo 'Not an image file';
@@ -6854,6 +6968,38 @@ try {
                         @unlink($extractedFile);
                     }
                     @rmdir($extractDir);
+                    if ($fileData === false) $fileData = null;
+                }
+            }
+            
+            // UnRAR 폴백 (rar인데 7-zip이 추출 실패한 경우)
+            if ($fileData === null && $archiveExt2 === 'rar') {
+                $unrarBin2 = null;
+                $unrarPaths2 = ['C:\\Program Files\\WinRAR\\UnRAR.exe', 'C:\\Program Files (x86)\\WinRAR\\UnRAR.exe', 'C:\\Program Files\\WinRAR\\Rar.exe', 'C:\\Program Files (x86)\\WinRAR\\Rar.exe', '/usr/bin/unrar', '/usr/local/bin/unrar', '/usr/bin/unrar-nonfree'];
+                foreach ($unrarPaths2 as $_up) { if (file_exists($_up)) { $unrarBin2 = $_up; break; } }
+                if ($unrarBin2) {
+                    // 임시 디렉토리로 추출 후 읽기 (7z와 동일하게 바이너리 안전 방식)
+                    $extractDir2 = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_urext_' . md5($archiveReal . $entryName . microtime(true) . mt_rand());
+                    @mkdir($extractDir2, 0700, true);
+                    // unrar e: flat 추출, -y: 자동 yes, -inul: 메시지 억제. 출력 디렉토리는 끝 구분자 필요.
+                    // 보안: escapeshellarg로 command injection 방지. stdin 차단으로 비밀번호 프롬프트 멈춤 방지.
+                    $urDest = rtrim($extractDir2, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+                    $urCmd2 = escapeshellarg($unrarBin2) . ' e -y -inul ' . escapeshellarg($archiveReal)
+                            . ' ' . escapeshellarg($entryName) . ' ' . escapeshellarg($urDest);
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        @shell_exec('chcp 65001 >nul && ' . $urCmd2 . ' 2>nul < nul');
+                    } else {
+                        @shell_exec($urCmd2 . ' 2>/dev/null < /dev/null');
+                    }
+                    // flat 추출이므로 basename으로 읽음
+                    $extractedFile2 = $extractDir2 . DIRECTORY_SEPARATOR . basename($entryName);
+                    if (is_file($extractedFile2)) {
+                        if (@filesize($extractedFile2) <= $maxPreviewSize) {
+                            $fileData = @file_get_contents($extractedFile2);
+                        }
+                        @unlink($extractedFile2);
+                    }
+                    @rmdir($extractDir2);
                     if ($fileData === false) $fileData = null;
                 }
             }
@@ -9379,6 +9525,28 @@ try {
                     break;
                 }
             }
+
+            // UnRAR 설치 상태 (rar 전용 — 7-Zip이 못 읽는 rar 처리 보완)
+            $unrarInfo = ['installed' => false, 'path' => '', 'version' => ''];
+            $unrarSearchPaths = [
+                'C:\\Program Files\\WinRAR\\UnRAR.exe',
+                'C:\\Program Files (x86)\\WinRAR\\UnRAR.exe',
+                'C:\\Program Files\\WinRAR\\Rar.exe',
+                'C:\\Program Files (x86)\\WinRAR\\Rar.exe',
+                '/usr/bin/unrar', '/usr/local/bin/unrar', '/usr/bin/unrar-nonfree'
+            ];
+            foreach ($unrarSearchPaths as $_urp) {
+                if (file_exists($_urp)) {
+                    $unrarInfo['installed'] = true;
+                    $unrarInfo['path'] = $_urp;
+                    // 버전 확인
+                    $urVer = @shell_exec(escapeshellarg($_urp) . ' 2>&1');
+                    if ($urVer && preg_match('/UNRAR\s+([\d.]+)/i', $urVer, $um)) {
+                        $unrarInfo['version'] = $um[1];
+                    }
+                    break;
+                }
+            }
             
             $result = [
                 'success' => true,
@@ -9409,7 +9577,8 @@ try {
                 'security_checks' => $securityChecks,
                 'php_info' => $phpInfo,
                 'server_resources' => $serverResources,
-                'seven_zip' => $sevenZipInfo
+                'seven_zip' => $sevenZipInfo,
+                'unrar' => $unrarInfo
             ];
             break;
         

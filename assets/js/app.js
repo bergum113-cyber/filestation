@@ -29970,6 +29970,20 @@ const App = {
                         szPanel.style.border = '1px solid rgba(255,152,0,0.2)';
                         szPanel.innerHTML = `⚠️ <b>7-Zip</b> ${t('il_not_installed', '미설치')}<br><span style="font-size:12px;color:#666;">${t('archive_zip_only', 'ZIP, TAR 형식만 미리보기 가능합니다. 7-Zip을 설치하면 RAR, 7Z, ISO 등 40개+ 형식을 지원합니다.')}</span>`;
                     }
+                    // UnRAR 설치 상태 (rar 전용 — 7-Zip이 못 읽는 rar 보완)
+                    const urPanel = document.getElementById('archive-unrar-status');
+                    if (urPanel) {
+                        const ur = sysRes.unrar || {};
+                        if (ur.installed) {
+                            urPanel.style.background = 'rgba(76,175,80,0.08)';
+                            urPanel.style.border = '1px solid rgba(76,175,80,0.2)';
+                            urPanel.innerHTML = `✅ <b>UnRAR ${this.escapeHtml(ur.version || '')}</b> ${t('il_installed', '설치됨')} <span style="color:#888;font-size:12px;">(${this.escapeHtml(ur.path || '')})</span><br><span style="font-size:12px;color:#666;">${t('unrar_rar_supported', '7-Zip이 못 읽는 rar 파일도 미리보기 가능')}</span>`;
+                        } else {
+                            urPanel.style.background = 'rgba(158,158,158,0.08)';
+                            urPanel.style.border = '1px solid rgba(158,158,158,0.2)';
+                            urPanel.innerHTML = `<b>UnRAR</b> ${t('il_not_installed', '미설치')} <span style="color:#888;font-size:12px;">(${t('optional', '선택')})</span><br><span style="font-size:12px;color:#666;">${t('unrar_optional_desc', '일부 rar는 7-Zip으로 목록이 안 보일 수 있습니다. WinRAR(UnRAR) 설치 시 그런 rar도 처리됩니다.')}</span>`;
+                        }
+                    }
                 }).catch(() => {});
             }
             $('#setting-onlyoffice-enabled').prop('checked', onlyoffice.enabled === true);
@@ -32975,7 +32989,7 @@ const App = {
                 const sizeStr = aSize > 1024*1024 
                     ? (aSize / (1024*1024)).toFixed(1) + ' MB' 
                     : (aSize / 1024).toFixed(1) + ' KB';
-                const methodBadge = res.method === '7zip' ? ' · 7-Zip' : res.method ? ' · ' + res.method : '';
+                const methodBadge = res.method === '7zip' ? ' · 7-Zip' : res.method === 'rar' ? ' · RAR' : res.method ? ' · ' + res.method : '';
                 info.textContent = `${res.total}${t('files_count', '개 항목')} · ${sizeStr}${res.encrypted ? ' · 🔒' : ''}${methodBadge}`;
             }
             
@@ -33021,7 +33035,7 @@ const App = {
                 const sizeStr = aSize > 1024*1024 
                     ? (aSize / (1024*1024)).toFixed(1) + ' MB' 
                     : (aSize / 1024).toFixed(1) + ' KB';
-                const methodBadge = res.method === '7zip' ? ' · 7-Zip' : res.method ? ' · ' + res.method : '';
+                const methodBadge = res.method === '7zip' ? ' · 7-Zip' : res.method === 'rar' ? ' · RAR' : res.method ? ' · ' + res.method : '';
                 info.textContent = `${res.total}${t('files_count', '개 항목')} · ${sizeStr}${res.encrypted ? ' · 🔒' : ''}${methodBadge}`;
             }
             
@@ -33144,7 +33158,7 @@ const App = {
             const ext = fileName.split('.').pop().toLowerCase();
             const icon = this._getArchiveFileIcon(ext);
             const lockBadge = item.encrypted ? ' <span style="color:#e65100;font-size:11px;">🔒</span>' : '';
-            const isImage = ['jpg','jpeg','png','gif','webp','bmp','svg','ico'].includes(ext);
+            const isImage = ['jpg','jpeg','png','gif','webp','bmp','svg'].includes(ext);
             const canPreviewImg = isImage && !item.encrypted;
             const imgStyle = canPreviewImg ? 'cursor:pointer;' : '';
             const imgAttr = canPreviewImg ? ` data-archive-img="${this.escapeHtml(item.name)}" onclick="App._previewArchiveImage(this.dataset.archiveImg)"` : '';
@@ -33190,7 +33204,7 @@ const App = {
         
         // 현재 폴더의 이미지 목록 수집 (갤러리 네비게이션용)
         const prefix = this._zipCurrentPath ? this._zipCurrentPath + '/' : '';
-        const imageExts = ['jpg','jpeg','png','gif','webp','bmp','svg','ico'];
+        const imageExts = ['jpg','jpeg','png','gif','webp','bmp','svg'];
         const archiveImages = this._zipItems.filter(item => {
             if (item.is_dir || item.encrypted) return false;
             const name = item.name;
@@ -33328,7 +33342,7 @@ const App = {
             if (!res.success || !res.items) throw new Error(res.error || 'Failed');
             
             // 이미지 파일 찾기
-            const imageExts2 = ['jpg','jpeg','png','gif','webp','bmp','svg','ico'];
+            const imageExts2 = ['jpg','jpeg','png','gif','webp','bmp','svg'];
             const images = res.items.filter(item => {
                 if (item.is_dir || item.encrypted) return false;
                 const ext = item.name.split('.').pop().toLowerCase();

@@ -6883,18 +6883,23 @@ class FileManager {
         @set_time_limit(0);
         
         // 7z l -slt 로 암호화 여부 사전 체크 (보안: escapeShellPath 사용)
-        $checkCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt ' . $this->escapeShellPath($fullZipPath);
+        // 틀린 더미 비번(-p)으로 시도하여 헤더 암호화(목록까지 암호화)도 감지. stdin 차단으로 비번 프롬프트 멈춤 방지.
+        $encProbePw = '__fs_enc_probe__';
+        $checkCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt -p' . $this->escapeShellPath($encProbePw) . ' ' . $this->escapeShellPath($fullZipPath);
         if (DIRECTORY_SEPARATOR === '\\') {
-            $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1');
+            $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
         } else {
-            $checkOutput = @shell_exec($checkCmd . ' 2>&1');
+            $checkOutput = @shell_exec($checkCmd . ' 2>&1 < /dev/null');
         }
         
         $isEncrypted = false;
         if ($checkOutput) {
-            // "Encrypted = +" 또는 "Method = AES" 패턴 확인
+            // "Encrypted = +"/"Method = AES" (일반 암호화·항목 정보) 또는
+            // "Cannot open encrypted"/"Wrong password" (헤더 암호화·목록까지 암호) 패턴 확인
             if (preg_match('/Encrypted\s*=\s*\+/i', $checkOutput) || 
-                preg_match('/Method\s*=.*AES/i', $checkOutput)) {
+                preg_match('/Method\s*=.*AES/i', $checkOutput) ||
+                stripos($checkOutput, 'Cannot open encrypted') !== false ||
+                preg_match('/Wrong password/i', $checkOutput)) {
                 $isEncrypted = true;
             }
         }
@@ -7307,6 +7312,48 @@ class FileManager {
             $progressCallback(100, 100, $basename);
         }
         
+        // UnRAR 폴백: rar인데 7-Zip이 추출하지 못한 경우 (7-Zip의 rar 지원 한계 보완 — 목록/미리보기 폴백과 동일 취지)
+        if ($fileCount === 0 && $ext === 'rar') {
+            $unrarBin = null;
+            $unrarPaths = [
+                'C:\\Program Files\\WinRAR\\UnRAR.exe',
+                'C:\\Program Files (x86)\\WinRAR\\UnRAR.exe',
+                'C:\\Program Files\\WinRAR\\Rar.exe',
+                'C:\\Program Files (x86)\\WinRAR\\Rar.exe',
+                '/usr/bin/unrar', '/usr/local/bin/unrar', '/usr/bin/unrar-nonfree'
+            ];
+            foreach ($unrarPaths as $up) { if (file_exists($up)) { $unrarBin = $up; break; } }
+            if ($unrarBin) {
+                // unrar x: 전체 경로 유지 추출, -y: 자동 yes, -o+: 덮어쓰기, -inul: 메시지 억제. stdin 차단으로 비밀번호 프롬프트 멈춤 방지.
+                // 보안: escapeShellPath로 경로 이스케이프 (command injection 방지)
+                $urDest = rtrim($extractDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
+                $urCmd = $this->escapeShellPath($unrarBin) . ' x -y -o+ -inul ' . $this->escapeShellPath($fullPath) . ' ' . $this->escapeShellPath($urDest);
+                // 암호화 rar 대응: 비밀번호가 있으면 -p<password> 추가 (7z x와 동일한 비번 처리 패턴).
+                // 흐름상 여기 도달 = 무암호 또는 (암호화 + 비번 있음). 비번 없는 암호화는 사전 체크에서 need_password로 이미 반환됨.
+                if (!empty($password)) {
+                    $urSafePwd = preg_replace('/[\x00-\x1F\x7F"`$\\\\]/', '', $password);
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        $urCmd .= ' -p"' . $urSafePwd . '"';
+                    } else {
+                        $urCmd .= ' -p' . escapeshellarg($urSafePwd);
+                    }
+                }
+                if (DIRECTORY_SEPARATOR === '\\') {
+                    @shell_exec('chcp 65001 >nul && ' . $urCmd . ' 2>nul < nul');
+                } else {
+                    @shell_exec($urCmd . ' 2>/dev/null < /dev/null');
+                }
+                // 추출 결과 다시 집계
+                $fileCount = 0; $totalExtractedSize = 0;
+                if (is_dir($extractDir)) {
+                    $it = new \RecursiveIteratorIterator(
+                        new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS)
+                    );
+                    foreach ($it as $f) { $fileCount++; $totalExtractedSize += $f->getSize(); }
+                }
+            }
+        }
+
         if ($fileCount === 0 || ($isEncrypted && $totalExtractedSize === 0)) {
             if (is_dir($extractDir)) {
                 $this->deleteDirectory($extractDir);

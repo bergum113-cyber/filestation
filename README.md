@@ -4,7 +4,7 @@
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
-![rhwp](https://img.shields.io/badge/rhwp-0.7.14-9cf)
+![rhwp](https://img.shields.io/badge/rhwp-0.7.15-9cf)
 ![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
@@ -15,7 +15,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.14 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.15 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -200,7 +200,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.14 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.15 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -488,7 +488,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.14** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.15** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -663,7 +663,7 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.14
+버전: 0.7.15
 파일: assets/rhwp/
 업그레이드: rhwp_업그레이드_가이드_v6.md 참조
 ```
@@ -684,7 +684,7 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.14의 베타 단계 제한, HWP 형식만 저장 가능
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.15의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -719,11 +719,93 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.2 (rhwp 0.7.14 기반)
+**현재 버전**: v5.8.2 (rhwp 0.7.15 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.2 (2026-05-29 ~ 2026-06-05) ⭐ 현재
+#### v5.8.2a (2026-06-06) ⭐ 현재
+
+**[v5.8.2a 정정/롤백] RAR5 파일명 임의 변환(fs_rar5_decode/normalize) 제거 — 원본 코드포인트 보존 (2026-06-06)**
+
+직전에 추가했던 RAR5 파일명 "escape 디코더"가 **오진이었음을 확인하고 전량 롤백**. 원본(코드포인트 그대로 보존) 동작으로 복구.
+
+- 오진 경위: 일부 RAR5의 파일명이 `U+FFFE` 다음에 `U+E000~U+E0FF`(PUA, 사용자정의영역) 코드포인트로 저장된 것을 보고, 이를 "한글이 escape된 것"으로 오판해 `cp - 0xE000` 바이트로 변환하는 디코더를 넣었다. 변환 결과가 우연히 유효한 한글 UTF-8(`만화 [완결]` 등)이 나오자 맞다고 단정한 것이 오류였다.
+- 사실 확인: **정품 WinRAR로 동일 RAR을 열면 그 PUA 코드포인트(특수 그림문자)가 그대로 표시된다.** 즉 RAR에 저장된 진짜 파일명이 PUA 문자이며(이 테스트 파일을 만든 압축기가 그렇게 저장함), WinRAR(표준 참조 구현)과 일치시키려면 **어떤 변환도 하지 않고 원본 코드포인트를 그대로 보존**해야 한다. 디코더는 원본을 변조하는 버그였다.
+- 조치: `api/RarNative.php`를 디코더 추가 이전 원본으로 복원(fs_rar5_decode_name·fs_rar5_normalize_name 제거, RAR5 파일명은 헤더의 UTF-8 바이트 그대로 사용). `api.php`도 원본으로 복원(archive_preview에 추가했던 "전체추출+정규화 매칭" 폴백 제거). 두 파일 모두 직전 배포 이전 원본과 diff 동일 확인, `php -l` 통과.
+- 결과: RAR 목록·미리보기가 WinRAR과 동일하게 원본 코드포인트를 보존. PUA 글리프는 뷰어/폰트에 따라 그림문자 또는 대체문자(￾)로 보이지만, 바이트는 원본과 100% 일치(변조 없음). 7z 경로는 이번 변경과 무관하게 기존대로 정상.
+- 최종 결론(PUA 표시 = 폰트 문제, 데이터 무수정 유지): 브라우저 콘솔에서 `App._zipItems`의 코드포인트를 직접 확인한 결과 `U+E0EB U+E0A7 …`(PUA) + `U+FFFE`로, **FileStation이 들고 있는 데이터는 WinRAR과 100% 동일**함(U+FFFD 같은 손상 없음). 즉 목록이 두부문자(□/￾)로 보이는 것은 데이터 손상이 아니라, 웹 폰트에 PUA(U+E000~U+F8FF) 영역 글리프가 없어서 생기는 **순수 렌더링/폰트 문제**다. WinRAR·반디집은 해당 PUA 글리프를 가진 폰트가 있어 그림문자로 보여주는 것일 뿐, PUA 파일명은 본래 이식성이 없다(폰트/환경이 다르면 동일하게 깨짐).
+- 공식 스펙 근거(RAR 5.0 archive format, rarlab/unrar): "Unix 파일명에 Unicode/UTF-8로 변환 불가한 high ASCII 문자가 있으면, 해당 바이트를 **0xE080–0xE0FF PUA 영역에 매핑**하고 문자열에 **0xFFFE(non-character) 마커를 삽입**한다. 이렇게 매핑된 이름은 **이식성이 없으며 생성한 바로 그 시스템에서만 정확히 복원**할 수 있다(Such mapped names are not portable and can be correctly unpacked only on the same system where they were created)." → 즉 U+FFFE+U+E0xx는 RAR이 정의한 정식 동작이고, 원래 시스템 인코딩을 모르는 다른 환경(WinRAR 포함)에서는 PUA 그대로 두는 것이 스펙에 부합한다. (참고: 이번 테스트 RAR의 PUA 바이트를 꺼내 UTF-8로 풀면 `만화 [완결]`이 나오긴 하나, 인코딩이 항상 UTF-8이라는 보장이 없어 임의 복원은 위험 — WinRAR과 동일하게 보존하는 방침을 채택함.)
+- 결정 근거 보강: 위 스펙에 따라 PUA 보존이 표준에 부합하는 안전한 선택. 임의 디코딩(특정 인코딩 가정)은 다른 시스템 인코딩으로 만든 파일에서 오역 위험이 있어 채택하지 않음.
+- 결정: 데이터가 이미 정확하고(미리보기·추출은 PUA 코드포인트로 매칭되어 정상 동작), 실사용 파일에는 이런 PUA 그림문자가 없으므로(일반 한글·일본어·중국어·특수문자는 정상 표시됨), **코드를 추가 수정하지 않고 원본 보존 상태를 유지**한다. PUA를 WinRAR처럼 그림으로 보여주려면 해당 PUA 글리프 폰트를 `@font-face`로 웹에 탑재해야 하나, 환경 종속·라이선스·유지보수 부담 대비 실익이 낮아 보류. (정상 동작하는 표시 로직을 건드려 회귀를 만들지 않기 위함)
+
+**[v5.8.2a 버그 수정] rar 내부 한글/유니코드 파일명 깨짐 — PHP 네이티브 RAR 헤더 직접 파싱 (2026-06-06)**
+
+UnRAR 목록 우선화(아래 항목)를 적용해도 Windows에서 한글 파일명이 여전히 깨지는 경우가 있어, 7-Zip/UnRAR CLI에 의존하지 않고 RAR 헤더를 직접 읽어 파일명을 추출하는 방식으로 근본 해결. (반디집 같은 전용 압축 프로그램이 쓰는 방식)
+
+- 근본 원인: 7-Zip·UnRAR CLI 모두 출력이 Windows 콘솔 코드페이지(chcp)에 의존. `chcp 65001`을 붙여도 shell_exec의 파이프/리다이렉션 환경에서 일관되게 적용되지 않아 한글이 깨질 수 있음. CLI를 거치는 한 환경 의존을 완전히 제거할 수 없음.
+- 해결: `api/RarNative.php` 신규 — PHP만으로 RAR 헤더를 직접 파싱.
+  - RAR5(`Rar!\x1A\x07\x01\x00`): 가변정수(vint) 파싱 → File 헤더(type 2)에서 파일명을 UTF-8 그대로 추출(원본 코드포인트 보존 — WinRAR과 동일). 크기·디렉토리 플래그·extra area의 파일시간 레코드(type 3, Unix/Windows FILETIME)에서 수정시각 추출.
+  - RAR4(`Rar!\x1A\x07\x00`): File 헤더(0x74) 고정 오프셋 파싱(NAME_SIZE=블록+26, 이름=블록+32, HIGH 필드 시 +8). 유니코드 확장 이름(플래그 0x200)은 UnRAR의 EncodeFileName 알고리즘으로 디코드. DOS datetime에서 수정시각, head_flags 0xe0=디렉토리, 0x04=암호화 추출.
+- 통합: archive_list에서 rar이면 **네이티브 파싱을 최우선** 시도. 성공 시 7-Zip 목록을 교체하고 method='rar'(화면 '· RAR'), UnRAR 셸 폴백은 건너뜀. 네이티브 실패(헤더 암호화 등) 시에만 기존 UnRAR/7-Zip 폴백 동작. zip/7z/iso 등 다른 형식과 7-Zip 블록은 무변경.
+- RAR4 비유니코드 OEM 이름은 호출측에서 UTF-8 검증 후 CP949 폴백. 1GB 초과 파일은 메모리 보호를 위해 네이티브 생략(기존 폴백 사용).
+- 검증: PHP `php -l` OK, JS `node --check` OK. 실제 RAR5/RAR4 파일 및 한글 RAR5로 파일명·크기·날짜·디렉토리 개수 일치 확인(파일/디렉토리 카운트가 7-Zip·UnRAR 결과와 정확히 일치). ※ Windows 실기기에서 한글 목록 표시('· RAR' 라벨)와 내부 이미지 미리보기 검증 권장. 미리보기/추출은 여전히 7z/UnRAR로 해당 이름을 추출하므로(별도 경로), 한글 미리보기가 안 되면 추출 경로가 다음 과제.
+
+**[v5.8.2a 버그 수정] rar 내부 한글/유니코드 파일명 깨짐 — UnRAR 목록 우선화 (2026-06-06)**
+
+rar 압축 내부의 한글/유니코드 파일명이 `___?羅??萃??溜?`처럼 깨져 표시되던 문제 수정. (7-Zip은 rar의 유니코드 파일명 처리가 약함 — RAR은 파일명을 UTF-16으로 저장하는데 7-Zip이 콘솔 코드페이지로 변환하며 손실)
+
+- 원인: 7-Zip이 rar를 읽되 한글 파일명을 깨뜨려도 목록 항목은 채워지므로(`empty($items)` 아님), 기존 UnRAR 폴백(0개일 때만 동작)이 작동하지 않아 깨진 이름이 그대로 표시됨.
+- 수정: archive_list에서 rar이고 UnRAR이 있으면 UnRAR 목록을 우선 사용(RAR 공식 도구가 유니코드 정확). UnRAR 결과를 임시 배열에 모아 성공 시 7-Zip 목록을 교체, UnRAR 실패 시 7-Zip 목록 유지(자동 폴백). 7-Zip 목록 블록·zip/7z/iso 등 다른 형식은 무변경.
+- 미리보기: 목록이 정상 이름을 주면 미리보기 시 7-Zip이 해당 이름을 못 찾아(0개) `fileData=null` → 기존 archive_preview UnRAR 폴백(`unrar e`)이 정상 이름으로 추출. (7z의 "No files to process" 동작 실측 확인)
+- 검증: PHP `php -l` OK, 7z e 미존재 entry 0개 추출 확인. ※ 실제 rar 실기기 검증 권장. extract(전체 압축해제)는 별도 — 아래 한계 참고.
+
+**[v5.8.2a 버그 수정] 압축 목록 유니코드 파일명 처리 — 7z 목록 호출 chcp 누락 (2026-06-06)**
+
+압축(7z/rar/iso 등) 내부 파일명에 일본어·중국어 등 비한글 유니코드가 있을 때 Windows에서 목록이 깨질 수 있던 문제 수정. (한글은 기존 CP949→UTF-8 변환으로 보완돼 있었음)
+
+- 원인: archive_list의 7z `l -slt` 목록 호출에만 `chcp 65001`(UTF-8 콘솔)이 빠져 있었음. UnRAR 목록·미리보기 추출·암호 체크에는 이미 적용돼 있어 7z 목록만 불일치.
+- 수정: 7z 목록 호출에 Windows 분기로 `chcp 65001` 추가. 이제 인코딩 처리 4곳(7z 목록/UnRAR 목록/미리보기 추출/암호 체크) 모두 일관. saveEntry의 CP949→UTF-8 폴백은 UTF-8 출력 시 자동 스킵되어 충돌 없음.
+- 클라이언트는 기존에도 `encodeURIComponent`로 entry 전달, 추출은 escapeshellarg+chcp라 특수문자([], &, 공백 등)·한글은 정상 처리됐음. 이번 수정으로 비한글 유니코드까지 정확.
+- 검증: PHP `php -l` OK. 한글/일본어/특수문자 이미지명 목록 파싱 확인. ※ Windows 실기기에서 일본어 등 파일명 검증 권장.
+
+**[v5.8.2a 기능] 헤더 암호화 7z/rar 압축해제 — 비밀번호 입력창 지원 (2026-06-06)**
+
+암호 걸린 7z/rar 압축해제가 ZIP처럼 동작하도록 개선. 일반 암호화(내용만)는 기존에도 비번 입력창이 떴으나, 헤더 암호화(파일 목록까지 암호화)는 압축해제 시 감지가 안 돼 "압축 해제 실패"로 끝나던 것을 보완.
+
+- 원인: extract7zip 사전 암호화 체크가 `Encrypted = +`(항목 정보)에만 의존 → 헤더 암호화는 목록 자체가 안 읽혀 해당 신호가 없어 미감지 + `7z l`이 비번 프롬프트로 멈출 위험.
+- 수정: 사전 체크를 틀린 더미 비번(`-p`)으로 시도 + stdin 차단. 헤더 암호화면 7-Zip이 `Cannot open encrypted archive` / `Wrong password`를 반환 → 이를 추가 감지. 무암호=목록정상(미암호화), 일반암호=`Encrypted=+`, 헤더암호=`Cannot open encrypted` 3케이스 정확 구분(실측).
+- 클라이언트 무변경: 기존 extract `need_password` 흐름(입력창 → 비번 재요청 → `7z x -p` 해제) 재사용. ZIP·일반 암호화 동작 100% 보존.
+- 검증: PHP `php -l` OK, 7z로 무암호/일반암호/헤더암호 3케이스 감지 실측. ※ 실제 헤더 암호화 rar 실기기 검증 권장.
+
+**[v5.8.2a 기능] rar 처리에 UnRAR 폴백 추가 — 7-Zip이 못 읽는 rar 대응 (2026-06-06)**
+
+7-Zip의 rar 지원 한계로 일부 rar(특정 RAR5 방식 등)에서 목록이 0개로 나오던 것을, RAR 공식 도구 UnRAR 폴백으로 보완. 7-Zip으로 먼저 시도하고, rar인데 목록/추출이 안 되면 UnRAR로 재시도.
+
+- 서버(archive_list): UnRAR 바이너리 경로 탐색(WinRAR\UnRAR.exe·Rar.exe / unrar) 추가. 7-Zip이 0개 반환 + rar 확장자면 `unrar lt`(technical list)로 목록 재파싱(Name/Type/Size, 빈 줄 구분, CP949→UTF-8 변환). 기존 7-Zip 동작은 100% 보존 — 7-Zip이 읽으면 그대로, 못 읽을 때만 UnRAR.
+- 서버(archive_preview): 7-Zip 이미지 추출 실패 + rar면 `unrar e`로 임시 디렉토리 추출 후 읽기(바이너리 안전 방식).
+- 서버(extract7zip, 압축해제): 7-Zip 추출 결과가 0개(rar)면 `unrar x`로 재추출 후 파일 수 재집계. 암호화 rar도 커버 — 비밀번호가 있으면 `-p<password>` 추가(7z x와 동일한 비번 처리 패턴). 무암호는 비번 없이 추출(회귀 없음). 추출 폴백은 출력 파싱이 없어(파일 생성 여부만 확인) 안정적. extractSplitZip(분할 압축)은 영향 없음.
+- 보안: escapeshellarg로 command injection 방지, stdin 차단으로 비밀번호 프롬프트 멈춤 방지, 임시 디렉토리 추출 후 정리.
+- 검증: PHP `php -l` OK. UnRAR lt 표준 출력 파싱 시뮬레이션 확인(파일/디렉토리/한글 구분). ※ 서버에 WinRAR/UnRAR 설치 필요, 실제 rar로 실기기 검증 필요.
+
+**[v5.8.2a 기능] 시스템 설정에 UnRAR 설치 상태 표시 (2026-06-06)**
+
+관리탭 > 시스템 설정 > "압축파일 미리보기 설정"에 7-Zip 상태만 있던 것에 UnRAR(rar 전용) 설치 상태 표시를 추가. rar UnRAR 폴백 기능과 일관성 확보.
+
+- 서버: system_info 응답에 `unrar` 정보(설치 여부/경로/버전) 추가. UnRAR 경로 탐색은 archive_list 폴백과 동일(WinRAR\UnRAR.exe, Rar.exe, /usr/bin/unrar 등).
+- 클라이언트: 7-Zip 상태 패널 아래 UnRAR 상태 패널 추가(설치됨/미설치). 안내 테이블에 "UnRAR(선택) — 7-Zip이 못 읽는 rar 보완" 행 추가.
+- 설치 안내: 7-Zip 설치 안내 박스 아래 UnRAR 설치 안내 박스 추가(Windows win-rar.com, Linux apt/yum install unrar). 선택 사항임을 명시.
+- UnRAR은 선택 사항(7-Zip이 대부분의 rar 처리, UnRAR은 그 외 rar 보완)이므로 미설치 시 경고가 아닌 회색 안내로 표시.
+- 검증: PHP `php -l`(api.php·index.php) OK, app.js node --check OK. UnRAR 감지 실측(경로·버전 인식) 확인.
+
+**[v5.8.2a 버그 수정] 압축/ISO 내부 .ico 이미지 미리보기 제외 (2026-06-06)**
+
+압축(zip/7z/rar)·ISO 내부 목록에서 `.ico`(아이콘) 파일이 이미지로 인식되어 미리보기 대상이 되던 것을 제외. Portable 앱 등 아이콘이 많은 압축에서 불필요한 이미지 미리보기 링크가 다수 생기는 문제 해소.
+
+- 수정: 압축 내부 이미지 판정 확장자에서 `ico` 제거 — 클라이언트 3곳(목록 미리보기 링크 생성, 갤러리 네비게이션, 이미지 찾기) + 서버(archive_preview 이미지 화이트리스트). jpg/jpeg/png/gif/webp/bmp/svg만 미리보기 대상.
+- 범위: 압축/ISO 내부 미리보기 흐름만. 일반 파일 탐색기의 `.ico` 파일 타입 분류·아이콘 표시는 그대로 유지.
+- 검증: PHP `php -l` OK, app.js node --check OK. 서버 로직 실측 — .ico는 400 거부, png/jpg는 정상 미리보기.
+
+#### v5.8.2 (2026-05-29 ~ 2026-06-05)
 
 **[v5.8.2 버그 수정] 압축 내부 이미지 미리보기 — 7z/rar 등에서 안 뜨던 문제 (2026-06-05)**
 
@@ -743,6 +825,18 @@ zip 압축은 내부 이미지 미리보기가 되는데 7z/rar 등은 목록만
 - 보안: 서버 실행 확장자(php/jsp/asp 등)는 `serverExecExts`에서 MIME과 무관하게 항상 차단(불변). 이 함수는 "안전한 확장자로 위장한 위험 내용" 보조 차단 역할 유지 — jpg로 위장한 php/html은 차단됨.
 - 안전성: 화이트리스트 일치 경로는 그대로라 기존 정상 파일 영향 0. 일반 업로드(1493)·청크 업로드(1808) 양쪽 동일 함수라 함께 적용.
 - 검증: PHP `php -l` OK. 리플렉션 실측 — 정상 rar/zip 통과, php·html 위장 차단, txt 내 html 통과 전부 확인.
+
+**[v5.8.2] rhwp 0.7.14 → 0.7.15 업그레이드 (2026-06-07)**
+
+HWP/HWPX 뷰어·편집기 엔진(rhwp)을 0.7.15로 업그레이드. 0.7.14 후속 security patch 사이클 — 브라우저 확장 service worker fetch 경로 보안 강화(SSRF 차단), 수식 TAC 흐름·미주 커서 이동 정정, HWPX 저장 계약 후속 보강(그림 flip/rotation·isEmbeded·대각선 셀 테두리). 공개 API 하위 호환 유지(PATCH) — `HwpDocument`/`renderPageSvg`/`version` ABI 보존으로 뷰어 호환.
+
+- npm `@rhwp/core@0.7.15` tarball shasum 진본 검증(`dfe74e615dd8cddb2a3920317be798cf2791d31e`) 후 빌드. 빌드 결과: `index-BuFkkamh.js`, `index-C9eG_4qi.css`(0.7.14와 동일 해시 — CSS 무변경), `rhwp_bg-DsnvX-Xj.wasm`.
+- studio 패치 매 업그레이드 재적용: J1(file:save Ctrl+S 매핑 제거) 1건, J2(file:print Ctrl+P 매핑 제거) 1건, P2(CSS `../images/` → `images/`) 2건 적용. P1(절대경로) 0건은 정상.
+- vite 빌드 시 PWA·커스텀 플러그인 보존 위해 `base: './'`만 안전 추가(통째 덮어쓰기 회피).
+- 사전 회귀 점검: 0.7.15는 보안·정정 위주 PATCH, 렌더링 새 회귀 없음. 보안 변경(확장 service worker)은 웹뷰어 경로와 무관. HWPX 저장은 우리가 차단(5중 방어)하는 영역이라 영향 없음.
+- 커스텀 기능 보존 검증 통과(서버 저장/다른 이름으로 저장/Blob 캡처/MutationObserver/Ctrl+S/저장 중 동기화 일시중지/웹하드 자동 갱신 등). PHP 커스텀 로직은 파일명·버전 주석 외 무변경 확인.
+- 알려진 한계: SVG/Canvas `preserveAspectRatio="none"`(과거 #335)은 코드상 잔존하나 실사용 재현 없음(0.7.8~0.7.14 동일).
+- ⚠️ FileStation 버전 유지(v5.8.2a — 펜닐 룰, "버전 올려줘" 명시 없음).
 
 **[v5.8.2] rhwp 0.7.13 → 0.7.14 업그레이드 (2026-06-05)**
 
@@ -2703,4 +2797,4 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 ---
 
 *FileStation v5.8.2 — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-06-05 (rhwp 0.7.14 기준)*
+*최종 업데이트: 2026-06-07 (rhwp 0.7.15 기준)*

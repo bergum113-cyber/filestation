@@ -2587,18 +2587,28 @@ password=mypass</pre>
                         <h3>📦 <?php echo $currentLang === 'en' ? 'Archive Preview Settings' : '압축파일 미리보기 설정'; ?></h3>
                         <div class="setting-item">
                             <div id="archive-7zip-status" style="padding:10px 12px;border-radius:6px;margin-bottom:10px;font-size:13px;"></div>
+                            <div id="archive-unrar-status" style="padding:10px 12px;border-radius:6px;margin-bottom:10px;font-size:13px;"></div>
                             <p class="setting-desc"><?php echo $currentLang === 'en' 
                                 ? 'Archive files (zip, rar, 7z, iso, etc.) can be previewed to view internal file lists. ZIP and TAR formats work with PHP built-in. For other formats (RAR, 7Z, ISO, CAB, etc.), <b>7-Zip</b> must be installed on the server.'
                                 : '압축 파일(zip, rar, 7z, iso 등)을 미리보기하여 내부 파일 목록을 확인할 수 있습니다. ZIP과 TAR 형식은 PHP 내장으로 동작합니다. 그 외 형식(RAR, 7Z, ISO, CAB 등)은 서버에 <b>7-Zip</b>이 설치되어야 합니다.'; ?></p>
                             <table style="font-size:12px;margin-top:8px;border-collapse:collapse;color:#666;">
                                 <tr><td style="padding:3px 15px 3px 0;"><b>PHP <?php echo $currentLang === 'en' ? 'Built-in' : '내장'; ?></b></td><td>zip, tar, gz, tgz, bz2</td></tr>
                                 <tr><td style="padding:3px 15px 3px 0;"><b>7-Zip <?php echo $currentLang === 'en' ? 'Required' : '필요'; ?></b></td><td>rar, 7z, iso, cab, wim, arj, lzh, dmg, msi <?php echo $currentLang === 'en' ? 'and more' : '외 다수'; ?></td></tr>
+                                <tr><td style="padding:3px 15px 3px 0;"><b>UnRAR <?php echo $currentLang === 'en' ? 'Optional' : '선택'; ?></b></td><td><?php echo $currentLang === 'en' ? 'rar (handles rar files that 7-Zip cannot open)' : 'rar (7-Zip이 못 읽는 rar 파일 보완)'; ?></td></tr>
                             </table>
                             <div style="margin-top:10px;padding:8px 12px;background:rgba(33,150,243,0.06);border:1px solid rgba(33,150,243,0.15);border-radius:6px;font-size:12px;color:#666;">
                                 <p style="margin:0 0 4px;font-weight:600;">💡 <?php echo $currentLang === 'en' ? '7-Zip Installation' : '7-Zip 설치 방법'; ?></p>
                                 <p style="margin:0;">
                                     Windows: <a href="https://www.7-zip.org/download.html" target="_blank" style="color:#1976d2;">7-zip.org</a> <?php echo $currentLang === 'en' ? 'Download and install to default path' : '에서 다운로드 후 기본 경로에 설치'; ?><br>
                                     Linux: <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">apt install 7zip</code> <?php echo $currentLang === 'en' ? 'or' : '또는'; ?> <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">yum install p7zip-full</code>
+                                </p>
+                            </div>
+                            <div style="margin-top:10px;padding:8px 12px;background:rgba(158,158,158,0.06);border:1px solid rgba(158,158,158,0.18);border-radius:6px;font-size:12px;color:#666;">
+                                <p style="margin:0 0 4px;font-weight:600;">💡 <?php echo $currentLang === 'en' ? 'UnRAR Installation (optional)' : 'UnRAR 설치 방법 (선택)'; ?></p>
+                                <p style="margin:0 0 4px;"><?php echo $currentLang === 'en' ? 'Only needed for rar files that 7-Zip cannot open.' : '7-Zip으로 목록이 안 보이는 일부 rar 파일에만 필요합니다.'; ?></p>
+                                <p style="margin:0;">
+                                    Windows: <a href="https://www.win-rar.com/download.html" target="_blank" style="color:#1976d2;">win-rar.com</a> <?php echo $currentLang === 'en' ? 'Install WinRAR (includes UnRAR.exe)' : '에서 WinRAR 설치 (UnRAR.exe 포함)'; ?><br>
+                                    Linux: <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">apt install unrar</code> <?php echo $currentLang === 'en' ? 'or' : '또는'; ?> <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">yum install unrar</code>
                                 </p>
                             </div>
                         </div>
