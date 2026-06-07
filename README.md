@@ -1,6 +1,6 @@
-# FileStation v5.8.2
+# FileStation v5.8.2a
 
-![version](https://img.shields.io/badge/version-v5.8.2-blue)
+![version](https://img.shields.io/badge/version-v5.8.2a-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
@@ -500,7 +500,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.2.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.2a.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -719,11 +719,24 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.2 (rhwp 0.7.15 기반)
+**현재 버전**: v5.8.2a (rhwp 0.7.15 기반)
 
 ### 주요 변경 이력
 
 #### v5.8.2a (2026-06-06) ⭐ 현재
+
+**[v5.8.2a] rhwp 0.7.14 → 0.7.15 업그레이드 (2026-06-07)**
+
+HWP/HWPX 뷰어·편집기 엔진(rhwp)을 0.7.15로 업그레이드. 0.7.14 후속 security patch 사이클 — 브라우저 확장 service worker fetch 경로 보안 강화(SSRF 차단), 수식 TAC 흐름·미주 커서 이동 정정, HWPX 저장 계약 후속 보강(그림 flip/rotation·isEmbeded·대각선 셀 테두리). 공개 API 하위 호환 유지(PATCH) — `HwpDocument`/`renderPageSvg`/`version` ABI 보존으로 뷰어 호환.
+
+- npm `@rhwp/core@0.7.15` tarball shasum 진본 검증(`dfe74e615dd8cddb2a3920317be798cf2791d31e`) 후 빌드. 빌드 결과: `index-BuFkkamh.js`, `index-C9eG_4qi.css`(0.7.14와 동일 해시 — CSS 무변경), `rhwp_bg-DsnvX-Xj.wasm`.
+- studio 패치 매 업그레이드 재적용: J1(file:save Ctrl+S 매핑 제거) 1건, J2(file:print Ctrl+P 매핑 제거) 1건, P2(CSS `../images/` → `images/`) 2건 적용. P1(절대경로) 0건은 정상.
+- vite 빌드 시 PWA·커스텀 플러그인 보존 위해 `base: './'`만 안전 추가(통째 덮어쓰기 회피).
+- 사전 회귀 점검: 0.7.15는 보안·정정 위주 PATCH, 렌더링 새 회귀 없음. 보안 변경(확장 service worker)은 웹뷰어 경로와 무관. HWPX 저장은 우리가 차단(5중 방어)하는 영역이라 영향 없음.
+- HWPX 직접 저장: rhwp 0.7.15도 여전히 베타 비활성(studio 코드 `#196` 차단, `#197 완전 변환기` 완료 시까지). HWP 형식 저장만 동작. FileStation HWPX 차단(5중 방어) 그대로 유지.
+- 커스텀 기능 보존 검증 통과(서버 저장/다른 이름으로 저장/Blob 캡처/MutationObserver/Ctrl+S/저장 중 동기화 일시중지/웹하드 자동 갱신 등). PHP 커스텀 로직은 파일명·버전 주석 외 무변경 확인.
+- 알려진 한계: SVG/Canvas `preserveAspectRatio="none"`(과거 #335)은 코드상 잔존하나 실사용 재현 없음(0.7.8~0.7.14 동일).
+- ⚠️ FileStation 버전 유지(v5.8.2a — 펜닐 룰, "버전 올려줘" 명시 없음).
 
 **[v5.8.2a 정정/롤백] RAR5 파일명 임의 변환(fs_rar5_decode/normalize) 제거 — 원본 코드포인트 보존 (2026-06-06)**
 
@@ -825,18 +838,6 @@ zip 압축은 내부 이미지 미리보기가 되는데 7z/rar 등은 목록만
 - 보안: 서버 실행 확장자(php/jsp/asp 등)는 `serverExecExts`에서 MIME과 무관하게 항상 차단(불변). 이 함수는 "안전한 확장자로 위장한 위험 내용" 보조 차단 역할 유지 — jpg로 위장한 php/html은 차단됨.
 - 안전성: 화이트리스트 일치 경로는 그대로라 기존 정상 파일 영향 0. 일반 업로드(1493)·청크 업로드(1808) 양쪽 동일 함수라 함께 적용.
 - 검증: PHP `php -l` OK. 리플렉션 실측 — 정상 rar/zip 통과, php·html 위장 차단, txt 내 html 통과 전부 확인.
-
-**[v5.8.2] rhwp 0.7.14 → 0.7.15 업그레이드 (2026-06-07)**
-
-HWP/HWPX 뷰어·편집기 엔진(rhwp)을 0.7.15로 업그레이드. 0.7.14 후속 security patch 사이클 — 브라우저 확장 service worker fetch 경로 보안 강화(SSRF 차단), 수식 TAC 흐름·미주 커서 이동 정정, HWPX 저장 계약 후속 보강(그림 flip/rotation·isEmbeded·대각선 셀 테두리). 공개 API 하위 호환 유지(PATCH) — `HwpDocument`/`renderPageSvg`/`version` ABI 보존으로 뷰어 호환.
-
-- npm `@rhwp/core@0.7.15` tarball shasum 진본 검증(`dfe74e615dd8cddb2a3920317be798cf2791d31e`) 후 빌드. 빌드 결과: `index-BuFkkamh.js`, `index-C9eG_4qi.css`(0.7.14와 동일 해시 — CSS 무변경), `rhwp_bg-DsnvX-Xj.wasm`.
-- studio 패치 매 업그레이드 재적용: J1(file:save Ctrl+S 매핑 제거) 1건, J2(file:print Ctrl+P 매핑 제거) 1건, P2(CSS `../images/` → `images/`) 2건 적용. P1(절대경로) 0건은 정상.
-- vite 빌드 시 PWA·커스텀 플러그인 보존 위해 `base: './'`만 안전 추가(통째 덮어쓰기 회피).
-- 사전 회귀 점검: 0.7.15는 보안·정정 위주 PATCH, 렌더링 새 회귀 없음. 보안 변경(확장 service worker)은 웹뷰어 경로와 무관. HWPX 저장은 우리가 차단(5중 방어)하는 영역이라 영향 없음.
-- 커스텀 기능 보존 검증 통과(서버 저장/다른 이름으로 저장/Blob 캡처/MutationObserver/Ctrl+S/저장 중 동기화 일시중지/웹하드 자동 갱신 등). PHP 커스텀 로직은 파일명·버전 주석 외 무변경 확인.
-- 알려진 한계: SVG/Canvas `preserveAspectRatio="none"`(과거 #335)은 코드상 잔존하나 실사용 재현 없음(0.7.8~0.7.14 동일).
-- ⚠️ FileStation 버전 유지(v5.8.2a — 펜닐 룰, "버전 올려줘" 명시 없음).
 
 **[v5.8.2] rhwp 0.7.13 → 0.7.14 업그레이드 (2026-06-05)**
 
@@ -2796,5 +2797,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.2 — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*FileStation v5.8.2a — 한국 사용자를 위한 자체호스팅 웹 NAS*
 *최종 업데이트: 2026-06-07 (rhwp 0.7.15 기준)*
