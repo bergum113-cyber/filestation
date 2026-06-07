@@ -12512,7 +12512,7 @@ const App = {
                 this.deleteSelectedItems(items);
                 break;
             case 'extract':
-                this.extractZip(item);
+                this.showExtractModeModal(item);
                 break;
             case 'compress':
                 this.compressFiles(items);
@@ -13080,9 +13080,57 @@ const App = {
         if (modal) modal.remove();
     },
 
-    // ZIP 압축 해제 (진행률 표시)
-    async extractZip(item, password = '') {
+    // 압축 해제 방식 선택 모달 (여기에 풀기 / 폴더에 풀기)
+    showExtractModeModal(item) {
         if (!item || !item.name) return;
+        const self = this;
+        const baseName = item.name.replace(/\.(zip|7z|rar|001|iso|cab|wim|arj|lzh|tar|gz|tgz|bz2|tbz2|xz)$/i, '');
+        const folderLabel = t('extract_to_folder', '폴더에 풀기');
+        const hereLabel = t('extract_here', '여기에 풀기');
+        const html = `
+            <div id="extract-mode-modal" class="modal-overlay" style="z-index:10001;">
+                <div class="modal" style="max-width:420px;">
+                    <div class="modal-header">
+                        <h2>📦 ${t('extract_mode_title', '압축 해제')}</h2>
+                        <button class="modal-close" id="extract-mode-close">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p style="margin:0 0 14px;font-size:14px;color:var(--text-light,#666);">${this.escapeHtml(item.name)}</p>
+                        <button id="extract-mode-folder" class="btn" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border:1px solid var(--border,#ddd);border-radius:6px;cursor:pointer;background:var(--bg,#fff);">
+                            <div style="font-weight:600;font-size:14px;">📁 ${folderLabel}</div>
+                            <div style="font-size:12px;color:#888;margin-top:3px;">${this.escapeHtml(baseName)}/ ${t('extract_to_folder_desc', '폴더를 만들고 그 안에 풉니다')}</div>
+                        </button>
+                        <button id="extract-mode-here" class="btn" style="display:block;width:100%;text-align:left;padding:12px 14px;border:1px solid var(--border,#ddd);border-radius:6px;cursor:pointer;background:var(--bg,#fff);">
+                            <div style="font-weight:600;font-size:14px;">📂 ${hereLabel}</div>
+                            <div style="font-size:12px;color:#888;margin-top:3px;">${t('extract_here_desc', '현재 위치에 바로 풉니다')}</div>
+                        </button>
+                    </div>
+                    <div class="modal-footer">
+                        <button id="extract-mode-cancel" class="btn">${t('cancel', '취소')}</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', html);
+        const modal = document.getElementById('extract-mode-modal');
+        const close = () => { if (modal) modal.remove(); };
+        document.getElementById('extract-mode-folder').onclick = () => { close(); self.extractZip(item, '', 'folder'); };
+        document.getElementById('extract-mode-here').onclick = () => { close(); self.extractZip(item, '', 'here'); };
+        document.getElementById('extract-mode-cancel').onclick = close;
+        document.getElementById('extract-mode-close').onclick = close;
+        document.addEventListener('keydown', function escHandler(e) {
+            if (e.key === 'Escape') { document.removeEventListener('keydown', escHandler); close(); }
+        });
+        // 기본 포커스: 폴더에 풀기 (엔터로 선택 가능)
+        const folderBtn = document.getElementById('extract-mode-folder');
+        if (folderBtn) folderBtn.focus();
+    },
+    
+    // ZIP 압축 해제 (진행률 표시)
+    // mode: 'folder'(압축파일명 폴더 생성 후 풀기, 기본) | 'here'(현재 위치에 풀기)
+    async extractZip(item, password = '', mode = 'folder') {
+        if (!item || !item.name) return;
+        // console.log('[FS압축][해제] name=' + item.name + ' / path=' + item.path + ' / mode=' + mode + ' / password=' + (password ? '[있음]' : '[없음]'));
         
         const ext = item.name.split('.').pop().toLowerCase();
         const zipExts = ['zip', '001'];
@@ -13103,7 +13151,7 @@ const App = {
             // need_password가 먼저 오면 모달 없이 패스워드 요청
             let progressShown = false;
             
-            let url = `api.php?action=extract_stream&storage_id=${this.currentStorage}&path=${encodeURIComponent(item.path)}`;
+            let url = `api.php?action=extract_stream&storage_id=${this.currentStorage}&path=${encodeURIComponent(item.path)}&mode=${encodeURIComponent(mode)}`;
             if (password) url += `&password=${encodeURIComponent(password)}`;
             
             try {
@@ -13124,6 +13172,7 @@ const App = {
                     } else if (data.type === 'complete') {
                         eventSource.close();
                         if (progressShown) this.hideZipProgressModal();
+                        // console.log('[FS압축][해제완료-7z/rar]', data);
                         if (data.success) {
                             this.toastResponsive(
                                 `${t('extract_complete','압축 해제 완료')}: ${data.extracted_to} (${data.file_count}${t('count_files','개 파일')})`,
@@ -13139,7 +13188,7 @@ const App = {
                             this.showZipPasswordModal({
                                 title: t('zip_extract_password_title', '📦 압축 해제 암호'),
                                 message: msg
-                            }).then(pwd => { if (pwd) self.extractZip(item, pwd); });
+                            }).then(pwd => { if (pwd) self.extractZip(item, pwd, mode); });
                         } else {
                             this.toast(data.error || t('err_extract_failed', '압축 해제 실패'), 'error');
                         }
@@ -13161,7 +13210,7 @@ const App = {
         this.showZipProgressModal('extract', item.name);
         
         // SSE 스트리밍으로 진행률 표시
-        let url = `api.php?action=extract_stream&storage_id=${this.currentStorage}&path=${encodeURIComponent(item.path)}`;
+        let url = `api.php?action=extract_stream&storage_id=${this.currentStorage}&path=${encodeURIComponent(item.path)}&mode=${encodeURIComponent(mode)}`;
         if (password) {
             url += `&password=${encodeURIComponent(password)}`;
         }
@@ -13199,7 +13248,7 @@ const App = {
                             message: msg
                         });
                         if (pwd !== null && pwd !== '') {
-                            this.extractZip(item, pwd);
+                            this.extractZip(item, pwd, mode);
                         }
                     } else {
                         this.toast(data.error || t('err_extract_failed', '압축 해제 실패'), 'error');
@@ -13421,6 +13470,26 @@ const App = {
                 resolve(result);
             };
             
+            // 엔터=확인, ESC=취소 (document 캡처 단계에서 처리해 포커스 위치·다른 핸들러와 무관하게 동작)
+            const keyHandler = (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (showConfirm && confirmInput && document.activeElement === input) {
+                        confirmInput.focus();
+                    } else {
+                        submit();
+                    }
+                } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeModal(null);
+                }
+            };
+            const closeModal = (result) => {
+                document.removeEventListener('keydown', keyHandler, true);
+                close(result);
+            };
+            
             const submit = () => {
                 const pwd = input.value;
                 if (!pwd) {
@@ -13438,17 +13507,13 @@ const App = {
                         return;
                     }
                 }
-                close(pwd);
+                closeModal(pwd);
             };
             
             document.getElementById('zip-password-ok').onclick = submit;
-            document.getElementById('zip-password-cancel').onclick = () => close(null);
-            document.getElementById('zip-password-close').onclick = () => close(null);
-            document.addEventListener('keydown', function escHandler(e) {
-                if (e.key === 'Escape') { document.removeEventListener('keydown', escHandler); close(null); }
-            });
-            input.addEventListener('keydown', (e) => { if (e.key === 'Enter') { if (showConfirm && confirmInput) confirmInput.focus(); else submit(); }});
-            if (confirmInput) confirmInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+            document.getElementById('zip-password-cancel').onclick = () => closeModal(null);
+            document.getElementById('zip-password-close').onclick = () => closeModal(null);
+            document.addEventListener('keydown', keyHandler, true);
         });
     },
     
@@ -33006,9 +33071,33 @@ const App = {
         }
     },
     
-    async _loadZipList(storageId, path) {
+    async _loadZipList(storageId, path, password = '') {
         try {
-            const res = await this.api('archive_list', { storage_id: storageId, path }, 'GET');
+            const params = { storage_id: storageId, path };
+            if (password) params.password = password;
+            const res = await this.api('archive_list', params, 'GET');
+            // console.log('[FS압축][목록] path=' + path + ' / password=' + (password ? '[있음]' : '[없음]'), res);
+            
+            // 헤더 암호화 아카이브: 비밀번호 필요 (반디집처럼 비번 입력창)
+            if (res.success && res.need_password) {
+                const msg = res.wrong_password
+                    ? t('zip_wrong_password', '암호가 틀립니다. 다시 입력하세요.')
+                    : t('archive_password_required', '암호가 걸린 압축 파일입니다. 암호를 입력하세요.');
+                const pwd = await this.showZipPasswordModal({
+                    title: t('archive_preview_password_title', '🔐 압축 파일 암호'),
+                    message: msg
+                });
+                if (pwd !== null && pwd !== '') {
+                    this._zipArchivePassword = pwd; // 미리보기/추출에 재사용
+                    return this._loadZipList(storageId, path, pwd);
+                }
+                // 취소 시 안내
+                const cancelList = document.getElementById('archive-list');
+                if (cancelList) {
+                    cancelList.innerHTML = `<div style="text-align:center;padding:40px;color:#888;">🔒 ${t('archive_password_cancelled', '암호 입력이 취소되었습니다.')}</div>`;
+                }
+                return;
+            }
             
             if (!res.success) {
                 const errList = document.getElementById('archive-list');
@@ -33024,6 +33113,7 @@ const App = {
             this._zipCurrentPath = '';
             this._zipStorageId = storageId;
             this._zipArchivePath = path;
+            if (password) this._zipArchivePassword = password;
             this._isVaultArchive = false;
             this._vaultArchiveTempId = null;
             this._vaultArchiveTempId = null;
@@ -33159,7 +33249,7 @@ const App = {
             const icon = this._getArchiveFileIcon(ext);
             const lockBadge = item.encrypted ? ' <span style="color:#e65100;font-size:11px;">🔒</span>' : '';
             const isImage = ['jpg','jpeg','png','gif','webp','bmp','svg'].includes(ext);
-            const canPreviewImg = isImage && !item.encrypted;
+            const canPreviewImg = isImage; // 암호화 항목은 클릭 시 _previewArchiveImage에서 비번을 요청
             const imgStyle = canPreviewImg ? 'cursor:pointer;' : '';
             const imgAttr = canPreviewImg ? ` data-archive-img="${this.escapeHtml(item.name)}" onclick="App._previewArchiveImage(this.dataset.archiveImg)"` : '';
             const imgHint = canPreviewImg ? ` title="${t('click_to_preview', '클릭하여 미리보기')}"` : '';
@@ -33198,15 +33288,31 @@ const App = {
         const archivePath = this._zipArchivePath;
         if (!storageId || !archivePath || !entryName) return;
         
+        // 데이터 암호화 항목인데 아직 비번이 없으면 먼저 비번을 받는다 (그 후 재호출)
+        const targetItem = (this._zipItems || []).find(it => it.name === entryName);
+        if (targetItem && targetItem.encrypted && !this._zipArchivePassword) {
+            this.showZipPasswordModal({
+                title: t('archive_preview_password_title', '🔐 압축 파일 암호'),
+                message: t('archive_password_required', '암호가 걸린 압축 파일입니다. 암호를 입력하세요.')
+            }).then(pwd => {
+                if (pwd !== null && pwd !== '') {
+                    this._zipArchivePassword = pwd;
+                    this._previewArchiveImage(entryName); // 비번 받고 재시도
+                }
+            });
+            return;
+        }
+        
         const fileName = entryName.split('/').pop();
         const vaultParam = (this._isVaultArchive && this._vaultArchiveTempId) ? `&vault_temp_id=${this._vaultArchiveTempId}` : '';
-        const url = `api.php?action=archive_preview&storage_id=${storageId}&path=${encodeURIComponent(archivePath)}&entry=${encodeURIComponent(entryName)}${vaultParam}`;
+        const pwParam = this._zipArchivePassword ? `&password=${encodeURIComponent(this._zipArchivePassword)}` : '';
+        const url = `api.php?action=archive_preview&storage_id=${storageId}&path=${encodeURIComponent(archivePath)}&entry=${encodeURIComponent(entryName)}${vaultParam}${pwParam}`;
         
         // 현재 폴더의 이미지 목록 수집 (갤러리 네비게이션용)
         const prefix = this._zipCurrentPath ? this._zipCurrentPath + '/' : '';
         const imageExts = ['jpg','jpeg','png','gif','webp','bmp','svg'];
         const archiveImages = this._zipItems.filter(item => {
-            if (item.is_dir || item.encrypted) return false;
+            if (item.is_dir || (item.encrypted && !this._zipArchivePassword)) return false;
             const name = item.name;
             if (prefix && !name.startsWith(prefix)) return false;
             const relative = prefix ? name.substring(prefix.length) : name;
@@ -33219,7 +33325,7 @@ const App = {
         this._archiveGalleryList = archiveImages.map(img => ({
             name: img.name.split('/').pop(),
             _archiveEntry: img.name,
-            _vaultBlobUrl: `api.php?action=archive_preview&storage_id=${storageId}&path=${encodeURIComponent(archivePath)}&entry=${encodeURIComponent(img.name)}${vaultParam}`
+            _vaultBlobUrl: `api.php?action=archive_preview&storage_id=${storageId}&path=${encodeURIComponent(archivePath)}&entry=${encodeURIComponent(img.name)}${vaultParam}${pwParam}`
         }));
         this._archiveGalleryIdx = archiveImages.findIndex(img => img.name === entryName);
         
@@ -33365,13 +33471,14 @@ const App = {
             // 첫 번째(]) 또는 마지막([) 이미지
             const imgIdx = 0; // 항상 첫 번째 이미지부터
             const entry = images[imgIdx];
-            const imgUrl = `api.php?action=archive_preview&storage_id=${storageId}&path=${encodeURIComponent(archivePath)}&entry=${encodeURIComponent(entry.name)}${vaultParam}`;
+            const galPwParam = this._zipArchivePassword ? `&password=${encodeURIComponent(this._zipArchivePassword)}` : '';
+            const imgUrl = `api.php?action=archive_preview&storage_id=${storageId}&path=${encodeURIComponent(archivePath)}&entry=${encodeURIComponent(entry.name)}${vaultParam}${galPwParam}`;
             
             // 갤러리 리스트 업데이트
             this._archiveGalleryList = images.map(img => ({
                 name: img.name.split('/').pop(),
                 _archiveEntry: img.name,
-                _vaultBlobUrl: `api.php?action=archive_preview&storage_id=${storageId}&path=${encodeURIComponent(archivePath)}&entry=${encodeURIComponent(img.name)}${vaultParam}`
+                _vaultBlobUrl: `api.php?action=archive_preview&storage_id=${storageId}&path=${encodeURIComponent(archivePath)}&entry=${encodeURIComponent(img.name)}${vaultParam}${galPwParam}`
             }));
             
             this.galleryImages = this._archiveGalleryList.map(img => ({

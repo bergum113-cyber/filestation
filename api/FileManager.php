@@ -2544,6 +2544,40 @@ class FileManager {
         return escapeshellarg($path);
     }
     
+    /**
+     * 압축 비밀번호를 안전하게 명령행 -p 인자로 변환.
+     *
+     * ⚠️ 중요: 비밀번호 문자를 함부로 "제거"하면 안 된다. 과거에 위험문자라며
+     *   $ ` " \ 등을 지워버려서, 사용자가 "12#$"를 입력해도 "12#"만 7z/UnRAR에
+     *   전달되어 "비밀번호 틀림"이 나는 버그가 있었다(로그로 확정).
+     *   → 제어문자(\x00-\x1F, \x7F)만 제거하고, 셸 인용은 플랫폼 규칙대로 처리한다.
+     *
+     * Windows: bat 파일 안에서 -p"..." 형태로 실행된다.
+     *   - cmd가 환경변수 확장하는 % 는 %% 로 이스케이프
+     *   - 큰따옴표(")는 bat의 -p"..." 인용을 깨므로 불가피하게 제거(7-Zip도 CLI로 " 포함 비번 입력 불가 — 알려진 한계)
+     *   - 나머지($ # & | < > ^ 등)는 큰따옴표 안에서 안전하므로 그대로 둔다.
+     * Linux: escapeshellarg가 모든 문자를 안전 처리하므로 원본 그대로 넘긴다.
+     *
+     * @param string $password 원본 비밀번호
+     * @return string " -p\"...\"" 또는 " -p'...'" 형태의 명령행 조각(앞 공백 포함). 빈 비번이면 ' -p""'.
+     */
+    private function buildPasswordArg(string $password): string {
+        // 제어문자만 제거 (명령행 자체를 깨뜨리는 문자) — 일반 특수문자는 보존
+        $pw = preg_replace('/[\x00-\x1F\x7F]/', '', $password);
+        if ($pw === '') {
+            // 빈 비번: 헤더 암호화 아카이브가 프롬프트로 멈추지 않도록 -p"" 지정
+            return (DIRECTORY_SEPARATOR === '\\') ? ' -p""' : " -p''";
+        }
+        if (DIRECTORY_SEPARATOR === '\\') {
+            // Windows(bat): % → %%, " → 제거(인용 불가), 나머지 보존
+            $pw = str_replace('%', '%%', $pw);
+            $pw = str_replace('"', '', $pw);
+            return ' -p"' . $pw . '"';
+        }
+        // Linux: escapeshellarg가 $ ` " \ 등 전부 안전 처리
+        return ' -p' . escapeshellarg($pw);
+    }
+    
     // Windows 8.3 짧은 경로명 가져오기 (비ASCII 파일명 문제 해결)
     private function getWindowsShortPath(string $path): ?string {
         if (PHP_OS_FAMILY !== 'Windows') return null;
@@ -6222,7 +6256,7 @@ class FileManager {
     }
     
     // 압축 해제
-    public function extractZip(int $storageId, string $zipPath, string $destPath = '', ?callable $progressCallback = null, string $password = ''): array {
+    public function extractZip(int $storageId, string $zipPath, string $destPath = '', ?callable $progressCallback = null, string $password = '', string $mode = 'folder'): array {
         if (!$this->storage->checkPermission($storageId, 'can_write')) {
             return ['success' => false, 'error' => __('api_err_no_write_perm', '쓰기 권한이 없습니다.')];
         }
@@ -6242,21 +6276,39 @@ class FileManager {
         
         // 분할 압축 파일 (.001) — 7-Zip으로 해제
         if ($ext === '001') {
-            return $this->extractSplitZip($basePath, $fullZipPath, $zipPath, $destPath, $progressCallback, $password);
+            return $this->extractSplitZip($basePath, $fullZipPath, $zipPath, $destPath, $progressCallback, $password, $mode);
         }
         
         // ZIP 이외 형식 (rar, 7z, iso, cab 등) — 7-Zip으로 해제
-        $sevenZipFormats = ['rar', '7z', 'iso', 'cab', 'wim', 'arj', 'lzh', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz'];
+        // 프론트(app.js archiveExts)와 일치시킴 + 7-Zip이 추출 지원하는 주요 형식 포함.
+        $sevenZipFormats = ['rar', '7z', 'iso', 'cab', 'wim', 'arj', 'lzh', 'tar', 'gz', 'tgz',
+                            'bz2', 'tbz2', 'xz', 'txz', 'rpm', 'deb', 'dmg', 'msi', 'nsis',
+                            'cpio', 'xar', 'lzma', 'z', 'taz', 'tlz', 'zst', 'tzst'];
         if (in_array($ext, $sevenZipFormats)) {
-            return $this->extract7zip($basePath, $fullZipPath, $zipPath, $destPath, $progressCallback, $password);
+            return $this->extract7zip($basePath, $fullZipPath, $zipPath, $destPath, $progressCallback, $password, $mode);
         }
         
         if ($ext !== 'zip') {
             return ['success' => false, 'error' => __('api_err_unsupported_format', '지원하지 않는 형식입니다.')];
         }
         
+        // ZIP: 7-Zip 바이너리가 있으면 7-Zip으로 해제 (PHP ZipArchive는 Windows에서 CP949/EUC-KR 등
+        //   레거시 인코딩 파일명을 제대로 처리 못 해 폴더 구조가 깨지는 문제가 있음. 7-Zip은 정확히 처리).
+        //   7-Zip이 없는 환경에서는 아래 PHP ZipArchive 경로로 폴백.
+        $hasSevenZip = false;
+        foreach (['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'] as $szp) {
+            if (file_exists($szp)) { $hasSevenZip = true; break; }
+        }
+        if ($hasSevenZip) {
+            return $this->extract7zip($basePath, $fullZipPath, $zipPath, $destPath, $progressCallback, $password, $mode);
+        }
+        
         // 압축 해제 경로 결정
-        if (empty($destPath)) {
+        // mode='here': 압축파일이 있는 폴더에 직접 풀기 (내부 폴더 구조는 그대로 보존)
+        // mode='folder'(기본): 압축파일명 폴더를 만들고 그 안에 풀기
+        if ($mode === 'here' && empty($destPath)) {
+            $extractDir = dirname($fullZipPath);
+        } elseif (empty($destPath)) {
             $basename = basename($fullZipPath);
             if (strtolower(substr($basename, -4)) === '.zip') {
                 $zipName = substr($basename, 0, -4);
@@ -6268,8 +6320,11 @@ class FileManager {
             $extractDir = $this->buildPath($basePath, $destPath);
         }
         
-        // 중복 폴더명 처리
-        $extractDir = $this->getUniqueFilename($extractDir);
+        // 중복 폴더명 처리 — "여기에 풀기"는 기존 폴더에 직접 쓰므로 고유화하지 않음
+        $isHereMode = ($mode === 'here' && empty($destPath));
+        if (!$isHereMode) {
+            $extractDir = $this->getUniqueFilename($extractDir);
+        }
         
         if (!$this->isPathSafe($basePath, $extractDir)) {
             return ['success' => false, 'error' => __('invalid_dst_path')];
@@ -6322,8 +6377,8 @@ class FileManager {
                 $testContent = $zip->getFromName($testFile);
                 if ($testContent === false) {
                     $zip->close();
-                    // 생성된 빈 폴더 삭제
-                    @rmdir($extractDir);
+                    // 생성된 빈 폴더 삭제 (여기에 풀기면 기존 폴더 보호)
+                    if (!$isHereMode) @rmdir($extractDir);
                     return ['success' => false, 'error' => __('zip_wrong_password', '압축 파일 암호가 틀립니다.'), 'need_password' => true];
                 }
             }
@@ -6635,15 +6690,8 @@ class FileManager {
         
         // 암호 설정
         if (!empty($password)) {
-            // 비밀번호에 특수문자 포함 시 쉘 주입 방지
-            // 7-Zip은 -p 뒤에 바로 비밀번호 (공백/탭이 구분자)
-            // 위험 문자 제거 후 quote로 감쌈
-            $safePwd = preg_replace('/[\x00-\x1F\x7F"`$\\\\]/', '', $password);
-            if (DIRECTORY_SEPARATOR === '\\') {
-                $cmd .= ' -p"' . $safePwd . '"';
-            } else {
-                $cmd .= ' -p' . escapeshellarg($safePwd);
-            }
+            // 비밀번호를 안전하게 -p 인자로 변환 (제어문자만 제거, $ # ` 등 보존)
+            $cmd .= $this->buildPasswordArg($password);
             $cmd .= ' -mem=AES256';
         }
         
@@ -6845,7 +6893,7 @@ class FileManager {
     /**
      * 분할 ZIP 해제 (7-Zip 필요)
      */
-    private function extractSplitZip(string $basePath, string $fullZipPath, string $zipPath, string $destPath, ?callable $progressCallback, string $password): array {
+    private function extractSplitZip(string $basePath, string $fullZipPath, string $zipPath, string $destPath, ?callable $progressCallback, string $password, string $mode = 'folder'): array {
         // 7-Zip 바이너리 탐색
         $sevenZipBin = null;
         $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'];
@@ -6864,13 +6912,24 @@ class FileManager {
             $folderName = preg_replace('/\.\d{3}$/i', '', $basename);
         }
         
-        if (empty($destPath)) {
+        // mode='here': 압축파일이 있는 폴더에 직접 풀기 / 'folder'(기본): 압축파일명 폴더 생성
+        if ($mode === 'here' && empty($destPath)) {
+            $extractDir = dirname($fullZipPath);
+        } elseif (empty($destPath)) {
             $extractDir = dirname($fullZipPath) . DIRECTORY_SEPARATOR . $folderName;
         } else {
             $extractDir = $this->buildPath($basePath, $destPath);
         }
         
-        $extractDir = $this->getUniqueFilename($extractDir);
+        // "여기에 풀기" 모드 여부 — extractDir이 기존 폴더이므로 실패/취소 시 삭제 금지
+        $isHereMode = ($mode === 'here' && empty($destPath));
+        if (!$isHereMode) {
+            $extractDir = $this->getUniqueFilename($extractDir);
+        }
+        $safeCleanup = function() use (&$extractDir, $isHereMode) {
+            if ($isHereMode) return; // 기존 폴더 보호
+            if (is_dir($extractDir)) $this->deleteDirectory($extractDir);
+        };
         
         if (!$this->isPathSafe($basePath, $extractDir)) {
             return ['success' => false, 'error' => __('invalid_dst_path')];
@@ -6906,7 +6965,7 @@ class FileManager {
         
         if ($isEncrypted && empty($password)) {
             // 암호화된 파일인데 패스워드 없음 → 패스워드 요청
-            @rmdir($extractDir);
+            if (!$isHereMode) @rmdir($extractDir); // 여기에 풀기면 기존 폴더 보호
             return ['success' => false, 'error' => 'password_required', 'need_password' => true];
         }
         
@@ -6932,13 +6991,8 @@ class FileManager {
         $cmd = $this->escapeShellPath($sevenZipBin) . ' x ' . $escapedZip . ' -o' . $escapedDest . ' -aoa';
         
         if (!empty($password)) {
-            // 비밀번호 위험 문자 제거
-            $safePwd = preg_replace('/[\x00-\x1F\x7F"`$\\\\]/', '', $password);
-            if (DIRECTORY_SEPARATOR === '\\') {
-                $cmd .= ' -p"' . $safePwd . '"';
-            } else {
-                $cmd .= ' -p' . escapeshellarg($safePwd);
-            }
+            // 비밀번호를 안전하게 -p 인자로 변환 (제어문자만 제거, $ # ` 등 보존)
+            $cmd .= $this->buildPasswordArg($password);
         }
         
         // 백그라운드 실행 — 결과 코드를 파일에 기록
@@ -6982,10 +7036,8 @@ class FileManager {
                     @unlink($resultFile);
                     
                     if ($exitCode !== 0) {
-                        // 실패 (패스워드 틀림 = exitcode 2)
-                        if (is_dir($extractDir)) {
-                            $this->deleteDirectory($extractDir);
-                        }
+                        // 실패 (패스워드 틀림 = exitcode 2) — 여기에 풀기면 기존 폴더 보호
+                        $safeCleanup();
                         return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
                     }
                     
@@ -7019,10 +7071,8 @@ class FileManager {
                 } else {
                     exec('pkill -f ' . escapeshellarg('7z.*' . basename($fullZipPath)) . ' 2>/dev/null');
                 }
-                // 해제 폴더 삭제
-                if (is_dir($extractDir)) {
-                    $this->deleteDirectory($extractDir);
-                }
+                // 해제 폴더 삭제 (여기에 풀기면 기존 폴더 보호)
+                $safeCleanup();
                 @unlink($resultFile);
                 return ['success' => false, 'error' => 'cancelled'];
             }
@@ -7087,10 +7137,8 @@ class FileManager {
         
         if ($fileCount === 0 || ($isEncrypted && $totalExtractedSize === 0)) {
             // 해제 실패 또는 패스워드 틀림 (0바이트 파일만 생성됨)
-            // 빈 폴더/파일 삭제
-            if (is_dir($extractDir)) {
-                $this->deleteDirectory($extractDir);
-            }
+            // 빈 폴더/파일 삭제 (여기에 풀기면 기존 폴더 보호)
+            $safeCleanup();
             
             if ($isEncrypted) {
                 return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
@@ -7113,7 +7161,19 @@ class FileManager {
     /**
      * 7-Zip으로 아카이브 해제 (rar, 7z, iso, cab 등)
      */
-    private function extract7zip(string $basePath, string $fullPath, string $zipPath, string $destPath, ?callable $progressCallback, string $password): array {
+    private function extract7zip(string $basePath, string $fullPath, string $zipPath, string $destPath, ?callable $progressCallback, string $password, string $mode = 'folder'): array {
+        // ===== 디버그 로그 (압축 해제 문제 진단용) =====
+        // config.php의 EXTRACT_DEBUG 를 true 로 바꾸면 <DATA_PATH>/extract_debug.log 에 기록됨.
+        $dbgOn = (defined('EXTRACT_DEBUG') && EXTRACT_DEBUG);
+        $dbgLog = (defined('DATA_PATH') ? DATA_PATH : sys_get_temp_dir()) . DIRECTORY_SEPARATOR . 'extract_debug.log';
+        $dbg = function($msg) use ($dbgOn, $dbgLog) {
+            if ($dbgOn) @file_put_contents($dbgLog, date('Y-m-d H:i:s') . ' ' . $msg . "\n", FILE_APPEND);
+        };
+        $dbg("");
+        $dbg("======== extract7zip 시작 ========");
+        $dbg("fullPath=$fullPath");
+        $dbg("mode=$mode / password=" . ($password !== '' ? '[있음 len=' . strlen($password) . ' hex=' . bin2hex(substr($password,0,20)) . ']' : '[없음]'));
+
         $sevenZipBin = null;
         $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'];
         foreach ($szPaths as $p) { if (file_exists($p)) { $sevenZipBin = $p; break; } }
@@ -7121,18 +7181,38 @@ class FileManager {
         if (!$sevenZipBin) {
             return ['success' => false, 'error' => __('7zip_not_installed', '이 형식의 압축 해제는 서버에 7-Zip이 설치되어야 합니다.')];
         }
+        $dbg("sevenZipBin=$sevenZipBin");
         
         $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
         $basename = basename($fullPath);
         $folderName = pathinfo($basename, PATHINFO_FILENAME);
         
-        if (empty($destPath)) {
+        // mode='here': 압축파일이 있는 폴더에 직접 풀기 (내부 폴더 구조 보존)
+        // mode='folder'(기본): 압축파일명 폴더 생성 후 그 안에 풀기
+        if ($mode === 'here' && empty($destPath)) {
+            $extractDir = dirname($fullPath);
+        } elseif (empty($destPath)) {
             $extractDir = dirname($fullPath) . DIRECTORY_SEPARATOR . $folderName;
         } else {
             $extractDir = $this->buildPath($basePath, $destPath);
         }
         
-        $extractDir = $this->getUniqueFilename($extractDir);
+        // "여기에 풀기" 모드 여부 — 이 경우 extractDir이 기존 폴더(개인폴더 등)이므로
+        // 실패/취소 시에도 절대 폴더를 통째로 삭제하면 안 됨 (데이터 손실 방지).
+        $isHereMode = ($mode === 'here' && empty($destPath));
+        
+        // "여기에 풀기"는 기존 폴더에 직접 쓰므로 고유화하지 않음
+        if (!$isHereMode) {
+            $extractDir = $this->getUniqueFilename($extractDir);
+        }
+        $dbg("isHereMode=" . ($isHereMode ? 'YES(폴더삭제 금지)' : 'NO'));
+        
+        // 안전 삭제: "여기에 풀기"면 extractDir(기존 폴더)을 삭제하지 않음.
+        // 폴더 생성 모드일 때만 추출 폴더 정리.
+        $safeCleanup = function() use (&$extractDir, $isHereMode) {
+            if ($isHereMode) return; // 기존 폴더 보호 — 절대 삭제 안 함
+            if (is_dir($extractDir)) $this->deleteDirectory($extractDir);
+        };
         
         if (!$this->isPathSafe($basePath, $extractDir)) {
             return ['success' => false, 'error' => __('invalid_dst_path')];
@@ -7145,11 +7225,21 @@ class FileManager {
         @set_time_limit(0);
         
         // 7z l -slt 로 암호화 여부 사전 체크 (보안: escapeShellPath)
-        $checkCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt ' . $this->escapeShellPath($fullPath);
+        // 헤더 암호화 아카이브가 비밀번호 프롬프트로 멈추지 않도록 빈 비번(-p"") + stdin 차단.
+        $checkCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt -p"" ' . $this->escapeShellPath($fullPath);
         if (DIRECTORY_SEPARATOR === '\\') {
-            $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1');
+            $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
         } else {
-            $checkOutput = @shell_exec($checkCmd . ' 2>&1');
+            $checkOutput = @shell_exec($checkCmd . ' 2>&1 < /dev/null');
+        }
+        // 헤더 암호화 감지: 목록을 못 뽑고 암호 프롬프트/오류가 난 경우도 암호화로 간주
+        if ($checkOutput !== null && (
+                stripos($checkOutput, 'Enter password') !== false ||
+                stripos($checkOutput, 'Wrong password') !== false ||
+                stripos($checkOutput, 'Cannot open encrypted archive') !== false
+            )) {
+            // 헤더 암호화 — 아래 $isEncrypted 판정에서 처리되도록 표시
+            $checkOutput = ($checkOutput ?? '') . "\nEncrypted = +\n";
         }
         
         $isEncrypted = false;
@@ -7159,9 +7249,12 @@ class FileManager {
                 $isEncrypted = true;
             }
         }
+        $dbg("extractDir=$extractDir / ext=$ext / isEncrypted=" . ($isEncrypted ? 'YES' : 'NO'));
+        $dbg("checkOutput(앞 300자)=" . substr((string)$checkOutput, 0, 300));
         
         if ($isEncrypted && empty($password)) {
-            @rmdir($extractDir);
+            if (!$isHereMode) @rmdir($extractDir); // 여기에 풀기면 기존 폴더 보호
+            $dbg("→ password_required 반환 (암호화인데 비번 없음)");
             return ['success' => false, 'error' => 'password_required', 'need_password' => true];
         }
         
@@ -7173,12 +7266,36 @@ class FileManager {
         $cmd = $this->escapeShellPath($sevenZipBin) . ' x ' . $escapedPath . ' -o' . $escapedDest . ' -aoa';
         
         if (!empty($password)) {
-            // 비밀번호 위험 문자 제거
-            $safePwd = preg_replace('/[\x00-\x1F\x7F"`$\\\\]/', '', $password);
+            // 비밀번호를 안전하게 -p 인자로 변환 (제어문자만 제거, $ # ` 등 보존)
+            $cmd .= $this->buildPasswordArg($password);
+        }
+        $dbg("7z 추출 cmd=$cmd");
+        
+        // [진단] 디버그 켜졌을 때: 추출 명령을 별도 임시 폴더에 동기 실행해 실제 stdout/stderr 캡처.
+        //   (왜 실패하는지 = 비번 오류인지 Unsupported인지 등 결정적 정보)
+        //   ★ 실제 추출(extractDir)과 분리된 임시 폴더에 돌리므로, 아래 본 추출이 중복 실행되지 않음.
+        //   진단 폴더는 사용 후 즉시 정리. 디버그 OFF면 이 블록 전체가 no-op.
+        if ($dbgOn) {
+            $diagDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7z_diag_' . md5($fullPath . microtime(true) . mt_rand());
+            @mkdir($diagDir, 0700, true);
+            $diagCmd = $this->escapeShellPath($sevenZipBin) . ' x ' . $escapedPath . ' -o' . $this->escapeShellPath($diagDir) . ' -aoa';
+            if (!empty($password)) $diagCmd .= $this->buildPasswordArg($password);
             if (DIRECTORY_SEPARATOR === '\\') {
-                $cmd .= ' -p"' . $safePwd . '"';
+                $diagOut = @shell_exec('chcp 65001 >nul && ' . $diagCmd . ' 2>&1 < nul');
             } else {
-                $cmd .= ' -p' . escapeshellarg($safePwd);
+                $diagOut = @shell_exec($diagCmd . ' 2>&1 < /dev/null');
+            }
+            $dbg("[진단] 7z x 실제 출력:\n" . substr((string)$diagOut, 0, 1500));
+            // 진단 추출 결과 폴더 구조 기록
+            if (is_dir($diagDir)) {
+                $diagCnt = 0;
+                $diagIt = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($diagDir, \RecursiveDirectoryIterator::SKIP_DOTS));
+                foreach ($diagIt as $df) {
+                    if ($diagCnt++ >= 40) { $dbg("  ...(이하 생략)"); break; }
+                    $drel = str_replace($diagDir . DIRECTORY_SEPARATOR, '', $df->getPathname());
+                    $dbg("  [진단추출] " . ($df->isDir() ? '[D] ' : '[F] ') . $drel . ' (' . $df->getSize() . 'B)');
+                }
+                $this->deleteDirectory($diagDir); // 진단 임시폴더 정리
             }
         }
         
@@ -7214,11 +7331,22 @@ class FileManager {
                 if (file_exists($resultFile)) {
                     $exitCode = (int)trim(@file_get_contents($resultFile));
                     @unlink($resultFile);
+                    $dbg("암호화 추출 exitCode=$exitCode");
                     
                     if ($exitCode !== 0) {
-                        if (is_dir($extractDir)) {
-                            $this->deleteDirectory($extractDir);
+                        // rar은 7-Zip이 RAR5 암호화를 "Unsupported Method"로 실패할 수 있음.
+                        // 이 경우 비번 오류로 단정하지 말고 아래 UnRAR 폴백에서 재시도(rar 공식 도구가 정확).
+                        if ($ext === 'rar') {
+                            $dbg("→ rar exit≠0, UnRAR 폴백으로 넘김");
+                            // 여기에 풀기 모드면 기존 폴더를 삭제하면 안 됨(개인폴더 보호). 폴더 생성 모드만 정리.
+                            if (!$isHereMode && is_dir($extractDir)) {
+                                $this->deleteDirectory($extractDir);
+                                @mkdir($extractDir, 0755, true);
+                            }
+                            break; // 폴링 종료 → 아래 fileCount=0 → UnRAR 폴백 진입
                         }
+                        $dbg("→ wrong_password 반환 (7z/zip exit≠0)");
+                        $safeCleanup(); // 여기에 풀기면 기존 폴더 보호
                         return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
                     }
                     break;
@@ -7246,9 +7374,7 @@ class FileManager {
                 } else {
                     exec('pkill -f ' . escapeshellarg('7z.*' . $basename) . ' 2>/dev/null');
                 }
-                if (is_dir($extractDir)) {
-                    $this->deleteDirectory($extractDir);
-                }
+                $safeCleanup(); // 여기에 풀기면 기존 폴더(개인폴더 등) 보호 — 삭제 안 함
                 @unlink($resultFile);
                 return ['success' => false, 'error' => 'cancelled'];
             }
@@ -7320,9 +7446,11 @@ class FileManager {
                 'C:\\Program Files (x86)\\WinRAR\\UnRAR.exe',
                 'C:\\Program Files\\WinRAR\\Rar.exe',
                 'C:\\Program Files (x86)\\WinRAR\\Rar.exe',
+                'C:\\Program Files\\WinRAR\\UnRAR.exe',
                 '/usr/bin/unrar', '/usr/local/bin/unrar', '/usr/bin/unrar-nonfree'
             ];
             foreach ($unrarPaths as $up) { if (file_exists($up)) { $unrarBin = $up; break; } }
+            $dbg("UnRAR 폴백 진입 (7z 추출 실패). unrarBin=" . ($unrarBin ?: '[없음! UnRAR.exe를 못 찾음]'));
             if ($unrarBin) {
                 // unrar x: 전체 경로 유지 추출, -y: 자동 yes, -o+: 덮어쓰기, -inul: 메시지 억제. stdin 차단으로 비밀번호 프롬프트 멈춤 방지.
                 // 보안: escapeShellPath로 경로 이스케이프 (command injection 방지)
@@ -7331,17 +7459,27 @@ class FileManager {
                 // 암호화 rar 대응: 비밀번호가 있으면 -p<password> 추가 (7z x와 동일한 비번 처리 패턴).
                 // 흐름상 여기 도달 = 무암호 또는 (암호화 + 비번 있음). 비번 없는 암호화는 사전 체크에서 need_password로 이미 반환됨.
                 if (!empty($password)) {
-                    $urSafePwd = preg_replace('/[\x00-\x1F\x7F"`$\\\\]/', '', $password);
-                    if (DIRECTORY_SEPARATOR === '\\') {
-                        $urCmd .= ' -p"' . $urSafePwd . '"';
-                    } else {
-                        $urCmd .= ' -p' . escapeshellarg($urSafePwd);
-                    }
+                    $urCmd .= $this->buildPasswordArg($password);
                 }
-                if (DIRECTORY_SEPARATOR === '\\') {
-                    @shell_exec('chcp 65001 >nul && ' . $urCmd . ' 2>nul < nul');
+                $dbg("UnRAR 폴백 cmd=$urCmd");
+                // 디버그 시 stderr까지 캡처해 실패 원인 기록 (-inul 대신 메시지 보이게)
+                if ($dbgOn) {
+                    $urDiagCmd = $this->escapeShellPath($unrarBin) . ' x -y -o+ ' . $this->escapeShellPath($fullPath) . ' ' . $this->escapeShellPath($urDest);
+                    if (!empty($password)) {
+                        $urDiagCmd .= $this->buildPasswordArg($password);
+                    }
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        $urDiagOut = @shell_exec('chcp 65001 >nul && ' . $urDiagCmd . ' 2>&1 < nul');
+                    } else {
+                        $urDiagOut = @shell_exec($urDiagCmd . ' 2>&1 < /dev/null');
+                    }
+                    $dbg("[진단] UnRAR 실제 출력:\n" . substr((string)$urDiagOut, 0, 1000));
                 } else {
-                    @shell_exec($urCmd . ' 2>/dev/null < /dev/null');
+                    if (DIRECTORY_SEPARATOR === '\\') {
+                        @shell_exec('chcp 65001 >nul && ' . $urCmd . ' 2>nul < nul');
+                    } else {
+                        @shell_exec($urCmd . ' 2>/dev/null < /dev/null');
+                    }
                 }
                 // 추출 결과 다시 집계
                 $fileCount = 0; $totalExtractedSize = 0;
@@ -7351,13 +7489,13 @@ class FileManager {
                     );
                     foreach ($it as $f) { $fileCount++; $totalExtractedSize += $f->getSize(); }
                 }
+                $dbg("UnRAR 폴백 후 fileCount=$fileCount, totalSize=$totalExtractedSize");
             }
         }
 
         if ($fileCount === 0 || ($isEncrypted && $totalExtractedSize === 0)) {
-            if (is_dir($extractDir)) {
-                $this->deleteDirectory($extractDir);
-            }
+            $dbg("→ 추출 실패 판정 (fileCount=$fileCount, isEncrypted=" . ($isEncrypted?'Y':'N') . ", totalSize=$totalExtractedSize)");
+            $safeCleanup(); // 여기에 풀기면 기존 폴더(개인폴더 등) 보호 — 삭제 안 함
             if ($isEncrypted) {
                 return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
             }
@@ -7366,6 +7504,21 @@ class FileManager {
         
         $relExtractDir = str_replace($basePath . DIRECTORY_SEPARATOR, '', $extractDir);
         $relExtractDir = str_replace('\\', '/', $relExtractDir);
+        
+        if ($dbgOn) {
+            $dbg("→ 추출 성공: extracted_to=" . basename($extractDir) . ", fileCount=$fileCount, path=$relExtractDir");
+            if (is_dir($extractDir)) {
+                $structIt = new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS)
+                );
+                $cnt = 0;
+                foreach ($structIt as $f) {
+                    if ($cnt++ >= 30) { $dbg("  ...(이하 생략)"); break; }
+                    $rel = str_replace($extractDir . DIRECTORY_SEPARATOR, '', $f->getPathname());
+                    $dbg("  추출됨: " . ($f->isDir() ? '[D] ' : '[F] ') . $rel);
+                }
+            }
+        }
         
         return [
             'success' => true,

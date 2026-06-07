@@ -100,6 +100,30 @@ $activityLog = new ActivityLog($db, $auth);
  * TRUSTED_PROXIES에 등록된 IP에서 온 요청만 프록시 헤더 신뢰
  * 그 외에는 REMOTE_ADDR만 사용 (헤더 조작 방지)
  */
+
+/**
+ * 압축 비밀번호를 안전하게 명령행 -p 인자로 변환 (FileManager::buildPasswordArg와 동일 규칙).
+ *
+ * ⚠️ 비밀번호 문자를 제거하면 안 된다. 과거 $ ` " \ 를 위험문자라며 지워서
+ *   "12#$" 입력이 "12#"로 잘려 7z/UnRAR이 "비밀번호 틀림"을 내던 버그가 있었다(로그 확정).
+ *   제어문자만 제거하고 셸 인용은 플랫폼 규칙대로 한다.
+ *   - Windows(bat -p"..."): % → %%, " 제거(인용 불가), 나머지 보존
+ *   - Linux: escapeshellarg가 전부 안전 처리
+ * 빈 비번이면 -p"" (헤더 암호화 프롬프트 멈춤 방지).
+ */
+function fs_build_password_arg(string $password): string {
+    $pw = preg_replace('/[\x00-\x1F\x7F]/', '', $password);
+    if ($pw === '') {
+        return (DIRECTORY_SEPARATOR === '\\') ? ' -p""' : " -p''";
+    }
+    if (DIRECTORY_SEPARATOR === '\\') {
+        $pw = str_replace('%', '%%', $pw);
+        $pw = str_replace('"', '', $pw);
+        return ' -p"' . $pw . '"';
+    }
+    return ' -p' . escapeshellarg($pw);
+}
+
 function getClientIP(): string {
     $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
     
@@ -6555,6 +6579,18 @@ try {
             $items = [];
             $isEncrypted = false;
             $method = 'none';
+            $needPassword = false; // 헤더 암호화로 목록을 못 읽을 때 true
+            $archivePassword = (string)($_GET['password'] ?? '');
+            
+            // 디버그 로그 (config.php EXTRACT_DEBUG=true 시 기록)
+            $alDbgOn = (defined('EXTRACT_DEBUG') && EXTRACT_DEBUG);
+            $alDbgLog = (defined('DATA_PATH') ? DATA_PATH : sys_get_temp_dir()) . DIRECTORY_SEPARATOR . 'extract_debug.log';
+            $alDbg = function($msg) use ($alDbgOn, $alDbgLog) {
+                if ($alDbgOn) @file_put_contents($alDbgLog, date('Y-m-d H:i:s') . ' [archive_list] ' . $msg . "\n", FILE_APPEND);
+            };
+            $alDbg("");
+            $alDbg("======== archive_list 시작 ========");
+            $alDbg("archive=$archiveFullPath / ext=$archiveExt / password=" . ($archivePassword !== '' ? '[있음 len=' . strlen($archivePassword) . ']' : '[없음]'));
             
             // 7-zip 바이너리 탐색
             $sevenZipBin = null;
@@ -6638,13 +6674,30 @@ try {
             if (empty($items) && $method === 'none' && $sevenZipBin) {
                 $tmpFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7z_' . md5($archiveFullPath) . '.txt';
                 // 보안: escapeshellarg로 경로 이스케이프 (command injection 방지)
-                $cmd = escapeshellarg($sevenZipBin) . ' l -slt ' . escapeshellarg($archiveFullPath);
-                // Windows: 한글/일본어/중국어 등 유니코드 파일명 정확 처리를 위해 UTF-8 콘솔(chcp 65001). (UnRAR 목록·미리보기 추출과 동일 패턴)
+                $cmd = escapeshellarg($sevenZipBin) . ' l -slt';
+                // 헤더 암호화(-mhe) 7z 등: 비밀번호를 안전하게 -p로 전달 (없으면 -p"")
+                // 제어문자만 제거하고 $ # ` 등 정상 문자 보존 (과거 $ 제거로 비번 잘림 버그 수정)
+                $cmd .= fs_build_password_arg($archivePassword);
+                $cmd .= ' ' . escapeshellarg($archiveFullPath);
+                $alDbg("7z 목록 비번 hex=" . ($archivePassword !== '' ? bin2hex(substr($archivePassword,0,30)) : '[없음]') . " / 비번인자=" . fs_build_password_arg($archivePassword));
+                $alDbg("7z 목록 cmd=$cmd");
+                // Windows: 한글/일본어/중국어 등 유니코드 파일명 정확 처리를 위해 UTF-8 콘솔(chcp 65001). stdin 차단으로 비번 프롬프트 멈춤 방지.
                 if (DIRECTORY_SEPARATOR === '\\') {
-                    $shellOutput = shell_exec('chcp 65001 >nul && ' . $cmd . ' 2>&1');
+                    $shellOutput = shell_exec('chcp 65001 >nul && ' . $cmd . ' 2>&1 < nul');
                 } else {
-                    $shellOutput = shell_exec($cmd . ' 2>&1');
+                    $shellOutput = shell_exec($cmd . ' 2>&1 < /dev/null');
                 }
+                // 헤더 암호화 감지: 목록을 못 뽑고 암호 오류/프롬프트가 나온 경우
+                if ($shellOutput !== null && (
+                        stripos($shellOutput, 'Wrong password') !== false ||
+                        stripos($shellOutput, 'Enter password') !== false ||
+                        stripos($shellOutput, 'Cannot open encrypted archive') !== false ||
+                        (stripos($shellOutput, 'headers') !== false && stripos($shellOutput, 'crypt') !== false)
+                    )) {
+                    $isEncrypted = true;
+                    $needPassword = true;
+                }
+                $alDbg("7z 목록: needPassword=" . ($needPassword ? 'YES' : 'NO') . " / 출력앞200=" . substr((string)$shellOutput, 0, 200));
                 if ($shellOutput !== null && $shellOutput !== false) {
                     @file_put_contents($tmpFile, $shellOutput);
                 }
@@ -6725,6 +6778,14 @@ try {
                     if (strpos(implode("\n", $debugLines), 'Encrypted = +') !== false) $isEncrypted = true;
                 }
                 
+                // 목록을 성공적으로 읽었으면(items 채워짐) 비번이 맞은 것 → needPassword 해제.
+                //   (비번 없이 첫 시도에서 needPassword=true가 됐어도, 비번 주고 재요청해 목록을 읽으면 해제되어야
+                //    프론트가 비번창을 다시 띄우지 않음. 헤더 암호화 7z의 무한 비번창 버그 수정.)
+                if (!empty($items)) {
+                    $needPassword = false;
+                }
+                $alDbg("7z 목록 파싱 후: items=" . count($items) . ", needPassword=" . ($needPassword ? 'YES' : 'NO'));
+                
                 // 임시 파일 삭제
                 @unlink($tmpFile);
                 
@@ -6739,6 +6800,7 @@ try {
             $nativeRarUsed = false;
             if ($archiveExt === 'rar') {
                 $nat = @fs_rar_native_list($archiveFullPath);
+                $alDbg("RAR 네이티브 파싱: " . ($nat ? ('항목 ' . count($nat['items'] ?? []) . '개, fmt=' . ($nat['fmt'] ?? '?')) : 'null(실패)'));
                 if ($nat && !empty($nat['items'])) {
                     $natItems = [];
                     $natEncrypted = false;
@@ -6762,6 +6824,7 @@ try {
                             'index'      => count($natItems),
                         ];
                     }
+                    $alDbg("RAR 네이티브 암호감지=" . ($natEncrypted ? 'YES' : 'NO') . " / 항목샘플: " . implode(' | ', array_map(function($x){ return ($x['is_dir']?'[D]':'[F]') . $x['name'] . ($x['encrypted']?'🔒':''); }, array_slice($natItems, 0, 5))));
                     if (!empty($natItems)) {
                         $items = $natItems;
                         $method = 'rar';
@@ -6827,8 +6890,25 @@ try {
                 }
             }
             
+            // 헤더 암호화로 목록을 못 읽은 경우: 비밀번호 요청 (반디집처럼 비번 입력창 유도)
+            if (empty($items) && $needPassword) {
+                $alDbg("→ 결과: need_password=true, wrong_password=" . ($archivePassword !== '' ? 'true' : 'false') . " (헤더암호, 목록 못읽음)");
+                $result = [
+                    'success' => true,
+                    'items' => [],
+                    'total' => 0,
+                    'archive_size' => (int)($archiveSize ?: 0),
+                    'encrypted' => true,
+                    'need_password' => true,
+                    'wrong_password' => ($archivePassword !== ''), // 비번 줬는데도 실패 = 틀린 비번
+                    'method' => $method !== 'none' ? $method : '7zip'
+                ];
+                break;
+            }
+            
             // 모든 방법 실패
             if (empty($items) && $method === 'none') {
+                $alDbg("→ 결과: 실패 (items 비고 method=none)");
                 $result = [
                     'success' => false, 
                     'error' => $sevenZipBin 
@@ -6838,12 +6918,14 @@ try {
                 break;
             }
             
+            $alDbg("→ 결과: success, total=" . count($items) . ", encrypted=" . ($isEncrypted?'YES':'NO') . ", need_password=" . ($needPassword?'YES':'NO') . ", method=$method");
             $result = [
                 'success' => true,
                 'items' => $items,
                 'total' => count($items),
                 'archive_size' => (int)($archiveSize ?: 0),
                 'encrypted' => $isEncrypted,
+                'need_password' => $needPassword,
                 'method' => $method
             ];
             break;
@@ -6857,6 +6939,14 @@ try {
             $path = $_GET['path'] ?? '';           // 아카이브 파일 경로
             $entryName = $_GET['entry'] ?? '';      // 아카이브 내부 파일 경로
             $vaultTempId2 = $_GET['vault_temp_id'] ?? '';
+            $previewPassword = (string)($_GET['password'] ?? ''); // 암호화 아카이브 미리보기용
+            // 디버그 로그 (config.php EXTRACT_DEBUG=true 시)
+            $pvDbgOn = (defined('EXTRACT_DEBUG') && EXTRACT_DEBUG);
+            $pvDbgLog = (defined('DATA_PATH') ? DATA_PATH : sys_get_temp_dir()) . DIRECTORY_SEPARATOR . 'extract_debug.log';
+            $pvDbg = function($msg) use ($pvDbgOn, $pvDbgLog) {
+                if ($pvDbgOn) @file_put_contents($pvDbgLog, date('Y-m-d H:i:s') . ' [archive_preview] ' . $msg . "\n", FILE_APPEND);
+            };
+            $pvDbg("entry=$entryName / password=" . ($previewPassword !== '' ? '[있음 len=' . strlen($previewPassword) . ' hex=' . bin2hex(substr($previewPassword,0,20)) . ']' : '[없음]'));
             
             if (!$path || !$entryName) {
                 http_response_code(400); exit;
@@ -6953,14 +7043,24 @@ try {
                     $cmd2 = escapeshellarg($szBin2) . ' e -y ' . escapeshellarg($archiveReal)
                           . ' ' . escapeshellarg($entryPath)
                           . ' -o' . escapeshellarg($extractDir);
+                    // 암호화 아카이브: 비밀번호 전달 (없으면 빈 비번으로 프롬프트 멈춤 방지)
+                    // 제어문자만 제거하고 $ # ` 등 정상 문자 보존
+                    $cmd2 .= fs_build_password_arg($previewPassword);
+                    $pvDbg("7z e cmd=$cmd2");
                     if (DIRECTORY_SEPARATOR === '\\') {
-                        // Windows: 한글/유니코드 경로 대응 위해 UTF-8 콘솔(chcp 65001) 후 실행 (archive_check_password와 동일 패턴)
-                        @shell_exec('chcp 65001 >nul && ' . $cmd2 . ' 2>nul');
+                        // Windows: 한글/유니코드 경로 대응 위해 UTF-8 콘솔(chcp 65001) 후 실행. stdin 차단으로 프롬프트 멈춤 방지.
+                        if ($pvDbgOn) {
+                            $pvOut = @shell_exec('chcp 65001 >nul && ' . $cmd2 . ' 2>&1 < nul');
+                            $pvDbg("7z e 출력=" . substr((string)$pvOut, 0, 500));
+                        } else {
+                            @shell_exec('chcp 65001 >nul && ' . $cmd2 . ' 2>nul < nul');
+                        }
                     } else {
-                        @shell_exec($cmd2 . ' 2>/dev/null');
+                        @shell_exec($cmd2 . ' 2>/dev/null < /dev/null');
                     }
                     // flat 추출이므로 basename으로 읽음
                     $extractedFile = $extractDir . DIRECTORY_SEPARATOR . basename($entryName);
+                    $pvDbg("추출파일 경로=$extractedFile / 존재=" . (is_file($extractedFile) ? 'YES (' . @filesize($extractedFile) . 'B)' : 'NO'));
                     if (is_file($extractedFile)) {
                         if (@filesize($extractedFile) <= $maxPreviewSize) {
                             $fileData = @file_get_contents($extractedFile);
@@ -6986,6 +7086,10 @@ try {
                     $urDest = rtrim($extractDir2, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
                     $urCmd2 = escapeshellarg($unrarBin2) . ' e -y -inul ' . escapeshellarg($archiveReal)
                             . ' ' . escapeshellarg($entryName) . ' ' . escapeshellarg($urDest);
+                    // 암호화 rar: 비밀번호 전달 (unrar는 -p<pwd>) — 제어문자만 제거, 정상 문자 보존
+                    if ($previewPassword !== '') {
+                        $urCmd2 .= fs_build_password_arg($previewPassword);
+                    }
                     if (DIRECTORY_SEPARATOR === '\\') {
                         @shell_exec('chcp 65001 >nul && ' . $urCmd2 . ' 2>nul < nul');
                     } else {
@@ -7051,18 +7155,20 @@ try {
                 break;
             }
             
-            // 보안: escapeshellarg로 command injection 방지
-            $checkCmd = escapeshellarg($sevenZipBin) . ' l -slt ' . escapeshellarg($fullPath);
+            // 보안: escapeshellarg로 command injection 방지. 헤더암호 프롬프트 멈춤 방지(-p"" + stdin 차단)
+            $checkCmd = escapeshellarg($sevenZipBin) . ' l -slt -p"" ' . escapeshellarg($fullPath);
             if (DIRECTORY_SEPARATOR === '\\') {
-                $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1');
+                $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
             } else {
-                $checkOutput = @shell_exec($checkCmd . ' 2>&1');
+                $checkOutput = @shell_exec($checkCmd . ' 2>&1 < /dev/null');
             }
             
             $encrypted = false;
             if ($checkOutput) {
                 if (preg_match('/Encrypted\s*=\s*\+/i', $checkOutput) || 
-                    preg_match('/Method\s*=.*AES/i', $checkOutput)) {
+                    preg_match('/Method\s*=.*AES/i', $checkOutput) ||
+                    stripos($checkOutput, 'Enter password') !== false ||
+                    stripos($checkOutput, 'Cannot open encrypted archive') !== false) {
                     $encrypted = true;
                 }
             }
@@ -7080,7 +7186,8 @@ try {
                   $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')]; break; }
             }
             
-            $result = $fileManager->extractZip($storageId, $path, $input['dest'] ?? '', null, $input['password'] ?? '');
+            $extractMode = ($input['mode'] ?? 'folder') === 'here' ? 'here' : 'folder';
+            $result = $fileManager->extractZip($storageId, $path, $input['dest'] ?? '', null, $input['password'] ?? '', $extractMode);
             
             if ($result['success'] ?? false) {
                 $storageInfo = $storage->getStorageById($storageId);
@@ -7139,7 +7246,8 @@ try {
             };
             
             $zipPassword = $_GET['password'] ?? '';
-            $result = $fileManager->extractZip($storageId, $path, '', $progressCallback, $zipPassword);
+            $extractMode = ($_GET['mode'] ?? 'folder') === 'here' ? 'here' : 'folder';
+            $result = $fileManager->extractZip($storageId, $path, '', $progressCallback, $zipPassword, $extractMode);
             
             // 완료 이벤트
             echo "data: " . json_encode([

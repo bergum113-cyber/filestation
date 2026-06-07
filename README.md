@@ -1,6 +1,6 @@
-# FileStation v5.8.2a
+# FileStation v5.8.2b
 
-![version](https://img.shields.io/badge/version-v5.8.2a-blue)
+![version](https://img.shields.io/badge/version-v5.8.2b-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
@@ -500,7 +500,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.2a.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.2b.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -719,11 +719,37 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.2a (rhwp 0.7.15 기반)
+**현재 버전**: v5.8.2b (rhwp 0.7.15 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.2a (2026-06-06) ⭐ 현재
+#### v5.8.2b (2026-06-07) ⭐ 현재
+
+**[v5.8.2b] 암호 압축파일 처리 개선 + 압축 해제 방식 선택 (2026-06-07)**
+
+암호(비밀번호) 걸린 7z/rar 처리와 압축 해제 폴더 방식을 개선. ("버전 올려줘" 지시로 5.8.2a→5.8.2b)
+
+- **🔴 [근본 원인 수정] 비밀번호 `$`·`` ` ``·`"` 문자가 제거되어 "비번 틀림"이 나던 버그 (api.php + FileManager.php):** 디버그 로그로 원인 확정 — 비번 정제 정규식 `[\x00-\x1F\x7F"`$\\]`가 **`$`를 정상 비번 문자인데도 제거**해서, 사용자가 `12#$`를 입력해도 7z/UnRAR에는 `12#`만 전달됨 → 7z·UnRAR 모두 "Wrong password/Incorrect password". 즉 비번이 틀린 게 아니라 코드가 비번을 잘랐던 것. **`fs_build_password_arg()`/`buildPasswordArg()` 공통 헬퍼**를 도입해 제어문자(`\x00-\x1F`,`\x7F`)만 제거하고 `$ # \` ``` 등 정상 문자는 보존. 셸 인용은 플랫폼 규칙대로(Windows bat: `%`→`%%`, `"`만 제거(7-Zip CLI 한계)·나머지 보존 / Linux: escapeshellarg). 비번 정제 8곳(목록·추출·미리보기·분할·UnRAR 폴백) 전부 헬퍼로 교체. 검증: `12#$` 비번으로 7z 생성→추출 성공, 폴더 구조·내용 정상.
+- 위 수정으로 **"폴더 따로 파일 따로" 문제도 함께 해결**: 비번이 잘려 7z가 부분 실패하며 0바이트 깨진 파일만 추출되던 것이, 비번이 온전히 전달되면서 정상 폴더 구조로 추출됨.
+- **[5차 수정] ZIP 폴더 구조 깨짐 — 7-Zip으로 추출 (FileManager.php):** PHP ZipArchive가 Windows에서 만든 ZIP의 CP949/EUC-KR 레거시 인코딩 파일명을 제대로 처리 못 해 폴더 구조가 깨지는 문제(검색 확인: ZipArchive는 비ASCII 파일명 미지원). ZIP도 7-Zip 바이너리가 있으면 7-Zip(`7z x`)으로 해제하도록 변경 — 7-Zip은 인코딩을 정확히 처리. 7-Zip이 없는 환경은 기존 PHP ZipArchive로 폴백(회귀 없음). 검증: 한글 폴더구조 ZIP·암호 ZIP 모두 폴더 구조 정상 보존.
+- **[6차 수정] 헤더 암호화 7z 무한 비번창 버그 (api.php archive_list):** 헤더 암호화(`-mhe=on`) 7z에서 비밀번호를 올바로 입력해 목록을 읽었는데도(`total=2`) `need_password` 플래그가 해제되지 않아, 프론트가 비번 입력창을 계속 다시 띄우던 문제(로그로 확정: 비번 `-p"12#$"` 정상 전달·목록 성공인데 need_password=YES 유지). 목록 파싱 성공(items가 채워짐) 시 `needPassword`를 false로 리셋하도록 수정. 검증: 헤더암호 7z이 비번 입력 후 목록 정상 표시, 비번창 재출현 없음.
+- **[5차 수정] 7z 미리보기 비밀번호 인식 (app.js):** 데이터 암호화 7z(목록은 보이나 파일만 암호화)에서 이미지 미리보기 시 비밀번호가 전달되지 않던 문제. ① 암호화 항목 미리보기 클릭 시 비번이 없으면 비번 입력창을 띄우고 받은 뒤 재시도, ② 갤러리 네비게이션 URL에도 비밀번호 파라미터 추가(누락분 보완), ③ 암호화 이미지도 미리보기 클릭은 허용(클릭 시 비번 요청). 검증: 데이터암호 7z 이미지가 비번 입력 후 미리보기됨.
+
+- **🔴 [긴급 수정] "여기에 풀기" 모드의 폴더 삭제 사고 방지 (FileManager.php):** "여기에 풀기"는 `extractDir`이 압축파일이 있는 폴더(개인폴더 등 기존 폴더)인데, 추출 실패·취소·비번 오류 시 `deleteDirectory($extractDir)`가 호출되어 **그 폴더가 통째로 삭제**되는 치명적 버그가 있었음. `$isHereMode` 플래그와 `$safeCleanup()` 헬퍼를 도입해, 여기에 풀기 모드에서는 어떤 실패 경로에서도 기존 폴더를 절대 삭제하지 않도록 가드. extractZip(ZIP)·extract7zip(7z/rar)·extractSplitZip(.001)의 모든 삭제 지점(실패/취소/비번오류, 총 10여 곳)에 적용. 폴더에 풀기 모드는 기존대로 새 추출 폴더만 정리(회귀 없음). 검증: 여기에 풀기 추출 실패 시 개인폴더 내 파일 전부 보존, 폴더에 풀기는 압축명 폴더만 정리 확인.
+
+- **RAR 암호 표시 (RarNative.php):** RAR5 네이티브 파서가 파일 암호화를 감지하도록 `fs_rar5_extra_has_crypt()` 추가. RAR5 스펙상 암호화 파일은 File 헤더 extra area에 암호화 레코드(type 1)를 포함하는데, 기존엔 `encrypted=false`로 하드코딩되어 암호 자물쇠(🔒) 표시가 안 됐음. extra area를 순회해 type 1 레코드가 있으면 `encrypted=true`. (mtime 추출 함수는 무수정) 검증: 암호 rar는 감지, 비암호 rar은 오탐 없음.
+- **7z 헤더 암호화 (api.php archive_list):** 헤더 암호화(`-mhe=on`) 7z은 `7z l`이 파일 목록 자체를 못 읽어 "빈 폴더"로 보이던 문제. 7z 목록 호출에 빈 비번(`-p""`)+stdin 차단(`< nul`/`< /dev/null`)을 넣어 비번 프롬프트로 멈추지 않게 하고, 암호 프롬프트/오류 감지 시 `need_password`를 반환. 프론트(`_loadZipList`)는 비번 입력창을 띄우고 비번으로 목록을 재요청 → 반디집처럼 동작. 비번 맞으면 목록+암호 배지 정상 표시.
+- **미리보기 비번 전달 (api.php archive_preview):** 암호화 아카이브 내부 이미지 미리보기에 비번(`password`)을 받아 7z `e`/unrar `e` 추출에 `-p` 전달(없으면 `-p""`+stdin 차단). 프론트는 목록 단계에서 받은 비번을 미리보기 URL에 전달, 비번 보유 시 암호화 항목도 미리보기 허용.
+- **압축 해제 방식 2가지 (FileManager.php + api.php + app.js):** 표준 압축 프로그램(WinRAR/7-Zip/반디집)처럼 "📁 폴더에 풀기"(압축파일명 폴더 생성 후 그 안에 풀기, 기본) / "📂 여기에 풀기"(현재 위치에 직접 풀기) 선택 모달 추가. `extractZip/extract7zip/extractSplitZip`에 `$mode='folder'|'here'` 파라미터 추가(기본 folder=기존 동작 100% 보존). 두 방식 모두 압축 내부 폴더 구조를 그대로 보존(`7z x`/`unrar x`/ZipArchive 경로 유지). 검증: 폴더/하위폴더/파일 구조 보존 확인.
+- **압축 해제 사전 암호체크 멈춤 방지 (FileManager.php + api.php archive_check_password):** `7z l` 사전 체크에도 `-p""`+stdin 차단 추가 → 헤더 암호화 아카이브에서 비번 프롬프트로 무한 대기하던 잠재 멈춤 해소.
+- **[3차 수정] 엔터키 확실히 동작 (app.js showZipPasswordModal):** 기존엔 엔터 핸들러가 input 요소에만 붙어 포커스가 빗나가면 동작 안 할 수 있었음. document 캡처 단계(`addEventListener(..., true)`)로 옮겨 포커스 위치·다른 핸들러와 무관하게 엔터=확인/ESC=취소 보장. close 시 핸들러 확실히 제거.
+- **[3차 수정] RAR 암호 추출 "비번 틀림" 오판 수정 (FileManager.php extract7zip):** 암호화 rar을 7-Zip으로 풀면 RAR5를 "Unsupported Method"(exit≠0)로 실패하는데, 기존엔 이를 무조건 `wrong_password`로 반환해 **맞는 비번도 틀렸다고 표시**되고 UnRAR 폴백에 도달 못 했음. rar이면 exit≠0 시 비번 오류로 단정하지 않고 UnRAR 폴백으로 넘겨 재시도(rar 공식 도구가 RAR5 암호 추출 정확). 비ASCII 비번은 bat+chcp 65001로 UTF-8 전달.
+- **[4차 진단용] 압축 디버그 로그/콘솔 (기본 OFF):** 압축 해제·목록 문제(폴더 구조/비번 인식) 실기기 진단용. ① **서버 로그**: `config.php`의 `EXTRACT_DEBUG`를 `true`로 바꾸면 `<DATA_PATH>/extract_debug.log`에 archive_list(목록·암호감지·비번 hex·7z 명령)와 extract7zip(추출 명령·실제 7z 출력·exit코드·추출된 파일 구조)·archive_preview(미리보기 추출)가 전부 기록됨. ② **브라우저 콘솔(F12)**: `[FS압축]` 콘솔 로그. 진단 완료 후 정리 — `EXTRACT_DEBUG`는 기본 `false`(no-op), 콘솔 로그는 주석 처리(호출부 보존)해 평상시 출력 없음. 재진단 시 주석 해제 또는 `EXTRACT_DEBUG=true`로 즉시 활성화 가능. ③ **[개선] 디버그 중복 추출 제거**: 디버그 ON일 때 extract7zip의 진단용 동기 실행이 실제 추출 폴더(extractDir)를 써서 7z이 두 번 실행되던 것을, 별도 임시 폴더(`fs_7z_diag_*`)에서 진단하고 즉시 정리하도록 변경. 본 추출은 항상 1회만 실행. 디버그 OFF면 전체 no-op(영향 없음).
+- **엔터키:** 압축 비번 입력(showZipPasswordModal)·범용 비번(promptPassword)은 기존에 이미 엔터/ESC 처리 구현됨. 신규 방식선택 모달에도 ESC 닫기 적용.
+- 안전성: 모든 셸 호출 escapeshellarg, 비번 위험문자 제거(`[\x00-\x1F\x7F"`$\\]`), 임시 추출 격리·정리 유지. 기존 호출부는 mode 생략 시 동작 불변(회귀 없음). 전 파일 `php -l`/`node --check` 통과.
+- ⚠️ 알려진 환경 의존: 컨테이너 p7zip 16.02는 RAR5 **암호 추출**을 "Unsupported Method"로 미지원(목록·감지는 정상). Windows 정품 7-Zip/WinRAR은 지원하므로 실기기 확인 권장. 모든 검증은 Linux 컨테이너 기준.
+
+#### v5.8.2a (2026-06-06)
 
 **[v5.8.2a] rhwp 0.7.14 → 0.7.15 업그레이드 (2026-06-07)**
 
@@ -2797,5 +2823,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.2a — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-06-07 (rhwp 0.7.15 기준)*
+*FileStation v5.8.2b — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-06-07 (v5.8.2b, rhwp 0.7.15 기준)*

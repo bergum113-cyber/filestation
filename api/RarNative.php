@@ -63,16 +63,20 @@ if (!function_exists('fs_rar_native_list')) {
                 if ($nlen < 0 || $pos + $nlen > $len) break;
                 $nm = substr($data, $pos, $nlen); // UTF-8
                 $isDir = (bool)($fflags & 0x01);
-                // mtime이 본문에 없으면 extra area의 파일시간 레코드(type 3)에서 추출
-                if ($mtime === '' && $extraSize > 0) {
+                // extra area에서 mtime(type 3)과 암호화(type 1) 추출
+                $isEnc = false;
+                if ($extraSize > 0) {
                     $extraStart = $hbodyStart + $hsize - $extraSize;
-                    $mtime = fs_rar5_extra_mtime($data, $extraStart, $extraSize);
+                    if ($mtime === '') {
+                        $mtime = fs_rar5_extra_mtime($data, $extraStart, $extraSize);
+                    }
+                    $isEnc = fs_rar5_extra_has_crypt($data, $extraStart, $extraSize);
                 }
                 $items[] = [
                     'name'      => str_replace('\\', '/', $nm),
                     'size'      => $unp,
                     'is_dir'    => $isDir,
-                    'encrypted' => false,
+                    'encrypted' => $isEnc,
                     'modified'  => $mtime,
                 ];
             }
@@ -201,6 +205,30 @@ if (!function_exists('fs_rar_native_list')) {
     }
 
     /** RAR5 extra area에서 파일시간 레코드(type 3)의 mtime 추출 */
+    /**
+     * RAR5 File 헤더의 extra area에서 암호화 레코드(type 1) 존재 여부 확인.
+     * RAR5 스펙: 파일이 암호화되면 extra area에 File encryption record(type 1)가 포함된다.
+     * (헤더 암호화 -hp의 경우 헤더 자체가 안 읽혀 별도 처리. 여기선 데이터 암호화 -p 감지)
+     * @return bool 암호화 레코드가 있으면 true
+     */
+    function fs_rar5_extra_has_crypt($data, $start, $size) {
+        $len = strlen($data);
+        $end = $start + $size;
+        if ($start < 0 || $end > $len) return false;
+        $p = $start; $guard = 0;
+        while ($p < $end) {
+            if (++$guard > 1000) break;
+            $recSize = fs_rar5_vint($data, $p);
+            if ($recSize <= 0) break;
+            $recBodyStart = $p;
+            $recType = fs_rar5_vint($data, $p);
+            if ($recType === 1) return true; // File encryption record
+            $p = $recBodyStart + $recSize;
+            if ($p <= $recBodyStart) break;
+        }
+        return false;
+    }
+
     function fs_rar5_extra_mtime($data, $start, $size) {
         $len = strlen($data);
         $end = $start + $size;
