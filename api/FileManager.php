@@ -7513,19 +7513,57 @@ class FileManager {
                 $isEncrypted = true;
             }
         }
+        // RAR은 시놀로지 등에서 7z이 한글경로 아카이브를 못 열어 checkOutput으로 암호 감지가 안 될 수 있다.
+        //   미리보기(archive_list)와 동일하게 RarNative로 직접 헤더를 파싱해 암호화 여부를 확정한다.
+        if (!$isEncrypted && $ext === 'rar') {
+            $rarNativePath = __DIR__ . '/RarNative.php';
+            if (is_file($rarNativePath)) {
+                require_once $rarNativePath;
+                if (function_exists('fs_rar_native_list')) {
+                    $rarInfo = @fs_rar_native_list($fullPath);
+                    if (is_array($rarInfo) && !empty($rarInfo['items'])) {
+                        foreach ($rarInfo['items'] as $rit) {
+                            if (!empty($rit['encrypted'])) { $isEncrypted = true; break; }
+                        }
+                        $dbg("RAR 네이티브 암호 감지: isEncrypted=" . ($isEncrypted ? 'YES' : 'NO'));
+                    }
+                }
+            }
+        }
         $dbg("extractDir=$extractDir / ext=$ext / isEncrypted=" . ($isEncrypted ? 'YES' : 'NO'));
         $dbg("checkOutput(앞 300자)=" . substr((string)$checkOutput, 0, 300));
         
         if ($isEncrypted && empty($password)) {
             if (!$isHereMode) @rmdir($extractDir); // 여기에 풀기면 기존 폴더 보호
+            // 여기에 풀기 stage(임시폴더)도 정리
+            if ($hereFinalDest !== null && is_dir($extractDir) && strpos(basename($extractDir), ".fs_extract_tmp_") === 0) {
+                $this->deleteDirectory($extractDir);
+            }
             $dbg("→ password_required 반환 (암호화인데 비번 없음)");
             return ['success' => false, 'error' => 'password_required', 'need_password' => true];
         }
         
         $totalSize = @filesize($fullPath) ?: 1;
         
+        // [RAR 한글경로 우회] 시놀로지 등(p7zip 16.02 / UnRAR 5.70)은 비ASCII 경로의 RAR을
+        //   'Can not open the file as archive' / 'Program aborted'로 못 연다. 압축파일을 추출 폴더 안에
+        //   영문 임시 이름으로 복사한 뒤 그 경로로 추출하면 경로 문제를 회피한다(추출 후 임시본 삭제).
+        //   내부 파일명이 깨지는 건 별도 rename 보정(fixExtractedFilenames)이 처리.
+        $effectivePath = $fullPath;
+        $rarTempCopy = null;
+        if ($ext === 'rar' && preg_match('/[^\x00-\x7F]/', $fullPath)) {
+            if (!is_dir($extractDir)) @mkdir($extractDir, 0755, true);
+            $rarTempCopy = $extractDir . DIRECTORY_SEPARATOR . '.fs_rar_src_' . md5($fullPath . mt_rand()) . '.rar';
+            if (@copy($fullPath, $rarTempCopy)) {
+                $effectivePath = $rarTempCopy;
+                $dbg("RAR 한글경로 우회: 영문 임시본으로 복사 → " . basename($rarTempCopy));
+            } else {
+                $rarTempCopy = null; // 복사 실패 시 원본 경로로 진행
+            }
+        }
+        
         // 보안: escapeShellPath로 경로 이스케이프
-        $escapedPath = $this->escapeShellPath($fullPath);
+        $escapedPath = $this->escapeShellPath($effectivePath);
         $escapedDest = $this->escapeShellPath($extractDir);
         // 덮어쓰기 정책: '여기에 풀기'는 빈 임시 stage에 추출하므로(15차) 충돌이 없어 -aoa로 무방하고,
         //   7z의 -aou가 만드는 'name_1' 형식 대신, 최종 이동 단계에서 getUniqueFilename이 'name (2)' 형식으로
@@ -7690,6 +7728,10 @@ class FileManager {
         // resultFile 정리
         @unlink($resultFile);
         
+        // RAR 한글경로 우회용 영문 임시본(.fs_rar_src_*.rar)은 추출물이 아니므로 집계에서 제외.
+        //   (UnRAR 폴백이 아직 쓸 수 있어 파일 자체는 폴백 후 최종 삭제.)
+        $rarTempBase = ($rarTempCopy !== null) ? basename($rarTempCopy) : null;
+        
         $fileCount = 0;
         $totalExtractedSize = 0;
         if (is_dir($extractDir)) {
@@ -7698,6 +7740,8 @@ class FileManager {
             );
             $dbgNameCnt = 0;
             foreach ($it as $f) { 
+                // RAR 한글경로 우회용 영문 임시본은 추출물이 아니므로 제외
+                if ($rarTempBase !== null && $f->getFilename() === $rarTempBase) continue;
                 // '여기에 풀기'는 extractDir이 사용자 폴더 자체다. 추출 이전부터 있던 파일(preExisting)을
                 //   세면, 추출이 실패(0개)해도 기존 파일 때문에 '성공'으로 오판한다. → 새로 생긴 것만 카운트.
                 if ($isHereMode) {
@@ -7784,8 +7828,8 @@ class FileManager {
                 // ⚠️ 시놀로지 등 locale=C 환경에서는 UnRAR이 '한글 절대경로'를 '?'로 변환해 파일을 못 열어
                 //    'Program aborted'로 실패한다. → 압축파일이 있는 디렉토리로 cd 후 파일명만 상대경로로 넘기고,
                 //    추출 대상도 상대경로로 지정해 셸이 경로를 바이트 그대로 전달하게 한다(로케일 무관).
-                $archiveDir = dirname($fullPath);
-                $archiveBase = basename($fullPath);
+                $archiveDir = dirname($effectivePath);
+                $archiveBase = basename($effectivePath);
                 $urDest = rtrim($extractDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
                 // 추출 대상이 압축파일 디렉토리 하위면 상대경로로, 아니면 절대경로 유지
                 $urDestArg = $urDest;
@@ -7826,6 +7870,7 @@ class FileManager {
                         new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS)
                     );
                     foreach ($it as $f) {
+                        if ($rarTempBase !== null && $f->getFilename() === $rarTempBase) continue;
                         if ($isHereMode) {
                             $topName = explode(DIRECTORY_SEPARATOR, substr($f->getPathname(), strlen($extractDir) + 1))[0];
                             if (isset($preExisting[$topName])) continue; // 기존 파일 제외
@@ -7835,6 +7880,11 @@ class FileManager {
                 }
                 $dbg("UnRAR 폴백 후 fileCount=$fileCount, totalSize=$totalExtractedSize");
             }
+        }
+        
+        // RAR 한글경로 우회용 영문 임시본 최종 삭제 (추출/폴백 모두 끝난 시점)
+        if ($rarTempCopy !== null && is_file($rarTempCopy)) {
+            @unlink($rarTempCopy);
         }
 
         if ($fileCount === 0 || ($isEncrypted && $totalExtractedSize === 0)) {
@@ -7877,6 +7927,8 @@ class FileManager {
             if ($sdh) {
                 while (($sname = readdir($sdh)) !== false) {
                     if ($sname === '.' || $sname === '..') continue;
+                    // 내부 임시 파일(.fs_rar_src_ 영문 임시본 등)은 추출물이 아니므로 사용자 폴더로 옮기지 않음(이중 방어).
+                    if (strpos($sname, '.fs_rar_src_') === 0) { @unlink($extractDir . DIRECTORY_SEPARATOR . $sname); continue; }
                     $sSrc = $extractDir . DIRECTORY_SEPARATOR . $sname;
                     $sDest = $hereFinalDest . DIRECTORY_SEPARATOR . $sname;
                     if (file_exists($sDest)) {
