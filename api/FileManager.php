@@ -7546,19 +7546,44 @@ class FileManager {
         $totalSize = @filesize($fullPath) ?: 1;
         
         // [RAR 한글경로 우회] 시놀로지 등(p7zip 16.02 / UnRAR 5.70)은 비ASCII 경로의 RAR을
-        //   'Can not open the file as archive' / 'Program aborted'로 못 연다. 압축파일을 추출 폴더 안에
-        //   영문 임시 이름으로 복사한 뒤 그 경로로 추출하면 경로 문제를 회피한다(추출 후 임시본 삭제).
-        //   내부 파일명이 깨지는 건 별도 rename 보정(fixExtractedFilenames)이 처리.
+        //   'Can not open' / 'Program aborted' / 'No such file'로 못 연다. UnRAR 5.70은 특히 실행 시
+        //   현재 디렉토리(cd 대상) 경로에 한글이 있으면 그 안의 파일조차 못 찾는다(여기풀기는 stage가 영문이라
+        //   우연히 됐고, 폴더풀기는 추출 폴더명이 한글이라 실패 → '암호 틀림'처럼 보였다).
+        //   → RAR이고 경로에 비ASCII가 있으면, basePath(보통 영문 사용자ID 경로) 바로 아래에 '영문' 작업폴더를
+        //     만들어 거기에 영문 임시본을 두고 거기로 추출한 뒤, 결과를 실제 extractDir로 옮긴다.
+        //     이렇게 하면 7z/UnRAR이 다루는 모든 경로(압축파일·출력폴더·cwd)가 ASCII가 된다.
         $effectivePath = $fullPath;
         $rarTempCopy = null;
-        if ($ext === 'rar' && preg_match('/[^\x00-\x7F]/', $fullPath)) {
+        $rarWorkDir = null;          // RAR 추출용 영문 작업폴더 (한글경로 우회)
+        $rarRealExtractDir = null;   // 결과를 옮길 실제 목적지(원래 extractDir)
+        // 여기풀기(isHereMode)는 extractDir이 이미 영문 stage(.fs_extract_tmp_)라 UnRAR cwd가 영문 → 우회 불필요.
+        //   폴더 모드에서 extractDir(추출 폴더)이 한글이면 UnRAR 5.70이 cwd 한글 때문에 실패하므로 영문 작업폴더로 우회.
+        if (!$isHereMode && $ext === 'rar' && preg_match('/[^\x00-\x7F]/', $extractDir)) {
+            $rarWorkBase = rtrim($basePath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '.fs_rar_work_' . md5($fullPath . microtime(true) . mt_rand());
+            // basePath가 ASCII가 아니면 영문 우회가 무의미하므로, ASCII일 때만 작업폴더 우회 적용.
+            if (!preg_match('/[^\x00-\x7F]/', $rarWorkBase) && @mkdir($rarWorkBase, 0700, true)) {
+                $rarWorkDir = $rarWorkBase;
+                $rarRealExtractDir = $extractDir;   // 원래 목적지 보관
+                $rarTempCopy = $rarWorkDir . DIRECTORY_SEPARATOR . 'src.rar';  // 영문 임시본
+                if (@copy($fullPath, $rarTempCopy)) {
+                    $effectivePath = $rarTempCopy;
+                    $extractDir = $rarWorkDir;       // 추출은 영문 작업폴더에서 수행
+                    $dbg("RAR 한글경로 우회: 영문 작업폴더에서 추출 → $rarWorkDir");
+                } else {
+                    @rmdir($rarWorkBase);
+                    $rarWorkDir = null; $rarRealExtractDir = null; $rarTempCopy = null;
+                }
+            }
+        }
+        // 영문 임시본 방식 (rarWorkDir 우회 미적용 시 보조): 여기풀기 stage 안 또는 basePath 비ASCII 등.
+        if ($rarWorkDir === null && $ext === 'rar' && preg_match('/[^\x00-\x7F]/', $fullPath)) {
             if (!is_dir($extractDir)) @mkdir($extractDir, 0755, true);
             $rarTempCopy = $extractDir . DIRECTORY_SEPARATOR . '.fs_rar_src_' . md5($fullPath . mt_rand()) . '.rar';
             if (@copy($fullPath, $rarTempCopy)) {
                 $effectivePath = $rarTempCopy;
-                $dbg("RAR 한글경로 우회: 영문 임시본으로 복사 → " . basename($rarTempCopy));
+                $dbg("RAR 한글경로 우회(보조): 영문 임시본으로 복사 → " . basename($rarTempCopy));
             } else {
-                $rarTempCopy = null; // 복사 실패 시 원본 경로로 진행
+                $rarTempCopy = null;
             }
         }
         
@@ -7894,10 +7919,38 @@ class FileManager {
             if ($hereFinalDest !== null && is_dir($extractDir) && strpos(basename($extractDir), ".fs_extract_tmp_") === 0) {
                 $this->deleteDirectory($extractDir);
             }
+            // RAR 영문 작업폴더(한글경로 우회)도 실패 시 정리
+            if ($rarWorkDir !== null && is_dir($rarWorkDir)) {
+                $this->deleteDirectory($rarWorkDir);
+            }
             if ($isEncrypted) {
                 return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
             }
             return ['success' => false, 'error' => __('extract_failed', '압축 해제 실패')];
+        }
+        
+        // [RAR 영문 작업폴더 → 실제 목적지 이동] 한글경로 우회로 영문 작업폴더에서 추출·보정했으니,
+        //   이제 결과를 원래 목적지(rarRealExtractDir)로 옮긴다. extractDir 변수를 실제 목적지로 되돌린다.
+        if ($rarWorkDir !== null && $rarRealExtractDir !== null) {
+            // 혹시 남아있을 영문 임시본 제거 (작업폴더 내)
+            $leftSrc = $rarWorkDir . DIRECTORY_SEPARATOR . 'src.rar';
+            if (is_file($leftSrc)) @unlink($leftSrc);
+            if (!is_dir($rarRealExtractDir)) @mkdir($rarRealExtractDir, 0755, true);
+            $wdh = @opendir($rarWorkDir);
+            if ($wdh) {
+                while (($wname = readdir($wdh)) !== false) {
+                    if ($wname === '.' || $wname === '..') continue;
+                    if ($wname === 'src.rar') { @unlink($rarWorkDir . DIRECTORY_SEPARATOR . $wname); continue; }
+                    $wSrc = $rarWorkDir . DIRECTORY_SEPARATOR . $wname;
+                    $wDest = $rarRealExtractDir . DIRECTORY_SEPARATOR . $wname;
+                    if (file_exists($wDest)) $wDest = $this->getUniqueFilename($wDest);
+                    @rename($wSrc, $wDest);
+                }
+                closedir($wdh);
+            }
+            $this->deleteDirectory($rarWorkDir);
+            $extractDir = $rarRealExtractDir;  // 이후 로직(여기풀기 이동/경로계산)이 실제 목적지를 보도록 복원
+            $dbg("RAR 영문 작업폴더 → 실제 목적지 이동 완료: $rarRealExtractDir");
         }
         
         $relExtractDir = str_replace($basePath . DIRECTORY_SEPARATOR, '', $extractDir);
