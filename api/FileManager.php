@@ -2602,7 +2602,7 @@ class FileManager {
      * 7z이 파일명을 디스크에 쓰지 않고 PHP가 직접 쓰므로 로케일과 완전히 무관하다.
      * 정상 환경에서는 1)에서 깨짐이 없어 아무 동작도 하지 않는다(회귀 없음).
      */
-    private function fixExtractedFilenames(string $sevenZipBin, string $archivePath, string $extractDir, string $password, callable $dbg, bool $dbgOn): void {
+    private function fixExtractedFilenames(string $sevenZipBin, string $archivePath, string $extractDir, string $password, callable $dbg, bool $dbgOn, bool $isHereMode = false, array $preExisting = []): void {
         if (!is_dir($extractDir)) return;
         
         // 2) 먼저 목록으로 정확한 UTF-8 경로를 얻는다 (감지·복원 모두에 사용)
@@ -2696,16 +2696,44 @@ class FileManager {
             return;
         }
         
-        // 4a) 기존 추출물(깨진 이름 포함) 제거 → stage의 정상 UTF-8 결과로 교체
-        $old = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::CHILD_FIRST
-        );
-        foreach ($old as $f) {
-            if ($f->isDir()) @rmdir($f->getPathname());
-            else @unlink($f->getPathname());
+        // 4a) ⚠️ extractDir 전체를 절대 비우지 않는다. 특히 '여기에 풀기' 모드에선 extractDir이
+        //     사용자의 기존 폴더 자체라, 비우면 기존 파일이 전부 삭제되는 치명적 사고가 난다.
+        //     → 이번 압축에서 추출된 '깨진 이름' 항목만 정밀하게 제거하고, stage의 정상본으로 교체한다.
+        //     사용자의 기존 파일(압축 목록에 없는 것)은 일절 건드리지 않는다.
+        
+        // 4a-1) 깨진 추출물 제거 대상 수집: '목록의 UTF-8 경로가 디스크에 없는' 경우,
+        //       그에 대응해 깨져서 디스크에 남은 항목을 찾아 지운다. 단 stage(정상본)와 겹치지 않게.
+        //       안전을 위해, 디스크의 비UTF-8/? 포함 이름 중 '이번에 새로 만들어진(압축에 해당하는)' 것만 제거.
+        //       정확 매칭이 어려우므로: 목록의 최상위 항목 이름들을 UTF-8로 알고 있으니,
+        //       그 최상위에 해당하는 깨진 디렉토리/파일만 제거한다.
+        $topNames = []; // 압축 최상위 엔트리(UTF-8)
+        foreach ($entries as $e) {
+            $p = str_replace('\\', '/', $e['Path']);
+            if ($p === '' || $p === $archivePath) continue;
+            $top = explode('/', $p)[0];
+            if ($top !== '') $topNames[$top] = true;
         }
-        // 4b) stage → extractDir 이동
+        // 디스크 최상위에서, '목록 최상위 UTF-8 이름과 일치하지 않으면서 깨진(비UTF-8/?) 이름'인 항목만 제거
+        $dh = @opendir($extractDir);
+        if ($dh) {
+            while (($name = readdir($dh)) !== false) {
+                if ($name === '.' || $name === '..') continue;
+                // ★ 추출 이전부터 있던 사용자 기존 파일은 절대 건드리지 않는다(비UTF-8 이름이어도 보호).
+                if (isset($preExisting[$name])) continue;
+                $isUtf8 = mb_check_encoding($name, 'UTF-8');
+                $hasQ = strpos($name, '?') !== false;
+                // 정상 UTF-8이고 ? 없으면(=정상 추출본 or 기존 파일) 보존
+                if ($isUtf8 && !$hasQ) continue;
+                // 깨진 이름(비UTF-8 또는 ?)이면서 이번 추출로 새로 생긴 것만 제거
+                $full = $extractDir . $sep . $name;
+                if (is_dir($full)) $this->deleteDirectory($full);
+                else @unlink($full);
+                $dbg("[파일명보정] 깨진 추출물 제거: " . bin2hex(substr($name, 0, 20)));
+            }
+            closedir($dh);
+        }
+        
+        // 4b) stage(정상 UTF-8 결과) → extractDir 으로 이동 (기존 파일 보존, 같은 경로만 덮어씀)
         $stage = new \RecursiveIteratorIterator(
             new \RecursiveDirectoryIterator($stageDir, \RecursiveDirectoryIterator::SKIP_DOTS),
             \RecursiveIteratorIterator::SELF_FIRST
@@ -2718,11 +2746,15 @@ class FileManager {
             } else {
                 $dp = dirname($dest);
                 if (!is_dir($dp)) @mkdir($dp, 0755, true);
+                // '여기에 풀기'에서 같은 이름의 기존 파일이 있으면 덮어쓰지 않고 이름 변경(name_1.ext)으로 보존.
+                if ($isHereMode && file_exists($dest)) {
+                    $dest = $this->getUniqueFilename($dest);
+                }
                 @rename($f->getPathname(), $dest);
             }
         }
         $this->deleteDirectory($stageDir);
-        $dbg("[파일명보정] 교체 완료: $okFiles 개 파일 UTF-8 이름으로 복원");
+        $dbg("[파일명보정] 교체 완료: $okFiles 개 파일 UTF-8 이름으로 복원 (기존 파일 보존" . ($isHereMode ? ', 여기에풀기 모드' : '') . ")");
     }
     
     // Windows 8.3 짧은 경로명 가져오기 (비ASCII 파일명 문제 해결)
@@ -6531,8 +6563,46 @@ class FileManager {
             }
         }
         
-        // 진행률 콜백이 있으면 배치 단위로 해제
-        if ($progressCallback && $totalFiles > 0) {
+        // '여기에 풀기'(extractDir=사용자 폴더)에서 ZipArchive::extractTo는 같은 이름의 기존 파일을
+        //   무조건 덮어써 데이터 손실 위험이 있다. → 임시 stage 폴더에 추출한 뒤 extractDir로 이동하되,
+        //   기존 파일과 충돌하면 getUniqueFilename(name_1)으로 보존한다. (7z 경로의 -aou와 동일 취지)
+        //   폴더 생성 모드는 extractDir이 빈 새 폴더라 충돌이 없으므로 기존 방식 유지.
+        if ($isHereMode) {
+            $zipStage = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_zipstage_' . md5($fullZipPath . microtime(true) . mt_rand());
+            @mkdir($zipStage, 0700, true);
+            $realStage = realpath($zipStage);
+            // stage에 전체 추출 (Zip Slip 방어 포함)
+            for ($i = 0; $i < $totalFiles; $i++) {
+                $filename = $zip->getNameIndex($i);
+                if ($filename === false || strpos($filename, '..') !== false) continue;
+                $zip->extractTo($zipStage, $filename);
+                $ex = realpath($zipStage . DIRECTORY_SEPARATOR . $filename);
+                if ($ex && $realStage && !isSubPath($ex, $realStage)) { @unlink($ex); continue; }
+                if ($progressCallback && ($i % 20 === 0 || $i === $totalFiles - 1)) {
+                    $progressCallback($i + 1, $totalFiles, $filename);
+                }
+            }
+            // stage → extractDir 이동 (충돌 시 이름 변경으로 기존 파일 보존)
+            if (is_dir($zipStage)) {
+                $sit = new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($zipStage, \RecursiveDirectoryIterator::SKIP_DOTS),
+                    \RecursiveIteratorIterator::SELF_FIRST
+                );
+                foreach ($sit as $sf) {
+                    $rel = substr($sf->getPathname(), strlen($zipStage) + 1);
+                    $dest = $extractDir . DIRECTORY_SEPARATOR . $rel;
+                    if ($sf->isDir()) {
+                        if (!is_dir($dest)) @mkdir($dest, 0755, true);
+                    } else {
+                        $dp = dirname($dest);
+                        if (!is_dir($dp)) @mkdir($dp, 0755, true);
+                        if (file_exists($dest)) $dest = $this->getUniqueFilename($dest);
+                        @rename($sf->getPathname(), $dest);
+                    }
+                }
+                $this->deleteDirectory($zipStage);
+            }
+        } elseif ($progressCallback && $totalFiles > 0) {
             $updateInterval = max(1, min(50, (int)($totalFiles * 0.05)));
             $lastUpdate = 0;
             $realExtractDir = realpath($extractDir);
@@ -6570,9 +6640,10 @@ class FileManager {
         
         $zip->close();
         
+        // extracted_to: '여기에 풀기'는 extractDir이 현재 폴더 자체라 폴더명이 무의미하므로 압축파일명 표시.
         return [
             'success' => true, 
-            'extracted_to' => basename($extractDir),
+            'extracted_to' => $isHereMode ? basename($fullZipPath) : basename($extractDir),
             'file_count' => $totalFiles
         ];
     }
@@ -7135,7 +7206,8 @@ class FileManager {
         // 보안: escapeShellPath로 경로 이스케이프
         $escapedZip = $this->escapeShellPath($fullZipPath);
         $escapedDest = $this->escapeShellPath($extractDir);
-        $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedZip . ' -o' . $escapedDest . ' -aoa';
+        // '여기에 풀기'는 같은 이름의 기존 파일을 덮어쓰지 않도록 -aou(자동 이름변경). 폴더 생성은 -aoa.
+        $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedZip . ' -o' . $escapedDest . ' ' . ($isHereMode ? '-aou' : '-aoa');
         
         if (!empty($password)) {
             // 비밀번호를 안전하게 -p 인자로 변환 (제어문자만 제거, $ # ` 등 보존)
@@ -7369,6 +7441,21 @@ class FileManager {
             mkdir($extractDir, 0755, true);
         }
         
+        // [파일명보정 대비] 추출 직전 extractDir의 기존 항목 스냅샷.
+        //   보정 단계에서 '깨진 이름' 제거 시, 이 스냅샷에 있던(=추출 이전부터 존재한) 항목은
+        //   사용자의 기존 파일이므로 절대 건드리지 않는다. 비UTF-8 이름의 기존 파일도 보호된다.
+        $preExisting = [];
+        if (is_dir($extractDir)) {
+            $pdh = @opendir($extractDir);
+            if ($pdh) {
+                while (($pn = readdir($pdh)) !== false) {
+                    if ($pn === '.' || $pn === '..') continue;
+                    $preExisting[$pn] = true;
+                }
+                closedir($pdh);
+            }
+        }
+        
         @set_time_limit(0);
         
         // 7z l -slt 로 암호화 여부 사전 체크 (보안: escapeShellPath)
@@ -7410,7 +7497,10 @@ class FileManager {
         // 보안: escapeShellPath로 경로 이스케이프
         $escapedPath = $this->escapeShellPath($fullPath);
         $escapedDest = $this->escapeShellPath($extractDir);
-        $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedPath . ' -o' . $escapedDest . ' -aoa';
+        // 덮어쓰기 정책: '여기에 풀기'는 extractDir이 사용자 폴더라, 같은 이름의 기존 파일을 덮어쓰면 안 된다.
+        //   -aou(자동 이름변경: 충돌 시 name_1 등)로 기존 파일을 보존한다. ('폴더 생성'은 빈 새 폴더라 -aoa로 무방.)
+        $overwriteOpt = $isHereMode ? '-aou' : '-aoa';
+        $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedPath . ' -o' . $escapedDest . ' ' . $overwriteOpt;
         
         if (!empty($password)) {
             // 비밀번호를 안전하게 -p 인자로 변환 (제어문자만 제거, $ # ` 등 보존)
@@ -7585,14 +7675,47 @@ class FileManager {
                 }
             }
         }
+        // '여기에 풀기'는 extractDir이 사용자 폴더 자체라, 위 집계엔 기존 파일까지 포함된다.
+        //   토스트에 표시할 '압축 해제 파일 개수'는 추출 성공 판정(rar 폴백 등)과 별개로 압축 목록 기준으로 따로 센다.
+        //   (성공 판정용 $fileCount는 그대로 두고, 표시용 개수만 $archiveFileCount로 분리.)
+        $archiveFileCount = $fileCount;
+        if ($isHereMode) {
+            $listCmd2 = $this->escapeShellPath($sevenZipBin) . ' l -slt -sccUTF-8' . $this->buildPasswordArg($password) . ' ' . $this->escapeShellPath($fullPath);
+            if (DIRECTORY_SEPARATOR === '\\') {
+                $listOut2 = @shell_exec('chcp 65001 >nul && ' . $listCmd2 . ' 2>&1 < nul');
+            } else {
+                $listOut2 = @shell_exec($this->utf8EnvPrefix() . $listCmd2 . ' 2>&1 < /dev/null');
+            }
+            if ($listOut2) {
+                // -slt 출력을 Path 단위 엔트리로 파싱. 아카이브 자체(첫 Path=아카이브경로)와 폴더(Attributes D 시작)는 제외.
+                $cntFiles = 0;
+                $cur = [];
+                $flush = function() use (&$cur, &$cntFiles, $fullPath) {
+                    if (empty($cur['Path'])) return;
+                    if ($cur['Path'] === $fullPath) return; // 아카이브 자체
+                    $isDir = isset($cur['Attributes']) && strpos(ltrim($cur['Attributes']), 'D') === 0;
+                    if (!$isDir) $cntFiles++;
+                };
+                foreach (preg_split('/\r?\n/', $listOut2) as $ln) {
+                    if (preg_match('/^(Path|Attributes) = (.*)$/', $ln, $mm)) {
+                        if ($mm[1] === 'Path') { $flush(); $cur = ['Path' => $mm[2]]; }
+                        else { $cur['Attributes'] = $mm[2]; }
+                    }
+                }
+                $flush();
+                if ($cntFiles > 0) $archiveFileCount = $cntFiles;
+            }
+        }
         
-        // [파일명 인코딩 보정] 일부 환경(시놀로지 DSM 등 비UTF-8 로케일)에서는 7-Zip이 추출 시
-        //   파일을 디스크에 쓸 때 OS 파일 API가 LC_CTYPE 로케일을 따라, 비ASCII(한글/일본어/중국어 등)
-        //   파일명을 '?'로 치환해 저장한다(콘솔용 -sccUTF-8로는 해결 안 됨). 목록(l)은 -sccUTF-8로 정확히
-        //   UTF-8을 얻으므로, 추출 파일명이 깨졌으면 목록 기준으로 -so(stdout) 재추출해 올바른 이름으로 저장.
-        //   정상 환경(Windows/UTF-8 리눅스)은 깨짐이 없어 이 블록을 건너뛴다(회귀 없음).
-        if ($fileCount > 0 && $ext !== 'rar') {
-            $this->fixExtractedFilenames($sevenZipBin, $fullPath, $extractDir, $password, $dbg, $dbgOn);
+        // [파일명 인코딩 보정] 일부 환경(시놀로지 DSM 등 비UTF-8 로케일 리눅스)에서는 7-Zip이 추출 시
+        //   파일을 디스크에 쓸 때 OS 파일 API가 LC_CTYPE 로케일을 따라, 비ASCII 파일명을 '?'로 치환한다.
+        //   → 목록 기준 -so 재추출로 보정.
+        // ⚠️ Windows는 7-Zip이 유니코드 파일명을 Win32 API(UTF-16)로 정확히 기록하므로 깨지지 않는다.
+        //   오히려 Windows에서 PHP의 is_file()이 한글 경로를 못 읽어 '깨짐'으로 오판하거나, -so 출력을
+        //   chcp 콘솔 파이프가 변조해 바이너리(PDF/이미지)를 손상시킬 위험이 있으므로 보정을 돌리지 않는다.
+        //   (보정은 비UTF-8 로케일 리눅스 환경 전용.)
+        if ($fileCount > 0 && $ext !== 'rar' && DIRECTORY_SEPARATOR !== '\\') {
+            $this->fixExtractedFilenames($sevenZipBin, $fullPath, $extractDir, $password, $dbg, $dbgOn, $isHereMode, $preExisting);
             // 보정 후 재집계 (이름만 바뀌므로 개수/크기는 동일하지만 안전하게)
             $fileCount = 0; $totalExtractedSize = 0;
             if (is_dir($extractDir)) {
@@ -7687,10 +7810,15 @@ class FileManager {
             }
         }
         
+        // extracted_to: 폴더 생성 모드는 만들어진 폴더명, '여기에 풀기'는 extractDir이 현재 폴더 자체라
+        //   폴더명(예: 사용자 폴더명 'seo')이 표시되면 의미가 없으므로 압축파일명을 보여준다.
+        // file_count: '여기에 풀기'는 extractDir에 기존 파일이 섞여 있으므로, 압축 목록 기준 개수($archiveFileCount)로 표시.
+        //   단 압축 목록 계산이 실패(rar 폴백 등으로 7z 목록 못 읽음)해 0이면 fileCount로 폴백.
+        $displayCount = ($isHereMode && $archiveFileCount > 0) ? $archiveFileCount : $fileCount;
         return [
             'success' => true,
-            'extracted_to' => basename($extractDir),
-            'file_count' => $fileCount,
+            'extracted_to' => $isHereMode ? $basename : basename($extractDir),
+            'file_count' => $displayCount,
             'path' => $relExtractDir
         ];
     }
