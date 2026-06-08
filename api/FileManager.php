@@ -2590,17 +2590,20 @@ class FileManager {
     }
     
     /**
-     * 추출된 파일명이 환경(로케일) 문제로 깨진 경우, 압축 목록(UTF-8 정확)을 기준으로
-     * -so(stdout) 재추출하여 올바른 UTF-8 파일명으로 다시 저장한다.
+     * 추출된 파일명이 환경(로케일) 문제로 '?'(0x3F) 등으로 깨진 경우, 이미 정상 추출된 파일의
+     * 내용은 그대로 두고 파일명만 압축 목록(UTF-8 정확) 기준으로 rename하여 복원한다.
+     *
+     * 배경: 시놀로지 등 비UTF-8 로케일 p7zip은 추출 시 디스크 파일명을 '?'로 치환하지만 내용은 정상.
+     *   (`7z x -so <한글경로>` 재추출은 해당 빌드에서 한글 경로 매칭이 안 돼 실패하므로 사용하지 않는다.)
      *
      * 동작:
-     *   1) extractDir의 실제 파일명에 깨짐(? 포함 또는 비UTF-8)이 있는지 검사. 없으면 즉시 종료(정상 환경).
-     *   2) 깨짐이 있으면 7z 목록(-slt -sccUTF-8)으로 정확한 UTF-8 경로 목록을 얻는다.
-     *   3) 각 파일을 `7z x -so <경로>`로 내용만 받아, extractDir 아래 올바른 UTF-8 경로로 직접 기록.
-     *   4) 기존에 깨진 이름으로 추출된 파일/폴더는 정리.
+     *   1) 목록(-slt -sccUTF-8)으로 정확한 UTF-8 파일 경로+크기를 얻는다.
+     *   2) 그 경로가 디스크에 없으면(=깨짐) 보정 대상. 모두 존재하면 즉시 종료(정상 환경, 회귀 없음).
+     *   3) 디스크의 '깨진 이름' 파일을 수집하고, (경로 깊이 + 파일 크기)로 목록 항목과 유일 매칭되는 것만 rename.
+     *      매칭이 모호하면(같은 깊이·크기 다수) 건드리지 않는다(데이터 안전 우선).
+     *   4) preExisting(추출 이전부터 있던 사용자 파일)은 어떤 이름이든 절대 건드리지 않는다.
      *
-     * 7z이 파일명을 디스크에 쓰지 않고 PHP가 직접 쓰므로 로케일과 완전히 무관하다.
-     * 정상 환경에서는 1)에서 깨짐이 없어 아무 동작도 하지 않는다(회귀 없음).
+     * rename은 PHP가 바이트 경로로 수행하므로 로케일과 무관하다(시놀로지에서도 동작).
      */
     private function fixExtractedFilenames(string $sevenZipBin, string $archivePath, string $extractDir, string $password, callable $dbg, bool $dbgOn, bool $isHereMode = false, array $preExisting = []): void {
         if (!is_dir($extractDir)) return;
@@ -2630,131 +2633,118 @@ class FileManager {
         if (!empty($cur['Path'])) $entries[] = $cur;
         if (empty($entries)) { $dbg("[파일명보정] 목록 파싱 결과 없음 → 중단(원본 보존)"); return; }
         
-        // 1) 깨짐 감지: 목록의 UTF-8 상대경로 집합과, 디스크의 실제 상대경로 집합을 비교.
-        //    목록에 있는 경로가 디스크에 그대로 존재하지 않으면(= 치환/깨짐 발생) 보정 대상.
-        //    이 방식은 '?'치환(0x3F, UTF-8로는 유효)도 잡고, 합법적 '?'파일명(목록·디스크 일치)은 오판하지 않는다.
-        $expectedRel = [];
+        // 1) 깨짐 감지: 목록의 UTF-8 상대경로가 디스크에 그대로 존재하는지 확인.
+        //    존재하지 않으면(=치환/깨짐) 보정 대상. '?'치환(0x3F)도 잡고, 합법적 '?'파일명은 오판 안 함.
+        $sep = DIRECTORY_SEPARATOR;
+        $expectedFiles = []; // rel(UTF-8) => size
         foreach ($entries as $e) {
             $p = str_replace('\\', '/', $e['Path']);
             if ($p === '' || $p === $archivePath) continue;
             $isDir = (isset($e['Folder']) && $e['Folder'] === '+')
                   || (isset($e['Attributes']) && strpos($e['Attributes'], 'D') === 0);
-            if (!$isDir) $expectedRel[$p] = true;
+            if ($isDir) continue;
+            // 경로 안전성: 절대경로/.. 차단
+            if (strpos($p, '..') !== false || strpos($p, ':') !== false || $p[0] === '/' || $p[0] === '\\') continue;
+            $expectedFiles[$p] = (int)($e['Size'] ?? -1);
         }
-        if (empty($expectedRel)) { $dbg("[파일명보정] 목록에 파일 항목 없음 → 스킵"); return; }
+        if (empty($expectedFiles)) { $dbg("[파일명보정] 목록에 파일 항목 없음 → 스킵"); return; }
         
-        $sep = DIRECTORY_SEPARATOR;
-        $missing = 0;
-        foreach ($expectedRel as $rel => $_) {
+        $missingRels = [];
+        foreach ($expectedFiles as $rel => $sz) {
             $disk = $extractDir . $sep . str_replace('/', $sep, $rel);
-            if (!is_file($disk)) $missing++;
+            if (!is_file($disk)) $missingRels[$rel] = $sz;
         }
-        if ($missing === 0) {
+        if (empty($missingRels)) {
             $dbg("[파일명보정] 목록 경로가 디스크에 모두 정상 존재 → 보정 불필요");
             return;
         }
-        $dbg("[파일명보정] 목록 대비 디스크에 없는 파일 $missing/" . count($expectedRel) . "개(파일명 깨짐 추정) → -so 재추출 시작");
+        $dbg("[파일명보정] 목록 대비 디스크에 없는 파일 " . count($missingRels) . "/" . count($expectedFiles) . "개(파일명 깨짐 추정) → 이름 매칭 복원 시작");
         
-        // 3) 별도 임시 폴더에 -so로 재추출 (성공 검증 후에만 원본과 교체 → 중간 실패 시 원본 보존)
-        $stageDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_namefix_' . md5($archivePath . microtime(true) . mt_rand());
-        if (!@mkdir($stageDir, 0700, true)) { $dbg("[파일명보정] 임시폴더 생성 실패 → 중단(원본 보존)"); return; }
-        
-        $expectFiles = 0; $okFiles = 0;
-        foreach ($entries as $e) {
-            $path = str_replace('\\', '/', $e['Path']);
-            if ($path === '' || $path === $archivePath) continue;
-            $isDir = (isset($e['Folder']) && $e['Folder'] === '+')
-                  || (isset($e['Attributes']) && strpos($e['Attributes'], 'D') === 0);
-            // 경로 안전성: 절대경로/.. 차단 (Zip Slip 방어)
-            if (strpos($path, '..') !== false || strpos($path, ':') !== false || $path[0] === '/' || $path[0] === '\\') continue;
-            $target = $stageDir . $sep . str_replace('/', $sep, $path);
-            if ($isDir) {
-                if (!is_dir($target)) @mkdir($target, 0755, true);
-                continue;
-            }
-            $expectFiles++;
-            $parent = dirname($target);
-            if (!is_dir($parent)) @mkdir($parent, 0755, true);
-            // -so 로 내용만 받아서 직접 기록 (파일명은 PHP가 UTF-8로 씀)
-            $soCmd = $this->escapeShellPath($sevenZipBin) . ' x -so -sccUTF-8' . $this->buildPasswordArg($password)
-                   . ' ' . $this->escapeShellPath($archivePath) . ' ' . $this->escapeShellPath($path);
-            if (DIRECTORY_SEPARATOR === '\\') {
-                $content = @shell_exec('chcp 65001 >nul && ' . $soCmd . ' 2>nul < nul');
-            } else {
-                $content = @shell_exec($this->utf8EnvPrefix() . $soCmd . ' 2>/dev/null < /dev/null');
-            }
-            if ($content !== null && $content !== false && @file_put_contents($target, $content) !== false) {
-                $okFiles++;
-            }
-        }
-        $dbg("[파일명보정] -so 재추출: 기대 $expectFiles / 성공 $okFiles");
-        
-        // 4) 모든 파일이 성공적으로 재추출됐을 때만 교체. 하나라도 실패하면 원본 보존(데이터 손실 방지).
-        if ($expectFiles === 0 || $okFiles < $expectFiles) {
-            $dbg("[파일명보정] 일부 실패 → 원본 보존, 보정 취소");
-            $this->deleteDirectory($stageDir);
-            return;
-        }
-        
-        // 4a) ⚠️ extractDir 전체를 절대 비우지 않는다. 특히 '여기에 풀기' 모드에선 extractDir이
-        //     사용자의 기존 폴더 자체라, 비우면 기존 파일이 전부 삭제되는 치명적 사고가 난다.
-        //     → 이번 압축에서 추출된 '깨진 이름' 항목만 정밀하게 제거하고, stage의 정상본으로 교체한다.
-        //     사용자의 기존 파일(압축 목록에 없는 것)은 일절 건드리지 않는다.
-        
-        // 4a-1) 깨진 추출물 제거 대상 수집: '목록의 UTF-8 경로가 디스크에 없는' 경우,
-        //       그에 대응해 깨져서 디스크에 남은 항목을 찾아 지운다. 단 stage(정상본)와 겹치지 않게.
-        //       안전을 위해, 디스크의 비UTF-8/? 포함 이름 중 '이번에 새로 만들어진(압축에 해당하는)' 것만 제거.
-        //       정확 매칭이 어려우므로: 목록의 최상위 항목 이름들을 UTF-8로 알고 있으니,
-        //       그 최상위에 해당하는 깨진 디렉토리/파일만 제거한다.
-        $topNames = []; // 압축 최상위 엔트리(UTF-8)
-        foreach ($entries as $e) {
-            $p = str_replace('\\', '/', $e['Path']);
-            if ($p === '' || $p === $archivePath) continue;
-            $top = explode('/', $p)[0];
-            if ($top !== '') $topNames[$top] = true;
-        }
-        // 디스크 최상위에서, '목록 최상위 UTF-8 이름과 일치하지 않으면서 깨진(비UTF-8/?) 이름'인 항목만 제거
-        $dh = @opendir($extractDir);
-        if ($dh) {
-            while (($name = readdir($dh)) !== false) {
-                if ($name === '.' || $name === '..') continue;
-                // ★ 추출 이전부터 있던 사용자 기존 파일은 절대 건드리지 않는다(비UTF-8 이름이어도 보호).
-                if (isset($preExisting[$name])) continue;
-                $isUtf8 = mb_check_encoding($name, 'UTF-8');
-                $hasQ = strpos($name, '?') !== false;
-                // 정상 UTF-8이고 ? 없으면(=정상 추출본 or 기존 파일) 보존
-                if ($isUtf8 && !$hasQ) continue;
-                // 깨진 이름(비UTF-8 또는 ?)이면서 이번 추출로 새로 생긴 것만 제거
-                $full = $extractDir . $sep . $name;
-                if (is_dir($full)) $this->deleteDirectory($full);
-                else @unlink($full);
-                $dbg("[파일명보정] 깨진 추출물 제거: " . bin2hex(substr($name, 0, 20)));
-            }
-            closedir($dh);
-        }
-        
-        // 4b) stage(정상 UTF-8 결과) → extractDir 으로 이동 (기존 파일 보존, 같은 경로만 덮어씀)
-        $stage = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($stageDir, \RecursiveDirectoryIterator::SKIP_DOTS),
-            \RecursiveIteratorIterator::SELF_FIRST
+        // 2) 디스크에서 '깨진(비UTF-8/?) 이름'이고 '추출 이전부터 있던 게 아닌(preExisting 제외)' 파일을 수집.
+        //    내용은 7z이 정상 추출했으므로(이름만 깨짐), 재추출하지 않고 목록 기준으로 rename만 한다.
+        //    매칭 키: 같은 부모 디렉토리(깨진 경로는 디렉토리명도 깨졌을 수 있으므로 '깊이' 기준) + 파일 크기.
+        //    안전: 매칭이 모호하면(같은 크기 다수 등) 그 항목은 건드리지 않는다.
+        $brokenFiles = []; // [ ['path'=>절대경로, 'size'=>크기, 'depth'=>깊이, 'ext'=>확장자] ]
+        $it = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS)
         );
-        foreach ($stage as $f) {
-            $rel = substr($f->getPathname(), strlen($stageDir) + 1);
-            $dest = $extractDir . $sep . $rel;
-            if ($f->isDir()) {
-                if (!is_dir($dest)) @mkdir($dest, 0755, true);
-            } else {
-                $dp = dirname($dest);
-                if (!is_dir($dp)) @mkdir($dp, 0755, true);
-                // '여기에 풀기'에서 같은 이름의 기존 파일이 있으면 덮어쓰지 않고 이름 변경(name_1.ext)으로 보존.
-                if ($isHereMode && file_exists($dest)) {
-                    $dest = $this->getUniqueFilename($dest);
+        foreach ($it as $f) {
+            if (!$f->isFile()) continue;
+            $full = $f->getPathname();
+            $rel = substr($full, strlen($extractDir) + 1);
+            $relU = str_replace('\\', '/', $rel);
+            // 목록에 정상 존재하는 파일(정상 추출본)·기존 파일은 제외
+            if (isset($expectedFiles[$relU]) && !isset($missingRels[$relU])) continue;
+            // preExisting(추출 이전부터 있던 사용자 파일) 최상위는 보호
+            $topName = explode($sep, $rel)[0];
+            if (isset($preExisting[$topName])) continue;
+            // 깨진 이름(비UTF-8 또는 ?)만 대상
+            $base = $f->getFilename();
+            $pathHasBroken = (!mb_check_encoding($rel, 'UTF-8')) || strpos($rel, '?') !== false;
+            if (!$pathHasBroken) continue;
+            $brokenFiles[] = [
+                'path' => $full,
+                'size' => $f->getSize(),
+                'depth' => substr_count($relU, '/'),
+            ];
+        }
+        
+        if (empty($brokenFiles)) { $dbg("[파일명보정] 깨진 디스크 파일 없음 → 스킵(원본 보존)"); return; }
+        
+        // 3) missingRels(목록의 UTF-8 경로) ↔ brokenFiles(디스크 깨진 파일) 매칭.
+        //    (깊이 + 크기)가 유일하게 일치하는 것만 확정 매칭. 모호하거나 크기 정보가 없으면 건드리지 않음(안전).
+        //    단, 깨진 파일이 1개뿐이고 목록의 깨진 항목도 1개뿐이면(단일 파일 압축) 크기 없이도 깊이로 매칭 허용.
+        $renamed = 0; $ambiguous = 0;
+        $usedBroken = [];
+        $singleCase = (count($brokenFiles) === 1 && count($missingRels) === 1);
+        foreach ($missingRels as $rel => $sz) {
+            $depth = substr_count($rel, '/');
+            // 후보: 아직 안 쓰였고, 깊이 같고, 크기도 같은(또는 단일 파일 케이스) 깨진 파일
+            $cands = [];
+            foreach ($brokenFiles as $i => $bf) {
+                if (isset($usedBroken[$i])) continue;
+                if ($bf['depth'] !== $depth) continue;
+                // 크기 검증: 크기 정보가 있으면 반드시 일치해야 함. 없으면(파싱실패) 단일 케이스만 허용.
+                if ($sz >= 0) {
+                    if ($bf['size'] === $sz) $cands[] = $i;
+                } elseif ($singleCase) {
+                    $cands[] = $i;
                 }
-                @rename($f->getPathname(), $dest);
+            }
+            if (count($cands) === 1) {
+                $bi = $cands[0];
+                $destAbs = $extractDir . $sep . str_replace('/', $sep, $rel);
+                $dp = dirname($destAbs);
+                if (!is_dir($dp)) @mkdir($dp, 0755, true);
+                // 충돌 시 기존 파일을 덮어쓰지 않고 이름 변경으로 보존(여기에풀기/폴더 모드 공통).
+                if (file_exists($destAbs)) $destAbs = $this->getUniqueFilename($destAbs);
+                if (@rename($brokenFiles[$bi]['path'], $destAbs)) {
+                    $usedBroken[$bi] = true;
+                    $renamed++;
+                }
+            } else {
+                $ambiguous++;
             }
         }
-        $this->deleteDirectory($stageDir);
-        $dbg("[파일명보정] 교체 완료: $okFiles 개 파일 UTF-8 이름으로 복원 (기존 파일 보존" . ($isHereMode ? ', 여기에풀기 모드' : '') . ")");
+        $dbg("[파일명보정] 이름 매칭 복원: 성공 $renamed / 모호(미처리) $ambiguous / 깨진파일 " . count($brokenFiles) . "개");
+        
+        // 4) 빈 깨진 디렉토리 정리 (rename 후 남은 깨진 폴더 껍데기). preExisting·정상 폴더는 보호.
+        $dit = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($dit as $f) {
+            if (!$f->isDir()) continue;
+            $rel = substr($f->getPathname(), strlen($extractDir) + 1);
+            $topName = explode($sep, $rel)[0];
+            if (isset($preExisting[$topName])) continue;
+            $name = $f->getFilename();
+            $broken = (!mb_check_encoding($rel, 'UTF-8')) || strpos($rel, '?') !== false;
+            if (!$broken) continue;
+            // 비어있을 때만 제거 (안에 뭔가 남아있으면 안전하게 보존)
+            @rmdir($f->getPathname()); // 비어있지 않으면 rmdir 실패 → 보존
+        }
+        $dbg("[파일명보정] 완료: $renamed 개 파일 UTF-8 이름으로 복원" . ($isHereMode ? ' (여기에풀기, 기존파일 보존)' : ''));
     }
     
     // Windows 8.3 짧은 경로명 가져오기 (비ASCII 파일명 문제 해결)
@@ -7706,7 +7696,7 @@ class FileManager {
                 if ($cntFiles > 0) $archiveFileCount = $cntFiles;
             }
         }
-        
+        //   → 목록 기준으로 깨진 파일명을 rename 복원(fixExtractedFilenames).
         // [파일명 인코딩 보정] 일부 환경(시놀로지 DSM 등 비UTF-8 로케일 리눅스)에서는 7-Zip이 추출 시
         //   파일을 디스크에 쓸 때 OS 파일 API가 LC_CTYPE 로케일을 따라, 비ASCII 파일명을 '?'로 치환한다.
         //   → 목록 기준 -so 재추출로 보정.
