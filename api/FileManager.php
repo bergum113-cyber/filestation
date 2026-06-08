@@ -6555,10 +6555,12 @@ class FileManager {
         
         // '여기에 풀기'(extractDir=사용자 폴더)에서 ZipArchive::extractTo는 같은 이름의 기존 파일을
         //   무조건 덮어써 데이터 손실 위험이 있다. → 임시 stage 폴더에 추출한 뒤 extractDir로 이동하되,
-        //   기존 파일과 충돌하면 getUniqueFilename(name_1)으로 보존한다. (7z 경로의 -aou와 동일 취지)
+        //   기존 파일과 충돌하면 getUniqueFilename(name (2))으로 보존한다. (괄호 (2) 방식으로 통일)
         //   폴더 생성 모드는 extractDir이 빈 새 폴더라 충돌이 없으므로 기존 방식 유지.
         if ($isHereMode) {
-            $zipStage = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_zipstage_' . md5($fullZipPath . microtime(true) . mt_rand());
+            // stage는 사용자 폴더(extractDir)와 같은 파일시스템에 생성 (cross-device rename 방지).
+            //   sys_get_temp_dir(/tmp)는 시놀로지 등에서 /volume1과 다른 fs라 최종 rename이 실패할 수 있음.
+            $zipStage = rtrim($extractDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '.fs_extract_tmp_' . md5($fullZipPath . microtime(true) . mt_rand());
             @mkdir($zipStage, 0700, true);
             $realStage = realpath($zipStage);
             // stage에 전체 추출 (Zip Slip 방어 포함)
@@ -6572,23 +6574,18 @@ class FileManager {
                     $progressCallback($i + 1, $totalFiles, $filename);
                 }
             }
-            // stage → extractDir 이동 (충돌 시 이름 변경으로 기존 파일 보존)
+            // stage → extractDir 으로 '최상위 항목 단위' 이동 (폴더/파일 충돌 시 '(2)'로 분리, 기존 데이터 보존)
             if (is_dir($zipStage)) {
-                $sit = new \RecursiveIteratorIterator(
-                    new \RecursiveDirectoryIterator($zipStage, \RecursiveDirectoryIterator::SKIP_DOTS),
-                    \RecursiveIteratorIterator::SELF_FIRST
-                );
-                foreach ($sit as $sf) {
-                    $rel = substr($sf->getPathname(), strlen($zipStage) + 1);
-                    $dest = $extractDir . DIRECTORY_SEPARATOR . $rel;
-                    if ($sf->isDir()) {
-                        if (!is_dir($dest)) @mkdir($dest, 0755, true);
-                    } else {
-                        $dp = dirname($dest);
-                        if (!is_dir($dp)) @mkdir($dp, 0755, true);
-                        if (file_exists($dest)) $dest = $this->getUniqueFilename($dest);
-                        @rename($sf->getPathname(), $dest);
+                $zdh = @opendir($zipStage);
+                if ($zdh) {
+                    while (($zname = readdir($zdh)) !== false) {
+                        if ($zname === '.' || $zname === '..') continue;
+                        $zSrc = $zipStage . DIRECTORY_SEPARATOR . $zname;
+                        $zDest = $extractDir . DIRECTORY_SEPARATOR . $zname;
+                        if (file_exists($zDest)) $zDest = $this->getUniqueFilename($zDest); // 폴더/파일 통째로 (2)
+                        @rename($zSrc, $zDest);
                     }
+                    closedir($zdh);
                 }
                 $this->deleteDirectory($zipStage);
             }
@@ -7131,6 +7128,14 @@ class FileManager {
         
         // "여기에 풀기" 모드 여부 — extractDir이 기존 폴더이므로 실패/취소 시 삭제 금지
         $isHereMode = ($mode === 'here' && empty($destPath));
+        
+        // [여기에 풀기 폴더충돌 (2) 분리] extract7zip과 동일: 실제 추출은 임시 stage에서, 최종에 최상위 단위 이동.
+        $hereFinalDest = null;
+        if ($isHereMode) {
+            $hereFinalDest = $extractDir;
+            // stage는 사용자 폴더와 같은 파일시스템에 생성 (cross-device rename 방지 — extract7zip과 동일)
+            $extractDir = rtrim($hereFinalDest, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '.fs_extract_tmp_' . md5($fullZipPath . microtime(true) . mt_rand());
+        }
         if (!$isHereMode) {
             $extractDir = $this->getUniqueFilename($extractDir);
         }
@@ -7196,8 +7201,8 @@ class FileManager {
         // 보안: escapeShellPath로 경로 이스케이프
         $escapedZip = $this->escapeShellPath($fullZipPath);
         $escapedDest = $this->escapeShellPath($extractDir);
-        // '여기에 풀기'는 같은 이름의 기존 파일을 덮어쓰지 않도록 -aou(자동 이름변경). 폴더 생성은 -aoa.
-        $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedZip . ' -o' . $escapedDest . ' ' . ($isHereMode ? '-aou' : '-aoa');
+        // '여기에 풀기'는 빈 stage에 추출하므로 -aoa로 무방. (2)분리는 최종 이동의 getUniqueFilename이 담당.
+        $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedZip . ' -o' . $escapedDest . ' -aoa';
         
         if (!empty($password)) {
             // 비밀번호를 안전하게 -p 인자로 변환 (제어문자만 제거, $ # ` 등 보존)
@@ -7355,13 +7360,33 @@ class FileManager {
             return ['success' => false, 'error' => __('extract_failed', '압축 해제 실패')];
         }
         
+        // [여기에 풀기 최종 이동] stage → 사용자 폴더, 최상위 항목 단위(충돌 시 (2) 분리)
+        if ($hereFinalDest !== null) {
+            if (!is_dir($hereFinalDest)) @mkdir($hereFinalDest, 0755, true);
+            $sdh = @opendir($extractDir);
+            if ($sdh) {
+                while (($sname = readdir($sdh)) !== false) {
+                    if ($sname === '.' || $sname === '..') continue;
+                    $sSrc = $extractDir . DIRECTORY_SEPARATOR . $sname;
+                    $sDest = $hereFinalDest . DIRECTORY_SEPARATOR . $sname;
+                    if (file_exists($sDest)) $sDest = $this->getUniqueFilename($sDest);
+                    @rename($sSrc, $sDest);
+                }
+                closedir($sdh);
+            }
+            if (is_dir($extractDir) && strpos(basename($extractDir), ".fs_extract_tmp_") === 0) {
+                $this->deleteDirectory($extractDir);
+            }
+            $extractDir = $hereFinalDest;
+        }
+        
         // 상대 경로 계산
         $relExtractDir = str_replace($basePath . DIRECTORY_SEPARATOR, '', $extractDir);
         $relExtractDir = str_replace('\\', '/', $relExtractDir);
         
         return [
             'success' => true,
-            'extracted_to' => basename($extractDir),
+            'extracted_to' => $hereFinalDest !== null ? $basename : basename($extractDir),
             'file_count' => $fileCount,
             'path' => $relExtractDir
         ];
@@ -7410,11 +7435,26 @@ class FileManager {
         // 실패/취소 시에도 절대 폴더를 통째로 삭제하면 안 됨 (데이터 손실 방지).
         $isHereMode = ($mode === 'here' && empty($destPath));
         
+        // [여기에 풀기 폴더충돌 (2) 분리]
+        //   '여기에 풀기'는 사용자 폴더에 직접 풀면, 압축 최상위 폴더가 기존 폴더와 같을 때 7z이 병합(merge)해버린다.
+        //   이를 막기 위해 실제 추출은 임시 stage 폴더에서 수행하고(아래 모든 후처리도 stage 기준으로 동작),
+        //   함수 마지막에 stage의 '최상위 항목(폴더/파일) 단위'로 사용자 폴더에 이동하면서 충돌 시 '(2)'로 분리한다.
+        //   $hereFinalDest = 사용자가 실제로 풀고 싶은 폴더(원래 extractDir). 추출/후처리는 $extractDir(=stage)에서.
+        $hereFinalDest = null;
+        if ($isHereMode) {
+            $hereFinalDest = $extractDir; // 사용자 폴더 (최종 이동 목적지)
+            // ⚠️ stage는 반드시 '사용자 폴더와 같은 파일시스템'에 만들어야 한다. sys_get_temp_dir()(/tmp 등)는
+            //   시놀로지처럼 사용자 볼륨(/volume1)과 다른 파일시스템일 수 있어, 최종 rename이 cross-device로 실패한다.
+            //   → 사용자 폴더 안에 숨김 임시 디렉토리를 만들어 같은 fs 내 이동(rename)이 되도록 한다.
+            $extractDir = rtrim($hereFinalDest, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '.fs_extract_tmp_' . md5($fullPath . microtime(true) . mt_rand());
+            // stage는 새 빈 폴더이므로, 이하 로직에서 preExisting/덮어쓰기 충돌이 자연히 없어 추출/집계/보정이 정확해진다.
+        }
+        
         // "여기에 풀기"는 기존 폴더에 직접 쓰므로 고유화하지 않음
         if (!$isHereMode) {
             $extractDir = $this->getUniqueFilename($extractDir);
         }
-        $dbg("isHereMode=" . ($isHereMode ? 'YES(폴더삭제 금지)' : 'NO'));
+        $dbg("isHereMode=" . ($isHereMode ? 'YES(폴더삭제 금지)' : 'NO') . ($hereFinalDest ? " / stage=$extractDir / finalDest=$hereFinalDest" : ''));
         
         // 안전 삭제: "여기에 풀기"면 extractDir(기존 폴더)을 삭제하지 않음.
         // 폴더 생성 모드일 때만 추출 폴더 정리.
@@ -7487,9 +7527,10 @@ class FileManager {
         // 보안: escapeShellPath로 경로 이스케이프
         $escapedPath = $this->escapeShellPath($fullPath);
         $escapedDest = $this->escapeShellPath($extractDir);
-        // 덮어쓰기 정책: '여기에 풀기'는 extractDir이 사용자 폴더라, 같은 이름의 기존 파일을 덮어쓰면 안 된다.
-        //   -aou(자동 이름변경: 충돌 시 name_1 등)로 기존 파일을 보존한다. ('폴더 생성'은 빈 새 폴더라 -aoa로 무방.)
-        $overwriteOpt = $isHereMode ? '-aou' : '-aoa';
+        // 덮어쓰기 정책: '여기에 풀기'는 빈 임시 stage에 추출하므로(15차) 충돌이 없어 -aoa로 무방하고,
+        //   7z의 -aou가 만드는 'name_1' 형식 대신, 최종 이동 단계에서 getUniqueFilename이 'name (2)' 형식으로
+        //   충돌을 처리한다(폴더/파일 일관). '폴더 생성' 모드도 빈 새 폴더라 -aoa.
+        $overwriteOpt = '-aoa';
         $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedPath . ' -o' . $escapedDest . ' ' . $overwriteOpt;
         
         if (!empty($password)) {
@@ -7657,6 +7698,12 @@ class FileManager {
             );
             $dbgNameCnt = 0;
             foreach ($it as $f) { 
+                // '여기에 풀기'는 extractDir이 사용자 폴더 자체다. 추출 이전부터 있던 파일(preExisting)을
+                //   세면, 추출이 실패(0개)해도 기존 파일 때문에 '성공'으로 오판한다. → 새로 생긴 것만 카운트.
+                if ($isHereMode) {
+                    $topName = explode(DIRECTORY_SEPARATOR, substr($f->getPathname(), strlen($extractDir) + 1))[0];
+                    if (isset($preExisting[$topName])) continue;
+                }
                 $fileCount++; 
                 $totalExtractedSize += $f->getSize();
                 if ($dbgOn && $dbgNameCnt++ < 20) {
@@ -7734,8 +7781,19 @@ class FileManager {
             if ($unrarBin) {
                 // unrar x: 전체 경로 유지 추출, -y: 자동 yes, -o+: 덮어쓰기, -inul: 메시지 억제. stdin 차단으로 비밀번호 프롬프트 멈춤 방지.
                 // 보안: escapeShellPath로 경로 이스케이프 (command injection 방지)
+                // ⚠️ 시놀로지 등 locale=C 환경에서는 UnRAR이 '한글 절대경로'를 '?'로 변환해 파일을 못 열어
+                //    'Program aborted'로 실패한다. → 압축파일이 있는 디렉토리로 cd 후 파일명만 상대경로로 넘기고,
+                //    추출 대상도 상대경로로 지정해 셸이 경로를 바이트 그대로 전달하게 한다(로케일 무관).
+                $archiveDir = dirname($fullPath);
+                $archiveBase = basename($fullPath);
                 $urDest = rtrim($extractDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
-                $urCmd = $this->escapeShellPath($unrarBin) . ' x -y -o+ -inul ' . $this->escapeShellPath($fullPath) . ' ' . $this->escapeShellPath($urDest);
+                // 추출 대상이 압축파일 디렉토리 하위면 상대경로로, 아니면 절대경로 유지
+                $urDestArg = $urDest;
+                if (strpos($urDest, $archiveDir . DIRECTORY_SEPARATOR) === 0) {
+                    $urDestArg = '.' . DIRECTORY_SEPARATOR . substr($urDest, strlen($archiveDir) + 1);
+                }
+                $cdPrefix = 'cd ' . $this->escapeShellPath($archiveDir) . ' && ';
+                $urCmd = $cdPrefix . $this->escapeShellPath($unrarBin) . ' x -y -o+ -inul ' . $this->escapeShellPath($archiveBase) . ' ' . $this->escapeShellPath($urDestArg);
                 // 암호화 rar 대응: 비밀번호가 있으면 -p<password> 추가 (7z x와 동일한 비번 처리 패턴).
                 // 흐름상 여기 도달 = 무암호 또는 (암호화 + 비번 있음). 비번 없는 암호화는 사전 체크에서 need_password로 이미 반환됨.
                 if (!empty($password)) {
@@ -7744,7 +7802,7 @@ class FileManager {
                 $dbg("UnRAR 폴백 cmd=$urCmd");
                 // 디버그 시 stderr까지 캡처해 실패 원인 기록 (-inul 대신 메시지 보이게)
                 if ($dbgOn) {
-                    $urDiagCmd = $this->escapeShellPath($unrarBin) . ' x -y -o+ ' . $this->escapeShellPath($fullPath) . ' ' . $this->escapeShellPath($urDest);
+                    $urDiagCmd = $cdPrefix . $this->escapeShellPath($unrarBin) . ' x -y -o+ ' . $this->escapeShellPath($archiveBase) . ' ' . $this->escapeShellPath($urDestArg);
                     if (!empty($password)) {
                         $urDiagCmd .= $this->buildPasswordArg($password);
                     }
@@ -7761,13 +7819,19 @@ class FileManager {
                         @shell_exec($this->utf8EnvPrefix() . $urCmd . ' 2>/dev/null < /dev/null');
                     }
                 }
-                // 추출 결과 다시 집계
+                // 추출 결과 다시 집계 ('여기에 풀기'면 추출 이전부터 있던 파일은 제외하고 새로 생긴 것만 카운트)
                 $fileCount = 0; $totalExtractedSize = 0;
                 if (is_dir($extractDir)) {
                     $it = new \RecursiveIteratorIterator(
                         new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS)
                     );
-                    foreach ($it as $f) { $fileCount++; $totalExtractedSize += $f->getSize(); }
+                    foreach ($it as $f) {
+                        if ($isHereMode) {
+                            $topName = explode(DIRECTORY_SEPARATOR, substr($f->getPathname(), strlen($extractDir) + 1))[0];
+                            if (isset($preExisting[$topName])) continue; // 기존 파일 제외
+                        }
+                        $fileCount++; $totalExtractedSize += $f->getSize();
+                    }
                 }
                 $dbg("UnRAR 폴백 후 fileCount=$fileCount, totalSize=$totalExtractedSize");
             }
@@ -7776,6 +7840,10 @@ class FileManager {
         if ($fileCount === 0 || ($isEncrypted && $totalExtractedSize === 0)) {
             $dbg("→ 추출 실패 판정 (fileCount=$fileCount, isEncrypted=" . ($isEncrypted?'Y':'N') . ", totalSize=$totalExtractedSize)");
             $safeCleanup(); // 여기에 풀기면 기존 폴더(개인폴더 등) 보호 — 삭제 안 함
+            // 여기에 풀기 stage는 사용자 폴더가 아닌 임시 폴더이므로 실패 시 정리 (사용자 데이터와 무관).
+            if ($hereFinalDest !== null && is_dir($extractDir) && strpos(basename($extractDir), ".fs_extract_tmp_") === 0) {
+                $this->deleteDirectory($extractDir);
+            }
             if ($isEncrypted) {
                 return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
             }
@@ -7800,9 +7868,36 @@ class FileManager {
             }
         }
         
-        // extracted_to: 폴더 생성 모드는 만들어진 폴더명, '여기에 풀기'는 extractDir이 현재 폴더 자체라
-        //   폴더명(예: 사용자 폴더명 'seo')이 표시되면 의미가 없으므로 압축파일명을 보여준다.
-        // file_count: '여기에 풀기'는 extractDir에 기존 파일이 섞여 있으므로, 압축 목록 기준 개수($archiveFileCount)로 표시.
+        // [여기에 풀기 최종 이동] stage(임시)에서 추출/보정/집계가 끝났으니, 사용자 폴더로 최상위 항목 단위 이동.
+        //   최상위 폴더/파일이 기존과 충돌하면 '(2)'로 분리(병합 방지). 기존 데이터는 절대 덮어쓰지 않음.
+        if ($hereFinalDest !== null) {
+            if (!is_dir($hereFinalDest)) @mkdir($hereFinalDest, 0755, true);
+            $movedTop = 0;
+            $sdh = @opendir($extractDir);
+            if ($sdh) {
+                while (($sname = readdir($sdh)) !== false) {
+                    if ($sname === '.' || $sname === '..') continue;
+                    $sSrc = $extractDir . DIRECTORY_SEPARATOR . $sname;
+                    $sDest = $hereFinalDest . DIRECTORY_SEPARATOR . $sname;
+                    if (file_exists($sDest)) {
+                        $sDest = $this->getUniqueFilename($sDest); // 폴더/파일 통째로 '(2)' 분리
+                    }
+                    if (@rename($sSrc, $sDest)) $movedTop++;
+                }
+                closedir($sdh);
+            }
+            $dbg("[여기에풀기 이동] stage→사용자폴더 최상위 $movedTop개 이동 (충돌 시 (2) 분리)");
+            // stage 잔재 정리 (임시 폴더)
+            if (is_dir($extractDir) && strpos(basename($extractDir), ".fs_extract_tmp_") === 0) {
+                $this->deleteDirectory($extractDir);
+            }
+            // 사용자에게 보여줄 경로/이름은 실제 목적지 기준으로
+            $relExtractDir = str_replace($basePath . DIRECTORY_SEPARATOR, '', $hereFinalDest);
+            $relExtractDir = str_replace('\\', '/', $relExtractDir);
+        }
+        
+        // extracted_to: 폴더 생성 모드는 만들어진 폴더명, '여기에 풀기'는 압축파일명을 보여준다.
+        // file_count: '여기에 풀기'는 압축 목록 기준 개수($archiveFileCount)로 표시.
         //   단 압축 목록 계산이 실패(rar 폴백 등으로 7z 목록 못 읽음)해 0이면 fileCount로 폴백.
         $displayCount = ($isHereMode && $archiveFileCount > 0) ? $archiveFileCount : $fileCount;
         return [
