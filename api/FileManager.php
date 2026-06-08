@@ -2589,6 +2589,142 @@ class FileManager {
         return 'LANG=C.UTF-8 LC_ALL=C.UTF-8 ';
     }
     
+    /**
+     * 추출된 파일명이 환경(로케일) 문제로 깨진 경우, 압축 목록(UTF-8 정확)을 기준으로
+     * -so(stdout) 재추출하여 올바른 UTF-8 파일명으로 다시 저장한다.
+     *
+     * 동작:
+     *   1) extractDir의 실제 파일명에 깨짐(? 포함 또는 비UTF-8)이 있는지 검사. 없으면 즉시 종료(정상 환경).
+     *   2) 깨짐이 있으면 7z 목록(-slt -sccUTF-8)으로 정확한 UTF-8 경로 목록을 얻는다.
+     *   3) 각 파일을 `7z x -so <경로>`로 내용만 받아, extractDir 아래 올바른 UTF-8 경로로 직접 기록.
+     *   4) 기존에 깨진 이름으로 추출된 파일/폴더는 정리.
+     *
+     * 7z이 파일명을 디스크에 쓰지 않고 PHP가 직접 쓰므로 로케일과 완전히 무관하다.
+     * 정상 환경에서는 1)에서 깨짐이 없어 아무 동작도 하지 않는다(회귀 없음).
+     */
+    private function fixExtractedFilenames(string $sevenZipBin, string $archivePath, string $extractDir, string $password, callable $dbg, bool $dbgOn): void {
+        if (!is_dir($extractDir)) return;
+        
+        // 2) 먼저 목록으로 정확한 UTF-8 경로를 얻는다 (감지·복원 모두에 사용)
+        $listCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt -sccUTF-8' . $this->buildPasswordArg($password) . ' ' . $this->escapeShellPath($archivePath);
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $listOut = @shell_exec('chcp 65001 >nul && ' . $listCmd . ' 2>&1 < nul');
+        } else {
+            $listOut = @shell_exec($this->utf8EnvPrefix() . $listCmd . ' 2>&1 < /dev/null');
+        }
+        if (!$listOut) { $dbg("[파일명보정] 목록 획득 실패 → 중단(원본 보존)"); return; }
+        
+        // -slt 파싱: Path / Folder / Size / Attributes
+        $entries = [];
+        $cur = [];
+        foreach (preg_split('/\r?\n/', $listOut) as $line) {
+            if ($line === '') {
+                if (!empty($cur['Path'])) $entries[] = $cur;
+                $cur = [];
+                continue;
+            }
+            if (preg_match('/^(Path|Folder|Size|Attributes) = (.*)$/', $line, $m)) {
+                $cur[$m[1]] = $m[2];
+            }
+        }
+        if (!empty($cur['Path'])) $entries[] = $cur;
+        if (empty($entries)) { $dbg("[파일명보정] 목록 파싱 결과 없음 → 중단(원본 보존)"); return; }
+        
+        // 1) 깨짐 감지: 목록의 UTF-8 상대경로 집합과, 디스크의 실제 상대경로 집합을 비교.
+        //    목록에 있는 경로가 디스크에 그대로 존재하지 않으면(= 치환/깨짐 발생) 보정 대상.
+        //    이 방식은 '?'치환(0x3F, UTF-8로는 유효)도 잡고, 합법적 '?'파일명(목록·디스크 일치)은 오판하지 않는다.
+        $expectedRel = [];
+        foreach ($entries as $e) {
+            $p = str_replace('\\', '/', $e['Path']);
+            if ($p === '' || $p === $archivePath) continue;
+            $isDir = (isset($e['Folder']) && $e['Folder'] === '+')
+                  || (isset($e['Attributes']) && strpos($e['Attributes'], 'D') === 0);
+            if (!$isDir) $expectedRel[$p] = true;
+        }
+        if (empty($expectedRel)) { $dbg("[파일명보정] 목록에 파일 항목 없음 → 스킵"); return; }
+        
+        $sep = DIRECTORY_SEPARATOR;
+        $missing = 0;
+        foreach ($expectedRel as $rel => $_) {
+            $disk = $extractDir . $sep . str_replace('/', $sep, $rel);
+            if (!is_file($disk)) $missing++;
+        }
+        if ($missing === 0) {
+            $dbg("[파일명보정] 목록 경로가 디스크에 모두 정상 존재 → 보정 불필요");
+            return;
+        }
+        $dbg("[파일명보정] 목록 대비 디스크에 없는 파일 $missing/" . count($expectedRel) . "개(파일명 깨짐 추정) → -so 재추출 시작");
+        
+        // 3) 별도 임시 폴더에 -so로 재추출 (성공 검증 후에만 원본과 교체 → 중간 실패 시 원본 보존)
+        $stageDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_namefix_' . md5($archivePath . microtime(true) . mt_rand());
+        if (!@mkdir($stageDir, 0700, true)) { $dbg("[파일명보정] 임시폴더 생성 실패 → 중단(원본 보존)"); return; }
+        
+        $expectFiles = 0; $okFiles = 0;
+        foreach ($entries as $e) {
+            $path = str_replace('\\', '/', $e['Path']);
+            if ($path === '' || $path === $archivePath) continue;
+            $isDir = (isset($e['Folder']) && $e['Folder'] === '+')
+                  || (isset($e['Attributes']) && strpos($e['Attributes'], 'D') === 0);
+            // 경로 안전성: 절대경로/.. 차단 (Zip Slip 방어)
+            if (strpos($path, '..') !== false || strpos($path, ':') !== false || $path[0] === '/' || $path[0] === '\\') continue;
+            $target = $stageDir . $sep . str_replace('/', $sep, $path);
+            if ($isDir) {
+                if (!is_dir($target)) @mkdir($target, 0755, true);
+                continue;
+            }
+            $expectFiles++;
+            $parent = dirname($target);
+            if (!is_dir($parent)) @mkdir($parent, 0755, true);
+            // -so 로 내용만 받아서 직접 기록 (파일명은 PHP가 UTF-8로 씀)
+            $soCmd = $this->escapeShellPath($sevenZipBin) . ' x -so -sccUTF-8' . $this->buildPasswordArg($password)
+                   . ' ' . $this->escapeShellPath($archivePath) . ' ' . $this->escapeShellPath($path);
+            if (DIRECTORY_SEPARATOR === '\\') {
+                $content = @shell_exec('chcp 65001 >nul && ' . $soCmd . ' 2>nul < nul');
+            } else {
+                $content = @shell_exec($this->utf8EnvPrefix() . $soCmd . ' 2>/dev/null < /dev/null');
+            }
+            if ($content !== null && $content !== false && @file_put_contents($target, $content) !== false) {
+                $okFiles++;
+            }
+        }
+        $dbg("[파일명보정] -so 재추출: 기대 $expectFiles / 성공 $okFiles");
+        
+        // 4) 모든 파일이 성공적으로 재추출됐을 때만 교체. 하나라도 실패하면 원본 보존(데이터 손실 방지).
+        if ($expectFiles === 0 || $okFiles < $expectFiles) {
+            $dbg("[파일명보정] 일부 실패 → 원본 보존, 보정 취소");
+            $this->deleteDirectory($stageDir);
+            return;
+        }
+        
+        // 4a) 기존 추출물(깨진 이름 포함) 제거 → stage의 정상 UTF-8 결과로 교체
+        $old = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::CHILD_FIRST
+        );
+        foreach ($old as $f) {
+            if ($f->isDir()) @rmdir($f->getPathname());
+            else @unlink($f->getPathname());
+        }
+        // 4b) stage → extractDir 이동
+        $stage = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($stageDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+            \RecursiveIteratorIterator::SELF_FIRST
+        );
+        foreach ($stage as $f) {
+            $rel = substr($f->getPathname(), strlen($stageDir) + 1);
+            $dest = $extractDir . $sep . $rel;
+            if ($f->isDir()) {
+                if (!is_dir($dest)) @mkdir($dest, 0755, true);
+            } else {
+                $dp = dirname($dest);
+                if (!is_dir($dp)) @mkdir($dp, 0755, true);
+                @rename($f->getPathname(), $dest);
+            }
+        }
+        $this->deleteDirectory($stageDir);
+        $dbg("[파일명보정] 교체 완료: $okFiles 개 파일 UTF-8 이름으로 복원");
+    }
+    
     // Windows 8.3 짧은 경로명 가져오기 (비ASCII 파일명 문제 해결)
     private function getWindowsShortPath(string $path): ?string {
         if (PHP_OS_FAMILY !== 'Windows') return null;
@@ -7447,6 +7583,21 @@ class FileManager {
                     $rn = $f->getFilename();
                     $dbg("  [추출파일명] " . $rn . " / hex=" . bin2hex(substr($rn, 0, 40)) . " / UTF-8유효=" . (mb_check_encoding($rn, 'UTF-8') ? 'YES' : 'NO') . " / ?포함=" . (strpos($rn, '?') !== false ? 'YES' : 'NO'));
                 }
+            }
+        }
+        
+        // [파일명 인코딩 보정] 일부 환경(시놀로지 DSM 등 비UTF-8 로케일)에서는 7-Zip이 추출 시
+        //   파일을 디스크에 쓸 때 OS 파일 API가 LC_CTYPE 로케일을 따라, 비ASCII(한글/일본어/중국어 등)
+        //   파일명을 '?'로 치환해 저장한다(콘솔용 -sccUTF-8로는 해결 안 됨). 목록(l)은 -sccUTF-8로 정확히
+        //   UTF-8을 얻으므로, 추출 파일명이 깨졌으면 목록 기준으로 -so(stdout) 재추출해 올바른 이름으로 저장.
+        //   정상 환경(Windows/UTF-8 리눅스)은 깨짐이 없어 이 블록을 건너뛴다(회귀 없음).
+        if ($fileCount > 0 && $ext !== 'rar') {
+            $this->fixExtractedFilenames($sevenZipBin, $fullPath, $extractDir, $password, $dbg, $dbgOn);
+            // 보정 후 재집계 (이름만 바뀌므로 개수/크기는 동일하지만 안전하게)
+            $fileCount = 0; $totalExtractedSize = 0;
+            if (is_dir($extractDir)) {
+                $it2 = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS));
+                foreach ($it2 as $f) { $fileCount++; $totalExtractedSize += $f->getSize(); }
             }
         }
         
