@@ -6693,7 +6693,7 @@ try {
             if (empty($items) && $method === 'none' && $sevenZipBin) {
                 $tmpFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7z_' . md5($archiveFullPath) . '.txt';
                 // 보안: escapeshellarg로 경로 이스케이프 (command injection 방지)
-                $cmd = escapeshellarg($sevenZipBin) . ' l -slt';
+                $cmd = escapeshellarg($sevenZipBin) . ' l -slt -sccUTF-8';
                 // 헤더 암호화(-mhe) 7z 등: 비밀번호를 안전하게 -p로 전달 (없으면 -p"")
                 // 제어문자만 제거하고 $ # ` 등 정상 문자 보존 (과거 $ 제거로 비번 잘림 버그 수정)
                 $cmd .= fs_build_password_arg($archivePassword);
@@ -7065,7 +7065,7 @@ try {
                     @mkdir($extractDir, 0700, true);
                     // 7z e: flat 추출(경로 무시하고 파일명만), -y: 덮어쓰기, -o: 출력 디렉토리
                     // 보안: escapeshellarg로 command injection 방지
-                    $cmd2 = escapeshellarg($szBin2) . ' e -y ' . escapeshellarg($archiveReal)
+                    $cmd2 = escapeshellarg($szBin2) . ' e -y -sccUTF-8 ' . escapeshellarg($archiveReal)
                           . ' ' . escapeshellarg($entryPath)
                           . ' -o' . escapeshellarg($extractDir);
                     // 암호화 아카이브: 비밀번호 전달 (없으면 빈 비번으로 프롬프트 멈춤 방지)
@@ -7181,7 +7181,7 @@ try {
             }
             
             // 보안: escapeshellarg로 command injection 방지. 헤더암호 프롬프트 멈춤 방지(-p"" + stdin 차단)
-            $checkCmd = escapeshellarg($sevenZipBin) . ' l -slt -p"" ' . escapeshellarg($fullPath);
+            $checkCmd = escapeshellarg($sevenZipBin) . ' l -slt -sccUTF-8 -p"" ' . escapeshellarg($fullPath);
             if (DIRECTORY_SEPARATOR === '\\') {
                 $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
             } else {

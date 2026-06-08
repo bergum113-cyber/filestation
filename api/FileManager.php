@@ -6955,7 +6955,7 @@ class FileManager {
         // 7z l -slt 로 암호화 여부 사전 체크 (보안: escapeShellPath 사용)
         // 틀린 더미 비번(-p)으로 시도하여 헤더 암호화(목록까지 암호화)도 감지. stdin 차단으로 비번 프롬프트 멈춤 방지.
         $encProbePw = '__fs_enc_probe__';
-        $checkCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt -p' . $this->escapeShellPath($encProbePw) . ' ' . $this->escapeShellPath($fullZipPath);
+        $checkCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt -sccUTF-8 -p' . $this->escapeShellPath($encProbePw) . ' ' . $this->escapeShellPath($fullZipPath);
         if (DIRECTORY_SEPARATOR === '\\') {
             $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
         } else {
@@ -6999,7 +6999,7 @@ class FileManager {
         // 보안: escapeShellPath로 경로 이스케이프
         $escapedZip = $this->escapeShellPath($fullZipPath);
         $escapedDest = $this->escapeShellPath($extractDir);
-        $cmd = $this->escapeShellPath($sevenZipBin) . ' x ' . $escapedZip . ' -o' . $escapedDest . ' -aoa';
+        $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedZip . ' -o' . $escapedDest . ' -aoa';
         
         if (!empty($password)) {
             // 비밀번호를 안전하게 -p 인자로 변환 (제어문자만 제거, $ # ` 등 보존)
@@ -7237,7 +7237,7 @@ class FileManager {
         
         // 7z l -slt 로 암호화 여부 사전 체크 (보안: escapeShellPath)
         // 헤더 암호화 아카이브가 비밀번호 프롬프트로 멈추지 않도록 빈 비번(-p"") + stdin 차단.
-        $checkCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt -p"" ' . $this->escapeShellPath($fullPath);
+        $checkCmd = $this->escapeShellPath($sevenZipBin) . ' l -slt -sccUTF-8 -p"" ' . $this->escapeShellPath($fullPath);
         if (DIRECTORY_SEPARATOR === '\\') {
             $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
         } else {
@@ -7274,7 +7274,7 @@ class FileManager {
         // 보안: escapeShellPath로 경로 이스케이프
         $escapedPath = $this->escapeShellPath($fullPath);
         $escapedDest = $this->escapeShellPath($extractDir);
-        $cmd = $this->escapeShellPath($sevenZipBin) . ' x ' . $escapedPath . ' -o' . $escapedDest . ' -aoa';
+        $cmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedPath . ' -o' . $escapedDest . ' -aoa';
         
         if (!empty($password)) {
             // 비밀번호를 안전하게 -p 인자로 변환 (제어문자만 제거, $ # ` 등 보존)
@@ -7289,7 +7289,7 @@ class FileManager {
         if ($dbgOn) {
             $diagDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7z_diag_' . md5($fullPath . microtime(true) . mt_rand());
             @mkdir($diagDir, 0700, true);
-            $diagCmd = $this->escapeShellPath($sevenZipBin) . ' x ' . $escapedPath . ' -o' . $this->escapeShellPath($diagDir) . ' -aoa';
+            $diagCmd = $this->escapeShellPath($sevenZipBin) . ' x -sccUTF-8 ' . $escapedPath . ' -o' . $this->escapeShellPath($diagDir) . ' -aoa';
             if (!empty($password)) $diagCmd .= $this->buildPasswordArg($password);
             if (DIRECTORY_SEPARATOR === '\\') {
                 $diagOut = @shell_exec('chcp 65001 >nul && ' . $diagCmd . ' 2>&1 < nul');
