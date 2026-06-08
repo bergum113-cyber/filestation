@@ -2578,6 +2578,17 @@ class FileManager {
         return ' -p' . escapeshellarg($pw);
     }
     
+    /**
+     * 7-Zip/UnRAR의 출력·추출 파일명을 환경(로케일)과 무관하게 UTF-8로 처리하기 위한 명령행 prefix.
+     * Linux/시놀로지 도커 등에서 LANG/LC_CTYPE이 UTF-8이 아니면(C, POSIX 등) 비ASCII 파일명이 깨지므로
+     * UTF-8 로케일을 강제한다. Windows는 chcp 65001로 처리하므로 빈 문자열.
+     * (api.php의 $this->utf8EnvPrefix()와 동일 규칙. FileManager가 단독 require될 때를 대비해 자체 메서드로 보유.)
+     */
+    private function utf8EnvPrefix(): string {
+        if (DIRECTORY_SEPARATOR === '\\') return '';
+        return 'LANG=C.UTF-8 LC_ALL=C.UTF-8 ';
+    }
+    
     // Windows 8.3 짧은 경로명 가져오기 (비ASCII 파일명 문제 해결)
     private function getWindowsShortPath(string $path): ?string {
         if (PHP_OS_FAMILY !== 'Windows') return null;
@@ -6296,7 +6307,7 @@ class FileManager {
         //   레거시 인코딩 파일명을 제대로 처리 못 해 폴더 구조가 깨지는 문제가 있음. 7-Zip은 정확히 처리).
         //   7-Zip이 없는 환경에서는 아래 PHP ZipArchive 경로로 폴백.
         $hasSevenZip = false;
-        foreach (['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'] as $szp) {
+        foreach (['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'] as $szp) {
             if (file_exists($szp)) { $hasSevenZip = true; break; }
         }
         if ($hasSevenZip) {
@@ -6613,7 +6624,7 @@ class FileManager {
         
         // 7-Zip 바이너리 탐색
         $sevenZipBin = null;
-        $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'];
+        $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'];
         foreach ($szPaths as $p) { if (file_exists($p)) { $sevenZipBin = $p; break; } }
         
         if (!$sevenZipBin) {
@@ -6896,7 +6907,7 @@ class FileManager {
     private function extractSplitZip(string $basePath, string $fullZipPath, string $zipPath, string $destPath, ?callable $progressCallback, string $password, string $mode = 'folder'): array {
         // 7-Zip 바이너리 탐색
         $sevenZipBin = null;
-        $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'];
+        $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'];
         foreach ($szPaths as $p) { if (file_exists($p)) { $sevenZipBin = $p; break; } }
         
         if (!$sevenZipBin) {
@@ -6948,7 +6959,7 @@ class FileManager {
         if (DIRECTORY_SEPARATOR === '\\') {
             $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
         } else {
-            $checkOutput = @shell_exec($checkCmd . ' 2>&1 < /dev/null');
+            $checkOutput = @shell_exec($this->utf8EnvPrefix() . $checkCmd . ' 2>&1 < /dev/null');
         }
         
         $isEncrypted = false;
@@ -7008,7 +7019,7 @@ class FileManager {
             pclose(popen('start /b cmd /c "' . $batFile . '"', 'r'));
         } else {
             $escapedResult = escapeshellarg($resultFile);
-            exec('(' . $cmd . '; echo $? > ' . $escapedResult . ') > /dev/null 2>&1 &');
+            exec('(' . $this->utf8EnvPrefix() . $cmd . '; echo $? > ' . $escapedResult . ') > /dev/null 2>&1 &');
         }
         
         // 암호화 파일: 결과 파일이 생길 때까지 대기 (7z가 끝날 때까지)
@@ -7175,7 +7186,7 @@ class FileManager {
         $dbg("mode=$mode / password=" . ($password !== '' ? '[있음 len=' . strlen($password) . ' hex=' . bin2hex(substr($password,0,20)) . ']' : '[없음]'));
 
         $sevenZipBin = null;
-        $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'];
+        $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'];
         foreach ($szPaths as $p) { if (file_exists($p)) { $sevenZipBin = $p; break; } }
         
         if (!$sevenZipBin) {
@@ -7230,7 +7241,7 @@ class FileManager {
         if (DIRECTORY_SEPARATOR === '\\') {
             $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
         } else {
-            $checkOutput = @shell_exec($checkCmd . ' 2>&1 < /dev/null');
+            $checkOutput = @shell_exec($this->utf8EnvPrefix() . $checkCmd . ' 2>&1 < /dev/null');
         }
         // 헤더 암호화 감지: 목록을 못 뽑고 암호 프롬프트/오류가 난 경우도 암호화로 간주
         if ($checkOutput !== null && (
@@ -7283,7 +7294,7 @@ class FileManager {
             if (DIRECTORY_SEPARATOR === '\\') {
                 $diagOut = @shell_exec('chcp 65001 >nul && ' . $diagCmd . ' 2>&1 < nul');
             } else {
-                $diagOut = @shell_exec($diagCmd . ' 2>&1 < /dev/null');
+                $diagOut = @shell_exec($this->utf8EnvPrefix() . $diagCmd . ' 2>&1 < /dev/null');
             }
             $dbg("[진단] 7z x 실제 출력:\n" . substr((string)$diagOut, 0, 1500));
             // 진단 추출 결과 폴더 구조 기록
@@ -7311,7 +7322,7 @@ class FileManager {
             pclose(popen('start /b cmd /c "' . $batFile . '"', 'r'));
         } else {
             $escapedResult = escapeshellarg($resultFile);
-            exec('(' . $cmd . '; echo $? > ' . $escapedResult . ') > /dev/null 2>&1 &');
+            exec('(' . $this->utf8EnvPrefix() . $cmd . '; echo $? > ' . $escapedResult . ') > /dev/null 2>&1 &');
         }
         
         $progressStarted = false;
@@ -7428,9 +7439,14 @@ class FileManager {
             $it = new \RecursiveIteratorIterator(
                 new \RecursiveDirectoryIterator($extractDir, \RecursiveDirectoryIterator::SKIP_DOTS)
             );
+            $dbgNameCnt = 0;
             foreach ($it as $f) { 
                 $fileCount++; 
                 $totalExtractedSize += $f->getSize();
+                if ($dbgOn && $dbgNameCnt++ < 20) {
+                    $rn = $f->getFilename();
+                    $dbg("  [추출파일명] " . $rn . " / hex=" . bin2hex(substr($rn, 0, 40)) . " / UTF-8유효=" . (mb_check_encoding($rn, 'UTF-8') ? 'YES' : 'NO') . " / ?포함=" . (strpos($rn, '?') !== false ? 'YES' : 'NO'));
+                }
             }
         }
         
@@ -7471,14 +7487,14 @@ class FileManager {
                     if (DIRECTORY_SEPARATOR === '\\') {
                         $urDiagOut = @shell_exec('chcp 65001 >nul && ' . $urDiagCmd . ' 2>&1 < nul');
                     } else {
-                        $urDiagOut = @shell_exec($urDiagCmd . ' 2>&1 < /dev/null');
+                        $urDiagOut = @shell_exec($this->utf8EnvPrefix() . $urDiagCmd . ' 2>&1 < /dev/null');
                     }
                     $dbg("[진단] UnRAR 실제 출력:\n" . substr((string)$urDiagOut, 0, 1000));
                 } else {
                     if (DIRECTORY_SEPARATOR === '\\') {
                         @shell_exec('chcp 65001 >nul && ' . $urCmd . ' 2>nul < nul');
                     } else {
-                        @shell_exec($urCmd . ' 2>/dev/null < /dev/null');
+                        @shell_exec($this->utf8EnvPrefix() . $urCmd . ' 2>/dev/null < /dev/null');
                     }
                 }
                 // 추출 결과 다시 집계

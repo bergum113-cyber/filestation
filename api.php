@@ -124,6 +124,25 @@ function fs_build_password_arg(string $password): string {
     return ' -p' . escapeshellarg($pw);
 }
 
+/**
+ * 7-Zip/UnRAR 등 외부 압축 도구의 출력 파일명을 환경(로케일/콘솔)과 무관하게 UTF-8로 받기 위한
+ * 명령행 prefix를 반환한다.
+ *
+ * 배경: 7z 네이티브 포맷은 파일명을 UTF-16(유니코드)로 저장하지만, CLI가 stdout에 쓸 때의 인코딩은
+ *   실행 환경에 의존한다.
+ *   - Linux/시놀로지 도커 등 p7zip: LANG/LC_CTYPE 로케일을 따른다. 로케일이 UTF-8이 아니면(C, POSIX 등)
+ *     한글 등 비ASCII 파일명이 깨진다. → LANG/LC_ALL을 UTF-8로 강제하면 항상 UTF-8 출력.
+ *   - Windows: chcp 65001(호출부에서 처리) + 출력 파일 리다이렉트로 처리하므로 여기선 prefix 불필요.
+ *
+ * 다양한 서버 환경(Windows+Apache, 시놀로지 도커, 일반 리눅스)에서 일관되게 동작하도록 하는 핵심.
+ *
+ * @return string Linux: "LANG=C.UTF-8 LC_ALL=C.UTF-8 " (뒤 공백 포함) / Windows: "" (빈 문자열)
+ */
+function fs_utf8_env_prefix(): string {
+    if (DIRECTORY_SEPARATOR === '\\') return '';
+    return 'LANG=C.UTF-8 LC_ALL=C.UTF-8 ';
+}
+
 function getClientIP(): string {
     $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
     
@@ -6597,7 +6616,7 @@ try {
             $sevenZipPaths = [
                 'C:\\Program Files\\7-Zip\\7z.exe',
                 'C:\\Program Files (x86)\\7-Zip\\7z.exe',
-                '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'
+                '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'
             ];
             foreach ($sevenZipPaths as $_7zp) {
                 if (file_exists($_7zp)) { $sevenZipBin = $_7zp; break; }
@@ -6682,11 +6701,17 @@ try {
                 $alDbg("7z 목록 비번 hex=" . ($archivePassword !== '' ? bin2hex(substr($archivePassword,0,30)) : '[없음]') . " / 비번인자=" . fs_build_password_arg($archivePassword));
                 $alDbg("7z 목록 cmd=$cmd");
                 // Windows: 한글/일본어/중국어 등 유니코드 파일명 정확 처리를 위해 UTF-8 콘솔(chcp 65001). stdin 차단으로 비번 프롬프트 멈춤 방지.
+                // ★ 핵심: stdout을 파이프(shell_exec 반환값)로 받으면 Windows 콘솔이 표현 못 하는 한글을
+                //   글자당 '?'로 치환해버려 일부 환경에서 파일명이 깨진다(콘솔 코드페이지/폰트 의존).
+                //   출력을 파일로 직접 리다이렉트(> tmpFile)하면 콘솔 표시 단계를 거치지 않아 7-Zip이
+                //   내부 UTF-8 바이트를 그대로 파일에 기록 → 환경과 무관하게 파일명 보존.
+                $escapedTmp = escapeshellarg($tmpFile);
                 if (DIRECTORY_SEPARATOR === '\\') {
-                    $shellOutput = shell_exec('chcp 65001 >nul && ' . $cmd . ' 2>&1 < nul');
+                    @shell_exec('chcp 65001 >nul && ' . $cmd . ' > ' . $escapedTmp . ' 2>&1 < nul');
                 } else {
-                    $shellOutput = shell_exec($cmd . ' 2>&1 < /dev/null');
+                    @shell_exec(fs_utf8_env_prefix() . $cmd . ' > ' . $escapedTmp . ' 2>&1 < /dev/null');
                 }
+                $shellOutput = @file_exists($tmpFile) ? @file_get_contents($tmpFile) : null;
                 // 헤더 암호화 감지: 목록을 못 뽑고 암호 오류/프롬프트가 나온 경우
                 if ($shellOutput !== null && (
                         stripos($shellOutput, 'Wrong password') !== false ||
@@ -6698,9 +6723,7 @@ try {
                     $needPassword = true;
                 }
                 $alDbg("7z 목록: needPassword=" . ($needPassword ? 'YES' : 'NO') . " / 출력앞200=" . substr((string)$shellOutput, 0, 200));
-                if ($shellOutput !== null && $shellOutput !== false) {
-                    @file_put_contents($tmpFile, $shellOutput);
-                }
+                // 출력은 이미 위에서 $tmpFile로 직접 리다이렉트됨 (파일명 인코딩 보존). 별도 기록 불필요.
                 unset($shellOutput); // 메모리 해제
                 
                 $debugLines = [];
@@ -6716,11 +6739,13 @@ try {
                     $lineCount = 0;
                     $maxItems = 50000;
                     
-                    $saveEntry = function() use (&$currentEntry, &$items, &$isEncrypted, $maxItems) {
+                    $saveEntry = function() use (&$currentEntry, &$items, &$isEncrypted, $maxItems, $alDbg) {
                         if (empty($currentEntry['Path']) || count($items) >= $maxItems) return;
                         $isDir = (!empty($currentEntry['Folder']) && $currentEntry['Folder'] === '+');
                         if (!$isDir && isset($currentEntry['Attributes']) && strpos($currentEntry['Attributes'], 'D') === 0) $isDir = true;
                         $entryName = str_replace('\\', '/', $currentEntry['Path']);
+                        // [진단] 7z 원본 출력의 파일명 바이트 확인 (이미 ?로 깨졌는지 / CP949인지 / UTF-8인지)
+                        $alDbg("  [목록항목] 원본 path=" . $entryName . " / hex=" . bin2hex(substr($entryName, 0, 40)) . " / UTF-8유효=" . (mb_check_encoding($entryName, 'UTF-8') ? 'YES' : 'NO'));
                         // Windows 7-zip 출력이 CP949/EUC-KR일 수 있음 → UTF-8 변환
                         if (!mb_check_encoding($entryName, 'UTF-8')) {
                             $converted = @mb_convert_encoding($entryName, 'UTF-8', 'CP949');
@@ -6843,7 +6868,7 @@ try {
                 if (DIRECTORY_SEPARATOR === '\\') {
                     $urOut = @shell_exec('chcp 65001 >nul && ' . $urCmd . ' 2>&1 < nul');
                 } else {
-                    $urOut = @shell_exec($urCmd . ' 2>&1 < /dev/null');
+                    $urOut = @shell_exec(fs_utf8_env_prefix() . $urCmd . ' 2>&1 < /dev/null');
                 }
                 if ($urOut) {
                     $cur = [];
@@ -7022,7 +7047,7 @@ try {
             // 7-zip: 개별 파일 추출
             if ($fileData === null) {
                 $szBin2 = null;
-                $szPaths2 = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'];
+                $szPaths2 = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'];
                 foreach ($szPaths2 as $_p) { if (file_exists($_p)) { $szBin2 = $_p; break; } }
                 
                 if ($szBin2) {
@@ -7056,7 +7081,7 @@ try {
                             @shell_exec('chcp 65001 >nul && ' . $cmd2 . ' 2>nul < nul');
                         }
                     } else {
-                        @shell_exec($cmd2 . ' 2>/dev/null < /dev/null');
+                        @shell_exec(fs_utf8_env_prefix() . $cmd2 . ' 2>/dev/null < /dev/null');
                     }
                     // flat 추출이므로 basename으로 읽음
                     $extractedFile = $extractDir . DIRECTORY_SEPARATOR . basename($entryName);
@@ -7093,7 +7118,7 @@ try {
                     if (DIRECTORY_SEPARATOR === '\\') {
                         @shell_exec('chcp 65001 >nul && ' . $urCmd2 . ' 2>nul < nul');
                     } else {
-                        @shell_exec($urCmd2 . ' 2>/dev/null < /dev/null');
+                        @shell_exec(fs_utf8_env_prefix() . $urCmd2 . ' 2>/dev/null < /dev/null');
                     }
                     // flat 추출이므로 basename으로 읽음
                     $extractedFile2 = $extractDir2 . DIRECTORY_SEPARATOR . basename($entryName);
@@ -7147,7 +7172,7 @@ try {
             
             // 7-Zip 바이너리 탐색
             $sevenZipBin = null;
-            $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'];
+            $szPaths = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'];
             foreach ($szPaths as $p) { if (file_exists($p)) { $sevenZipBin = $p; break; } }
             
             if (!$sevenZipBin) {
@@ -7160,7 +7185,7 @@ try {
             if (DIRECTORY_SEPARATOR === '\\') {
                 $checkOutput = @shell_exec('chcp 65001 >nul && ' . $checkCmd . ' 2>&1 < nul');
             } else {
-                $checkOutput = @shell_exec($checkCmd . ' 2>&1 < /dev/null');
+                $checkOutput = @shell_exec(fs_utf8_env_prefix() . $checkCmd . ' 2>&1 < /dev/null');
             }
             
             $encrypted = false;
@@ -9619,7 +9644,7 @@ try {
             $sevenZipSearchPaths = [
                 'C:\\Program Files\\7-Zip\\7z.exe',
                 'C:\\Program Files (x86)\\7-Zip\\7z.exe',
-                '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'
+                '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'
             ];
             foreach ($sevenZipSearchPaths as $_7zp) {
                 if (file_exists($_7zp)) {
@@ -10200,7 +10225,7 @@ try {
             
             // 7-Zip 설치 여부
             $sevenZipInstalled = false;
-            $szPaths2 = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za'];
+            $szPaths2 = ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe', '/usr/bin/7z', '/usr/local/bin/7z', '/usr/bin/7za', '/usr/bin/7zz', '/usr/local/bin/7zz', '/usr/bin/7zzs', '/usr/local/bin/7zzs', '/usr/bin/7zip', '/bin/7zz', '/bin/7z'];
             foreach ($szPaths2 as $szp) { if (file_exists($szp)) { $sevenZipInstalled = true; break; } }
             $settings['seven_zip_installed'] = $sevenZipInstalled;
             
