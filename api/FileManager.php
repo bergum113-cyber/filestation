@@ -7669,10 +7669,23 @@ class FileManager {
                         // 이 경우 비번 오류로 단정하지 말고 아래 UnRAR 폴백에서 재시도(rar 공식 도구가 정확).
                         if ($ext === 'rar') {
                             $dbg("→ rar exit≠0, UnRAR 폴백으로 넘김");
-                            // 여기에 풀기 모드면 기존 폴더를 삭제하면 안 됨(개인폴더 보호). 폴더 생성 모드만 정리.
+                            // ⚠️ 폴더 정리 시 RAR 영문 임시본(src.rar / .fs_rar_src_)은 절대 지우면 안 된다.
+                            //   UnRAR 폴백이 바로 그 임시본을 입력으로 추출하기 때문(지우면 'No such file'로 실패).
+                            //   영문 작업폴더 우회($rarWorkDir) 중이면 폴더를 통째로 비우지 않고 7z이 만든
+                            //   깨진 추출물만 정리하되 src.rar은 보존한다. 일반 폴더모드(임시본이 extractDir 안)도 동일.
                             if (!$isHereMode && is_dir($extractDir)) {
-                                $this->deleteDirectory($extractDir);
-                                @mkdir($extractDir, 0755, true);
+                                $keepName = ($rarTempCopy !== null) ? basename($rarTempCopy) : null;
+                                $cdh = @opendir($extractDir);
+                                if ($cdh) {
+                                    while (($cn = readdir($cdh)) !== false) {
+                                        if ($cn === '.' || $cn === '..') continue;
+                                        if ($keepName !== null && $cn === $keepName) continue; // 영문 임시본 보존
+                                        $cp = $extractDir . DIRECTORY_SEPARATOR . $cn;
+                                        if (is_dir($cp)) $this->deleteDirectory($cp);
+                                        else @unlink($cp);
+                                    }
+                                    closedir($cdh);
+                                }
                             }
                             break; // 폴링 종료 → 아래 fileCount=0 → UnRAR 폴백 진입
                         }
