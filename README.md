@@ -4,7 +4,7 @@
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
-![rhwp](https://img.shields.io/badge/rhwp-0.7.15-9cf)
+![rhwp](https://img.shields.io/badge/rhwp-0.7.16-9cf)
 ![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
@@ -500,7 +500,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5.8.2c.zip -d /var/www/html/filestation
+unzip FileStation_v5.8.2d.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -663,7 +663,7 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.15
+버전: 0.7.16
 파일: assets/rhwp/
 업그레이드: rhwp_업그레이드_가이드_v6.md 참조
 ```
@@ -2903,5 +2903,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.8.2c — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-06-08 (v5.8.2c, rhwp 0.7.15 기준)*
+*FileStation v5.8.2d — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-06-19 (v5.8.2d, rhwp 0.7.16 기준)*
