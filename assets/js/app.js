@@ -683,7 +683,7 @@ class FSAudioPlayer {
         this._artworkMaintenanceTimer = null;
         this._lastArtworkCheck = 0;
         this._currentMetadata = null;  // 마지막 설정 metadata (복구용)
-        this._lastForceRefreshMin = -1;  // 분 경계 강제 갱신 추적 (트랙당 1회씩)
+        this._lastForceRefreshAt = 0;  // 마지막 강제 갱신 시각(벽시계, 1초 주기 추적)
 
         this._render();
         this._bind();
@@ -977,6 +977,13 @@ class FSAudioPlayer {
         if (!this._visColors.find(c => c.id === savedVisColor)) savedVisColor = 'default';
         this._currentVisColor = savedVisColor;
         
+        // 비주얼라이저 ON/OFF 복원 (기본: ON) — OFF면 .fap-vis-off 클래스로 숨김 + 그리기 루프 절약
+        this._visEnabled = true;
+        try {
+            this._visEnabled = localStorage.getItem('fap_vis_enabled') !== '0';
+        } catch(e) {}
+        if (!this._visEnabled && this.$.root) this.$.root.classList.add('fap-vis-off');
+        
         // 스킨 선택 UI 추가 (플레이어 상단)
         this._renderSkinSelector();
         
@@ -1006,6 +1013,12 @@ class FSAudioPlayer {
                         ${s.name}
                     </div>
                 `).join('')}
+                <div class="fap-vis-section">
+                <div class="fap-skin-section-title">${isKo ? '비주얼라이저' : 'Visualizer'}</div>
+                <div class="fap-vis-toggle-item" data-vis-toggle="1">
+                    <span class="fap-vis-toggle-label">${isKo ? '표시' : 'Show'}</span>
+                    <span class="fap-vis-toggle-state">${this._visEnabled ? 'ON' : 'OFF'}</span>
+                </div>
                 <div class="fap-skin-section-title">${isKo ? '비주얼라이저 색상' : 'Visualizer Color'}</div>
                 ${this._visColors.map(c => `
                     <div class="fap-vis-color-item${c.id === this._currentVisColor ? ' active' : ''}" data-vis-color="${c.id}">
@@ -1013,6 +1026,7 @@ class FSAudioPlayer {
                         <span class="fap-vis-color-name">${c.name}</span>
                     </div>
                 `).join('')}
+                </div>
             </div>
         `;
         // 플레이어 맨 앞에 삽입
@@ -1048,6 +1062,15 @@ class FSAudioPlayer {
                 menu.style.display = 'none';
                 return;
             }
+            // 비주얼라이저 ON/OFF 토글
+            const visToggle = e.target.closest('.fap-vis-toggle-item');
+            if (visToggle) {
+                e.stopPropagation();
+                this._setVisEnabled(!this._visEnabled);
+                const st = visToggle.querySelector('.fap-vis-toggle-state');
+                if (st) st.textContent = this._visEnabled ? 'ON' : 'OFF';
+                return; // 메뉴는 닫지 않음 (토글 결과를 바로 확인 가능)
+            }
             // 비주얼라이저 색상 아이템
             const visColorItem = e.target.closest('.fap-vis-color-item');
             if (visColorItem) {
@@ -1066,6 +1089,18 @@ class FSAudioPlayer {
     }
     
     // 비주얼라이저 색상 변경 (localStorage 저장 + 즉시 반영)
+    // 비주얼라이저 ON/OFF (펜닐님 요청 v5.8.2d)
+    //   OFF: .fap-vis-off 클래스로 canvas/VU 숨김 + 그리기 루프가 스킵해 CPU 절약
+    _setVisEnabled(enabled) {
+        this._visEnabled = !!enabled;
+        try { localStorage.setItem('fap_vis_enabled', this._visEnabled ? '1' : '0'); } catch(e) {}
+        if (this.$.root) this.$.root.classList.toggle('fap-vis-off', !this._visEnabled);
+        // 다시 켤 때: 비주얼라이저가 아직 초기화 전이면 초기화 (off 상태로 시작한 경우)
+        if (this._visEnabled && !this._visInitialized && !this._visFailed) {
+            try { this._initVisualizer(); } catch(e) {}
+        }
+    }
+
     _applyVisColor(colorId) {
         if (!this._visColors.find(c => c.id === colorId)) colorId = 'default';
         this._currentVisColor = colorId;
@@ -1098,6 +1133,27 @@ class FSAudioPlayer {
         // localStorage 저장
         this._currentSkin = skinId;
         try { localStorage.setItem('fap_skin', skinId); } catch(e) {}
+        
+        // [ap-fixed 재생목록 짤림 보정] (펜닐님 보고 v5.8.2d)
+        //   ap-fixed는 2열(커버 340px | 재생목록) 레이아웃이라 모달이 낮으면 재생목록이 몇 곡만 보임.
+        //   사용자가 모달을 작게 리사이즈해둔 상태로 ap-fixed 전환 시 자동으로 충분한 높이 확보.
+        //   (본체 미리보기 모달 #modal-preview에서만 동작 — 공유 페이지는 모달이 아님)
+        if (skinId === 'ap-fixed') {
+            try {
+                const modal = this.container && this.container.closest ? this.container.closest('#modal-preview') : null;
+                if (modal) {
+                    const minH = Math.min(Math.round(window.innerHeight * 0.85), 760); // 적정 높이 (재생목록 ~8곡+)
+                    const minW = 860; // 커버 340 + 재생목록 최소 폭
+                    const rect = modal.getBoundingClientRect();
+                    if (rect.height < minH) modal.style.height = minH + 'px';
+                    if (rect.width < minW) modal.style.width = Math.min(minW, Math.round(window.innerWidth * 0.95)) + 'px';
+                    // 키운 뒤 화면 밖으로 나가지 않게 위치 보정
+                    const r2 = modal.getBoundingClientRect();
+                    if (r2.bottom > window.innerHeight) modal.style.top = Math.max(8, window.innerHeight - r2.height - 8) + 'px';
+                    if (r2.right > window.innerWidth) modal.style.left = Math.max(8, window.innerWidth - r2.width - 8) + 'px';
+                }
+            } catch(e) {}
+        }
         
         // 스킨 전환으로 canvas 크기가 변경될 수 있으므로 비주얼라이저 resize
         // (ap-fixed: display:none → default: display:block 복귀 시 필수)
@@ -1565,7 +1621,7 @@ class FSAudioPlayer {
         const track = this.playlist[idx];
         this.audio.src = track.url;
         // ★ v5.8.1j: 트랙 변경 시 force refresh 분 경계 리셋 (이전 트랙 값 제거)
-        this._lastForceRefreshMin = -1;
+        this._lastForceRefreshAt = Date.now();
         // 재생 중이면 마퀴, 아니면 일반 텍스트
         if (!this.audio.paused || autoplay) {
             this._setMarqueeTitle(track.name);
@@ -2614,6 +2670,7 @@ class FSAudioPlayer {
             this._visRafId = requestAnimationFrame(draw);
             
             if (document.hidden) return;
+            if (this._visEnabled === false) return; // 비주얼라이저 OFF — 그리기 스킵 (CPU 절약)
             
             const cssW = this._visCssW;
             const cssH = this._visCssH;
@@ -4064,12 +4121,15 @@ class FSAudioPlayer {
             if (this._destroyed) return;
             // 재생 중일 때만 (일시정지면 OS가 이미 정리해도 무관)
             if (!this.audio || this.audio.paused) return;
-            // 25초 throttle (setInterval 30초지만 시스템 지연 흡수)
+            // 1초 주기 갱신 (펜닐님 결정 2026-06-10): 복구 메커니즘은 z_music에서 검증됐으므로,
+            //   갱신을 1초마다 하면 빈 썸네일 노출이 최대 1초 → 사용자가 사실상 인지 불가.
+            //   갱신은 메모리 metadata 재설정뿐(네트워크 없음)이라 부하 무시 가능.
+            //   ※ 실기기 확인 포인트: 1초 재설정 시 제어센터 깜빡임 여부(미검증) — 거슬리면 주기 상향.
             const now = Date.now();
-            if (now - this._lastArtworkCheck < 25000) return;
+            if (now - this._lastArtworkCheck < 800) return;
             this._lastArtworkCheck = now;
             this._checkAndRestoreArtwork();
-        }, 30000);
+        }, 1000);
     }
 
     // ★ v5.8.1j: artwork 손실 감지 + 2분마다 강제 갱신 (z_music 패턴)
@@ -4089,19 +4149,15 @@ class FSAudioPlayer {
         } catch(e) {
             needsRestore = true;
         }
-        // 2분마다 강제 갱신 (iOS 시스템 레벨 유실 대응 — z_music 검증)
-        //   재생 시간 기준 2분 경계마다 1회만 갱신 (중복 방지)
+        // 주기적 강제 갱신 (iOS 시스템 레벨 유실 대응 — z_music 패턴 개선)
+        //   v5.8.1j는 재생 시간 2분 경계 → 4분 이내 곡 복구 공백(실사용 보고) → 벽시계 30초로 1차 개선 →
+        //   1초 갱신으로 최종 결정(펜닐님 2026-06-10): 빈 썸네일 노출이 최대 1초라 사용자가 사실상 인지 불가.
+        //   갱신은 메모리 재설정뿐(네트워크 없음). 같은 artwork URL이라 iOS가 보통 다시 그리지 않음.
         if (!needsRestore && this.audio && !this.audio.paused) {
-            const currentTime = this.audio.currentTime;
-            if (currentTime > 0) {
-                const minutes = Math.floor(currentTime / 60);
-                if (minutes > 0 && minutes % 2 === 0) {
-                    // 이번 트랙의 이 분 경계에 이미 갱신했는지 체크
-                    if (this._lastForceRefreshMin !== minutes) {
-                        this._lastForceRefreshMin = minutes;
-                        needsRestore = true;
-                    }
-                }
+            const nowTs = Date.now();
+            if (nowTs - this._lastForceRefreshAt >= 1000) {
+                this._lastForceRefreshAt = nowTs;
+                needsRestore = true;
             }
         }
         if (needsRestore) {
@@ -8962,6 +9018,11 @@ const App = {
     
     async _checkIndexRebuildNotify() {
         try {
+            // dismiss 기록(_dismissedNotifications)이 아직 로드 안 됐으면 먼저 로드 (레이스 방지)
+            //   loadUserPreferences가 병렬로 돌 때 이 함수가 먼저 끝나면 dismiss가 비어 알림이 잠깐 뜰 수 있음.
+            if (!this._dismissedNotifications) {
+                try { await this.loadUserPreferences(); } catch(_) {}
+            }
             const [settingsRes, indexRes] = await Promise.all([
                 this.api('settings', {}, 'GET'),
                 this.api('index_stats', {}, 'GET')
@@ -8974,16 +9035,23 @@ const App = {
                 return;
             }
             
-            // 관리자가 닫은 알림은 재구축 전까지 다시 표시하지 않음
-            const dismissedAt = settingsRes.settings.index_rebuild_notify_dismissed || '';
-            if (dismissedAt) {
-                const lastRebuildTime = lastRebuild ? new Date(lastRebuild).getTime() : 0;
-                const dismissedTime = new Date(dismissedAt).getTime();
-                // dismiss 시점이 마지막 재구축 이후이면 알림 숨김
-                if (dismissedTime > lastRebuildTime) return;
+            // lastRebuild를 먼저 확정 (아래 dismiss 비교에서 사용 — TDZ 방지)
+            const lastRebuild = indexRes.stats?.last_rebuild;
+            const lastRebuildTime = lastRebuild ? new Date(lastRebuild).getTime() : 0;
+            
+            // 관리자가 닫은 알림은 "마지막 재구축 이후"에 닫았으면 다시 표시하지 않음.
+            //   닫기(X)는 범용 dismiss(_dismissedNotifications['index-rebuild'])에 시각이 저장됨(showHeaderNotification).
+            //   재구축을 하면 lastRebuildTime이 dismiss 시각보다 나중이 되어 알림이 다시 뜸.
+            // ⚠️⚠️ 회귀 주의 (2026-06 수정): dismiss는 반드시 _dismissedNotifications['index-rebuild']로 읽을 것.
+            //   settings.index_rebuild_notify_dismissed(서버 설정)로 바꾸면 X닫기(_dismissedNotifications 저장)와
+            //   키가 어긋나 "X 닫아도 새로고침하면 알림이 다시 뜨는" 버그가 재발함. 과거 보안감사/코드정리 때 이미 한 번 깨졌었음.
+            //   읽기·쓰기·메뉴방문(showSearchIndexModal)·재구축초기화 4곳 모두 동일 키를 써야 정상.
+            const dismissedTs = (this._dismissedNotifications && this._dismissedNotifications['index-rebuild']) || 0;
+            if (dismissedTs && dismissedTs > lastRebuildTime) {
+                this.removeHeaderNotification('index-rebuild');
+                return;
             }
             
-            const lastRebuild = indexRes.stats?.last_rebuild;
             if (!lastRebuild) {
                 // 한번도 재구축 안 했으면 알림
                 this.showHeaderNotification('index-rebuild', {
@@ -25536,6 +25604,14 @@ const App = {
         $('#index-total').text(t('loading_text', '로딩 중...'));
         this.showModal('modal-search-index');
         
+        // 검색 인덱스 메뉴를 방문하면 재구축 알림을 끔 (X 닫기와 동일 처리 — 펜닐님 요청 v5.8.2d)
+        //   X 클릭과 같은 메커니즘(_dismissedNotifications)에 현재 시각 기록 → 재구축 전까지 다시 안 뜸.
+        // ⚠️ 이 키(_dismissedNotifications['index-rebuild'])는 _checkIndexRebuildNotify 읽기와 반드시 일치해야 함(회귀 주의).
+        this._dismissedNotifications = this._dismissedNotifications || {};
+        this._dismissedNotifications['index-rebuild'] = Date.now();
+        this.api('user_preferences_save', { dismissed_notifications: this._dismissedNotifications }).catch(() => {});
+        this.removeHeaderNotification('index-rebuild');
+        
         // 인덱스 통계 로드
         const res = await this.api('index_stats', {}, 'GET');
         
@@ -25756,6 +25832,7 @@ const App = {
             );
             
             // 재구축 완료 → 알림 제거 + dismissed 초기화
+            // ⚠️ 키 _dismissedNotifications['index-rebuild']는 읽기/X닫기/메뉴방문과 동일해야 함(회귀 주의).
             this.removeHeaderNotification('index-rebuild');
             if (this._dismissedNotifications) {
                 delete this._dismissedNotifications['index-rebuild'];
@@ -26713,10 +26790,8 @@ const App = {
                         updateClock();
                     }
                 }
-                // 알림 dismiss 상태 복원
-                if (res.preferences.dismissed_notifications) {
-                    this._dismissedNotifications = res.preferences.dismissed_notifications;
-                }
+                // 알림 dismiss 상태 복원 (없으면 빈 객체로 — 로드 완료 표시 겸 반복 로드 방지)
+                this._dismissedNotifications = res.preferences.dismissed_notifications || {};
                 // 정렬 설정 복원 (서버 → localStorage)
                 if (res.preferences.sort_settings) {
                     const local = JSON.parse(localStorage.getItem('fs_sort_settings') || '{}');

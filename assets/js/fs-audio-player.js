@@ -622,6 +622,13 @@ class FSAudioPlayer {
         if (!this._visColors.find(c => c.id === savedVisColor)) savedVisColor = 'default';
         this._currentVisColor = savedVisColor;
         
+        // 비주얼라이저 ON/OFF 복원 (기본: ON) — OFF면 .fap-vis-off 클래스로 숨김 + 그리기 절약 (v5.8.2d)
+        this._visEnabled = true;
+        try {
+            this._visEnabled = localStorage.getItem('fap_vis_enabled') !== '0';
+        } catch(e) {}
+        if (!this._visEnabled && this.$ && this.$.root) this.$.root.classList.add('fap-vis-off');
+        
         // 스킨 선택 UI 추가 (플레이어 상단)
         this._renderSkinSelector();
         
@@ -651,6 +658,12 @@ class FSAudioPlayer {
                         ${s.name}
                     </div>
                 `).join('')}
+                <div class="fap-vis-section">
+                <div class="fap-skin-section-title">${isKo ? '비주얼라이저' : 'Visualizer'}</div>
+                <div class="fap-vis-toggle-item" data-vis-toggle="1">
+                    <span class="fap-vis-toggle-label">${isKo ? '표시' : 'Show'}</span>
+                    <span class="fap-vis-toggle-state">${this._visEnabled ? 'ON' : 'OFF'}</span>
+                </div>
                 <div class="fap-skin-section-title">${isKo ? '비주얼라이저 색상' : 'Visualizer Color'}</div>
                 ${this._visColors.map(c => `
                     <div class="fap-vis-color-item${c.id === this._currentVisColor ? ' active' : ''}" data-vis-color="${c.id}">
@@ -658,6 +671,7 @@ class FSAudioPlayer {
                         <span class="fap-vis-color-name">${c.name}</span>
                     </div>
                 `).join('')}
+                </div>
             </div>
         `;
         // 플레이어 맨 앞에 삽입
@@ -694,6 +708,15 @@ class FSAudioPlayer {
                 return;
             }
             // 비주얼라이저 색상 아이템
+            // 비주얼라이저 ON/OFF 토글
+            const visToggle = e.target.closest('.fap-vis-toggle-item');
+            if (visToggle) {
+                e.stopPropagation();
+                this._setVisEnabled(!this._visEnabled);
+                const st = visToggle.querySelector('.fap-vis-toggle-state');
+                if (st) st.textContent = this._visEnabled ? 'ON' : 'OFF';
+                return; // 메뉴는 닫지 않음
+            }
             const visColorItem = e.target.closest('.fap-vis-color-item');
             if (visColorItem) {
                 e.stopPropagation();
@@ -711,6 +734,16 @@ class FSAudioPlayer {
     }
     
     // 비주얼라이저 색상 변경 (localStorage 저장 + 즉시 반영)
+    // 비주얼라이저 ON/OFF (펜닐님 요청 v5.8.2d) — app.js와 동일 패턴
+    _setVisEnabled(enabled) {
+        this._visEnabled = !!enabled;
+        try { localStorage.setItem('fap_vis_enabled', this._visEnabled ? '1' : '0'); } catch(e) {}
+        if (this.$ && this.$.root) this.$.root.classList.toggle('fap-vis-off', !this._visEnabled);
+        if (this._visEnabled && !this._visInitialized && !this._visFailed) {
+            try { this._initVisualizer(); } catch(e) {}
+        }
+    }
+
     _applyVisColor(colorId) {
         if (!this._visColors.find(c => c.id === colorId)) colorId = 'default';
         this._currentVisColor = colorId;
@@ -2287,6 +2320,7 @@ class FSAudioPlayer {
             this._visRafId = requestAnimationFrame(draw);
             
             if (document.hidden) return;
+            if (this._visEnabled === false) return; // 비주얼라이저 OFF — 그리기 스킵 (CPU 절약)
             
             const cssW = this._visCssW;
             const cssH = this._visCssH;

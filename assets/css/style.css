@@ -4933,7 +4933,8 @@ video::cue {
     opacity: 1 !important;
 }
 .fap-skin-ap-fixed .fap-visualizer.vuled-mode {
-    display: none !important;
+    filter: none !important;
+    opacity: 1 !important;
 }
 /* 스킨별 filter는 VU 모드에선 적용 안 함 */
 .fap-skin-soundcloud .fap-visualizer.vu-mode,
@@ -5672,6 +5673,38 @@ video::cue {
     cursor: pointer;
     transition: background 0.12s;
 }
+/* 비주얼라이저 ON/OFF 토글 항목 (v5.8.2d) */
+.fap-vis-toggle-item {
+    padding: 8px 14px;
+    font-size: 10px;
+    color: #ddd;
+    cursor: pointer;
+    transition: background 0.12s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+.fap-vis-toggle-item:hover { background: rgba(255,255,255,0.08); }
+.fap-vis-toggle-state {
+    font-weight: 700;
+    font-size: 11px;
+    color: #667eea;
+}
+.fap-skin-ap-fixed .fap-vis-toggle-item { color: #333; }
+.fap-skin-ap-fixed .fap-vis-toggle-item:hover { background: #f5f5f5; }
+.fap-skin-ap-fixed .fap-vis-toggle-state { color: #3ac0ff; }
+/* 스킨별 토글 폰트/색상 (skin-item과 동일 톤) — 펜닐님 요청 v5.8.2d */
+.fap-skin-soundcloud .fap-vis-toggle-item { color: #333; }
+.fap-skin-soundcloud .fap-vis-toggle-item:hover { background: rgba(255,85,0,0.08); }
+.fap-skin-soundcloud .fap-vis-toggle-state { color: #f50; }
+.fap-skin-cassette .fap-vis-toggle-state { color: #e8b923; }
+.fap-skin-terminal .fap-vis-toggle-item { color: #c9d1d9; font-family: inherit; }
+.fap-skin-terminal .fap-vis-toggle-item:hover { background: #161b22; }
+.fap-skin-terminal .fap-vis-toggle-state { color: #00ff41; }
+.fap-skin-pixel .fap-vis-toggle-item { color: #9bbc0f; font-weight: bold; text-transform: uppercase; }
+.fap-skin-pixel .fap-vis-toggle-item:hover { background: #306230; }
+.fap-skin-pixel .fap-vis-toggle-state { color: #9bbc0f; }
 .fap-skin-item:hover { background: rgba(255,255,255,0.1); }
 .fap-skin-item.active {
     background: rgba(102,126,234,0.3);
@@ -5689,6 +5722,13 @@ video::cue {
     border-top: 1px solid rgba(255,255,255,0.07);
 }
 .fap-skin-section-title:first-child { border-top: none; }
+
+/* 비주얼라이저 메뉴 섹션 (표시 토글 + 색상) — 모바일에서는 숨김 (펜닐님 결정 v5.8.2d, 경우B) */
+/*   모바일/태블릿세로(≤1023px)에서는 비주얼라이저가 표시되지 않으므로(iOS는 OS 차단, ap-fixed는 숨김 처리) */
+/*   메뉴의 비주얼라이저 표시 ON/OFF + 색상 항목도 함께 숨겨 혼란 방지. 전 스킨 공통. */
+@media (max-width: 1023px) {
+    .fap-vis-section { display: none !important; }
+}
 
 /* 비주얼라이저 색상 선택 아이템 */
 .fap-vis-color-item {
@@ -6199,19 +6239,23 @@ video::cue {
     overflow: hidden;
     display: grid !important;
     grid-template-columns: 340px 1fr;
-    /* Row 1: 커버(고정) / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨(남은공간 흡수) */
-    /* ★ 마지막 행 1fr (펜닐님 결정 v5.8.1c): 모달 크기 변화 시 남는 공간을 마지막 볼륨 행이 흡수 */
-    /*    → 컨트롤/시킹바 사이는 콘텐츠 크기 그대로(auto), 빈 공간은 볼륨 아래(밑면)로 몰림 */
-    /*    이전엔 모든 행 auto라 brtype 사이에 빈 공간 분산됐음 */
-    grid-template-rows: 340px auto auto auto 1fr !important;
+    /* Row 1: 커버 / Row 2: 비주얼라이저 / Row 3: 가사 / Row 4: 시킹바 / Row 5: 컨트롤 / Row 6: 볼륨 / Row 7: spacer(1fr) */
+    /* ★ v5.8.2d 재수정: 볼륨을 1fr로 두면 비주얼라이저 ON/OFF 시 볼륨만 늘었다 줄고 컨트롤은 고정됐음. */
+    /*    → 볼륨도 auto(콘텐츠 크기)로 두고, 맨 아래 빈 spacer 행(1fr)이 남는 공간을 흡수. */
+    /*    이러면 비주얼라이저가 켜지면 가사~컨트롤~볼륨이 통째로 아래로 밀리고, 꺼지면 위로 올라옴. */
+    grid-template-rows: 340px auto auto auto auto auto 1fr !important;
     gap: 0 !important;
     min-height: 460px;
     position: relative;
 }
+/* 비주얼라이저 OFF 시 row2(비주얼) 접기 → 가사~볼륨이 위로 올라옴 */
+.fap.fap-skin-ap-fixed.fap-vis-off {
+    grid-template-rows: 340px 0 auto auto auto auto 1fr !important;
+}
 /* ★ iOS: 볼륨 영역 숨김 시 grid 마지막 행 제거 (좌측 column 빈 공간 방지) */
 /*    iOS도 마지막 행(컨트롤)을 1fr로 → 남는 공간을 컨트롤 아래로 몰아둠 */
 .fap.fap-skin-ap-fixed.fap-ios {
-    grid-template-rows: 340px auto auto 1fr !important;
+    grid-template-rows: 340px 0 auto auto auto auto 1fr !important;
     min-height: auto;
 }
 /* 스킨 선택기: 우측 상단에 고정, 플레이리스트 영역 위에 오버레이 */
@@ -6296,10 +6340,27 @@ video::cue {
 }
 
 /* 1행: 큰 앨범 커버 (헤더 위에 오버레이로 제목 표시됨) */
+/* 비주얼라이저: 커버(row1) 아래 독립 행(row2)에 배치 → 재생바/컨트롤이 그만큼 아래로 밀림 (v5.8.2d 재수정) */
 .fap-skin-ap-fixed .fap-visualizer,
-.fap-skin-ap-fixed .fap-vu-canvas-wrap,
-.fap-skin-ap-fixed .fap-vu-svg-root {
-    /* 비주얼라이저 + VU 미터 wrapper/오버레이 모두 숨김 (10th rev) */
+.fap-skin-ap-fixed .fap-vu-canvas-wrap {
+    grid-column: 1 !important;
+    grid-row: 2 !important;
+    align-self: center;   /* row 중앙 정렬 (stretch 시 위아래 여백 과다) */
+    z-index: 1;
+    position: relative;
+    margin: 0 !important;
+    pointer-events: auto;
+}
+/* ap-fixed VU 미터 위아래 여백 축소 (펜닐님 요청 v5.8.2d) */
+.fap-skin-ap-fixed .fap-visualizer.vu-mode {
+    height: 80px !important;
+    margin: 2px 0 0 !important;
+}
+.fap-skin-ap-fixed .fap-vu-canvas-wrap { margin: 2px 0 0 !important; }
+/* 비주얼라이저 OFF 시 숨김 (on/off 토글) */
+.fap.fap-vis-off .fap-visualizer,
+.fap.fap-vis-off .fap-vu-canvas-wrap,
+.fap.fap-vis-off .fap-vu-svg-root {
     display: none !important;
 }
 .fap-skin-ap-fixed .fap-ap-cover-big {
@@ -6332,7 +6393,7 @@ video::cue {
 /* 2행: seek 바 */
 .fap-skin-ap-fixed .fap-seek {
     grid-column: 1;
-    grid-row: 3;  /* 가사 행(2) 추가로 한 칸 밀림 */
+    grid-row: 4;  /* 비주얼라이저(2)+가사(3) 위에 → 한 칸 더 밀림 */
     align-self: start;     /* 행 상단에 고정 (행 stretch 방지) */
     /* ★ 위 여백 늘림: 썸네일과 시킹바 사이 시각적 분리 (펜닐님 요청 v5.8.1c) */
     padding: 16px 16px 8px !important;
@@ -6352,10 +6413,10 @@ video::cue {
 /* 4행: 컨트롤 버튼들 (중앙 정렬) - 가사 행 추가로 한 칸 밀림 */
 .fap-skin-ap-fixed .fap-controls {
     grid-column: 1;
-    grid-row: 4;
+    grid-row: 5;
     align-self: start;     /* 행 상단에 고정 */
     /* ★ 상하 여백 늘림: 시킹바/볼륨과 시각적 분리 (펜닐님 요청 v5.8.1c) */
-    padding: 16px 16px !important;
+    /* padding: 16px 16px !important; */
     background: #fff;
     justify-content: center !important;
     gap: 16px !important;
@@ -6399,9 +6460,9 @@ video::cue {
 /*    → 컨트롤(4행) 바로 아래에 볼륨이 붙어 보임. 남는 공간은 볼륨 아래(모달 바닥)로 몰림 */
 .fap-skin-ap-fixed .fap-volume {
     grid-column: 1;
-    grid-row: 5;
+    grid-row: 6;
     align-self: start;     /* 행 상단 = 컨트롤 바로 아래에 고정 */
-    padding: 12px 16px 16px !important;
+    padding: 4px 16px 16px !important;
     background: #fff;
     margin: 0 !important;
 }
@@ -6504,12 +6565,19 @@ video::cue {
 }
 
 /* 반응형: 좁은 화면에서는 위아래로 스택 */
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
     .fap.fap-skin-ap-fixed {
         grid-template-columns: 1fr;
         /* Row 1: 커버 / Row 2: 가사 / Row 3: 시킹바 / Row 4: 컨트롤 / Row 5: 볼륨 / Row 6: 플레이리스트(1fr 남은공간 흡수) */
+        /* ★ 모바일은 작업 전(v5.8.2d 비주얼라이저 추가 이전) 구조 유지 — 비주얼라이저 행 없음(펜닐님 요청) */
         grid-template-rows: 240px auto auto auto auto 1fr !important;
         min-height: auto;
+    }
+    /* 모바일 ap-fixed에서는 비주얼라이저 숨김 (작업 전 동작 복원) */
+    .fap-skin-ap-fixed .fap-visualizer,
+    .fap-skin-ap-fixed .fap-vu-canvas-wrap,
+    .fap-skin-ap-fixed .fap-vu-svg-root {
+        display: none !important;
     }
     .fap-skin-ap-fixed .fap-now {
         /* 모바일에서도 커버 위에 오버레이 */
@@ -15789,7 +15857,7 @@ body.video-pseudo-fs {
 /* AP-fixed에서 가사 영역 위치: 시킹바 위 (Row 2) */
 .fap-skin-ap-fixed .fap-lyrics-wrap {
     grid-column: 1;
-    grid-row: 2;
+    grid-row: 3;  /* 비주얼라이저 행(2) 추가로 밀림 */
     margin: 0 !important;
     padding: 2px 16px 2px !important;
     background: #fff;
@@ -15801,14 +15869,15 @@ body.video-pseudo-fs {
 /*    또한 마지막 행 1fr로 모달 크기 변화 시 남는 공간을 마지막 행이 흡수 (펜닐님 요청 v5.8.1c) */
 .fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
     /* PC: row 1=커버(340px) / row 2=가사(0) / row 3=시킹바 / row 4=컨트롤 / row 5=볼륨(1fr) */
-    grid-template-rows: 340px 0 auto auto 1fr !important;
+    grid-template-rows: 340px auto 0 auto auto auto 1fr !important;
 }
 .fap.fap-skin-ap-fixed.fap-no-inline-lyrics.fap-ios {
     /* iOS: 볼륨 영역 숨김 — row 1=커버 / row 2=0 / row 3=시킹바 / row 4=컨트롤(1fr) */
-    grid-template-rows: 340px 0 auto 1fr !important;
+    grid-template-rows: 340px 0 0 auto auto auto 1fr !important;
 }
-@media (max-width: 768px) {
+@media (max-width: 1023px) {
     /* 모바일: row 1=커버(240px) / row 2=가사(0) / row 3=시킹바 / row 4=컨트롤 / row 5=볼륨 / row 6=플레이리스트(1fr) */
+    /* ★ 모바일은 작업 전 구조 유지 — 비주얼라이저 행 없음(펜닐님 요청) */
     .fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
         grid-template-rows: 240px 0 auto auto auto 1fr !important;
     }

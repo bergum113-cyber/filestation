@@ -1,6 +1,6 @@
-# FileStation v5.8.2c
+# FileStation v5.8.2d
 
-![version](https://img.shields.io/badge/version-v5.8.2c-blue)
+![version](https://img.shields.io/badge/version-v5.8.2d-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
@@ -15,7 +15,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.15 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.16 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -200,7 +200,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.15 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.16 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -488,7 +488,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.15** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.16** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -684,7 +684,7 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.15의 베타 단계 제한, HWP 형식만 저장 가능
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.16의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -719,11 +719,49 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.2c (rhwp 0.7.15 기반)
+**현재 버전**: v5.8.2d (rhwp 0.7.16 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.2c (2026-06-08) ⭐ 현재
+#### v5.8.2d (2026-06-09 ~ 2026-06-10) ⭐ 현재
+
+**[검색 인덱스 재구축 알림: X 닫기/메뉴 방문 후에도 새로고침마다 다시 뜨던 버그 수정] (2026-06-10, 펜닐님 보고)**
+
+- **증상**: 인덱스 재구축 알림을 X로 닫아도 새로고침/폴더이동 시 다시 뜸. 일반 알림처럼 X 닫기나 해당 메뉴 방문 시 꺼지고 재구축 전까지 안 떠야 함.
+- **원인 3가지** (assets/js/app.js _checkIndexRebuildNotify):
+  1. **읽기/쓰기 키 불일치**: dismiss를 읽을 땐 settings.index_rebuild_notify_dismissed(서버 설정), X 닫기는 user_preferences.dismissed_notifications(범용)에 저장 → 서로 다른 키라 dismiss가 반영 안 됨.
+  2. **TDZ 버그**: dismiss 비교에서 lastRebuild를 선언(const) 전에 사용 → ReferenceError가 try-catch에 묻혀 로직 일부 무력화.
+  3. **메뉴 방문 시 dismiss 없음**: showSearchIndexModal이 알림을 끄지 않음.
+- **해결**: dismiss를 범용 _dismissedNotifications['index-rebuild']로 통일(X 닫기가 이미 저장하는 곳). lastRebuild 선언을 비교 앞으로 옮겨 TDZ 제거. showSearchIndexModal 진입 시 dismiss 저장 + 알림 제거 추가. dismiss 시각 > 마지막 재구축 시각이면 숨김 → 재구축하면 자동으로 다시 알림. _dismissedNotifications 미로드 시 레이스 방지 await 추가, 없으면 빈 객체로 초기화.
+- **회귀 경위 (중요)**: 이 알림은 2026-04월에 _dismissedNotifications['index-rebuild'] 범용 키 방식으로 정상 동작했음(펜닐님 "옛날엔 됐다" 기억이 정확). 이후 어느 시점에 settings.index_rebuild_notify_dismissed(서버 설정) 방식으로 재작성되면서 X 닫기 쪽(_dismissedNotifications)과 키가 어긋나 깨짐. 이번 수정은 4월의 원래 방식으로 복원한 것. 이 로직은 반드시 _dismissedNotifications 범용 키를 사용할 것 — settings 키로 바꾸면 X 닫기와 불일치하여 재발함.
+- **동작 확정** (펜닐님 결정): X 닫기 또는 검색 인덱스 메뉴 방문 시 알림 꺼짐 → 새로고침/폴더이동/작업해도 안 뜸. 재구축하면 다시 뜸. (외부/내부 업로드 알림은 share_clear_upload_notify로 서버 pending 초기화, 게시판 댓글 알림은 board_notification_read로 서버 읽음 처리 — 둘 다 같은 '확인하면 안 뜸' 패턴으로 이미 정상 동작 확인됨.)
+
+
+**[음악 플레이어 APlayer Fixed 스킨 개선: 비주얼라이저 추가 + ON/OFF 토글 + 재생목록 짤림 해결] (2026-06-10, 펜닐님 요청)** ✅ PC 실기기 확인 완료
+
+PC 음악 플레이어(일반 #modal-preview + 공유 share)의 ap-fixed 스킨 개선. 본체(app.js/style.css) + 공유(fs-audio-player.js/fs-audio-player.css) 양쪽 일치 수정.
+
+- **① ap-fixed 비주얼라이저 추가 (커버 밑 독립 행)**: 기존 ap-fixed는 비주얼라이저/VU를 `display:none`으로 전부 숨겼음(10th rev). → 커버(row1) **아래 독립 grid 행(row2)**으로 배치해 시킹바/컨트롤/볼륨이 그만큼 아래로 밀리게 함. (처음 오버레이(`align-self:end`로 커버에 겹침) 방식 시도 → 펜닐님 "재생바가 안 내려온다" 보고 → 실제 행으로 재수정.) grid를 7행으로 구성: `340px(커버) auto(비주얼row2) auto(가사) auto(시킹) auto(컨트롤) auto(볼륨) 1fr(맨아래 spacer)`. vuled 숨김 해제.
+- **🔴 핵심 버그(컨트롤 고정) 해결**: 처음엔 마지막 행을 볼륨=1fr로 뒀는데, 이러면 비주얼라이저 ON/OFF 시 **남는 공간(볼륨 1fr)만 늘었다 줄고 컨트롤 위치는 고정**됐음(펜닐님 보고: "컨트롤 고정, 볼륨바만 내려감"). → 볼륨도 auto로 바꾸고 **맨 아래 빈 spacer 행(1fr)을 추가**. 이제 비주얼라이저 ON 시 가사~컨트롤~볼륨이 통째로 아래로 밀리고 OFF 시 위로 올라옴. grid-row는 `!important`로 강제(다른 규칙에 안 밀리게). iOS/모바일(768px)/no-inline-lyrics 변형 grid 전부 7행 구조로 일치(비주얼 행은 OFF·iOS 시 0).
+- **② 비주얼라이저 ON/OFF 토글**: 스킨 메뉴에 '비주얼라이저 > 표시 ON/OFF' 항목 추가(`.fap-vis-toggle-item`, data-vis-toggle). `_setVisEnabled()`가 `.fap-vis-off` 클래스를 root에 토글 → canvas/VU 숨김 + grid row2를 0으로 접음 + draw 루프(`_visEnabled===false`) 스킵(CPU 절약). localStorage `fap_vis_enabled`. OFF 시작 후 ON 시 `_initVisualizer()` 지연 초기화. **토글 글자색·폰트 스킨별 일치**(soundcloud=#f50, terminal=#00ff41+모노, pixel=#9bbc0f+대문자, cassette=#e8b923), **폰트 10px**(skin-item 12px와 구분).
+- **③ ap-fixed 재생목록 짤림**: `_applySkin`에서 ap-fixed 전환 시 `#modal-preview` 높이가 작으면 자동 확대(최대 85vh/760px, 폭 860px) + 화면 밖 위치 보정. (본체 모달만 — 공유는 모달 아님.)
+- **④ 여백 미세 조정 (펜닐님 요청)**: VU 미터 `align-self:stretch`→`center`, ap-fixed VU 높이 160→**80px**, VU 아래여백 제거(`margin:2px 0 0`). 볼륨 위 padding 12→4px. `.fap-skin-ap-fixed .fap-controls`의 `padding:16px 16px !important` 주석처리.
+- **모바일 복원 (펜닐님 요청)**: 모바일(@media 768px)은 ap-fixed 비주얼라이저 작업 전 구조로 되돌림 — PC만 비주얼라이저 행(7트랙), 모바일은 작업 전 6트랙(비주얼 숨김). 분기점은 1023px — iPad 세로(768)·폰은 모바일(비주얼 숨김), iPad 가로(1024)·PC는 비주얼라이저 표시(펜닐님 요청, iPad 가로 1024가 PC로 가도록 1024→1023 조정). 모바일 ap-fixed가 영향받던 문제 해결.
+- **✅ 실기기 확인(펜닐님 PC)**: 비주얼라이저 커버 밑 표시, ON/OFF 시 컨트롤 같이 이동, VU 컴팩트, 재생목록 정상 — 전부 확인 완료.
+- **모바일 비주얼라이저 메뉴 숨김 (펜닐님 결정 경우B)**: 모바일(≤1023px)은 비주얼라이저가 표시 안 되므로(iOS는 OS 차단, ap-fixed는 숨김), 스킨 메뉴의 비주얼라이저 표시 ON/OFF + 색상 항목을 .fap-vis-section wrapper로 묶어 모바일에서 display:none. 전 스킨 공통(iOS/안드로이드 무관, 화면 크기 기준). 스킨 선택 항목은 wrapper 밖이라 모바일서도 유지.
+- **[패스]** 재생목록 검색창과 스킨 버튼 위치 겹침 → 위치 이동/검색창 축소 등 검토했으나 다른 스킨과 일관성 문제로 현 상태 유지(펜닐님 결정).
+- **참고**: 공유 플레이어(fs-audio-player.js)는 artwork maintenance(iOS 썸네일 갱신)는 없지만 스킨/비주얼라이저 구조는 동일 — ap-fixed 개선 양쪽 적용됨.
+
+**[음악 플레이어 iOS 썸네일: 강제 갱신을 재생시간 2분 경계 → 1초 주기로 개선] (2026-06-09~10)**
+
+- **증상** (펜닐님 보고): iOS 제어센터/잠금화면 썸네일이 4분 이내 곡에서도 간헐적으로 사라진 채 복구 안 됨 (곡 넘기면 나옴). 노래 듣다가 다음 트랙 넘기려 잠금화면/제어센터를 볼 때 빈 썸네일을 인지. 제어센터·잠금화면은 같은 MediaSession metadata라 증상 동일.
+- **원인**: v5.8.1j의 강제 갱신이 '재생 시간 기준 2분 경계(%2)' 방식이라 곡의 2분/4분 '지점'에서만 발동. 2분 직후 iOS가 시스템 레벨로 유실하면(JS에선 metadata가 멀쩡해 보여 손실 감지 불가) 다음 갱신은 4분 지점 → 4분 이내 곡은 끝까지 복구 기회 없음. 시뮬 재현: 3분30초 곡+2분10초 유실 → 구방식 복구 0회.
+- **해결** (`assets/js/app.js`): 벽시계 기준 주기 갱신으로 변경(변수 `_lastForceRefreshMin`→`_lastForceRefreshAt`, 트랙 변경 시 Date.now() 리셋). 30초로 1차 개선 후, **1초 주기로 최종 결정**(펜닐님 2026-06-10) — 복구 메커니즘은 z_music에서 검증됐으므로 1초 갱신이면 빈 썸네일 노출이 최대 1초라 사용자가 사실상 인지 불가. 타이머 setInterval 1초(throttle 0.8초)+무조건 갱신 1초.
+- **부하**: 갱신은 메모리 `_currentMetadata` 깊은복사 재설정뿐(네트워크 fetch 없음, artwork URL 동일해 iOS 캐시) → 1초 주기여도 CPU/배터리 영향 미미.
+- **✅ 실기기 확인 완료 (2026-06-10, 펜닐님 iOS)**: 1초 재설정 시 제어센터/잠금화면 깜빡임·진행바 흔들림 **없음** 확인 — 같은 artwork URL이라 iOS가 다시 그리지 않는 것이 실기기로 검증됨. 1초 갱신 방식 확정.
+- **참고**: 공유 페이지 플레이어(fs-audio-player.js)는 artwork maintenance 자체가 없음(이벤트 기반만) — 공유에서도 같은 증상 시 동일 패턴 이식 필요(미적용).
+
+#### v5.8.2c (2026-06-08 ~ 2026-06-09)
 
 **[v5.8.2c] 압축파일 다국어(한/일/중/특수문자) 파일명 인코딩 + 추출 안전성 전면 개선 (2026-06-08)**
 
@@ -775,6 +813,21 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 - **엔터키:** 압축 비번 입력(showZipPasswordModal)·범용 비번(promptPassword)은 기존에 이미 엔터/ESC 처리 구현됨. 신규 방식선택 모달에도 ESC 닫기 적용.
 - 안전성: 모든 셸 호출 escapeshellarg, 비번 위험문자 제거(`[\x00-\x1F\x7F"`$\\]`), 임시 추출 격리·정리 유지. 기존 호출부는 mode 생략 시 동작 불변(회귀 없음). 전 파일 `php -l`/`node --check` 통과.
 - ⚠️ 알려진 환경 의존: 컨테이너 p7zip 16.02는 RAR5 **암호 추출**을 "Unsupported Method"로 미지원(목록·감지는 정상). Windows 정품 7-Zip/WinRAR은 지원하므로 실기기 확인 권장. 모든 검증은 Linux 컨테이너 기준.
+
+**[rhwp 0.7.15 → 0.7.16 업그레이드] (2026-06-19)**
+
+HWP/HWPX 뷰어·편집기 엔진(rhwp)을 0.7.16으로 업그레이드. 0.7.15 후속 patch — HWPX 저장 계약(serializer fidelity) 정밀화, 누름틀 안내문 한컴 호환, rhwp-studio 드래그&드롭 보안 게이트(opt-in 모달), 다크테마 추가, 렌더·표·그림 정합 + 외부 기여자 PR 다수. 공개 API 하위 호환 유지(PATCH) — `HwpDocument`/`renderPageSvg`/`version` ABI 보존으로 뷰어 호환.
+
+- npm `@rhwp/core@0.7.16` tarball shasum 진본 검증(`9450eabd6c7327eddebc0b3048eb54f9f7aa24bd`) 후 빌드. 빌드 결과: `index-DbPVRDJn.js`, `index-BCYJGuoE.css`, `rhwp_bg-BRJ7oLBV.wasm`.
+- **🆕 CanvasKit 신규 자산**: 0.7.16부터 `canvaskit-DB1zH3nD.wasm`(7MB) + `canvaskit-renderer-CLU8e50R.js`가 studio 빌드 산출물에 추가됨(렌더링 백엔드). studio 폴더에 함께 배치. JS가 `import.meta.url` 기반 상대경로로 동적 로드하므로 base href와 무관하게 자기 위치(studio/)에서 해결 — PHP 참조 불필요. (가이드 v6는 0.7.12 기준이라 미기재 → STEP 4에 canvaskit 복사 추가)
+- studio 패치 매 업그레이드 재적용: J1(file:save Ctrl+S 매핑 제거) 1건, J2(file:print Ctrl+P 매핑 제거) 1건, P2(CSS `../images/` → `images/`) 2건 적용. P1(절대경로) 0건은 정상. 다크테마용 `icon_small_ko_dark.svg`도 정상 경로 처리(충돌 없음).
+- vite 빌드 시 PWA·커스텀 플러그인 보존 위해 `base: './'`만 안전 추가(옵션 B).
+- 사전 회귀 점검: 0.7.16은 정정·기능추가 위주 PATCH, 렌더링 새 회귀 없음. 드래그&드롭 보안 게이트는 우리가 안 쓰는 경로(`action=stream`으로 주입). HWPX 저장 계약 정밀화는 우리가 차단(5중 방어)하는 영역이라 영향 없음. 개체 비율 유지(#1430)는 편집 기능 개선(회귀 아님).
+- HWPX 직접 저장: 0.7.16도 여전히 베타 비활성 추정 — HWP 형식 저장만 동작. FileStation HWPX 차단(5중 방어) 그대로 유지.
+- 커스텀 기능 보존 검증 통과(서버 저장/다른 이름으로 저장/Blob 캡처/MutationObserver/Ctrl+S/저장 중 동기화 일시중지/웹하드 자동 갱신 등). PHP 커스텀 로직은 파일명·버전 주석 외 무변경.
+- 알려진 한계: SVG/Canvas `preserveAspectRatio="none"`(과거 #335)은 코드상 잔존하나 실사용 재현 없음(0.7.8~0.7.16 동일).
+- ⚠️ FileStation 버전 유지(v5.8.2d — 펜닐 룰, "버전 올려줘" 명시 없음).
+- ⚠️ **빌드/실기기 확인 필요**: 컨테이너에서 문법·패치·경로까지 검증. 실제 브라우저에서 ① HWP 뷰어 렌더링 ② 에디터 열기/편집/서버 저장(Ctrl+S) ③ 다크테마 추가에 따른 커스텀 메뉴 표시 ④ CanvasKit 렌더 정상 동작은 펜닐님 환경 확인 권장.
 
 #### v5.8.2a (2026-06-06)
 
