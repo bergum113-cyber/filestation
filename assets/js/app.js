@@ -12995,6 +12995,11 @@ const App = {
                     if (_fl2) _fl2.scrollTop = _convScroll;
                 });
             }
+            // 원본을 휴지통으로 이동한 경우(deleteOriginal) 휴지통 카운트 즉시 갱신.
+            //   (일반 삭제/복원/비우기와 동일하게 — 안 그러면 30초 폴링까지 카운트가 안 맞음)
+            if (deleteOriginal) {
+                this.updateTrashIcon();
+            }
         }
 
         // 결과 요약 토스트
