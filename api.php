@@ -5507,14 +5507,24 @@ try {
             session_write_close();
             _sessionDebugLog('STEP:files_after_swc');
             // [PerfDebug] files API 성능 측정 (data/files_perf.log 파일이 존재하면 자동 활성화)
+            // 상세화(v5.8.2e): 어느 스토리지/타입/원격여부/항목수가 느린지 식별 가능하게 메타 포함.
+            //   $_filesPerfMeta는 아래 목록 처리 후 채워짐(레퍼런스 캡처). 로그 OFF면 아래 채우기도 스킵.
             $_filesPerfLogFile = (defined('DATA_PATH') ? DATA_PATH : __DIR__ . '/data') . '/files_perf.log';
+            $_filesPerfMeta = null;
             if (is_file($_filesPerfLogFile)) {
                 $_filesPerfStart = microtime(true);
-                register_shutdown_function(function() use ($_filesPerfStart, $_filesPerfLogFile) {
+                $_phT = $_filesPerfStart;  // ★ 위상별 타이머 (각 단계 소요시간 계측)
+                $_filesPerfMeta = ['sid' => 0, 'type' => '?', 'remote' => '?', 'count' => -1,
+                                   'lfcall' => -1, 'hls' => 0, 'perm' => -1, 'vchk' => -1, 'pfilt' => -1, 'shr' => -1];
+                register_shutdown_function(function() use ($_filesPerfStart, $_filesPerfLogFile, &$_filesPerfMeta) {
                     $_elapsed = (microtime(true) - $_filesPerfStart) * 1000;
                     $_path = $_GET['path'] ?? '';
                     @file_put_contents($_filesPerfLogFile,
-                        date('H:i:s') . sprintf(' %6.1fms path=%s', $_elapsed, $_path) . "\n",
+                        date('H:i:s') . sprintf(' %7.1fms sid=%d type=%-6s remote=%s count=%d [hls=%d perm=%d lfcall=%d vchk=%d pfilt=%d shr=%d] path=%s',
+                            $_elapsed, $_filesPerfMeta['sid'], $_filesPerfMeta['type'],
+                            $_filesPerfMeta['remote'], $_filesPerfMeta['count'],
+                            $_filesPerfMeta['hls'], $_filesPerfMeta['perm'], $_filesPerfMeta['lfcall'],
+                            $_filesPerfMeta['vchk'], $_filesPerfMeta['pfilt'], $_filesPerfMeta['shr'], $_path) . "\n",
                         FILE_APPEND);
                 });
             }
@@ -5523,6 +5533,7 @@ try {
                 _sessionDebugLog('STEP:files_hls_cleanup_start');
                 $fileManager->hlsCleanupStale();
                 _sessionDebugLog('STEP:files_hls_cleanup_done');
+                if ($_filesPerfMeta !== null) { $_filesPerfMeta['hls'] = (int)round((microtime(true) - $_phT) * 1000); $_phT = microtime(true); }
             }
             // vault 임시 파일 자동 정리는 공통 영역에서 처리 (아래 참조)
             @set_time_limit(120); // 원격 스토리지 타임아웃 안전장치
@@ -5546,12 +5557,24 @@ try {
                 break;
             }
             _sessionDebugLog('STEP:files_perm_ok', 'sid=' . $storageId . ' path=' . substr($requestPath, 0, 80));
+            if ($_filesPerfMeta !== null) { $_filesPerfMeta['perm'] = (int)round((microtime(true) - $_phT) * 1000); $_phT = microtime(true); }
             
+            $_lfCallT0 = ($_filesPerfMeta !== null) ? microtime(true) : 0;  // listFiles 호출 전체 시간(iterator 前 is_dir/realpath 포함)
             $result = $fileManager->listFiles(
                 $storageId,
                 $requestPath
             );
             _sessionDebugLog('STEP:files_list_done', 'count=' . (isset($result['items']) ? count($result['items']) : 0));
+            // files_perf.log 활성 시에만 메타 수집 (OFF면 비용 0)
+            if ($_filesPerfMeta !== null) {
+                $_fpInfo = $storage->getStorageById($storageId);
+                $_filesPerfMeta['sid'] = $storageId;
+                $_filesPerfMeta['type'] = $_fpInfo['storage_type'] ?? '?';
+                $_filesPerfMeta['remote'] = $fileManager->isRemoteStorage($storageId) ? 'Y' : 'N';
+                $_filesPerfMeta['count'] = isset($result['items']) ? count($result['items']) : -1;
+                $_filesPerfMeta['lfcall'] = (int)round((microtime(true) - $_lfCallT0) * 1000);
+                $_phT = microtime(true);  // 위상타이머 정렬 (이후 vchk 계측 기준)
+            }
             
             // 1% 확률로 오래된 청크 정리
             if (mt_rand(1, 100) === 1) {
@@ -5568,9 +5591,12 @@ try {
                     }
                 }
                 
+                if ($_filesPerfMeta !== null) { $_filesPerfMeta['vchk'] = (int)round((microtime(true) - $_phT) * 1000); $_phT = microtime(true); }
+                
                 // 폴더별 권한 필터링
                 $currentPath = $_GET['path'] ?? '';
                 $result['items'] = $storage->filterByFolderPermission($storageId, $currentPath, $result['items']);
+                if ($_filesPerfMeta !== null) { $_filesPerfMeta['pfilt'] = (int)round((microtime(true) - $_phT) * 1000); $_phT = microtime(true); }
                 
                 $sortBy = $_GET['sort'] ?? 'name';
                 $sortOrder = $_GET['order'] ?? 'asc';
@@ -5599,6 +5625,7 @@ try {
                     }
                 }
                 unset($item);
+                if ($_filesPerfMeta !== null) { $_filesPerfMeta['shr'] = (int)round((microtime(true) - $_phT) * 1000); }
             }
             break;
         

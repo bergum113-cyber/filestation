@@ -1206,13 +1206,15 @@ class Storage {
         // ★ 타임아웃 쿨다운 체크 — 이전 호출이 타임아웃됐으면 장기간 스킵
         $timeoutCooldownFile = sys_get_temp_dir() . '/fs_recalc_timeout_' . $storageId . '.cooldown';
         $timeoutCooldownSeconds = 86400; // 24시간
+        $hadTimeoutCooldown = false; // [v5.8.2e] 이 스토리지가 과거 전수스캔 타임아웃 이력이 있는지 (인덱스 근사경로 판단용)
         if (file_exists($timeoutCooldownFile)) {
             $age = time() - filemtime($timeoutCooldownFile);
             if ($age < $timeoutCooldownSeconds) {
                 // 여전히 쿨다운 중 — 자동 재계산 스킵
                 return false;
             } else {
-                // 쿨다운 만료 — 마커 제거하고 한 번 더 시도
+                // 쿨다운 만료 — 마커 제거하고 한 번 더 시도 (단, 타임아웃 이력은 기억)
+                $hadTimeoutCooldown = true;
                 @unlink($timeoutCooldownFile);
             }
         }
@@ -1230,11 +1232,14 @@ class Storage {
         }
         @touch($lockFile);
         
-        // ★ 원격 스토리지(ftp/sftp/webdav/s3): 인덱스 DB에서 합산
+        // ★ 원격 스토리지(ftp/sftp/webdav/s3/smb): 인덱스 DB에서 합산
         // 기존엔 calculateDirectorySize로 fs 스캔했는데 FTP 같은 네트워크 경로는 매우 느려서
         // 23TB짜리는 20초 타임아웃 발생 → 매번 worker 점유 = 무한로딩 원인이었음
         // 대안: 인덱스 DB 사용. 인덱스 없으면 fs 스캔으로 폴백 (원본 동작 유지)
-        $remoteTypes = ['ftp', 'sftp', 'webdav', 's3'];
+        // [v5.8.2e] smb 추가: 수동 재계산(recalculateUsedSize)은 이미 smb를 원격으로 취급하는데
+        //   자동 재계산만 smb를 로컬 전수스캔으로 보내던 불일치 수정. smb도 네트워크 프로토콜이라
+        //   전수스캔은 비용 큼 → 다른 원격타입과 동일하게 인덱스 SUM(또는 미동기화 시 skip) 처리.
+        $remoteTypes = ['ftp', 'sftp', 'webdav', 's3', 'smb'];
         $storageType = $storage['storage_type'] ?? 'local';
         if (in_array($storageType, $remoteTypes)) {
             $fileIndex = \FileIndex::getInstance();
@@ -1321,7 +1326,65 @@ class Storage {
             // 인덱스가 없거나 stale하거나 진행 중 → fs 스캔 경로로 계속 (아래)
         }
         
+        // ★ [v5.8.2e] 전수스캔 폴백 직전 안전장치 (대용량/네트워크 스토리지 무한 타임아웃 방지)
+        //   문제: ftphdd 같은 대용량(10만+ 파일)·네트워크 마운트 스토리지는 완전동기화 조건
+        //         (24h 이내 완전동기화 + 진행중 아님)을 자주 못 만족해 아래 calculateDirectorySize
+        //         전수스캔으로 빠지는데, 전수스캔은 20초 타임아웃 → 결과 폐기(used_size 갱신 안 됨)
+        //         → 순수 낭비 + 워커 20초 점유(루트 접근 스파이크의 서버측 원인).
+        //   해결: 과거 타임아웃 이력이 있는 스토리지($hadTimeoutCooldown)는 전수스캔이 반복 실패하므로,
+        //         인덱스에 파일이 있으면 근사 SUM(0.1초)을 채택하고 전수스캔을 건너뛴다.
+        //   안전성 근거:
+        //     - 완전동기화되면 위쪽 authoritative fast-path가 먼저 잡아 정확값으로 정정 + 쿨다운 마커 제거.
+        //     - 근사값이라도 "폐기되는 타임아웃"보다 항상 낫다(현재는 갱신조차 안 됨 → 회귀 없음).
+        //     - 쿨다운 마커를 다시 찍어 24h간 전수스캔 재시도 자체를 억제(무한 20초 낭비 제거).
+        //     - 타임아웃 이력이 없는 정상/소용량 스토리지엔 전혀 영향 없음(아래 전수스캔 그대로 수행).
+        //   [v5.8.2e 7/9 보강] 트리거에 (B) 대용량(인덱스 파일 수) 추가:
+        //     (A) $hadTimeoutCooldown(마커)만으로는 부족 — via_index 성공이 마커를 지워(1308행) 조건이 유지 안 됨.
+        //         실제 로그(7/9)에서 via_index_approx 0건, ftphdd 여전히 20초 타임아웃 반복 확인됨.
+        //     (B) 대용량은 마커와 무관하게 파일 수로 판단 → 전수스캔 타임아웃 위험 스토리지를 영구 차단.
+        $FULLSCAN_RISK_FILES = 30000;  // 인덱스 파일 수 이 이상 = 전수스캔 20초 타임아웃 위험 → 인덱스 SUM 사용
+        if (isset($fileIndex) && $fileIndex->isAvailable()) {
+            $statsFallback = $fileIndex->getStorageStats($storageId);
+            $fileCountFb = (int)($statsFallback['files'] ?? 0);
+            if ($fileCountFb > 0 && ($hadTimeoutCooldown || $fileCountFb >= $FULLSCAN_RISK_FILES)) {
+                $usedSize = $fileIndex->getStorageTotalSize($storageId);
+                $this->db->update('storages', ['id' => $storageId], [
+                    'used_size' => $usedSize,
+                    'used_size_updated_at' => time()
+                ]);
+                self::$storageCache = [];
+                // 전수스캔 재시도를 24h간 억제 (다음 완전동기화 시 fast-path가 마커 제거하며 정확값으로 정정)
+                @touch($timeoutCooldownFile);
+                @unlink($lockFile);
+                // 로그 (data/scan_perf.log 있을 때만)
+                $dataDirFb = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
+                $perfLogFb = $dataDirFb . '/scan_perf.log';
+                if (is_file($perfLogFb)) {
+                    @file_put_contents($perfLogFb,
+                        sprintf("[%s] storage_recalc via_index_approx storage_id=%d name=%s size=%s files=%d (fullscan skipped: %s)\n",
+                            date('Y-m-d H:i:s'), $storageId,
+                            substr($storage['name'] ?? '?', 0, 30),
+                            $this->formatSize($usedSize), $fileCountFb,
+                            $hadTimeoutCooldown ? 'prior timeout' : 'large storage'),
+                        FILE_APPEND | LOCK_EX);
+                }
+                return true;
+            }
+        }
+        
         // 사용량 계산 (인덱스 DB 없거나 stale한 경우의 폴백)
+        // 상세로그(v5.8.2e): 이 전수 fs 스캔은 대용량/네트워크(smb 등)에서 느림·타임아웃의 주원인.
+        //   여기 FULLSCAN_START가 찍히면 = 해당 스토리지가 인덱스 즉시경로를 못 타고 전수스캔 중이라는 뜻.
+        //   특히 smb 타입이 여기 찍히면 재계산 분기 원격목록 누락(오분류) 신호.
+        $_fsScanStart = microtime(true);
+        $_fsScanPerfLog = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/scan_perf.log';
+        if (is_file($_fsScanPerfLog)) {
+            @file_put_contents($_fsScanPerfLog,
+                sprintf("[%s] storage_recalc FULLSCAN_START storage_id=%d type=%s name=%s (index unavailable/stale -> recursive fs scan)\n",
+                    date('Y-m-d H:i:s'), $storageId, ($storage['storage_type'] ?? '?'),
+                    substr($storage['name'] ?? '?', 0, 30)),
+                FILE_APPEND | LOCK_EX);
+        }
         $usedSize = $this->calculateDirectorySize($path);
         
         // ★ 타임아웃 감지 — 쿨다운 마커 세팅
@@ -1354,6 +1417,15 @@ class Storage {
         
         // 캐시 무효화
         self::$storageCache = [];
+        
+        // 상세로그(v5.8.2e): 전수스캔이 타임아웃 없이 완료된 경우의 소요시간 기록
+        if (isset($_fsScanPerfLog) && is_file($_fsScanPerfLog)) {
+            @file_put_contents($_fsScanPerfLog,
+                sprintf("[%s] storage_recalc FULLSCAN_DONE storage_id=%d type=%s elapsed=%.1fs size=%s\n",
+                    date('Y-m-d H:i:s'), $storageId, ($storage['storage_type'] ?? '?'),
+                    microtime(true) - $_fsScanStart, $this->formatSize($usedSize)),
+                FILE_APPEND | LOCK_EX);
+        }
         
         @unlink($lockFile);
         return true;

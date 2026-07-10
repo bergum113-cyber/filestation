@@ -636,6 +636,52 @@ class FileIndex {
         $stmt->bindValue(':id', $storageId, SQLITE3_INTEGER);
         return (int)$stmt->execute()->fetchArray()[0];
     }
+
+    /**
+     * 폴더 직속 자식 목록 (인덱스 DB 기반, 실시간 stat 없이 즉답)
+     *   하이브리드 목록의 1단계: 네트워크 마운트 콜드 접근 지연 회피용.
+     *   반환: 각 항목 [filename, filepath, is_dir, size, modified, extension] 배열, 또는 인덱스 불가 시 null.
+     *   주의: 빈 배열([])은 "직속 자식 없음"이며, "이 폴더가 인덱스에 있는지"는 별도 판단 필요
+     *         (호출측이 '스토리지 완전 동기화' 여부로 신뢰성 결정 — 미동기화면 실시간 목록 사용).
+     *   SQL 로직은 별도 SQLite 테스트로 검증됨(직속만·손자 제외·스토리지 격리·LIKE 특수문자 이스케이프).
+     */
+    public function getFolderListing(int $storageId, string $relativePath = ''): ?array {
+        if (!$this->available) return null;
+        $relativePath = trim(str_replace('\\', '/', $relativePath), '/');
+        // LIKE 특수문자 이스케이프 (%, _, \)
+        $escLike = function (string $s): string {
+            return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $s);
+        };
+        if ($relativePath === '') {
+            // 루트: filepath에 '/' 없는 것 = 직속
+            $stmt = $this->db->prepare("
+                SELECT filename, filepath, is_dir, size, modified, extension
+                FROM files
+                WHERE storage_id = :sid AND filepath NOT LIKE '%/%' ESCAPE '\\'
+                ORDER BY is_dir DESC, filename COLLATE NOCASE ASC
+            ");
+            $stmt->bindValue(':sid', $storageId, SQLITE3_INTEGER);
+        } else {
+            $stmt = $this->db->prepare("
+                SELECT filename, filepath, is_dir, size, modified, extension
+                FROM files
+                WHERE storage_id = :sid
+                  AND filepath LIKE :pre ESCAPE '\\'
+                  AND filepath NOT LIKE :deep ESCAPE '\\'
+                ORDER BY is_dir DESC, filename COLLATE NOCASE ASC
+            ");
+            $stmt->bindValue(':sid', $storageId, SQLITE3_INTEGER);
+            $stmt->bindValue(':pre', $escLike($relativePath) . '/%', SQLITE3_TEXT);
+            $stmt->bindValue(':deep', $escLike($relativePath) . '/%/%', SQLITE3_TEXT);
+        }
+        $res = $stmt->execute();
+        if ($res === false) return null;
+        $items = [];
+        while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
+            $items[] = $row;
+        }
+        return $items;
+    }
     
     /**
      * 메타 정보 저장

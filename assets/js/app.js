@@ -629,6 +629,8 @@ class FSAudioPlayer {
         this._draggingSeek = false;
         this._draggingVol = false;
         this._shuffleOrder = [];
+        this._shufflePlayed = new Set();  // ★ 셔플 한 바퀴 진행 추적 (소진 시 재셔플)
+        this._optReuseShuffle = !!opts.reuseShuffleOrder;  // ★ 재생 중 재생성이면 순서 유지
 
         // iOS 감지
         this._isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -929,7 +931,7 @@ class FSAudioPlayer {
         // ★ 저장된 셔플 상태 UI 반영 (localStorage에서 셔플=true 로드된 경우)
         if (this.shuffle) {
             this.$.btnShuffle.classList.add('active');
-            this._buildShuffleOrder();
+            this._ensureShuffleOrder(this._optReuseShuffle);  // ★ 재생 중 재생성이면 순서 유지, 닫았다 열기면 새 순서
         }
         // ★ IndexedDB 만료 항목 정리 (페이지당 1회, 5초 후 백그라운드 실행)
         try { FSCoverCacheDB.maybeCleanup(); } catch (e) {}
@@ -1349,7 +1351,7 @@ class FSAudioPlayer {
         this.$.btnShuffle.addEventListener('click', () => {
             this.shuffle = !this.shuffle;
             this.$.btnShuffle.classList.toggle('active', this.shuffle);
-            if (this.shuffle) this._buildShuffleOrder();
+            if (this.shuffle) { this._buildShuffleOrder(); this._shufflePlayed = new Set(); this._saveShuffleOrder(); }  // ★ 새 셔플 = 새 순서 + 진행 초기화 + 저장
             this._saveShufflePref();  // ★ localStorage 저장
         });
         // Volume button (mute toggle)
@@ -1618,6 +1620,7 @@ class FSAudioPlayer {
     _loadTrack(idx, autoplay) {
         if (idx < 0 || idx >= this.playlist.length) return;
         this.currentIndex = idx;
+        this._markShufflePlayed(idx);  // ★ 셔플 진행 추적 (전곡 소진 시 자동 재셔플)
         const track = this.playlist[idx];
         this.audio.src = track.url;
         // ★ v5.8.1j: 트랙 변경 시 force refresh 분 경계 리셋 (이전 트랙 값 제거)
@@ -2445,6 +2448,74 @@ class FSAudioPlayer {
             const j = Math.floor(Math.random() * (i + 1));
             [this._shuffleOrder[i], this._shuffleOrder[j]] = [this._shuffleOrder[j], this._shuffleOrder[i]];
         }
+    }
+
+    // ── 셔플 순서 관리 (멜론/벅스식) ──
+    // 규칙: ① 한 바퀴 중복 없이 전곡 ② 닫았다 열면 새 순서 ③ 전곡 소진 시 자동 재셔플.
+    //   플레이어는 곡 열 때마다 파괴/재생성되므로 "재생 중 재생성"과 "닫았다 열기"를 구분:
+    //   - 재생 중 재생성(곡 클릭·화면 이동): 생성부에서 이전 인스턴스 존재 → reuse=true → 순서·진행 유지
+    //   - 닫았다 열기/첫 열기: 이전 인스턴스 null → reuse=false → 새 순서
+    //   - 전곡 소진: _markShufflePlayed에서 자동 재셔플
+    _playlistSignature() {
+        // 재생목록 식별자: 개수 + 첫/끝 트랙 경로 (같은 폴더/목록인지 판별)
+        const n = this.playlist.length;
+        if (!n) return 'empty';
+        const key = (t) => (t && (t.path || t.fullName || t.url || t.name)) || '';
+        return n + '|' + key(this.playlist[0]) + '|' + key(this.playlist[n - 1]);
+    }
+    _isValidShuffleOrder(arr) {
+        // 0..n-1이 정확히 한 번씩 있는지 (손상 데이터 방어 — 깨진 순서면 indexOf=-1 버그 유발하므로 필수)
+        if (!Array.isArray(arr) || arr.length !== this.playlist.length) return false;
+        const seen = new Array(arr.length).fill(false);
+        for (const v of arr) {
+            if (!Number.isInteger(v) || v < 0 || v >= arr.length || seen[v]) return false;
+            seen[v] = true;
+        }
+        return true;
+    }
+    _saveShuffleOrder() {
+        try {
+            localStorage.setItem('fap-shuffle-order', JSON.stringify({
+                sig: this._playlistSignature(),
+                order: this._shuffleOrder,
+                played: Array.from(this._shufflePlayed || [])
+            }));
+        } catch (e) { /* quota/비활성 — 무시 */ }
+    }
+    _ensureShuffleOrder(reuse) {
+        // reuse=true(재생 중 재생성): 같은 재생목록의 저장된 순서+진행을 이어씀.
+        // reuse=false(닫았다 열기/첫 열기) 또는 저장값 무효: 새 순서로 시작.
+        if (reuse) {
+            try {
+                const saved = localStorage.getItem('fap-shuffle-order');
+                if (saved) {
+                    const obj = JSON.parse(saved);
+                    if (obj && obj.sig === this._playlistSignature() && this._isValidShuffleOrder(obj.order)) {
+                        this._shuffleOrder = obj.order;
+                        this._shufflePlayed = new Set(
+                            Array.isArray(obj.played) ? obj.played.filter(v => Number.isInteger(v) && v >= 0 && v < obj.order.length) : []
+                        );
+                        return;
+                    }
+                }
+            } catch (e) { /* 파싱/localStorage 실패 → 아래서 새로 생성 */ }
+        }
+        this._buildShuffleOrder();
+        this._shufflePlayed = new Set();
+        this._saveShuffleOrder();
+    }
+    _markShufflePlayed(idx) {
+        // _loadTrack에서 호출: 재생한 곡 기록 → 전곡 한 바퀴 소진 시 자동 재셔플(멜론/벅스식).
+        // 재생 경로(next/prev/onEnded)는 그대로 두고 여기서만 재셔플 → 저위험.
+        if (!this.shuffle) return;
+        if (!this._shufflePlayed) this._shufflePlayed = new Set();
+        this._shufflePlayed.add(idx);
+        if (this.playlist.length > 0 && this._shufflePlayed.size >= this.playlist.length) {
+            // 한 바퀴 완주 → 새로 섞기 (현재 곡은 새 사이클의 '이미 들은 곡'으로 표시해 즉시반복 방지)
+            this._buildShuffleOrder();
+            this._shufflePlayed = new Set([idx]);
+        }
+        this._saveShuffleOrder();
     }
 
     // ── Volume helpers (iOS GainNode / PC audio.volume) ──
@@ -4999,6 +5070,31 @@ const App = {
     },
     
     // API 호출
+    // [클라 계측] 느린 API 요청의 왕복시간 + 네트워크 상태를 서버 debug_log로 전송.
+    //   목적: 모바일 간헐 딜레이가 서버측인지(files_perf와 대조) 네트워크측인지, 네트워크면 어떤 상태였는지 확정.
+    //   - debug_log 재사용: data/debug_logs 폴더 있을 때만 서버가 기록(없으면 무시) + IP·시각 자동 기록(IP변경 추적).
+    //   - 느린 요청(1초+)만 전송 → 노이즈/부담 최소. fire-and-forget(sendBeacon), 요청 흐름에 영향 없음.
+    _logClientPerf(action, rttMs) {
+        try {
+            if (!rttMs || rttMs < 1000) return;  // 빠른 요청은 제외
+            const c = (navigator.connection || navigator.mozConnection || navigator.webkitConnection) || {};
+            const detail = {
+                action: action,
+                rtt: Math.round(rttMs),                                    // 클라 왕복시간(ms)
+                conn: c.effectiveType || '?',                             // 4g/3g/2g/slow-2g
+                downlink: (c.downlink != null) ? c.downlink : null,       // 추정 다운링크(Mbps)
+                connRtt: (c.rtt != null) ? c.rtt : null,                  // 통신계층 추정 RTT(ms)
+                online: navigator.onLine                                  // 온라인 여부
+            };
+            const body = JSON.stringify({ event: 'client_perf', detail: detail });
+            if (navigator.sendBeacon) {
+                navigator.sendBeacon('api.php?action=debug_log', new Blob([body], { type: 'application/json' }));
+            } else {
+                fetch('api.php?action=debug_log', { method: 'POST', body: body, keepalive: true, credentials: 'same-origin' }).catch(() => {});
+            }
+        } catch (e) { /* 계측 실패는 무시 */ }
+    },
+
     async api(action, data = {}, method = 'POST', signal = null, _retryCount = 0) {
         // 세션 만료 상태면 요청 차단 (인증 불필요 액션 제외)
         const noAuthActions = ['login', 'csrf_token', 'signup', 'signup_status', 'settings', 'server_config', 'terms', '2fa_verify', 'password_reset_request', 'find_username', 'share_access', 'share_download'];
@@ -5041,8 +5137,11 @@ const App = {
         }
         
         try {
+            const _perfT0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
             const res = await fetch(url, options);
             const json = await res.json();
+            // [클라 계측] 왕복시간(rtt) + 네트워크 상태 기록 (느린 요청만) — 서버시간(files_perf)과 대조해 네트워크/서버 구분
+            try { this._logClientPerf && this._logClientPerf(action, ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - _perfT0); } catch (e) {}
             
             // CSRF 토큰 오류 시 토큰 갱신 후 재시도 (최대 1회)
             if (json.csrf_error && _retryCount < 1) {
@@ -34516,6 +34615,8 @@ const App = {
                 // 커스텀 오디오 플레이어 초기화 (DOM 렌더 후)
                 setTimeout(() => {
                     try {
+                        // ★ 셔플: 이전 인스턴스가 살아있으면 '재생 중 재생성'(순서 유지), null이면 '닫았다 열기'(새 순서)
+                        const _wasOpen = !!this._fsAudioPlayer;
                         // 이전 인스턴스 정리
                         if (this._fsAudioPlayer) {
                             try { this._fsAudioPlayer.destroy(); } catch(e) {}
@@ -34529,6 +34630,7 @@ const App = {
                             container: container,
                             playlist: fsAudioList,
                             startIndex: fsAudioIndex,
+                            reuseShuffleOrder: _wasOpen,  // ★ 재생 중 재생성이면 셔플 순서 유지
                             volume: 0.8,
                             loop: 'all',
                             cover: coverUrl,
@@ -34741,7 +34843,7 @@ const App = {
                                 if (player.$ && player.$.btnShuffle) {
                                     player.$.btnShuffle.classList.toggle('active', player.shuffle);
                                 }
-                                if (player.shuffle && player._buildShuffleOrder) player._buildShuffleOrder();
+                                if (player.shuffle && player._buildShuffleOrder) { player._buildShuffleOrder(); player._shufflePlayed = new Set(); if (player._saveShuffleOrder) player._saveShuffleOrder(); }
                                 if (player._saveShufflePref) player._saveShufflePref();
                                 e.preventDefault();
                                 return;

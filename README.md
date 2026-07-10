@@ -1,10 +1,10 @@
-# FileStation v5.8.2d
+# FileStation v5.8.2e
 
-![version](https://img.shields.io/badge/version-v5.8.2d-blue)
+![version](https://img.shields.io/badge/version-v5.8.2e-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
-![rhwp](https://img.shields.io/badge/rhwp-0.7.16-9cf)
+![rhwp](https://img.shields.io/badge/rhwp-0.7.18-9cf)
 ![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
@@ -15,7 +15,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.16 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.18 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -200,7 +200,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.16 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.7.18 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -488,7 +488,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.16** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.7.18** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -663,9 +663,9 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.16
+버전: 0.7.18
 파일: assets/rhwp/
-업그레이드: rhwp_업그레이드_가이드_v6.md 참조
+업그레이드: rhwp_업그레이드_가이드_v6.3.md 참조
 ```
 
 ### WebDAV 서버
@@ -684,7 +684,8 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.16의 베타 단계 제한, HWP 형식만 저장 가능
+- **rhwp 0.7.18 업그레이드 (2026-07-11)** — 코어(npm shasum 검증 진본) + studio 소스 빌드 후 패치(J1 file:save, J2 file:print, P1/P2 CSS경로) 재적용. 렌더링 정합·초대형 표 성능·편집기 캐럿/undo/OLE 정합 개선(공개 API 하위호환 PATCH). HWPX 저장 차단(#11 sourceFormat 가드) 원본 유지. studio JS 구문 검증 통과. ⚠️ 렌더/편집 실동작은 실기기 확인 필요.
+- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.18의 베타 단계 제한, HWP 형식만 저장 가능
 
 ---
 
@@ -719,11 +720,86 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.2d (rhwp 0.7.16 기반)
+**현재 버전**: v5.8.2e (rhwp 0.7.18 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.2d (2026-06-09 ~ 2026-06-10) ⭐ 현재
+#### v5.8.2e (2026-06-23 ~ 07-11) ⭐ 현재
+
+**[성능 개선] 스토리지 용량 재계산 병목 제거 + 진단 로그 강화 (2026-07-08, 펜닐님 요청)**
+
+- **용량 재계산 무한 타임아웃 낭비 제거** (`Storage.php::backgroundRecalcIfNeeded`): 대용량/네트워크 스토리지(예: ftphdd, 10만+ 파일)가 완전동기화 조건(24h 이내 완전동기화 + 진행중 아님)을 못 만족해 매번 20초 전수스캔 → 타임아웃 → 결과 폐기(used_size 갱신조차 안 됨)하던 **순수 낭비 + 워커 20초 점유** 확인(scan_perf.log 6~7월 16회+ TIMEOUT, 파일 10만+). 전수스캔 직전 **인덱스 근사 SUM(0.1초)**을 채택하고 전수스캔을 건너뛰도록 안전장치 추가. **자기치유**: 인덱스 완전동기화되면 authoritative fast-path가 먼저 정확값으로 정정. 근사값이라도 "폐기되는 타임아웃"보다 항상 나음 → 회귀 없음.
+  - **⚠️ 2026-07-08 1차 시도는 실패 → 07-09 정정**: 처음엔 트리거를 `$hadTimeoutCooldown`(타임아웃 쿨다운 마커)으로 했으나, `via_index` 빠른 경로 성공 시 그 마커를 지워버려(1308행) 조건이 유지되지 않음. 실서버 로그(7/9)에서 **`via_index_approx` 0건 + ftphdd 여전히 20초 타임아웃 반복** 확인 → 1차 수정이 실제로는 미작동이었음. **정정**: 트리거를 마커에 더해 **인덱스 파일 수 기준**(`$fileCountFb >= 30000`)으로 보강 → 대용량 스토리지는 마커 소실과 무관하게 항상 근사 SUM 사용. 소용량/정상 스토리지는 기존대로 전수스캔(무영향). 로그에 `files=N (fullscan skipped: large storage|prior timeout)` 기록해 실서버 검증 가능.
+- **자동 재계산 smb 일관성 수정**: `backgroundRecalcIfNeeded`의 원격타입 목록에 smb 누락 → smb를 로컬 전수스캔으로 보내던 불일치를, 수동 재계산(`recalculateUsedSize`, 이미 smb 포함)과 동일하게 **인덱스 SUM 처리**로 정정. smb는 index_sync에서 어댑터(`rebuildStorageRemote`)로 인덱싱되므로 SUM 소스 존재 확인. 연결테스트용 remoteTypes 2곳(addStorage/updateStorage)은 smb 별도 처리 경로라 **의도적 제외 유지**(기계적 일괄수정 안 함).
+- **진단 로그 상세화** (게이트형 — `data/`에 해당 파일이 있을 때만 기록, 없으면 오버헤드 0):
+  - `files_perf.log`: 기존 "시간+경로" → **storage_id / type / remote여부 / 항목수** 추가. 어느 스토리지가 느린지 식별 가능.
+  - `files_perf.log` (07-09 추가): **listFiles 세부 타이밍** — `listFiles sid=N iter=Xms vault=Yms count=Z path=...`. 폴더 목록 지연이 메인 목록(iter, 파일 stat)인지 vault(암호화 폴더 glob 탐지)인지 분리 측정. `FileManager::listFiles`에 게이트형 추가(목록 로직 무손상, 순수 추가).
+    - **진단 결과 (07-10 최종 확정)**: 3단 계측으로 끝까지 특정됨.
+      1. **클라이언트(client_perf)**: files 1~1.9초 지연 순간의 조건이 `conn=4g, downlink=10, ip=192.168.0.1(집WiFi), online=true` → **네트워크/IP변경/신호 문제 아님, 서버측 확정**. (모바일 IP는 실제로 5분내 14회 등 자주 바뀌나, 세션은 안 끊기고 이 지연과 무관.)
+      2. **서버 전 단계(files_perf)**: 지연이 전부 `lfcall`(listFiles), 나머지 hls/perm/vchk/pfilt/shr = 0~1ms.
+      3. **listFiles 내부(iter/vault)**: 지연이 `iter`(DirectoryIterator 항목별 stat). **count=3인데 iter=1886ms**(항목당 600ms) → 항목 수 무관, **sid=7(ftphdd) 네트워크 마운트의 콜드 stat I/O**. 콜드→웜 명확: 같은 루트 첫 접근 1018ms → 재접근 19~21ms.
+    - **결론**: 서버가 네트워크 마운트(NAS)에서 파일 stat하는 I/O 지연. 서버 CPU·코드·클라 네트워크·IP 전부 무관. **코드 최적화 여지 없음**(stat 항목당 1회로 이미 최소). **단기 캐시도 무효**(느린 건 "첫 콜드 접근"이라 캐시할 게 없고, 재방문은 이미 19ms) — 07-09에 캐시를 레버로 봤으나 07-10 콜드/웜 데이터로 반증됨. 현실 레버: ① 마운트 keep-warm(유휴 방지 핑) ② 인덱스 기반 목록(신선도 트레이드오프+큰 변경) ③ 수용.
+  - **[하이브리드 인덱스 목록] 콜드 접근 지연 해소 (07-10, 게이트형·기본 OFF)** — 위 레버 ②를 안전하게 단계 구현.
+    - **1단계 (완료)**: `FileIndex::getFolderListing($storageId, $relativePath)` — 인덱스 DB에서 폴더 직속 자식 즉답 조회. SQL 로직 SQLite 실측 검증(직속만·손자 제외·스토리지 격리·LIKE 특수문자 이스케이프).
+    - **2단계 (완료)**: `FileManager::tryListFromIndex()` — listFiles 권한체크 직후, 원격/로컬 분기 前 분기(모든 연결방식 커버). **타깃 자동 판정**: conf 없으면 자동 모드 — **원격타입(ftp/sftp/webdav/s3/smb, 어댑터 목록=느림) 또는 대용량 로컬(인덱스 파일 30000+, 네트워크 마운트 콜드 지연 대상)**에 자동 적용, **소용량 로컬 디스크는 실시간 유지**(빠르고 외부변경 즉시반영). `data/index_listing.conf` 있으면 수동 모드(적힌 ID만, 빈 파일=전부 off 탈출구). **완전동기화 1회 이상(last_sync 존재)이면** 인덱스 즉답(재동기화 중에도 사용 — 증분 방식이라 인덱스는 이전 완전 스냅샷 유지, 07-10 로그로 checkpoint 조건이 과함을 확인해 제거)(`from_index:true`), 아니면 실시간. **전체 try/catch로 어떤 오류든 실시간 폴백**(목록 절대 안 깨짐). 항목 형식은 실시간과 완전 일치 검증. **배포판에서 conf 없이도 콜드 지연 스토리지에 자동 적용됨**(수동 설정 불필요).
+    - **3단계 (보류 — 실기기 검증 필요)**: 클라 `from_index` 응답 시 백그라운드 실시간 재검증→외부변경 자동 반영. 브라우저 렌더 경로라 컨테이너 테스트 불가 → 미구현.
+    - **효과**: 콜드 지연 스토리지(원격타입·대용량 네트워크 마운트) 폴더 **첫 접근 즉답**, 배포판에서 **conf 없이 자동**. 웹UI 작업은 인덱스 동기 갱신이라 **즉시 반영**. **한계**: 외부(NAS/원격서버 직접) 변경은 다음 인덱스 동기화 때 반영(3단계 미구현이라 자동갱신 없음). vault 폴더 표시는 생략. 소용량 로컬 디스크는 실시간 유지(영향 없음).
+    - **제어**: 자동 판정이 기본. 특정 스토리지 강제 지정/제외는 `data/index_listing.conf`에 스토리지 ID 기입(수동 모드). ⚠️ 실서버 검증 후 사용 권장(php -l 미실행, SQL·구조·로직 검증만).
+    - **실측 검증 (07-10)**: 배포 후 sid=7(ftphdd) 로그 확인 — **인덱스 목록 작동 확정**(실시간 `listFiles iter=` 경로 안 탐), **콜드 스파이크(1000~2000ms) 소멸 → 일정한 ~130ms**(항목 수 무관), 첫 접근 폴더도 안 느림, 재동기화 중에도 작동. 콜드 지연 문제 해결 확인.
+    - **추가 최적화 검토·미채택**: ~130ms는 getFolderListing의 직속자식 LIKE 쿼리가 서브트리를 훑기 때문(루트는 `NOT LIKE '%/%'`로 전체 스캔). `parent_path` 컬럼+인덱스로 ~10ms까지 가능하나 **스키마 변경+기존 인덱스 마이그레이션(backfill)이 배포 리스크**라 미채택. 130ms로 체감 충분하고 "멀쩡한 것 안 건드림" 원칙 유지.
+  - `files_perf.log` (07-09 전 단계 계측): 간헐 딜레이가 **어느 구간이든 한 로그 줄에 특정**되도록 files 액션 전 단계 시간 기록 — `[hls=N perm=N lfcall=N vchk=N pfilt=N shr=N]`. hls(HLS세션정리 1%확률), perm(권한체크), lfcall(listFiles 전체=iterator前 is_dir/realpath 포함), vchk(현재폴더 vault 확인), pfilt(폴더권한필터), shr(공유목록 로드·매칭). 예: `music/AI_ERRDAY WAVE ()` 폴더가 총 5071ms인데 listFiles iter=37ms였던 케이스 → 5초가 listFiles 밖 어느 단계인지 이 계측으로 확정 가능. (간헐 증상이라 "로그 넣고 재현 대기" 반복을 없애려 전 단계를 한 번에 계측.)
+  - **클라이언트 계측** (07-09, `assets/js/app.js` `api()` 래퍼): 느린 요청(1초+)의 **왕복시간(rtt) + 네트워크 상태**를 서버 `debug_log`로 전송(`event=client_perf`, `detail`={action, rtt, conn=4g/3g, downlink, connRtt, online}). **서버 무변경** — 기존 debug_log가 **IP·시각 자동 기록**(연속 로그 IP 다르면 = 모바일 IP변경 추적). 목적: 모바일 간헐 딜레이가 **서버측(files_perf와 대조)인지 네트워크측인지, 네트워크면 어떤 통신상태였는지** 확정. fire-and-forget(sendBeacon, this.api 미경유=재귀없음), 느린 요청만 전송. `data/debug_logs/` 폴더 있을 때만 기록(없으면 부담 0).
+  - `scan_perf.log`: 전수스캔 시작/완료(**FULLSCAN_START / FULLSCAN_DONE**, storage_type·경과시간) + 근사경로 채택(**via_index_approx**) 이벤트 추가.
+- **진단 결론**: 서버측 목록 처리는 대부분 1~40ms로 빠름. 유휴 후 스토리지 루트 5~7초 스파이크는 콜드 네트워크 마운트 재연결 + 백그라운드 재계산/인덱싱 워커 점유가 겹친 것. 일반 폴더의 모바일 지연은 네트워크 전송(서버 무관).
+- ⚠️ **실서버 확인 필요**: 컨테이너 PHP 부재로 `php -l` 정식 린트 미실행(구조 검증만 — 괄호 균형·스코프·메서드 존재 확인). 반영 후 `scan_perf.log`에 `TIMEOUT` 대신 `via_index_approx`가 찍히면 정상 동작.
+
+**[버그 수정] 음악 플레이어 셔플 — 반복/누락 개선 (2026-07-08, 펜닐님 요청)**
+
+- **증상**: 셔플 상태에서 들을 때마다 거의 같은 곡만 나오고 일부 곡은 한 번도 안 나옴.
+- **원인**(코드 추적으로 확정): 플레이어가 곡을 열 때마다 파괴/재생성되는데(app.js `destroy()`→`new FSAudioPlayer`), 생성자에서 셔플 ON이면 **매번 새 랜덤 순열을 만들고 저장하지 않음** + on/off 플래그만 저장. → 짧은 재생을 반복(곡 클릭·이동)하면 순서가 계속 리셋되어 앞쪽/특정 곡만 반복되고 순열 뒤쪽 곡은 누락. (셔플 **알고리즘**(Fisher-Yates)은 정상 — 순서를 **안 지키는** 상태관리가 문제.)
+- **수정 (멜론/벅스식 표준 셔플)**: ① 한 바퀴 중복 없이 전곡 재생 → ② 전곡 소진 시 자동 재셔플 → ③ 플레이어 닫았다 열면 새 순서. 단 **재생 중 재생성**(곡 클릭·화면 이동으로 destroy→new)은 순서·진행 유지. 구분 방법: 곡 열 때 이전 인스턴스가 살아있으면(`reuseShuffleOrder=true`) 순서 유지, `null`이면(닫힘/첫 열기) 새 순서. 셔플 순서+진행(들은 곡)은 `fap-shuffle-order` localStorage에 재생목록 식별자(개수+첫/끝 트랙 경로)와 함께 저장. **손상 데이터 방어**: 저장값이 완전순열(0..n-1 정확히 한 번씩)이 아니면 폐기하고 재생성.
+- **적용 범위**: app.js(본체) + fs-audio-player.js(공유) **양쪽 동일**(룰4). 헬퍼 5개(`_playlistSignature`/`_isValidShuffleOrder`/`_saveShuffleOrder`/`_ensureShuffleOrder`/`_markShufflePlayed`). 재셔플은 `_loadTrack`(모든 곡 로드 중앙 지점)에서 "들은 곡 수 = 전곡"일 때 트리거. **재생 순회(next/prev/onEnded)는 무손상** — 걷기 로직 안 건드리고 `_loadTrack`에 추적 1줄만 추가(최소·저위험). 비셔플 재생은 가드로 무영향. share.php는 페이지당 1회 생성이라 기본값(새 순서)으로 자동 정상 → 미수정.
+- **검증**: 양쪽 `node --check` 통과. 시뮬레이션 4종 — ①한 바퀴 전곡 ✅ ②닫았다열기 새순서 ✅ ③2바퀴 각각 전곡+순서 다름 ✅ ④재생 중 재생성 순서·진행 유지 ✅.
+- **한계**(버그 아님): 저장 슬롯 1개라 다른 폴더 전환 시 각 폴더용 새 순서 생성(한 폴더 내에선 정상 동작). `_loadTrack`마다 localStorage 저장(사용자 속도라 부담 미미).
+
+**[rhwp 0.7.17 → 0.7.18 업그레이드] (2026-07-11, 펜닐님 요청)** ⚠️ 실기기 확인 대기
+- npm tarball shasum: `290da8dbdf552a3fa705165cb44d254b8acacc41` (진본 확인). npm latest = 0.7.18.
+- 새 studio 자산: **index-BbUFqbC-.js**, **index-BKc-ZB2H.css**, **rhwp_bg-pm0fNsz7.wasm**, **canvaskit-renderer-Bks2wD1j.js** (canvaskit-DB1zH3nD.wasm은 0.7.17과 동일 해시 — skia 정적 자산 무변경). 코어 rhwp_bg.wasm = 6,640,844 bytes.
+- 패치 재적용: J1(file:save 매핑 제거), J2(file:print 매핑 제거), P1/P2(CSS 경로). J1/J2 각 1건 제거·메뉴 정의 유지·studio JS 구문 검증 통과(node --check). P1은 0.7.18 CSS가 `../images/`만 써서 미매칭(정상), P2 1건 처리.
+- 0.7.18 변경(CHANGELOG): 렌더링 정합 대규모 보정(부동/전면 개체 페이지네이션, RowBreak 표, 미주 흐름), 초대형 표 성능(52,694셀 타임아웃 해소), 편집기 캐럿/undo/OLE 정합(#2021/#2164 등), 관용 파싱·HWPX 보존 확대, WMF 재작성, 내부 리팩토링 21라운드(행동 회귀 0). 공개 API 하위호환 PATCH.
+- FileStation 무영향 확인: 커스텀 저장(Blob 훅 + 무인자 `exportHwp`) ABI 보존, HWPX 저장 차단(#11 `sourceFormat!==\`hwpx\``) 원본 유지. config APP_VERSION은 5.8.2e 유지("버전 올려줘" 없음).
+- ⚠️ studio는 소스 빌드·JS 구문 검증했으나 렌더/편집 실동작은 컨테이너 테스트 불가 → 실기기 확인 필요. 문제 시 0.7.17 studio로 롤백.
+
+**[rhwp 0.7.16 → 0.7.17 업그레이드] (2026-06-23, 펜닐님 요청)** ⚠️ 실기기 확인 대기
+
+- npm tarball shasum 검증: `ddb292e5cec94f9d84999eec02af5930ab10c695` (진본 확인). npm latest = 0.7.17.
+- 빌드 결과: **index-_kYZKzIp.js**, **index-sQvB-4Hv.css**, **rhwp_bg-Bry_KM2v.wasm**, **canvaskit-renderer-BS-907Do.js** (canvaskit-DB1zH3nD.wasm은 0.7.16과 동일 해시 — skia 정적 자산 무변경).
+- 패치 J1(file:save Ctrl+S 매핑 제거): 1개 매칭 → 제거 성공.
+- 패치 J2(file:print Ctrl+P 매핑 제거 → 브라우저 인쇄 fallback): 1개 매칭 → 제거 성공.
+- 패치 P1(절대경로): 0개 매칭(정상, 0.7.6+ 절대경로 미사용). 패치 P2(상위참조): 2개 매칭 → 제거 성공 (`../images/` → `images/`, light + dark 아이콘).
+- 검증 17/17 통과 (커스텀 10개 보존 + 엔진 패치 J1/J2 + CSS P1/P2 + CanvasKit 자산 배치).
+- 🆕 **새 발견: rhwp가 0.7.17에서 HWPX 안내 툴팁 문구 자체 변경.** 패치 A(HWPX 저장 차단 `sourceFormat!==\`hwpx\``)는 정상 유지되나, 안내 문구가 구"HWPX 직접 저장은 현재 베타…" → 신"HWPX 형식은 현재 베타 단계라 직접 저장이 비활성화되어 있습니다." + "HWPX 문서는 현재 직접 저장할 수 없습니다."로 바뀜. 또한 studio에 "HWPX 변환 저장 모드(HWP로 내보냄)" 토스트 + "HWPX 비표준 감지" 경고 다이얼로그가 존재하나, **rhwp 공식 0.7.17 CHANGELOG엔 신규 항목으로 없음** — 0.7.17 이전부터 있던 studio 기능으로 추정(0.7.17에선 안내 문구만 변경). 단, FileStation 에디터가 HWPX 저장을 5중 방어로 일괄 차단하므로 이 변환 모드 경로엔 실제로 도달하지 않음. HWPX 차단·안내 기능 자체는 유지(오히려 강화). → 가이드 검증 #12의 매칭 문자열은 0.7.17 기준 갱신 필요(rhwp 업스트림 문구 변경, FileStation 패치 문제 아님).
+- vite.config.ts: PWA + serve-samples-dir 커스텀 플러그인 보존 위해 옵션 B(`base: './'`만 Python 안전 추가) 적용.
+- CanvasKit 자산: renderer JS 해시 변경(0.7.16 CLU8e50R → 0.7.17 BS-907Do) — replay 계약 가드 확장(#1447/#1469) 반영. wasm은 동일. `import.meta.url` 자동 경로라 base href·PHP 참조 불필요. zip 약 36MB 유지.
+- **0.7.17 변경 사항** (CHANGELOG 사전 점검 — 0.7.16 후속 patch 사이클):
+  - **API**: WASM 고인자(7+) 함수 26개에 options object 변형 `*Ex(options_json[, image_data])` 추가 (#1413). **기존 positional API 유지(하위 호환)** — FileStation 커스텀 저장 로직은 Blob 훅 + exportHwp(무인자)라 영향 없음. ABI 보존 확인(`export_hwp(&mut self)`, `render_page_svg_*`, `version()`).
+  - **렌더링(차트)**: OOXML 차트 7종(3D막대4·3D원형1·ofPie2)을 2D 근사 렌더로 전환, "차트(미지원)" placeholder 제거 (#1453). 막대 차트 누적/백분율(c:grouping) 정합. → 기능 추가, 회귀 아님.
+  - **HWPX 저장 계약**: legacy 도형 shapeComment 직렬화 누락 정정 (#1451), ir-diff tab_extended 예약필드 거짓차이 제외 (#1473). → 우리가 차단하는 영역이라 무영향.
+  - **렌더링**: Text IR v2 폰트 fallback 권위 gap 유지 + CanvasKit replay 가드 확장 (#1429/#1447/#1469). 표 셀 TAC 그림·텍스트 세로정렬 보정 (#1352), 글자처럼 해제 그림 재흐름 (#1459).
+  - **rhwp-studio**: 미저장 문서 자동 백업 + 복구 UI (#1448), 로컬 글꼴 감지 opt-in (#1328), 쪽 테두리 미리보기 토글 복구 (#1426), 그림 삽입·인라인 커서 정합 (#1452), **표 줄/칸 입력·지우기 회귀 보정**(#1481), 표 셀 드래그 선택·셀 보호 (#1443/#493), 크기 고정 개체 조작 차단 (#1436), 플랫폼별 메뉴 단축키 표시 보정 (#1476).
+  - **브라우저 확장(0.2.6)**: CSP·다크 아이콘·Chrome 다운로드 interceptor 부작용 정정 — 우리 웹뷰어와 무관.
+  - **인프라**: Cargo.lock git 추적, 의존성 일괄 업데이트(skia-safe 0.99.0 등).
+- → 웹 빌드 영향: 정정·기능추가 위주, **렌더링 회귀 없음**. studio는 오히려 표 줄/칸 회귀(#1481) **수정** 포함.
+- → ABI 호환성: HwpDocument, renderPageSvg, version 모두 보존 (rhwp_viewer.php 호환).
+- → 펜닐님 커스텀 저장 로직: `application/x-hwp` MIME — Blob 패치 정상 작동.
+- **사전 회귀 점검**: SVG 렌더러의 `preserveAspectRatio="none"`(과거 PR #335)은 0.7.8~0.7.17 동일 잔존이나 펜닐님 환경 실사용 미재현 확정 항목 → 조치 불필요.
+- ⚠️ **실기기 확인 필요**: ① HWP 뷰어 렌더, ② 에디터 Ctrl+S 서버 저장, ③ 다크테마 + 커스텀 메뉴 공존, ④ CanvasKit 렌더, ⑤ studio 신규 자동 백업/복구 UI(#1448)가 커스텀 저장과 충돌 없는지, ⑥ 플랫폼별 단축키 표시 변경(#1476)이 J1/J2 동작에 영향 없는지.
+
+**[버전 정정] config.php @version 주석 동기화 (2026-06-23)**
+
+- `@version` 주석이 5.8.2a로 정체되어 있고 `APP_VERSION`은 5.8.2d였던 불일치 발견. 이번 버전 올림(5.8.2e) 시 둘 다 5.8.2e로 맞춤. (config.php 주석에 "수정 시 상단 @version 주석도 함께 업데이트할 것" 명시되어 있던 룰 준수.)
+
+#### v5.8.2d (2026-06-09 ~ 2026-06-10)
 
 - **[버그수정] H264/MP4 변환 시 원본 휴지통 이동 → 휴지통 카운트 미갱신 (2026-06-19, 펜닐님 보고)**: 일반 삭제/복원/비우기/일괄삭제는 동작 후 updateTrashIcon()으로 카운트 즉시 갱신되나, convertToH264 변환 완료 후처리(finally)에만 호출이 빠져 있어 원본이 휴지통으로 가도 30초 폴링 전까지 카운트가 안 맞았음. 변환 finally에 deleteOriginal 시 updateTrashIcon() 추가. 단일/다중 변환 모두 동일 경로라 일괄 커버. 이로써 휴지통 변경 동작(삭제/복원/비우기/일괄삭제/변환) 전부 카운트 갱신 일관.
 
@@ -2906,4 +2982,4 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 ---
 
 *FileStation v5.8.2d — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-06-19 (v5.8.2d, rhwp 0.7.16 기준)*
+*최종 업데이트: 2026-07-11 (v5.8.2e, rhwp 0.7.18 기준)*

@@ -113,10 +113,86 @@ class FileManager {
     }
     
     // 파일 목록 조회
+    /**
+     * [하이브리드 목록 2단계] 인덱스 DB 기반 즉답 목록 (조건 충족 시), 아니면 null → 호출측이 실시간 목록으로 폴백.
+     *   대상: data/index_listing.conf 에 storage_id 명시된 경우만 (파일 없으면 전부 기존 동작 = 기본 OFF, 위험 0).
+     *   조건: 인덱스 사용가능 + 해당 스토리지 완전동기화(last_sync 있음 + 체크포인트 없음=진행중 아님).
+     *   목적: 네트워크 마운트(type=local이나 NAS 백엔드) 폴더 콜드 접근 1~2초 지연 회피.
+     *   한계: vault 폴더 표시(.vault.json 탐지)는 생략(네트워크 op 회피) — vault 쓰는 스토리지는 대상 지정 말 것.
+     *   안전: 전체 try/catch — 어떤 오류든 null 반환 → 실시간 목록으로 폴백(목록 기능은 절대 안 깨짐).
+     *   3단계(클라): from_index=true 응답 → 백그라운드 실시간 검증으로 외부변경 반영.
+     */
+    private function tryListFromIndex(int $storageId, string $relativePath): ?array {
+        try {
+            $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
+            // 인덱스 사용 가능 확인
+            $fileIndex = \FileIndex::getInstance();
+            if (!$fileIndex->isAvailable()) return null;
+            // ── 타깃 판정 ──
+            //  conf 파일 있으면 '수동 모드': 적힌 storage_id만 (탈출구 — 빈 파일이면 전부 off).
+            //  conf 없으면 '자동 모드': 원격타입(ftp/sftp/webdav/s3/smb, 어댑터 목록=느림) 또는
+            //    대용량 로컬(파일 30000+, 네트워크 마운트 콜드 지연 대상)만. 소용량 로컬은 실시간 유지(외부변경 즉시반영).
+            //  → 배포판에서 conf 없이도 콜드 지연 스토리지에 자동 적용, 빠른 로컬 디스크는 영향 없음.
+            $confFile = $dataDir . DIRECTORY_SEPARATOR . 'index_listing.conf';
+            if (is_file($confFile)) {
+                $ids = preg_split('/[\s,]+/', (string)@file_get_contents($confFile), -1, PREG_SPLIT_NO_EMPTY);
+                if (!is_array($ids) || !in_array((string)$storageId, $ids, true)) return null;
+            } else {
+                if (!$this->isRemoteStorage($storageId)) {
+                    // 로컬: 대용량만 (소용량 로컬은 실시간 stat가 빠르고 외부변경 즉시반영이 나음)
+                    $stats = $fileIndex->getStorageStats($storageId);
+                    if ((int)($stats['files'] ?? 0) < 30000) return null;
+                }
+                // 원격타입 or 대용량 로컬 → 자동 적용 통과
+            }
+            $syncStr = $fileIndex->getMeta('last_sync_storage_' . $storageId);
+            if (!$syncStr) return null;  // 완전동기화 이력 없음(첫 동기화 전) → 실시간
+            // [개선] 재동기화 진행중(checkpoint 존재)이어도 인덱스 사용 OK:
+            //   last_sync는 '완전 1회 완료 시에만' 설정되고(FileIndex 422/498/983), 재동기화는 증분 방식
+            //   (+N ~N -N)이라 이전 완전 스냅샷을 유지함. 즉 checkpoint 있어도 인덱스는 완전.
+            //   기존엔 checkpoint 있으면 실시간 폴백했는데, 대용량 스토리지는 재동기화가 잦아(수시간)
+            //   그동안 콜드 지연이 그대로였음(07-10 로그로 확인) → checkpoint 조건 제거.
+            // 인덱스에서 폴더 직속 목록
+            $rows = $fileIndex->getFolderListing($storageId, $relativePath);
+            if ($rows === null) return null;  // 조회 실패 → 실시간
+            // listFiles 형식으로 변환 (name/path/is_dir/size/modified/extension/type/icon)
+            $items = [];
+            foreach ($rows as $row) {
+                $isDir = ((int)($row['is_dir'] ?? 0)) === 1;
+                $ext = $isDir ? '' : strtolower((string)($row['extension'] ?? ''));
+                $item = [
+                    'name' => (string)($row['filename'] ?? ''),
+                    'path' => (string)($row['filepath'] ?? ''),
+                    'is_dir' => $isDir,
+                    'size' => $isDir ? 0 : (int)($row['size'] ?? 0),
+                    'modified' => (string)($row['modified'] ?? ''),
+                    'extension' => $ext,
+                ];
+                $item['type'] = $this->getFileType($ext, $isDir);
+                $item['icon'] = $this->getFileIcon($item['type'], $ext);
+                $items[] = $item;
+            }
+            return [
+                'success' => true,
+                'path' => $relativePath,
+                'items' => $items,
+                'breadcrumb' => $this->getBreadcrumb($relativePath),
+                'from_index' => true,  // 클라 하이브리드: 백그라운드 실시간 검증 대상
+            ];
+        } catch (\Throwable $e) {
+            return null;  // 어떤 오류든 → 실시간 목록으로 안전 폴백
+        }
+    }
+
     public function listFiles(int $storageId, string $relativePath = ''): array {
         if (!$this->storage->checkPermission($storageId, 'can_read')) {
             return ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')];
         }
+        
+        // ★ [하이브리드 목록 2단계] 인덱스 기반 즉답 (게이트형 + 완전동기화 시에만, 아니면 아래 실시간)
+        //   네트워크 마운트(NAS 백엔드) 폴더 콜드 접근 1~2초 지연 회피. 실패/미대상이면 null→기존 동작.
+        $indexResult = $this->tryListFromIndex($storageId, $relativePath);
+        if ($indexResult !== null) return $indexResult;
         
         // 원격 스토리지인 경우 어댑터 사용
         if ($this->isRemoteStorage($storageId)) {
@@ -151,6 +227,9 @@ class FileManager {
         }
         
         $items = [];
+        // [세부 타이밍] data/files_perf.log 있을 때만 (네트워크 마운트 병목이 목록 vs vault 어디인지 진단)
+        $_lfPerf = @is_file((defined('DATA_PATH') ? DATA_PATH : __DIR__ . '/../data') . '/files_perf.log');
+        $_lfT0 = $_lfPerf ? microtime(true) : 0;
         $iterator = new DirectoryIterator($fullPath);
         
         foreach ($iterator as $file) {
@@ -176,6 +255,7 @@ class FileManager {
             $items[] = $item;
         }
         
+        $_lfT1 = $_lfPerf ? microtime(true) : 0;  // 메인 DirectoryIterator 목록 끝
         // E2E 암호화 폴더 감지 (glob으로 일괄 탐지, 특수문자 폴더는 fallback)
         $vaultDirNames = [];
         $vaultGlob = @glob($fullPath . DIRECTORY_SEPARATOR . '*' . DIRECTORY_SEPARATOR . '.vault.json', GLOB_NOSORT);
@@ -200,6 +280,17 @@ class FileManager {
             }
         }
         unset($_vi);
+        
+        // [세부 타이밍] 기록: 메인 목록(iter) vs vault 탐지(vault) 각각 몇 ms인지 → 병목 식별
+        if ($_lfPerf) {
+            $_lfT2 = microtime(true);
+            $_lfLog = (defined('DATA_PATH') ? DATA_PATH : __DIR__ . '/../data') . '/files_perf.log';
+            @file_put_contents($_lfLog,
+                sprintf("[%s] listFiles sid=%d iter=%.0fms vault=%.0fms count=%d path=%s\n",
+                    date('H:i:s'), $storageId, ($_lfT1 - $_lfT0) * 1000, ($_lfT2 - $_lfT1) * 1000,
+                    count($items), $relativePath),
+                FILE_APPEND | LOCK_EX);
+        }
         
         // 정렬은 api.php에서 sortFiles()로 처리 (중복 정렬 제거)
         

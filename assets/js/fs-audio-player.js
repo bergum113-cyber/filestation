@@ -278,6 +278,8 @@ class FSAudioPlayer {
         this._draggingSeek = false;
         this._draggingVol = false;
         this._shuffleOrder = [];
+        this._shufflePlayed = new Set();  // ★ 셔플 한 바퀴 진행 추적 (소진 시 재셔플)
+        this._optReuseShuffle = !!opts.reuseShuffleOrder;  // ★ 재생 중 재생성이면 순서 유지
 
         // iOS 감지
         this._isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -574,7 +576,7 @@ class FSAudioPlayer {
         // ★ 저장된 셔플 상태 UI 반영 (localStorage에서 셔플=true 로드된 경우)
         if (this.shuffle) {
             this.$.btnShuffle.classList.add('active');
-            this._buildShuffleOrder();
+            this._ensureShuffleOrder(this._optReuseShuffle);  // ★ 재생 중 재생성이면 순서 유지, 닫았다 열기면 새 순서
         }
         // ★ IndexedDB 만료 항목 정리 (페이지당 1회, 5초 후 백그라운드 실행)
         try { FSCoverCacheDB.maybeCleanup(); } catch (e) {}
@@ -969,7 +971,7 @@ class FSAudioPlayer {
         this.$.btnShuffle.addEventListener('click', () => {
             this.shuffle = !this.shuffle;
             this.$.btnShuffle.classList.toggle('active', this.shuffle);
-            if (this.shuffle) this._buildShuffleOrder();
+            if (this.shuffle) { this._buildShuffleOrder(); this._shufflePlayed = new Set(); this._saveShuffleOrder(); }  // ★ 새 셔플 = 새 순서 + 진행 초기화 + 저장
             this._saveShufflePref();  // ★ localStorage 저장
         });
         // Volume button (mute toggle)
@@ -1237,6 +1239,7 @@ class FSAudioPlayer {
     _loadTrack(idx, autoplay) {
         if (idx < 0 || idx >= this.playlist.length) return;
         this.currentIndex = idx;
+        this._markShufflePlayed(idx);  // ★ 셔플 진행 추적 (전곡 소진 시 자동 재셔플)
         const track = this.playlist[idx];
         // ★ [HLS_DIAG] 음악 공유 폴더 트랙 로드
         if (window._diagLog) {
@@ -2105,6 +2108,65 @@ class FSAudioPlayer {
             const j = Math.floor(Math.random() * (i + 1));
             [this._shuffleOrder[i], this._shuffleOrder[j]] = [this._shuffleOrder[j], this._shuffleOrder[i]];
         }
+    }
+
+    // ── 셔플 순서 관리 (멜론/벅스식) — app.js 본체와 동일 로직 ──
+    // ① 한 바퀴 중복 없이 전곡 ② 닫았다 열면 새 순서 ③ 전곡 소진 시 자동 재셔플.
+    //   재생 중 재생성(reuse=true)=순서 유지 / 닫았다 열기(reuse=false)=새 순서.
+    _playlistSignature() {
+        const n = this.playlist.length;
+        if (!n) return 'empty';
+        const key = (t) => (t && (t.path || t.fullName || t.url || t.name)) || '';
+        return n + '|' + key(this.playlist[0]) + '|' + key(this.playlist[n - 1]);
+    }
+    _isValidShuffleOrder(arr) {
+        if (!Array.isArray(arr) || arr.length !== this.playlist.length) return false;
+        const seen = new Array(arr.length).fill(false);
+        for (const v of arr) {
+            if (!Number.isInteger(v) || v < 0 || v >= arr.length || seen[v]) return false;
+            seen[v] = true;
+        }
+        return true;
+    }
+    _saveShuffleOrder() {
+        try {
+            localStorage.setItem('fap-shuffle-order', JSON.stringify({
+                sig: this._playlistSignature(),
+                order: this._shuffleOrder,
+                played: Array.from(this._shufflePlayed || [])
+            }));
+        } catch (e) { /* quota/비활성 — 무시 */ }
+    }
+    _ensureShuffleOrder(reuse) {
+        if (reuse) {
+            try {
+                const saved = localStorage.getItem('fap-shuffle-order');
+                if (saved) {
+                    const obj = JSON.parse(saved);
+                    if (obj && obj.sig === this._playlistSignature() && this._isValidShuffleOrder(obj.order)) {
+                        this._shuffleOrder = obj.order;
+                        this._shufflePlayed = new Set(
+                            Array.isArray(obj.played) ? obj.played.filter(v => Number.isInteger(v) && v >= 0 && v < obj.order.length) : []
+                        );
+                        return;
+                    }
+                }
+            } catch (e) { /* 파싱/localStorage 실패 → 아래서 새로 생성 */ }
+        }
+        this._buildShuffleOrder();
+        this._shufflePlayed = new Set();
+        this._saveShuffleOrder();
+    }
+    _markShufflePlayed(idx) {
+        // _loadTrack에서 호출: 재생한 곡 기록 → 전곡 한 바퀴 소진 시 자동 재셔플.
+        if (!this.shuffle) return;
+        if (!this._shufflePlayed) this._shufflePlayed = new Set();
+        this._shufflePlayed.add(idx);
+        if (this.playlist.length > 0 && this._shufflePlayed.size >= this.playlist.length) {
+            this._buildShuffleOrder();
+            this._shufflePlayed = new Set([idx]);
+        }
+        this._saveShuffleOrder();
     }
 
     // ── Volume helpers (iOS GainNode / PC audio.volume) ──
