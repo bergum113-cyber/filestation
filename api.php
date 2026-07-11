@@ -1722,15 +1722,23 @@ try {
             // OnlyOffice 설정 정보 반환 (로그인 불필요 - 초기화 시 필요)
             $settings = $db->load('settings');
             $onlyoffice = $settings['onlyoffice'] ?? [];
+            // PDF 편집 가능 여부: 저장된 서버 버전이 8.1 이상이어야 함 (없으면 false)
+            $ooPdfEditable = !empty($onlyoffice['pdf_editable']);
+            $ooExtensions = [
+                'word' => ['docx', 'doc', 'odt', 'rtf', 'hwp', 'hwpx'],
+                'cell' => ['xlsx', 'xls', 'ods', 'csv'],
+                'slide' => ['pptx', 'ppt', 'odp']
+            ];
+            // 버전 충족 시에만 pdf를 편집 대상에 노출 (낮은 버전은 pdf.js 미리보기 유지)
+            if ($ooPdfEditable) {
+                $ooExtensions['pdf'] = ['pdf'];
+            }
             $result = [
                 'success' => true,
                 'enabled' => !empty($onlyoffice['enabled']) && !empty($onlyoffice['server']),
                 'server' => $onlyoffice['server'] ?? '',
-                'extensions' => [
-                    'word' => ['docx', 'doc', 'odt', 'rtf', 'hwp', 'hwpx'],
-                    'cell' => ['xlsx', 'xls', 'ods', 'csv'],
-                    'slide' => ['pptx', 'ppt', 'odp']
-                ]
+                'pdf_enabled' => $ooPdfEditable,
+                'extensions' => $ooExtensions
             ];
             break;
         
@@ -10004,6 +10012,18 @@ try {
                     $onlyofficeSettings['has_secret'] = false;
                 }
                 
+                // 서버 버전 정보(version/pdf_editable) 보존:
+                // 서버 URL이 그대로면 이전에 감지한 버전을 유지하고, 바뀌었으면 초기화(재확인 유도)
+                $prevServer = trim($settings['onlyoffice']['server'] ?? '');
+                if ($prevServer !== '' && $prevServer === $onlyofficeSettings['server']) {
+                    if (isset($settings['onlyoffice']['version'])) {
+                        $onlyofficeSettings['version'] = $settings['onlyoffice']['version'];
+                    }
+                    if (isset($settings['onlyoffice']['pdf_editable'])) {
+                        $onlyofficeSettings['pdf_editable'] = $settings['onlyoffice']['pdf_editable'];
+                    }
+                }
+                
                 $settings['onlyoffice'] = $onlyofficeSettings;
             }
             
@@ -10157,6 +10177,119 @@ try {
                     'tested_url' => $testedUrl
                 ];
             }
+            break;
+        
+        case 'onlyoffice_version':
+            // OnlyOffice Document Server 버전 조회 (Command Service). 관리자 전용.
+            // 조회한 버전을 settings에 저장하고 PDF 편집 가능 여부(8.1+)를 함께 반환.
+            $auth->requireRealAdmin();
+            
+            // PDF 편집 최소 버전 (major.minor)
+            $ooPdfMinMajor = 8;
+            $ooPdfMinMinor = 1;
+            
+            $settings = $db->load('settings');
+            $ooSaved = $settings['onlyoffice'] ?? [];
+            
+            // 서버 URL: 입력값 우선, 없으면 저장된 값
+            $serverUrl = trim($input['server_url'] ?? '');
+            if ($serverUrl === '') {
+                $serverUrl = trim($ooSaved['server'] ?? '');
+            }
+            if ($serverUrl === '' || !filter_var($serverUrl, FILTER_VALIDATE_URL)) {
+                $result = ['success' => false, 'error' => __('api_err_onlyoffice_url', 'Document Server URL이 필요합니다.')];
+                break;
+            }
+            $serverUrl = rtrim($serverUrl, '/');
+            $secret = $ooSaved['secret'] ?? '';
+            
+            $commandUrl = $serverUrl . '/coauthoring/CommandService.ashx';
+            
+            // 요청 payload
+            $payload = ['c' => 'version'];
+            $bearer = '';
+            if (!empty($secret)) {
+                // HS256 JWT 서명 (payload 자체를 서명 → token 필드 + Authorization 헤더 둘 다 전송)
+                $b64u = function($d) { return rtrim(strtr(base64_encode($d), '+/', '-_'), '='); };
+                $jwtHeader = $b64u(json_encode(['alg' => 'HS256', 'typ' => 'JWT']));
+                $jwtPayload = $b64u(json_encode($payload));
+                $jwtSig = $b64u(hash_hmac('sha256', "$jwtHeader.$jwtPayload", $secret, true));
+                $bearer = "$jwtHeader.$jwtPayload.$jwtSig";
+                $payload['token'] = $bearer;
+            }
+            $bodyJson = json_encode($payload);
+            
+            $rawResp = false;
+            $errMsg = '';
+            $httpCode = 0;
+            if (function_exists('curl_init')) {
+                $ch = curl_init();
+                $headers = ['Content-Type: application/json'];
+                if ($bearer !== '') { $headers[] = 'Authorization: Bearer ' . $bearer; }
+                curl_setopt_array($ch, [
+                    CURLOPT_URL => $commandUrl,
+                    CURLOPT_POST => true,
+                    CURLOPT_POSTFIELDS => $bodyJson,
+                    CURLOPT_HTTPHEADER => $headers,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_TIMEOUT => 10,
+                    CURLOPT_CONNECTTIMEOUT => 5,
+                    CURLOPT_SSL_VERIFYPEER => false,
+                    CURLOPT_SSL_VERIFYHOST => false,
+                    CURLOPT_USERAGENT => 'FileStation OnlyOffice VersionCheck'
+                ]);
+                $rawResp = curl_exec($ch);
+                $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+                $errMsg = curl_error($ch);
+                curl_close($ch);
+            } else {
+                $hdr = "Content-Type: application/json\r\n";
+                if ($bearer !== '') { $hdr .= 'Authorization: Bearer ' . $bearer . "\r\n"; }
+                $context = stream_context_create([
+                    'http' => ['method' => 'POST', 'header' => $hdr, 'content' => $bodyJson, 'timeout' => 10, 'ignore_errors' => true],
+                    'ssl'  => ['verify_peer' => false, 'verify_peer_name' => false]
+                ]);
+                $rawResp = @file_get_contents($commandUrl, false, $context);
+                if ($rawResp === false) { $errMsg = __('connect_fail'); }
+            }
+            
+            if ($rawResp === false || $rawResp === '') {
+                $result = ['success' => false, 'error' => __f('connect_fail_detail', ['msg' => $errMsg ?: ('HTTP ' . $httpCode)])];
+                break;
+            }
+            
+            $respData = json_decode($rawResp, true);
+            // Command Service 응답: { "error": 0, "version": "9.3.1" }
+            if (!is_array($respData) || !isset($respData['version']) || (isset($respData['error']) && (int)$respData['error'] !== 0)) {
+                $ooErrCode = is_array($respData) && isset($respData['error']) ? (int)$respData['error'] : -1;
+                // error 6 = Invalid token (JWT 시크릿 불일치)
+                $hint = ($ooErrCode === 6)
+                    ? __('oo_ver_err_token', 'JWT 시크릿 키가 서버와 일치하지 않습니다.')
+                    : (__('oo_ver_err_code', 'OnlyOffice 버전 조회에 실패했습니다.') . ' (code: ' . $ooErrCode . ')');
+                $result = ['success' => false, 'error' => $hint];
+                break;
+            }
+            
+            $verStr = (string)$respData['version'];
+            $verParts = explode('.', $verStr);
+            $verMajor = (int)($verParts[0] ?? 0);
+            $verMinor = (int)($verParts[1] ?? 0);
+            $pdfEditable = ($verMajor > $ooPdfMinMajor) || ($verMajor === $ooPdfMinMajor && $verMinor >= $ooPdfMinMinor);
+            
+            // settings에 저장 (다른 onlyoffice 필드 유지)
+            if (!isset($settings['onlyoffice']) || !is_array($settings['onlyoffice'])) {
+                $settings['onlyoffice'] = [];
+            }
+            $settings['onlyoffice']['version'] = $verStr;
+            $settings['onlyoffice']['pdf_editable'] = $pdfEditable;
+            $db->save('settings', $settings);
+            
+            $result = [
+                'success' => true,
+                'version' => $verStr,
+                'pdf_editable' => $pdfEditable,
+                'min_version' => $ooPdfMinMajor . '.' . $ooPdfMinMinor
+            ];
             break;
         
         // ===== 사이트 설정 (로고, 배경 등) =====

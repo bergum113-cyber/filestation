@@ -2789,6 +2789,16 @@ password=mypass</pre>
                                 <div id="onlyoffice-test-result" class="test-result" style="display:none;"></div>
                             </div>
                             <div class="setting-item">
+                                <label><?php echo $currentLang === 'en' ? 'Installed Server Version' : '설치된 서버 버전'; ?></label>
+                                <div class="input-with-btn">
+                                    <button type="button" class="btn btn-sm" id="btn-onlyoffice-version"><?php echo $currentLang === 'en' ? '🔍 Check Version' : '🔍 버전 확인'; ?></button>
+                                </div>
+                                <p class="setting-desc"><?php echo $currentLang === 'en'
+                                    ? 'Checks the OnlyOffice Document Server version. <b>PDF editing requires v8.1 or higher.</b> On lower versions, PDF opens in the built-in pdf.js viewer only (view-only). Save the connection settings first, then check the version.'
+                                    : 'OnlyOffice Document Server의 버전을 확인합니다. <b>PDF 편집은 8.1 이상에서만 가능</b>합니다. 낮은 버전에서는 PDF가 내장 pdf.js 뷰어(미리보기 전용)로만 열립니다. 먼저 연결 설정을 저장한 뒤 버전을 확인하세요.'; ?></p>
+                                <div id="onlyoffice-version-result" class="test-result" style="display:none;"></div>
+                            </div>
+                            <div class="setting-item">
                                 <label><?php echo $currentLang === 'en' ? 'JWT Secret Key (optional)' : 'JWT 시크릿 키 (선택사항)'; ?> <span id="onlyoffice-secret-status"></span></label>
                                 <input type="password" id="setting-onlyoffice-secret" class="form-control" placeholder="<?php echo $currentLang === 'en' ? 'Leave empty to disable JWT' : '비워두면 JWT 비활성화'; ?>">
                                 <p class="setting-desc"><?php echo $currentLang === 'en' ? 'Enter the same value if JWT_SECRET was set in Docker. Leave empty if JWT_ENABLED=false.' : 'Docker 실행 시 JWT_SECRET을 설정했다면 동일한 값을 입력하세요. JWT_ENABLED=false로 설치했다면 비워두세요.'; ?></p>
@@ -2911,7 +2921,35 @@ RewriteRule ^/oo/(.*) ws://<?php echo $currentLang === 'en' ? 'OnlyOffice_Intern
                                 <p style="font-size:12px; color:#666; margin-top:5px;"><?php echo $currentLang === 'en' 
                                     ? '※ Document Server URL → <code>https://oo.your-domain.com</code><br>※ Add DNS A record for <code>oo.your-domain.com</code><br>※ Same server: use <code>127.0.0.1</code> instead of OnlyOffice internal IP<br>※ <code>location /</code> proxies all paths including <code>/printfile/</code>, <code>/cache/</code> → no separate config needed for print feature.'
                                     : '※ Document Server URL → <code>https://oo.도메인.com</code><br>※ DNS에 <code>oo.도메인.com</code> A레코드 추가<br>※ 같은 서버면 OnlyOffice내부IP 대신 <code>127.0.0.1</code> 사용<br>※ <code>location /</code> 가 <code>/printfile/</code>, <code>/cache/</code> 포함 모든 경로를 프록시하므로 인쇄 기능에 추가 설정 불필요.'; ?></p>
-                                <p style="margin-top:5px;"><?php echo $currentLang === 'en' ? 'Supported files: docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp, txt, csv, html, etc.' : '지원 파일: docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp, txt, csv, html 등'; ?></p>
+                                <p style="margin-top:5px;"><?php echo $currentLang === 'en' ? 'Supported files: docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp, txt, csv, html, etc. (PDF editing requires server v8.1+)' : '지원 파일: docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp, txt, csv, html 등 (PDF 편집은 서버 8.1+ 필요)'; ?></p>
+
+                                <p style="margin-top:15px;">⬆️ <strong><?php echo $currentLang === 'en' ? 'Upgrade OnlyOffice Docs Version (Docker)' : 'OnlyOffice Docs 버전 업그레이드 방법 (Docker)'; ?></strong></p>
+                                <p style="font-size:12px; color:#666; margin-bottom:5px;"><?php echo $currentLang === 'en'
+                                    ? 'If PDF editing is unavailable because the server version is lower than 8.1, upgrade the Document Server. Mounting data volumes lets you upgrade without losing documents/settings.'
+                                    : '서버 버전이 8.1 미만이라 PDF 편집이 안 되면 Document Server를 업그레이드하세요. 데이터 볼륨을 마운트해 두면 문서/설정 유실 없이 업그레이드됩니다.'; ?></p>
+                                <pre style="background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;"><?php echo $currentLang === 'en' ? '# 1) Back up mounted data (if volumes are mounted)' : '# 1) 마운트된 데이터 백업 (볼륨 마운트 시)'; ?>
+docker stop onlyoffice
+docker rename onlyoffice onlyoffice-old   <?php echo $currentLang === 'en' ? '# keep old container as fallback' : '# 롤백용으로 기존 컨테이너 보존'; ?>
+
+<?php echo $currentLang === 'en' ? '# 2) Pull the latest image' : '# 2) 최신 이미지 받기'; ?>
+
+docker pull onlyoffice/documentserver:latest
+
+<?php echo $currentLang === 'en' ? '# 3) Run new container (reuse the SAME -v mounts / -e JWT_SECRET / -p as before)' : '# 3) 새 컨테이너 실행 (기존과 동일한 -v 마운트 / -e JWT_SECRET / -p 사용)'; ?>
+
+docker run -d -p 8080:80 --restart=always \
+  --shm-size=256m \
+  -e JWT_SECRET=your-secret-key \
+  -v /app/onlyoffice/DocumentServer/data:/var/www/onlyoffice/Data \
+  -v /app/onlyoffice/DocumentServer/logs:/var/log/onlyoffice \
+  --name onlyoffice \
+  onlyoffice/documentserver:latest
+
+<?php echo $currentLang === 'en' ? '# 4) After it boots (1-2 min), click "Check Version" above.' : '# 4) 부팅 완료(1~2분) 후 위의 "버전 확인" 클릭.'; ?>
+<?php echo $currentLang === 'en' ? '# 5) If OK, remove the old one:  docker rm onlyoffice-old' : '# 5) 정상 확인되면 기존 컨테이너 삭제:  docker rm onlyoffice-old'; ?></pre>
+                                <p style="font-size:12px; color:#666; margin-top:5px;"><?php echo $currentLang === 'en'
+                                    ? '※ Always reuse the exact same JWT_SECRET, port, and -v mount paths as your current container — otherwise settings/data or JWT auth may break.<br>※ To pin a specific version instead of latest, use a tag, e.g. <code>onlyoffice/documentserver:9.3.1</code>.<br>※ If data volumes were NOT mounted before, back up first (see the ONLYOFFICE update guide).'
+                                    : '※ JWT_SECRET, 포트, -v 마운트 경로는 반드시 현재 컨테이너와 동일하게 사용하세요 — 다르면 설정/데이터 또는 JWT 인증이 깨질 수 있습니다.<br>※ latest 대신 특정 버전으로 고정하려면 태그를 쓰세요. 예: <code>onlyoffice/documentserver:9.3.1</code>.<br>※ 기존에 데이터 볼륨을 마운트하지 않았다면 먼저 백업하세요 (ONLYOFFICE 업데이트 가이드 참고).'; ?></p>
                             </div>
                         </div>
                     </div>

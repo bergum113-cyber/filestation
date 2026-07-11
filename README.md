@@ -1,6 +1,6 @@
-# FileStation v5.8.2e
+# FileStation v5.8.3
 
-![version](https://img.shields.io/badge/version-v5.8.2e-blue)
+![version](https://img.shields.io/badge/version-v5.8.3-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
@@ -720,11 +720,31 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.2e (rhwp 0.7.18 기반)
+**현재 버전**: v5.8.3 (rhwp 0.7.18 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.2e (2026-06-23 ~ 07-11) ⭐ 현재
+#### v5.8.3 (2026-07-11) ⭐ 현재
+
+**[기능] PDF를 OnlyOffice로 편집 — 서버 버전 게이트 + pdf.js 미리보기 유지 (2026-07-11, 펜닐님 요청)**
+
+- **핵심**: PDF를 OnlyOffice PDF 에디터로 열어 **편집·저장·수정** 가능하게 연결. 단, OnlyOffice Document Server 버전이 낮으면(8.1 미만) 연결을 차단해 **PDF 편집이 안 되게** 하고, 기존처럼 내장 **pdf.js 미리보기(보기 전용)** 로만 열리게 함. (근거: OnlyOffice는 8.0에서 `documentType: "pdf"` 추가, **8.1+에서 PDF 편집** 지원.)
+- **동작**:
+  - 버전 **8.1 이상** 확인 시 → PDF **더블클릭 = OnlyOffice 편집**(편집/저장/수정), 컨텍스트 메뉴엔 다른 오피스 파일처럼 **"미리보기"(pdf.js)** + **"OnlyOffice" 편집** 항목 모두 노출.
+  - 버전 **미확인/8.1 미만** → PDF 더블클릭·미리보기 모두 **pdf.js 뷰어**(현행 유지). OnlyOffice 라우팅 안 함.
+- **시스템 설정 — 버전 확인 추가**: OnlyOffice 설정에 **"🔍 버전 확인"** 버튼 신설. Document Server **Command Service**(`/coauthoring/CommandService.ashx`, `{"c":"version"}`, JWT 시크릿 있으면 서명)로 실제 설치 버전을 조회해 표시(`v9.3.1 — PDF 편집 지원` / `v8.0 — PDF 편집 불가` 형태). 조회한 버전·PDF가능여부를 settings에 저장하고, **재로그인 없이 현재 세션에 즉시 반영**.
+  - 설정 저장 시 **서버 URL이 동일하면 버전 정보 보존**, URL이 바뀌면 초기화(재확인 유도) → 잘못된 버전으로 PDF 편집이 열리는 사고 방지(안전 기본값: 미확인이면 PDF 편집 OFF).
+- **시스템 설정 — 업그레이드 방법 추가**: 8.1 미만일 때 문서/설정 유실 없이 올리는 **Docker 업그레이드 절차**(기존 `-v` 마운트·`JWT_SECRET`·포트 그대로 재사용, 롤백용 old 컨테이너 보존, 버전 확인 후 정리) 안내 블록을 설정 화면에 추가. 특정 버전 태그 고정(예: `onlyoffice/documentserver:9.3.1`) 안내 포함.
+- **변경 파일/지점**:
+  - `onlyoffice.php`: `documentTypes`에 `'pdf' => ['pdf','djvu','oxps','xps']` 추가 → PDF가 `documentType: pdf`로 열림(편집기). 기존 저장 콜백(`callbackUrl`+`forcesave`) 그대로 사용.
+  - `api.php`: 신규 액션 **`onlyoffice_version`**(관리자 전용, Command Service 조회·저장). `onlyoffice_config`(공개)엔 `pdf_enabled`(bool)만 반환하고 조건부로 `pdf` 확장자 노출 — 버전 문자열은 정보노출 축소를 위해 공개 엔드포인트에 넣지 않고 로그인 필요한 `settings`/`onlyoffice_version`으로만 제공. 설정 저장 시 version/pdf_editable 보존 로직.
+  - `assets/js/app.js`: `onlyofficePdfEnabled` 플래그 + `ooEditExts()` 헬퍼(확장자 목록 단일화, PDF는 게이트 통과 시에만 포함) → 라우팅 6곳(PC/모바일 더블클릭·엔터·컨텍스트 메뉴 2곳·모바일 열기)을 헬퍼로 통일. `checkOnlyOfficeVersion()`/`_renderOnlyOfficeVersion()` + 버튼 바인딩. 설정/설정로드 2곳에 플래그 반영.
+  - `index.php`: 설정 UI에 "버전 확인" 버튼·결과 표시 + 업그레이드 방법 안내.
+- **미리보기 무손상**: pdf.js 미리보기 경로는 **일절 미변경**. 컨텍스트 메뉴 "미리보기"는 버전과 무관하게 항상 pdf.js.
+- **검증**: PHP 4파일 `php -l` 통과(config/onlyoffice/api/index). `assets/js/app.js` `node --check` 통과 + 원본과 괄호 균형 동일(신규 불균형 0). OnlyOffice API 근거는 공식 문서 확인(`documentType` pdf, Command Service version).
+- ⚠️ **실기기 확인 필요**: ① "버전 확인" 클릭 시 실제 버전 표시(펜닐님 서버 9.3.1 → "PDF 편집 지원") ② PDF 더블클릭 시 OnlyOffice 편집기 로드·저장 반영 ③ 8.1 미만 가정 시 pdf.js로만 열리는지 ④ 컨텍스트 "미리보기"=pdf.js / "OnlyOffice"=편집 분리 동작.
+
+#### v5.8.2e (2026-06-23 ~ 07-11)
 
 **[성능 개선] 스토리지 용량 재계산 병목 제거 + 진단 로그 강화 (2026-07-08, 펜닐님 요청)**
 

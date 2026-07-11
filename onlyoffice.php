@@ -125,7 +125,9 @@ $fileModified = filemtime($fullPath);
 $documentTypes = [
     'word' => ['docx', 'doc', 'odt', 'txt', 'rtf', 'html', 'htm', 'epub', 'docm', 'dot', 'dotx', 'dotm', 'hwp', 'hwpx'],
     'cell' => ['xlsx', 'xls', 'ods', 'csv', 'xlsm', 'xlt', 'xltx', 'xltm'],
-    'slide' => ['pptx', 'ppt', 'odp', 'pptm', 'pot', 'potx', 'potm', 'pps', 'ppsx', 'ppsm']
+    'slide' => ['pptx', 'ppt', 'odp', 'pptm', 'pot', 'potx', 'potm', 'pps', 'ppsx', 'ppsm'],
+    // PDF 편집 (OnlyOffice Docs 8.1+ PDF 에디터). 낮은 버전은 프론트에서 라우팅 차단됨.
+    'pdf' => ['pdf', 'djvu', 'oxps', 'xps']
 ];
 
 $documentType = null;

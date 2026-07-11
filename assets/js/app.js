@@ -4682,6 +4682,8 @@ const App = {
     },
     // OnlyOffice 설정
     onlyofficeEnabled: false,
+    // OnlyOffice PDF 편집 가능 여부 (서버 8.1+ 확인 시에만 true — 낮으면 pdf.js 미리보기 유지)
+    onlyofficePdfEnabled: false,
     // 서버 설정 (청크 크기 등)
     serverConfig: {
         maxChunkSize: 10 * 1024 * 1024  // 기본값 10MB
@@ -5711,6 +5713,9 @@ const App = {
         // OnlyOffice 연결 테스트 버튼
         $('#btn-onlyoffice-test').on('click', () => this.testOnlyOffice());
         
+        // OnlyOffice 서버 버전 확인 버튼
+        $('#btn-onlyoffice-version').on('click', () => this.checkOnlyOfficeVersion());
+        
         // 사이트 이미지 업로드
         $('#logo-upload').on('change', (e) => {
             if (e.target.files[0]) {
@@ -5836,7 +5841,7 @@ const App = {
                             const fileItem = { path, name, isDir: false };
                             // OnlyOffice 활성화 시 Office 파일은 OnlyOffice로 열기 (외부 스토리지 제외)
                             const _dtExt = (name || '').split('.').pop().toLowerCase();
-                            const _dtOoExts = ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp'];
+                            const _dtOoExts = App.ooEditExts();
                             const _dtStorage = (App.storages || []).find(s => s.id == App.currentStorage);
                             const _dtRemote = _dtStorage && !['home', 'shared', 'local'].includes(_dtStorage.storage_type);
                             if (['hwp', 'hwpx'].includes(_dtExt) && !_dtRemote && !(App.vault && App.vault.isVaultView)) {
@@ -5996,7 +6001,7 @@ const App = {
                 }
                 
                 // OnlyOffice 활성화 시 Office 파일은 OnlyOffice로 열기 (외부 스토리지 제외)
-                const onlyofficeExts = ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp'];
+                const onlyofficeExts = App.ooEditExts();
                 if (App.onlyofficeEnabled && onlyofficeExts.includes(ext) && !_ooRemote && !(App.vault && App.vault.isVaultView)) {
                     App.openWithOnlyOffice(fileItem, 'edit');
                     return;
@@ -10902,7 +10907,7 @@ const App = {
             }
             
             // OnlyOffice 활성화 시 Office 파일은 OnlyOffice로 열기 (외부 스토리지 제외)
-            const onlyofficeExts = ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp'];
+            const onlyofficeExts = App.ooEditExts();
             if (this.onlyofficeEnabled && onlyofficeExts.includes(ext) && !_enterRemote) {
                 this.openWithOnlyOffice(fileItem, 'edit');
                 return;
@@ -12134,7 +12139,7 @@ const App = {
         const hasSelection = selectedItems.length > 0;
         
         // OnlyOffice 지원 파일 확인
-        const onlyofficeExts = ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp'];
+        const onlyofficeExts = App.ooEditExts();
         const isOnlyOfficeFile = selectedItems.length === 1 && !selectedItems[0].isDir && onlyofficeExts.includes((selectedItems[0].name || '').split('.').pop().toLowerCase());
         
         // HWP/HWPX 파일 확인
@@ -12414,7 +12419,7 @@ const App = {
             if (this.sevenZipInstalled && ['001', 'rar', '7z', 'iso', 'cab', 'wim', 'arj', 'lzh', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz'].includes(ext)) return true;
             return false;
         });
-        const onlyofficeExts = ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp'];
+        const onlyofficeExts = App.ooEditExts();
         const isOnlyOfficeFile = items.length === 1 && isFile && onlyofficeExts.includes((firstItem.name || '').split('.').pop().toLowerCase());
         const isHwpFile = items.length === 1 && isFile && ['hwp', 'hwpx'].includes((firstItem.name || '').split('.').pop().toLowerCase());
         
@@ -12595,7 +12600,7 @@ const App = {
                     if (['hwp', 'hwpx'].includes(ext) && !_mobRemote && !(this.vault && this.vault.isVaultView)) {
                         this.openWithRhwpEditor(item);
                     } else {
-                    const onlyofficeExts = ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp'];
+                    const onlyofficeExts = App.ooEditExts();
                     if (this.onlyofficeEnabled && onlyofficeExts.includes(ext) && !_mobRemote && !(this.vault && this.vault.isVaultView)) {
                         this.openWithOnlyOffice(item, 'edit');
                     } else if (this.getFileType(item.name)) {
@@ -30254,6 +30259,11 @@ const App = {
             
             // OnlyOffice 활성화 여부 저장 (컨텍스트 메뉴용)
             this.onlyofficeEnabled = onlyoffice.enabled && !!onlyoffice.server;
+            // PDF 편집 가능 여부 (서버 8.1+ 확인 시에만) — 낮으면 pdf.js 미리보기 유지
+            this.onlyofficePdfEnabled = this.onlyofficeEnabled && onlyoffice.pdf_editable === true;
+            
+            // 저장된 OnlyOffice 서버 버전 표시
+            this._renderOnlyOfficeVersion(onlyoffice.version || '', onlyoffice.pdf_editable === true);
         }
         
         // 사이트 설정 로드
@@ -31030,6 +31040,54 @@ const App = {
         } catch (error) {
             resultEl.html(`❌ ${t('test_request_failed', '테스트 요청 실패')}: ${this.escapeHtml(error.message || t('unknown_error', '알 수 없는 오류'))}`).removeClass('loading success').addClass('error');
             this.toast(t('onlyoffice_test_fail', 'OnlyOffice 연결 테스트 실패'), 'error');
+        }
+    },
+    
+    // OnlyOffice 서버 버전 표시 렌더링
+    _renderOnlyOfficeVersion(version, pdfEditable) {
+        const el = $('#onlyoffice-version-result');
+        if (!el.length) return;
+        if (!version) {
+            el.html(t('oo_ver_unknown', '⚠️ 버전 미확인 — 버전을 확인해야 PDF 편집이 활성화됩니다.'))
+              .removeClass('success error').addClass('loading').show();
+            return;
+        }
+        if (pdfEditable) {
+            el.html(`✅ v${this.escapeHtml(version)} — ${t('oo_ver_pdf_ok', 'PDF 편집 지원')}`)
+              .removeClass('loading error').addClass('success').show();
+        } else {
+            el.html(`⚠️ v${this.escapeHtml(version)} — ${t('oo_ver_pdf_low', 'PDF 편집 불가 (8.1 이상 필요, PDF는 미리보기만)')}`)
+              .removeClass('loading success').addClass('error').show();
+        }
+    },
+    
+    // OnlyOffice 서버 버전 확인 (Command Service)
+    async checkOnlyOfficeVersion() {
+        const serverUrl = $('#setting-onlyoffice-server').val().trim();
+        if (!serverUrl) {
+            this.toast(t('enter_doc_server_url', 'Document Server URL을 입력하세요.'), 'error');
+            return;
+        }
+        const resultEl = $('#onlyoffice-version-result');
+        resultEl.html(t('oo_ver_checking', '🔄 버전 확인 중...')).removeClass('success error').addClass('loading').show();
+        try {
+            const res = await this.api('onlyoffice_version', { server_url: serverUrl });
+            if (res.success) {
+                this._renderOnlyOfficeVersion(res.version, res.pdf_editable === true);
+                // 현재 세션에도 즉시 반영 (재로그인 없이 PDF 라우팅 갱신)
+                this.onlyofficePdfEnabled = this.onlyofficeEnabled && res.pdf_editable === true;
+                if (res.pdf_editable) {
+                    this.toast(t('oo_ver_pdf_enabled_toast', 'PDF 편집이 활성화되었습니다.'), 'success');
+                } else {
+                    this.toast(t('oo_ver_pdf_low_toast', '서버 버전이 낮아 PDF 편집은 비활성화됩니다.'), 'warning');
+                }
+            } else {
+                resultEl.html(`❌ ${this.escapeHtml(res.error || t('oo_ver_fail', '버전 확인 실패'))}`).removeClass('loading success').addClass('error');
+                this.toast(res.error || t('oo_ver_fail', '버전 확인 실패'), 'error');
+            }
+        } catch (error) {
+            resultEl.html(`❌ ${this.escapeHtml(error.message || t('unknown_error', '알 수 없는 오류'))}`).removeClass('loading success').addClass('error');
+            this.toast(t('oo_ver_fail', '버전 확인 실패'), 'error');
         }
     },
     
@@ -33090,6 +33148,13 @@ const App = {
         return null;
     },
     
+    // OnlyOffice 편집 대상 확장자 목록 (PDF는 서버 8.1+ 확인 시에만 포함)
+    ooEditExts() {
+        const exts = ['docx', 'doc', 'odt', 'rtf', 'xlsx', 'xls', 'ods', 'csv', 'pptx', 'ppt', 'odp'];
+        if (this.onlyofficePdfEnabled) exts.push('pdf');
+        return exts;
+    },
+    
     // OnlyOffice로 문서 열기
     openWithOnlyOffice(item, mode = 'edit') {
         if (!item || !item.path) {
@@ -33793,6 +33858,7 @@ const App = {
             const res = await this.api('onlyoffice_config', {}, 'GET');
             if (res.success) {
                 this.onlyofficeEnabled = res.enabled;
+                this.onlyofficePdfEnabled = res.enabled && res.pdf_enabled === true;
             }
         } catch (e) {
         }
