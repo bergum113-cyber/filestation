@@ -9148,8 +9148,12 @@ class FileManager {
             @flush();
         };
 
-        // ★ 변환 진단 로그 (data/convert_debug.log) — 실패 시에만 기록(가볍게)
-        $_cvLog = function($msg) use ($relativePath) {
+        // ★ 변환 진단 로그 (data/convert_debug.log) — v5.8.3b: 원인분석 위해 성공 경로도 기록.
+        //   files_perf.log / scan_perf.log 등과 동일한 '게이트' 방식: 이 로그 파일이 미리 존재할 때만 기록한다.
+        //   (파일이 없으면 아무것도 안 함 — 자동 생성하지 않음. 진단이 필요하면 빈 파일을 만들어 두면 됨.)
+        $_cvLogOn = @is_file(DATA_PATH . '/convert_debug.log');
+        $_cvLog = function($msg) use ($relativePath, $_cvLogOn) {
+            if (!$_cvLogOn) return; // 로그 파일이 없으면 기록하지 않음(자동 생성 방지)
             $line = '[' . date('Y-m-d H:i:s') . '] [' . $relativePath . '] ' . $msg . "\n";
             @file_put_contents(DATA_PATH . '/convert_debug.log', $line, FILE_APPEND | LOCK_EX);
         };
@@ -9219,6 +9223,9 @@ class FileManager {
         }
 
         $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
+
+        // [진단] probe 결과 기록 (원인 분석용 — 성공/실패 무관 항상 기록)
+        $_cvLog('PROBE ext=' . $ext . ' vcodec=[' . $videoCodec . '] acodec=[' . $audioCodec . '] durationSec=' . $durationSec . ' deleteOriginal=' . ($deleteOriginal ? '1' : '0'));
 
         // 2) 이미 h264 + mp4 컨테이너면 변환 불필요
         if ($videoCodec === 'h264' && $ext === 'mp4') {
@@ -9471,9 +9478,13 @@ class FileManager {
                 @unlink($stderrLog);
                 @unlink($progressFile);
                 if ($okOutput) {
+                    // [진단] 성공 판정 진입 — tmpOut 실재/크기 기록
+                    $_cvLog('OK_OUTPUT code=[' . $code . '] tmpOut=' . $tmpOut . ' exists=' . (is_file($tmpOut) ? '1' : '0') . ' size=' . (is_file($tmpOut) ? filesize($tmpOut) : 'N/A'));
                     // 검증: 출력(임시 dotfile)이 실제로 h264인지 확인
                     $verifyOut = @shell_exec($cvArg($ffmpeg) . ' -i ' . $cvArg($tmpOut) . ' 2>&1') ?? '';
                     $okH264 = (bool)preg_match('/Video:\s*h264/i', $verifyOut);
+                    // [진단] H264 재검증 결과
+                    $_cvLog('VERIFY okH264=' . ($okH264 ? '1' : '0') . ' verify_tail=' . mb_substr(trim($verifyOut), -400));
                     if (!$okH264) {
                         @unlink($tmpOut);
                         $sse('error', ['error' => __('convert_verify_fail', '변환 결과 검증 실패 (H264 아님)')]);
@@ -9487,6 +9498,23 @@ class FileManager {
                     }
                     $outRel = ltrim(str_replace($basePath, '', $outPath), '/\\');
                     $outRel = str_replace(DIRECTORY_SEPARATOR, '/', $outRel);
+                    // [진단] rename 성공 — 최종 출력 실재/크기 확인 (여기서 outPath 없으면 "완료인데 파일없음"의 증거)
+                    $_cvLog('RENAMED outPath=' . $outPath . ' exists=' . (is_file($outPath) ? '1' : '0') . ' size=' . (is_file($outPath) ? filesize($outPath) : 'N/A') . ' outEqualsOrig=' . (realpath($outPath) === realpath($fullPath) ? '1' : '0'));
+
+                    // ★ 파일 인덱스에 새 출력(mp4) 추가.
+                    //   게이트형+완전동기화 스토리지는 목록을 tryListFromIndex(인덱스)로 즉답하므로,
+                    //   변환 산출물을 인덱스에 반영하지 않으면 목록에 새 mp4가 안 나타난다.
+                    //   (create/rename/upload 등 다른 쓰기 작업과 동일하게 인덱스 갱신 — 변환만 누락돼 있던 버그 수정)
+                    //   인덱스 미사용(available=false) 스토리지에선 addFile이 무해하게 no-op.
+                    //   ※ try/catch 필수: 이 함수는 SSE 스트리밍이라, 인덱스 갱신이 예외를 던지면
+                    //     아래 done 이벤트를 못 보내 "변환 성공했는데 실패로 보이는" 문제가 생긴다.
+                    //     인덱스 갱신은 부가 후처리이므로, 실패해도 변환 성공 자체는 그대로 완료시킨다.
+                    try {
+                        $this->reindexPath($storageId, $basePath, $outPath);
+                        $_cvLog('INDEX addFile outRel=' . $outRel);
+                    } catch (\Throwable $_ie) {
+                        $_cvLog('INDEX addFile FAILED outRel=' . $outRel . ' err=' . $_ie->getMessage());
+                    }
 
                     // ★ 원본 휴지통 이동 (deleteOriginal=true일 때만 — 3단계에서 활성화)
                     $trashed = false;
@@ -9504,7 +9532,22 @@ class FileManager {
                             // 삭제 권한 있고 출력≠원본일 때만 휴지통 이동
                             $tr = $this->moveToTrash($storageId, $relativePath, $fullPath);
                             $trashed = !empty($tr['success']);
+                            // ★ 휴지통 이동 성공 시 파일 인덱스에서도 원본 제거.
+                            //   moveToTrash는 인덱스를 건드리지 않고(휴지통 DB만 기록), 인덱스 제거는 호출자 책임 —
+                            //   일반 delete()도 moveToTrash 후 removeFile을 직접 호출한다(동일 패턴).
+                            //   이걸 빠뜨리면 인덱스에 원본(.ts)이 남아 목록에 유령 항목으로 보인다.
+                            //   ※ try/catch: 위와 동일 — SSE done 이벤트 유실 방지 (인덱스 실패해도 변환은 성공).
+                            if ($trashed) {
+                                try {
+                                    $this->fileIndex->removeFile($storageId, $relativePath);
+                                    $_cvLog('INDEX removeFile orig=' . $relativePath);
+                                } catch (\Throwable $_ie) {
+                                    $_cvLog('INDEX removeFile FAILED orig=' . $relativePath . ' err=' . $_ie->getMessage());
+                                }
+                            }
                         }
+                        // [진단] 원본 처리 결과
+                        $_cvLog('TRASH deleteOriginal=1 canDelete=' . (isset($canDelete) && $canDelete ? '1' : '0') . ' trashed=' . ($trashed ? '1' : '0') . ' skippedNoPerm=' . ($trashSkippedNoPerm ? '1' : '0'));
                     }
                     $sse('done', [
                         'percent' => 100,

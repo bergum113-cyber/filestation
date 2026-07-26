@@ -718,6 +718,13 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                 <span id="board-inline-count" style="color:#999;font-size:13px;"></span>
                             </div>
                             <div class="toolbar-right">
+                                <select id="board-search-type" title="<?php echo $currentLang === 'en' ? 'Search filter' : '검색 조건'; ?>">
+                                    <option value="title_content"><?php echo $currentLang === 'en' ? 'Title+Content' : '제목+내용'; ?></option>
+                                    <option value="title"><?php echo $currentLang === 'en' ? 'Title' : '제목'; ?></option>
+                                    <option value="content"><?php echo $currentLang === 'en' ? 'Content' : '내용'; ?></option>
+                                    <option value="comment"><?php echo $currentLang === 'en' ? 'Comments' : '댓글내용'; ?></option>
+                                    <option value="author"><?php echo $currentLang === 'en' ? 'Author' : '작성자이름'; ?></option>
+                                </select>
                                 <div style="position:relative;display:inline-flex;align-items:center;">
                                     <span style="position:absolute;left:8px;color:#aaa;font-size:13px;pointer-events:none;">🔍</span>
                                     <input type="text" id="board-inline-search" placeholder="<?php echo $currentLang === 'en' ? 'Search...' : '검색...'; ?>" style="width:180px;height:32px;font-size:12px;padding:6px 10px 6px 28px;border:1px solid var(--theme-border,var(--border,#ddd));border-radius:16px;outline:none;background:var(--theme-hover,var(--bg-secondary,#f8f9fa));color:var(--theme-text,#333);transition:border-color 0.2s,width 0.2s;" onfocus="this.style.borderColor='var(--theme-primary,var(--primary,#667eea))';this.style.width='220px'" onblur="this.style.borderColor='';this.style.width='180px'">
@@ -777,11 +784,16 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             </div>
                             <div style="text-align:right;margin-top:12px;">
                                 <button class="btn btn-secondary" onclick="App.cancelBoardForm()"><?php echo $currentLang === 'en' ? 'Cancel' : '취소'; ?></button>
-                                <button id="btn-board-save" class="btn btn-primary" onclick="App.saveBoardPost()"><?php echo $currentLang === 'en' ? 'Save' : '저장'; ?></button>
+                                <button id="btn-board-save" class="btn btn-primary" onclick="App.saveBoardPost()"><?php echo $currentLang === 'en' ? 'Submit' : '등록'; ?></button>
                             </div>
                         </div>
-                        <!-- 페이지네이션 -->
-                        <div id="board-inline-pagination" style="text-align:center;"></div>
+                        <!-- 하단 바: 페이지네이션(가운데)과 게시판관리 버튼(오른쪽)을 같은 줄에 -->
+                        <div id="board-bottom-row" style="position:relative;">
+                            <!-- 페이지네이션 -->
+                            <div id="board-inline-pagination" style="text-align:center;"></div>
+                            <!-- 게시판관리(관리자 전용) — 선택한 글 일괄 삭제. 내용은 loadBoardPosts에서 채움 -->
+                            <div id="board-admin-actions"></div>
+                        </div>
                         </div><!-- /board-list-scroll-wrap -->
                     </div>
                     

@@ -2997,11 +2997,35 @@ try {
             
             $allPosts = $db->findAll('board_posts', ['board_id' => $boardId]);
             
-            // 검색
+            // 검색 (검색 조건: title_content(기본)/title/content/comment/author)
             if ($search) {
-                $allPosts = array_filter($allPosts, function($p) use ($search) {
-                    return stripos($p['title'] ?? '', $search) !== false || stripos($p['content'] ?? '', $search) !== false;
-                });
+                $searchType = $input['search_type'] ?? 'title_content';
+                if ($searchType === 'comment') {
+                    // 댓글내용 검색: 같은 게시판의 댓글에서 일치하는 글 id를 모아 그 글만 남긴다.
+                    // (삭제된 댓글은 content가 비워지므로 제외)
+                    $cmts = $db->load('board_comments') ?: [];
+                    $hitPostIds = [];
+                    foreach ($cmts as $c) {
+                        if ((int)($c['board_id'] ?? 0) !== (int)$boardId) continue;
+                        if (!empty($c['is_deleted'])) continue;
+                        if (stripos($c['content'] ?? '', $search) !== false) {
+                            $hitPostIds[(int)($c['post_id'] ?? 0)] = true;
+                        }
+                    }
+                    $allPosts = array_filter($allPosts, function($p) use ($hitPostIds) {
+                        return isset($hitPostIds[(int)($p['id'] ?? 0)]);
+                    });
+                } else {
+                    $allPosts = array_filter($allPosts, function($p) use ($search, $searchType) {
+                        switch ($searchType) {
+                            case 'title':   return stripos($p['title'] ?? '', $search) !== false;
+                            case 'content': return stripos($p['content'] ?? '', $search) !== false;
+                            case 'author':  return stripos($p['author_name'] ?? '', $search) !== false;
+                            default:        return stripos($p['title'] ?? '', $search) !== false
+                                                || stripos($p['content'] ?? '', $search) !== false;
+                        }
+                    });
+                }
                 $allPosts = array_values($allPosts);
             }
             
@@ -3796,46 +3820,160 @@ try {
             break;
 
         case 'board_post_delete':
-            // 게시글 삭제
+            // 게시글 삭제 (작성자 본인 또는 관리자)
             $auth->requireLogin();
             $user = $auth->getUser();
             $postId = (int)($input['post_id'] ?? 0);
             $isAdmin = $auth->isAdmin() || $auth->isAdminOrSubAdmin();
-            
-            $posts = $db->load('board_posts') ?: [];
-            $found = false;
-            $deletedBoardId = 0;
-            $posts = array_values(array_filter($posts, function($p) use ($postId, $user, $isAdmin, &$found, &$deletedBoardId) {
-                if (($p['id'] ?? 0) == $postId) {
-                    if ($p['author_id'] != $user['id'] && !$isAdmin) return true;
-                    $found = true;
-                    $deletedBoardId = $p['board_id'] ?? 0;
-                    return false;
-                }
-                return true;
-            }));
-            
-            if ($found) {
-                $db->save('board_posts', $posts);
-                // 댓글도 삭제
-                $comments = $db->load('board_comments') ?: [];
-                $comments = array_values(array_filter($comments, fn($c) => ($c['post_id'] ?? 0) != $postId));
-                $db->save('board_comments', $comments);
-                // 첨부파일 폴더 삭제 (댓글 첨부파일 포함, 재귀)
-                $attachDir = __DIR__ . '/data/board_files/' . $deletedBoardId . '/' . $postId;
-                if (is_dir($attachDir)) {
+
+            // 디렉터리 재귀 삭제 헬퍼 (게시글 첨부 / 댓글 첨부 모두에 사용)
+            $rmDirTree = function($dir) {
+                if (!is_dir($dir)) return;
+                try {
                     $iter = new \RecursiveIteratorIterator(
-                        new \RecursiveDirectoryIterator($attachDir, \RecursiveDirectoryIterator::SKIP_DOTS),
+                        new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS),
                         \RecursiveIteratorIterator::CHILD_FIRST
                     );
                     foreach ($iter as $f) {
                         if ($f->isDir()) @rmdir($f->getPathname());
                         else @unlink($f->getPathname());
                     }
-                    @rmdir($attachDir);
+                    @rmdir($dir);
+                } catch (\Throwable $_e) { /* 첨부 정리 실패는 삭제 자체를 되돌리지 않음 */ }
+            };
+
+            $posts = $db->load('board_posts') ?: [];
+            $target = null;
+            foreach ($posts as $p) { if (($p['id'] ?? 0) == $postId) { $target = $p; break; } }
+            if (!$target) {
+                $result = ['success' => false, 'error' => __('api_err_post_not_found', '게시글을 찾을 수 없습니다.')];
+                break;
+            }
+            // ★ 권한 없으면 조용히 무시하지 말고 명확히 알린다 (이전에는 success=true를 돌려줘 삭제된 것처럼 보였음)
+            if (($target['author_id'] ?? null) != $user['id'] && !$isAdmin) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
+                break;
+            }
+
+            $deletedBoardId = (int)($target['board_id'] ?? 0);
+            $posts = array_values(array_filter($posts, fn($p) => ($p['id'] ?? 0) != $postId));
+            $db->save('board_posts', $posts);
+
+            // 댓글 삭제 — 지워질 댓글 id를 먼저 모아 첨부 폴더까지 정리한다
+            $comments = $db->load('board_comments') ?: [];
+            $delCommentIds = [];
+            foreach ($comments as $c) {
+                if (($c['post_id'] ?? 0) == $postId) $delCommentIds[] = (int)($c['id'] ?? 0);
+            }
+            $comments = array_values(array_filter($comments, fn($c) => ($c['post_id'] ?? 0) != $postId));
+            $db->save('board_comments', $comments);
+
+            // ★ 첨부 정리: 게시글 첨부와 댓글 첨부는 저장 경로가 '형제' 관계라 각각 지워야 한다.
+            //     게시글 → data/board_files/{board}/{post}
+            //     댓글   → data/board_files/{board}/comments/{comment}
+            //   (이전에는 게시글 폴더만 지워 댓글 첨부파일이 고아로 남았음)
+            $rmDirTree(__DIR__ . '/data/board_files/' . $deletedBoardId . '/' . $postId);
+            foreach ($delCommentIds as $cid) {
+                if ($cid > 0) $rmDirTree(__DIR__ . '/data/board_files/' . $deletedBoardId . '/comments/' . $cid);
+            }
+
+            $result = ['success' => true];
+            break;
+
+        case 'board_posts_delete':
+            // ★ 게시글 일괄 삭제 (게시판관리 — 선택 삭제)
+            //   단건 board_post_delete와 동일한 권한/정리 규칙을 쓰되, board_posts JSON을
+            //   호출마다 전체 재작성하지 않도록 한 번의 load/save로 처리한다.
+            //   (단건 액션을 N번 호출하면 전체 파일을 N번 다시 쓰게 되어 느리고 위험)
+            $auth->requireLogin();
+            $user = $auth->getUser();
+            $isAdmin = $auth->isAdmin() || $auth->isAdminOrSubAdmin();
+
+            $rawIds = $input['post_ids'] ?? [];
+            if (!is_array($rawIds)) {
+                $result = ['success' => false, 'error' => 'invalid post_ids'];
+                break;
+            }
+            $ids = [];
+            foreach ($rawIds as $v) {
+                $n = (int)$v;
+                if ($n > 0) $ids[$n] = true;   // 중복 제거 + 정수화
+            }
+            if (!$ids) {
+                $result = ['success' => false, 'error' => 'no posts selected'];
+                break;
+            }
+            if (count($ids) > 500) {
+                $result = ['success' => false, 'error' => 'too many posts (max 500)'];
+                break;
+            }
+
+            $posts = $db->load('board_posts') ?: [];
+            $scopeBoardId = (int)($input['board_id'] ?? 0);   // 0이면 범위 제한 없음
+            $deleted = [];   // postId => boardId
+            $kept    = [];
+            $skipped = 0;    // 권한 없음/공지글/다른 게시판으로 건너뛴 수
+            foreach ($posts as $p) {
+                $pid = (int)($p['id'] ?? 0);
+                if ($pid <= 0 || !isset($ids[$pid])) { $kept[] = $p; continue; }
+
+                // 범위 가드: 요청한 게시판의 글만 삭제 (오래된 화면에서 다른 게시판 ID가 섞여 오는 것 방지)
+                if ($scopeBoardId > 0 && (int)($p['board_id'] ?? 0) !== $scopeBoardId) { $kept[] = $p; $skipped++; continue; }
+
+                // 권한: 작성자 본인 또는 관리자만 (단건 삭제와 동일 규칙)
+                if (($p['author_id'] ?? null) != $user['id'] && !$isAdmin) { $kept[] = $p; $skipped++; continue; }
+
+                // 공지글은 일괄 삭제 대상에서 제외 (실수 방지 — 클라이언트도 체크박스를 주지 않음).
+                // 공지 삭제가 필요하면 글 상세에서 개별 삭제로 진행.
+                if (!empty($p['is_notice']) || !empty($p['is_pinned'])) { $kept[] = $p; $skipped++; continue; }
+
+                $deleted[$pid] = (int)($p['board_id'] ?? 0);
+            }
+
+            if ($deleted) {
+                $db->save('board_posts', array_values($kept));
+
+                // 삭제된 글의 댓글 정리 — 지워질 댓글 id를 먼저 모아 첨부까지 함께 정리
+                $comments = $db->load('board_comments') ?: [];
+                $beforeCnt = count($comments);
+                $delCommentIds = [];   // commentId => boardId
+                foreach ($comments as $c) {
+                    $pid = (int)($c['post_id'] ?? 0);
+                    if (isset($deleted[$pid])) $delCommentIds[(int)($c['id'] ?? 0)] = $deleted[$pid];
+                }
+                $comments = array_values(array_filter($comments, function($c) use ($deleted) {
+                    return !isset($deleted[(int)($c['post_id'] ?? 0)]);
+                }));
+                if (count($comments) !== $beforeCnt) $db->save('board_comments', $comments);
+
+                // 첨부파일 폴더 정리 (재귀)
+                $rmDirTree = function($dir) {
+                    if (!is_dir($dir)) return;
+                    try {
+                        $iter = new \RecursiveIteratorIterator(
+                            new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS),
+                            \RecursiveIteratorIterator::CHILD_FIRST
+                        );
+                        foreach ($iter as $f) {
+                            if ($f->isDir()) @rmdir($f->getPathname());
+                            else @unlink($f->getPathname());
+                        }
+                        @rmdir($dir);
+                    } catch (\Throwable $_e) {
+                        // 첨부 정리 실패는 삭제 자체를 되돌리지 않음 (글/댓글은 이미 제거됨)
+                    }
+                };
+                // 게시글 첨부
+                foreach ($deleted as $pid => $bid) {
+                    $rmDirTree(__DIR__ . '/data/board_files/' . $bid . '/' . $pid);
+                }
+                // ★ 댓글 첨부는 경로가 형제 관계(data/board_files/{board}/comments/{comment})라 따로 지워야 한다
+                foreach ($delCommentIds as $cid => $bid) {
+                    if ($cid > 0) $rmDirTree(__DIR__ . '/data/board_files/' . $bid . '/comments/' . $cid);
                 }
             }
-            $result = ['success' => true];
+
+            $result = ['success' => true, 'deleted' => count($deleted), 'skipped' => $skipped];
             break;
 
         case 'board_comment_save':
@@ -4409,16 +4547,31 @@ try {
             break;
 
         case 'board_comment_delete':
-            // 댓글 삭제 (대댓글 있으면 소프트 삭제)
+            // 댓글 삭제
+            //  - 권한: 작성자 본인 또는 관리자 (없으면 명확히 에러 반환)
+            //  - 답글이 달린 댓글: 작성자는 삭제 불가(안내), 관리자만 소프트 삭제(내용·첨부 제거, 트리 유지)
+            //  - 답글이 없으면 완전 삭제
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제
             $user = $auth->getUser();
             $commentId = (int)($input['comment_id'] ?? 0);
             $isAdmin = $auth->isAdmin() || $auth->isAdminOrSubAdmin();
-            
+
             $comments = $db->load('board_comments') ?: [];
-            
-            // 대댓글 존재 여부 확인
+
+            // 대상 댓글 확인
+            $targetComment = null;
+            foreach ($comments as $c) { if (($c['id'] ?? 0) == $commentId) { $targetComment = $c; break; } }
+            if (!$targetComment) {
+                $result = ['success' => false, 'error' => __('api_err_comment_not_found', '댓글을 찾을 수 없습니다.')];
+                break;
+            }
+            if (($targetComment['author_id'] ?? null) != $user['id'] && !$isAdmin) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
+                break;
+            }
+
+            // 답글(대댓글) 존재 여부
             $hasReplies = false;
             foreach ($comments as $c) {
                 if (($c['parent_id'] ?? 0) == $commentId && !($c['is_deleted'] ?? false)) {
@@ -4426,54 +4579,43 @@ try {
                     break;
                 }
             }
-            
+
+            // ★ 답글이 달린 댓글은 작성자 본인은 삭제 불가 — 답글이 사라지거나 흐름이 끊기는 것을 막기 위함
+            if ($hasReplies && !$isAdmin) {
+                $result = ['success' => false, 'error' => __('board_comment_has_replies', '답글이 달린 댓글은 삭제할 수 없습니다.')];
+                break;
+            }
+
+            // 댓글 첨부 폴더 삭제 헬퍼
+            $rmCommentAttach = function($cBoardId, $cId) {
+                $cBoardId = (int)$cBoardId; $cId = (int)$cId;
+                if ($cBoardId <= 0 || $cId <= 0) return;
+                $dir = __DIR__ . '/data/board_files/' . $cBoardId . '/comments/' . $cId;
+                if (is_dir($dir)) {
+                    foreach (glob($dir . '/*') as $f) { if (is_file($f)) @unlink($f); }
+                    @rmdir($dir);
+                }
+            };
+
             if ($hasReplies) {
-                // 대댓글이 있으면 소프트 삭제 (내용만 지움)
+                // 관리자만 여기 도달 — 소프트 삭제 (내용/첨부는 지우되 항목은 남겨 답글 트리 유지)
                 foreach ($comments as &$c) {
                     if (($c['id'] ?? 0) == $commentId) {
-                        if ($c['author_id'] != $user['id'] && !$isAdmin) break;
                         $c['is_deleted'] = true;
                         $c['content'] = '';
                         $c['deleted_at'] = date('Y-m-d H:i:s');
-                        // 소프트 삭제 시에도 첨부파일 삭제
-                        $cBoardId = (int)($c['board_id'] ?? 0);
-                        if ($cBoardId > 0) {
-                            $commentAttachDir = __DIR__ . '/data/board_files/' . $cBoardId . '/comments/' . $commentId;
-                            if (is_dir($commentAttachDir)) {
-                                foreach (glob($commentAttachDir . '/*') as $f) { if (is_file($f)) @unlink($f); }
-                                @rmdir($commentAttachDir);
-                            }
-                        }
+                        $rmCommentAttach($c['board_id'] ?? 0, $commentId);
                         $c['attachments'] = [];
                         break;
                     }
                 }
                 unset($c);
             } else {
-                // 대댓글 없으면 완전 삭제
-                // 삭제 전 첨부파일 폴더 삭제
-                foreach ($comments as $c) {
-                    if (($c['id'] ?? 0) == $commentId) {
-                        if ($c['author_id'] != $user['id'] && !$isAdmin) break;
-                        $cBoardId = (int)($c['board_id'] ?? 0);
-                        if ($cBoardId > 0) {
-                            $commentAttachDir = __DIR__ . '/data/board_files/' . $cBoardId . '/comments/' . $commentId;
-                            if (is_dir($commentAttachDir)) {
-                                foreach (glob($commentAttachDir . '/*') as $f) { if (is_file($f)) @unlink($f); }
-                                @rmdir($commentAttachDir);
-                            }
-                        }
-                        break;
-                    }
-                }
-                $comments = array_values(array_filter($comments, function($c) use ($commentId, $user, $isAdmin) {
-                    if (($c['id'] ?? 0) == $commentId) {
-                        return ($c['author_id'] != $user['id'] && !$isAdmin);
-                    }
-                    return true;
-                }));
-                
-                // 부모 댓글이 소프트 삭제 상태이고 다른 대댓글도 없으면 부모도 완전 삭제
+                // 답글 없음 → 완전 삭제 (첨부 폴더 먼저 정리)
+                $rmCommentAttach($targetComment['board_id'] ?? 0, $commentId);
+                $comments = array_values(array_filter($comments, fn($c) => ($c['id'] ?? 0) != $commentId));
+
+                // 부모 댓글이 소프트 삭제 상태이고 남은 대댓글도 없으면 부모도 완전 삭제
                 // (삭제된 부모 + 마지막 대댓글 삭제 시 정리)
                 $cleanUp = true;
                 while ($cleanUp) {
@@ -4486,6 +4628,7 @@ try {
                             if (($cc['parent_id'] ?? 0) == $cid) { $hasChild = true; break; }
                         }
                         if (!$hasChild) {
+                            $rmCommentAttach($c['board_id'] ?? 0, $cid);
                             unset($comments[$i]);
                             $comments = array_values($comments);
                             $cleanUp = true;
@@ -4494,7 +4637,7 @@ try {
                     }
                 }
             }
-            
+
             $db->save('board_comments', $comments);
             $result = ['success' => true];
             break;

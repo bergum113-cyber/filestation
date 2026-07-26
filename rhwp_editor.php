@@ -3,7 +3,7 @@ require_once __DIR__ . '/php_version_check.php';
 /**
  * rhwp-studio HWP 에디터 래퍼
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.7.18
+ * @rhwp_version 0.8.0
  */
 
 require_once __DIR__ . '/config.php';
@@ -89,9 +89,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
     if (!$storageId || !$filePath) {
         echo json_encode(['success' => false, 'error' => 'Missing storage_id or path']); exit;
     }
-    // HWPX 차단 (rhwp 0.7.3 엔진의 exportHwpx가 베타 단계로 데이터 손상 위험)
-    if (preg_match('/\\.hwpx$/i', $filePath)) {
-        echo json_encode(['success' => false, 'error' => 'HWPX 저장은 형식 손상 위험으로 지원하지 않습니다']); exit;
+    // 확장자 검증: .hwp / .hwpx만 허용
+    // (HWPX 저장은 rhwp studio가 0.7.18+ 에서 정식 지원 — 0.7.3 시절 손상 이슈로 두었던 차단 해제)
+    if (!preg_match('/\\.(hwp|hwpx)$/i', $filePath)) {
+        echo json_encode(['success' => false, 'error' => '.hwp / .hwpx 파일만 저장할 수 있습니다']); exit;
     }
     if (!$storage->checkPermission($storageId, 'can_write')) {
         http_response_code(403);
@@ -185,9 +186,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     if (strlen($newName) > 240) {
         echo json_encode(['success' => false, 'error' => '파일명이 너무 깁니다']); exit;
     }
-    // 확장자 검증: .hwp만 허용 (.hwpx는 rhwp 0.7.3 엔진 베타로 인해 데이터 손상 위험이 있어 차단)
-    if (!preg_match('/\\.hwp$/i', $newName) || preg_match('/\\.hwpx$/i', $newName)) {
-        echo json_encode(['success' => false, 'error' => '.hwp 확장자만 지원합니다 (HWPX는 저장 미지원)']); exit;
+    // 확장자 검증: 원본과 같은 형식만 허용 (.hwp → .hwp, .hwpx → .hwpx)
+    // 내용은 원본 형식으로 저장되므로 확장자만 바꾸면 깨진 파일이 된다
+    $srcExt = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+    if (!in_array($srcExt, ['hwp', 'hwpx'], true)) {
+        echo json_encode(['success' => false, 'error' => '.hwp / .hwpx 파일만 저장할 수 있습니다']); exit;
+    }
+    if (strtolower(pathinfo($newName, PATHINFO_EXTENSION)) !== $srcExt) {
+        echo json_encode(['success' => false, 'error' => '확장자는 .' . $srcExt . ' 여야 합니다']); exit;
     }
     
     if (!$storage->checkPermission($storageId, 'can_write')) {
@@ -394,8 +400,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
   window.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   document.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   </script>
-  <script type="module" crossorigin src="index-BbUFqbC-.js?v=<?php echo APP_VERSION; ?>"></script>
-  <link rel="stylesheet" crossorigin href="index-BKc-ZB2H.css?v=<?php echo APP_VERSION; ?>">
+  <script type="module" crossorigin src="index-CupL1TWV.js?v=<?php echo APP_VERSION; ?>"></script>
+  <link rel="stylesheet" crossorigin href="index-CX93BaKm.css?v=<?php echo APP_VERSION; ?>">
 </head>
 <body>
   <div id="studio-root">
@@ -1058,8 +1064,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     }
     
     window.addEventListener('DOMContentLoaded', async () => {
-        // HWPX도 rhwp 0.7.3에서 뷰잉은 정상 지원됨 (저장만 차단)
-        // 재시도 횟수는 HWP와 동일하게 적용
+        // HWP/HWPX 모두 뷰잉·저장 지원 (재시도 횟수 동일 적용)
         const maxRetries = 4;
         
         try {
@@ -1146,12 +1151,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     }
     
     // Blob 생성자 패치: application/x-hwp Blob 데이터만 캡처 (HWP 저장 전용)
-    // HWPX는 서버 저장 미지원이므로 hwp+zip은 캡처 안 함 (데이터 손상 위험)
+    // HWPX 저장 지원에 따라 hwp+zip(HWPX)도 함께 캡처 — studio가 원본 형식으로 내보낸다
     let lastExportData = null;
     const OrigBlob = window.Blob;
     window.Blob = function(parts, options) {
         const blob = new OrigBlob(parts, options);
-        if (options && options.type === 'application/x-hwp' && parts && parts.length > 0) {
+        if (options && (options.type === 'application/x-hwp' || options.type === 'application/hwp+zip') && parts && parts.length > 0) {
             const data = parts[0];
             if (data instanceof Uint8Array && data.length > 16) {
                 lastExportData = new Uint8Array(data);
@@ -1237,8 +1242,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
                 }
             }
             
-            // 참고: rhwp 0.7.3+ 는 canExecute에서 HWPX 저장을 차단하지만
-            // 빌드 시 studio JS 패치로 canExecute 우회 → execute() 정상 실행됨
+            // 참고: studio는 원본 형식대로 저장한다 (HWP → x-hwp, HWPX → hwp+zip Blob).
+            //       두 MIME 모두 위 Blob 훅에서 캡처된다.
             
             if (lastExportData && lastExportData.length > 16) {
                 // console.log('[rhwp_editor] serverSave 호출, 크기:', lastExportData.length);
@@ -1248,6 +1253,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
                 // console.log('[rhwp_editor] 서버 저장 완료:', FILE_NAME, result.size, 'bytes');
                 // 부모 창(웹하드)에 파일 변경 알림 (목록 갱신용)
                 notifyParentFileChanged(FILE_NAME, 'save');
+                // 원본 파일에 덮어썼으므로 studio의 dirty 표시 해제
+                await markStudioSaved(FILE_NAME);
             } else {
                 console.error('[rhwp_editor] Blob 캡처 실패 - lastExportData:', lastExportData);
                 throw new Error('exportHwp 데이터 캡처 실패 (Blob 미생성)');
@@ -1274,6 +1281,24 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     // - save: 기존 파일 덮어쓰기 (크기/수정시간 변경)
     // - save-as: 새 파일 생성
     // - save-as-overwrite: 기존 파일을 새 이름으로 덮어쓰기
+    // studio에 '호스트가 저장을 마쳤다'고 통지해 수정됨(dirty) 표시를 해제한다.
+    // 우리 서버 저장은 showSaveFilePicker를 AbortError로 막기 때문에 studio 입장에서는
+    // '사용자가 저장을 취소함'으로 보여 내부 markClean에 도달하지 못한다. 그 결과 저장이
+    // 끝났는데도 창을 닫을 때 브라우저의 '변경사항이 저장되지 않을 수 있습니다' 경고가 떴다.
+    // window.rhwpStudio.notifySaved는 rhwp 0.8.0에서 추가된 호스트용 API로,
+    // markClean과 자동 임시저장 초안 폐기를 함께 수행한다. 구버전에는 없으므로 존재 확인 후 호출.
+    // fileName 인자를 넘기면 studio의 표시 파일명이 바뀌므로, 저장 대상이 바뀌지 않는 경우엔 생략한다.
+    async function markStudioSaved(fileName) {
+        try {
+            const api = window.rhwpStudio;
+            if (api && typeof api.notifySaved === 'function') {
+                await api.notifySaved(fileName);
+            }
+        } catch (e) {
+            console.warn('[rhwp_editor] notifySaved 실패(저장 자체는 완료됨):', e);
+        }
+    }
+    
     function notifyParentFileChanged(fileName, action) {
         try {
             const opener = window.opener;
@@ -1310,7 +1335,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     // HWPX 파일 판별 (파일명 기반)
     const IS_HWPX_DOC = /\.hwpx$/i.test(FILE_NAME);
     
-    // HWPX에서 저장 시도 시 사용자 안내
+    // (현재 미사용) HWPX 저장을 다시 차단해야 할 경우를 위한 안내 헬퍼 — 호출부 없음
     function notifyHwpxNotSupported() {
         const statusEl = document.getElementById('sb-message');
         const msg = 'HWPX 저장은 형식 손상 위험으로 지원하지 않습니다 (rhwp 엔진 베타 제약)';
@@ -1331,11 +1356,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     // e.code === 'KeyS' 매칭은 early 핸들러에서 이미 수행함
     window.__rhwpHandleSave = function(shift) {
         // console.log('[rhwp_editor] handleSave called, shift=' + shift + ', HWPX=' + IS_HWPX_DOC);
-        // HWPX는 저장/다른이름저장 모두 차단 (데이터 손상 방지)
-        if (IS_HWPX_DOC) {
-            notifyHwpxNotSupported();
-            return;
-        }
+        // HWP/HWPX 모두 저장 지원 (studio가 원본 형식 그대로 저장)
         if (shift) {
             exportAndSaveAs();
         } else {
@@ -1358,11 +1379,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
-            // HWPX 먼저 체크 (disabled 상태라도 사용자에게 이유를 알려주기 위함)
-            if (IS_HWPX_DOC) {
-                notifyHwpxNotSupported();
-                return;
-            }
             // disabled 상태면 아무것도 안 함 (HWP에서 문서 로드 전 등)
             if (saveItem.classList.contains('disabled')) return;
             // console.log('[rhwp_editor] 사용자 마우스 클릭: file:save → exportAndSave 호출');
@@ -1374,11 +1390,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
-            // HWPX 먼저 체크 (disabled 상태라도 사용자에게 이유를 알려주기 위함)
-            if (IS_HWPX_DOC) {
-                notifyHwpxNotSupported();
-                return;
-            }
             if (saveAsItem.classList.contains('disabled')) return;
             // console.log('[rhwp_editor] 사용자 마우스 클릭: file:save-as → exportAndSaveAs 호출');
             exportAndSaveAs();
@@ -1424,7 +1435,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
                 if (!name) return '파일명을 입력하세요';
                 if (/[\/\\:*?"<>|]|\.\./.test(name)) return '사용할 수 없는 문자가 있습니다 (/ \\ : * ? " < > | ..)';
                 if (name.length > 240) return '파일명이 너무 깁니다';
-                if (!/\.hwp$/i.test(name) || /\.hwpx$/i.test(name)) return '확장자는 .hwp 여야 합니다 (.hwpx 미지원)';
+                // 원본 형식과 같은 확장자만 허용 — 내용은 원본 형식 그대로 저장되므로
+                // 확장자만 바꾸면 내용과 어긋난 깨진 파일이 된다
+                const wantExt = IS_HWPX_DOC ? '.hwpx' : '.hwp';
+                if (!name.toLowerCase().endsWith(wantExt)) return '확장자는 ' + wantExt + ' 여야 합니다';
                 return null;
             };
             
@@ -1564,6 +1578,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
                 if (statusEl) statusEl.textContent = newName + ' 저장 완료 (' + sizeKB + 'KB)';
                 // 부모 창(웹하드)에 파일 목록 갱신 신호 전송
                 notifyParentFileChanged(newName, 'save-as');
+                await markStudioSaved();
             } catch (e) {
                 if (e.exists) {
                     // 같은 이름 파일이 이미 있음 — 덮어쓰기 확인
@@ -1584,6 +1599,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
                             if (statusEl) statusEl.textContent = newName + ' 덮어쓰기 완료 (' + sizeKB + 'KB)';
                             // 부모 창에 파일 목록 갱신 신호 (덮어쓰기도 갱신 필요)
                             notifyParentFileChanged(newName, 'save-as-overwrite');
+                            // 사본에 저장했을 뿐 원본 파일은 그대로이나, studio 자체 save-as와
+                            // 동일하게 clean 처리한다 (파일명 인자는 넘기지 않아 편집 대상은 원본 유지)
+                            await markStudioSaved();
                         } else {
                             throw new Error(j.error || '저장 실패');
                         }
@@ -1620,9 +1638,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     window.__rhwpServerSaveAs = exportAndSaveAs;
     
     // ===== 저장 메뉴 상태 관리 =====
-    // HWP: file:save, file:save-as 모두 활성화
-    // HWPX: 둘 다 비활성화 (rhwp 엔진이 file:save를 자동 비활성화하므로 그 상태 존중)
-    //       → 업스트림 canExecute가 이미 처리하지만, save-as는 커스텀이므로 직접 관리
+    // HWP/HWPX 공통: file:save, file:save-as 모두 활성화
+    //   file:save는 studio가 canExecute로 관리, file:save-as는 FileStation 커스텀이라 직접 관리
     
     // 저장 중에는 동기화 일시 중지 (저장 실행 중 rhwp가 file:save를 순간 disabled 처리하는 것을 무시)
     let syncSuspended = false;
@@ -1634,37 +1651,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         const saveAsItem = document.querySelector('.md-item[data-cmd="file:save-as"]');
         if (!saveAsItem) return;
         
-        if (IS_HWPX_DOC) {
-            // HWPX: 저장/다른이름저장 모두 비활성화 + 툴팁으로 이유 안내
-            // ⚠️ HWPX에서는 MutationObserver가 이 함수를 계속 호출하므로
-            //    실제 변경이 필요할 때만 DOM을 건드려 루프 방지 (멱등성 체크)
-            const tooltip = 'HWPX 저장은 형식 손상 위험으로 지원하지 않습니다';
-            if (!saveAsItem.classList.contains('disabled')) {
-                saveAsItem.classList.add('disabled');
-            }
-            if (saveAsItem.title !== tooltip) {
-                saveAsItem.title = tooltip;
-            }
-            if (saveItem) {
-                if (!saveItem.classList.contains('disabled')) {
-                    saveItem.classList.add('disabled');
-                }
-                if (saveItem.title !== tooltip) {
-                    saveItem.title = tooltip;
-                }
-            }
-        } else {
-            // HWP: file:save-as는 FileStation 커스텀 메뉴이므로 studio가 관리하지 않음
-            // 문서 로드 여부와 관계없이 항상 활성 유지 (HTML 초기값도 활성)
-            // studio가 자체적으로 disabled를 추가했을 경우에만 제거
-            if (saveAsItem.classList.contains('disabled')) {
-                saveAsItem.classList.remove('disabled');
-            }
-            if (saveAsItem.getAttribute('title')) saveAsItem.removeAttribute('title');
-            // file:save의 title은 HWP 상태에서는 제거 (studio가 disabled는 관리)
-            if (saveItem && saveItem.getAttribute('title')) {
-                saveItem.removeAttribute('title');
-            }
+        // file:save-as는 FileStation 커스텀 메뉴이므로 studio가 관리하지 않음
+        // 문서 로드 여부와 관계없이 항상 활성 유지 (HTML 초기값도 활성)
+        // studio가 자체적으로 disabled를 추가했을 경우에만 제거
+        // (HWPX도 저장을 지원하므로 HWP와 동일하게 처리)
+        if (saveAsItem.classList.contains('disabled')) {
+            saveAsItem.classList.remove('disabled');
+        }
+        if (saveAsItem.getAttribute('title')) saveAsItem.removeAttribute('title');
+        // file:save의 title 제거 (disabled 자체는 studio가 관리)
+        if (saveItem && saveItem.getAttribute('title')) {
+            saveItem.removeAttribute('title');
         }
     }
     
@@ -1683,11 +1680,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     });
     
     // 2) MutationObserver로 file:save 상태 변경 감시 → file:save-as도 동기화
-    // ⚠️ HWPX 문서일 때는 observer 사용 금지:
-    //    - HWPX는 초기 setup으로 한 번만 disabled+tooltip 설정하면 끝
-    //    - studio가 HWPX에서 메뉴 상태를 주기적으로 업데이트하면 
-    //      observer → syncSaveAsMenuState → classList/title 변경 → observer 재트리거 루프 위험
-    //    - HWPX에서는 저장 자체가 차단되므로 실시간 동기화 불필요
+    // (HWP/HWPX 동일 처리 — 예전에는 HWPX일 때 observer를 건너뛰었으나 저장을 지원하면서 통일)
     const observeSaveMenus = () => {
         const saveItem = document.querySelector('.md-item[data-cmd="file:save"]');
         const saveAsItem = document.querySelector('.md-item[data-cmd="file:save-as"]');
@@ -1696,14 +1689,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         // 초기 상태 한 번 정리
         syncSaveAsMenuState();
         
-        // HWPX는 observer 사용 안 함 (무한 루프 방지)
-        if (IS_HWPX_DOC) {
-            // HWPX에서도 혹시 studio가 나중에 상태를 건드릴 경우 대비해 
-            // 1회성 재동기화만 타이머로 수행
-            setTimeout(syncSaveAsMenuState, 2000);
-            setTimeout(syncSaveAsMenuState, 5000);
-            return true;
-        }
         
         // HWP에서만 실시간 observer
         const observer = new MutationObserver(() => {

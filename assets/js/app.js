@@ -6674,6 +6674,10 @@ const App = {
                 });
                 if (res.success) {
                     this.toast(t('index_sync_complete', '인덱스 동기화 완료') + ` (${res.count || 0}${t('items_count', '개')})`, 'success');
+                    // 동기화로 서버 인덱스가 갱신됐으므로 현재 목록도 새로 로드(캐시 무시).
+                    // 다른 작업(변환/삭제/업로드 등)이 완료 후 loadFiles(false)를 부르는 것과 동일 —
+                    // 이게 없으면 동기화 후 수동 새로고침을 눌러야 목록에 반영됨.
+                    this.loadFiles(false);
                 } else {
                     this.toast(res.error || t('index_sync_failed', '인덱스 동기화 실패'), 'error');
                 }
@@ -7181,7 +7185,22 @@ const App = {
         });
         
         $(document).on('keyup', '#board-inline-search', (e) => {
-            if (e.key === 'Enter') { this._boardSearchQuery = e.target.value; this.currentBoardPage = 1; this.loadBoardPosts(); }
+            if (e.key === 'Enter') {
+                this._boardSearchQuery = e.target.value;
+                this._boardSearchType = document.getElementById('board-search-type')?.value || 'title_content';
+                this.currentBoardPage = 1;
+                this.loadBoardPosts();
+            }
+        });
+        // 검색 조건 변경: 이미 입력된 검색어가 있으면 바로 다시 검색
+        $(document).on('change', '#board-search-type', (e) => {
+            this._boardSearchType = e.target.value || 'title_content';
+            const q = document.getElementById('board-inline-search')?.value || '';
+            if (q.trim()) {
+                this._boardSearchQuery = q;
+                this.currentBoardPage = 1;
+                this.loadBoardPosts();
+            }
         });
         
         $('#btn-add-popup').on('click', () => this.addPopup());
@@ -9441,11 +9460,41 @@ const App = {
         this._debugLog && this._debugLog('loadStorages_start', {
             hasUser: !!this.user,
             currentStorage: this.currentStorage ?? null,
-            retried: !!this._storageRetried
+            retried: !!this._storageRetryCount,
+            retryAttempt: this._storageRetryCount || 0
         });
         
+        // ★ 일시적 실패 재시도 스케줄러 (최대 3회, 1초→2초→3초 백오프)
+        //   기존: 1회만 재시도 + 성공해야만 플래그 리셋 → 연속 2회 실패 시 영구 포기,
+        //         사이드바가 빈 채로 굳어 사용자가 수동 새로고침해야 복구됐음.
+        //   변경: 3회까지 재시도하고, 소진되면 카운터를 리셋해 다음 트리거
+        //         (페이지 새로고침 / 탭 복귀 자동갱신)에서 다시 재시도할 수 있게 한다.
+        //   반환: true=재시도 예약됨, false=소진(호출부에서 failed_final 기록)
+        const _retryLoad = (reason) => {
+            const n = this._storageRetryCount || 0;
+            if (n < 3) {
+                this._storageRetryCount = n + 1;
+                this._debugLog && this._debugLog('loadStorages_retry_scheduled', { attempt: n + 1, reason: reason });
+                setTimeout(() => this.loadStorages(), 1000 * (n + 1));
+                return true;
+            }
+            this._storageRetryCount = 0; // 소진 → 리셋(다음 트리거에서 재시도 가능)
+            return false;
+        };
+
         const res = await this.api('storages', {}, 'GET');
         const _elapsedMs = Math.round(performance.now() - _startTime);
+
+        // ★ 요청이 취소(abort)되면 api()는 null을 반환한다 (loadFiles의 !res 가드와 동일 계열).
+        //   가드가 없으면 아래 res.success 참조에서 TypeError가 나는데, async 내부 예외라
+        //   호출부의 try/catch에도 안 잡히고(전역 unhandledrejection 핸들러도 없음) 조용히 죽어
+        //   재시도 로직조차 못 타고 사이드바가 빈 채로 남았다.
+        if (!res) {
+            if (!_retryLoad('aborted')) {
+                this._debugLog && this._debugLog('loadStorages_failed_final', { reason: 'aborted' });
+            }
+            return;
+        }
         
         // ★ 디버그: API 응답 결과 (응답 시간 포함 — 디스크 IO 지연 진단)
         this._debugLog && this._debugLog('loadStorages_response', {
@@ -9464,19 +9513,16 @@ const App = {
         });
         
         if (!res.success) {
-            // 세션 만료가 아닌 일시적 오류면 재시도
-            if (!res.session_expired && !this._storageRetried) {
-                this._storageRetried = true;
-                this._debugLog && this._debugLog('loadStorages_retry_scheduled');
-                setTimeout(() => this.loadStorages(), 1000);
-            } else {
+            // 세션 만료는 재시도해도 소용없으므로 즉시 종료(단축평가로 _retryLoad 미호출).
+            // 그 외 일시적 오류는 _retryLoad가 최대 3회까지 재시도를 예약한다.
+            if (res.session_expired || !_retryLoad('error')) {
                 this._debugLog && this._debugLog('loadStorages_failed_final', {
                     session_expired: !!res.session_expired
                 });
             }
             return;
         }
-        this._storageRetried = false;
+        this._storageRetryCount = 0;
         
         const list = $('#storage-list').empty();
         
@@ -21992,10 +22038,15 @@ const App = {
         // 상단 검색창 동기화
         const inlineSearchEl = document.getElementById('board-inline-search');
         if (inlineSearchEl) inlineSearchEl.value = search;
-        const res = await this.api('board_posts', { board_id: this.currentBoardId, page: this.currentBoardPage, search }, 'GET');
+        // 검색 조건(제목+내용/제목/내용/댓글내용/작성자이름) — 미선택 시 기본값
+        const searchType = this._boardSearchType || 'title_content';
+        const typeEl = document.getElementById('board-search-type');
+        if (typeEl) typeEl.value = searchType;
+        const res = await this.api('board_posts', { board_id: this.currentBoardId, page: this.currentBoardPage, search, search_type: searchType }, 'GET');
         
         if (!res.success) {
             listEl.innerHTML = `<div style="text-align:center;padding:30px;color:#e74c3c;">${this.escapeHtml(res.error || 'Error')}</div>`;
+            this._boardRenderAdminBar(false);
             return;
         }
         
@@ -22019,13 +22070,18 @@ const App = {
             listEl.style.display = 'none';
             emptyEl.style.display = 'block';
             paginEl.innerHTML = '';
+            this._boardRenderAdminBar(false);
             return;
         }
+        
+        // 관리자 전용 하단 액션 바 (게시판관리 = 선택 글 일괄 삭제)
+        this._boardRenderAdminBar(isAdmin);
         
         listEl.innerHTML = `
             <table class="board-table">
                 <thead>
                     <tr>
+                        ${isAdmin ? `<th class="board-col-check"><input type="checkbox" id="board-check-all" onclick="App.boardToggleAllChecks(this.checked)" title="${t('select_all','전체 선택')}"></th>` : ''}
                         <th class="board-col-num">${t('board_num','번호')}</th>
                         <th class="board-col-title">${t('title','제목')}</th>
                         <th class="board-col-author">${t('author','작성자')}</th>
@@ -22044,6 +22100,13 @@ const App = {
                         const attachIcon = (p.attachments?.length) ? '<span class="board-attach-icon">📎</span>' : '';
                         const dateStr = (p.created_at || '').substring(0, 10);
                         const commentBadge = p.comment_count ? `<span class="board-comment-badge">[${p.comment_count}]</span>` : '';
+                        // 공지글은 일괄 삭제 대상에서 제외 → 체크박스를 주지 않음
+                        // (공지는 저장 시 is_notice와 is_pinned가 함께 설정되므로 둘 다 확인)
+                        const isNoticePost = !!(p.is_notice || p.is_pinned);
+                        // 체크박스 셀: 행 onclick(글 열기)이 같이 발동하지 않도록 이벤트 전파를 막는다
+                        const checkCell = isAdmin
+                            ? `<td class="board-col-check" onclick="event.stopPropagation();">${isNoticePost ? '' : `<input type="checkbox" class="board-post-check" value="${p.id}" onclick="event.stopPropagation();App.boardUpdateCheckAllState();">`}</td>`
+                            : '';
                         let titleHtml = this.escapeHtml(p.title);
                         if (search) {
                             const qEsc = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -22051,6 +22114,7 @@ const App = {
                         }
                         const titleColor = (p.is_notice && noticeColor) ? ` style="color:${noticeColor}"` : '';
                         return `<tr class="board-postlist-row${rowCls}" onclick="App.viewBoardPost(${p.id})">
+                            ${checkCell}
                             <td class="board-col-num">${isPinned ? `<span class="board-pin-label">공지</span>` : (p.num || '')}</td>
                             <td class="board-col-title">${pinIcon}<strong${titleColor}>${titleHtml}</strong>${noticeBadge}${attachIcon}${commentBadge}</td>
                             <td class="board-col-author">${this.escapeHtml(p.author_name || '')}</td>
@@ -22119,6 +22183,7 @@ const App = {
         emptyEl.style.display = 'none';
         formEl.style.display = 'none';
         paginEl.innerHTML = '';
+        this._boardRenderAdminBar(false);
         toolbar.style.display = '';
         detailEl.style.display = 'block';
         
@@ -22528,6 +22593,69 @@ const App = {
     // 목록으로 돌아가기
     boardShowList() {
         this.loadBoardPosts();
+    },
+
+    // ===== 게시판관리 (관리자 전용, 선택 글 일괄 삭제) =====
+
+    // 하단 오른쪽 액션 바 렌더 (show=false면 비움)
+    _boardRenderAdminBar(show) {
+        const bar = document.getElementById('board-admin-actions');
+        if (!bar) return;
+        bar.innerHTML = show
+            ? `<button id="btn-board-manage" class="btn btn-danger" onclick="App.boardManageDeleteSelected()">🗑️ ${t('board_manage','게시판관리')}</button>`
+            : '';
+    },
+
+    // 헤더 전체선택 → 현재 페이지의 체크 가능한 글 전체 토글
+    // (공지글은 애초에 체크박스를 만들지 않으므로 자동으로 제외됨)
+    boardToggleAllChecks(checked) {
+        document.querySelectorAll('#board-inline-list .board-post-check').forEach(cb => { cb.checked = !!checked; });
+    },
+
+    // 개별 체크 변경 시 헤더 전체선택 체크박스 상태 동기화(일부 선택이면 indeterminate)
+    boardUpdateCheckAllState() {
+        const boxes = Array.from(document.querySelectorAll('#board-inline-list .board-post-check'));
+        const allEl = document.getElementById('board-check-all');
+        if (!allEl) return;
+        const checked = boxes.filter(cb => cb.checked).length;
+        allEl.checked = boxes.length > 0 && checked === boxes.length;
+        allEl.indeterminate = checked > 0 && checked < boxes.length;
+    },
+
+    // 선택된 글 일괄 삭제
+    async boardManageDeleteSelected() {
+        const ids = Array.from(document.querySelectorAll('#board-inline-list .board-post-check:checked'))
+            .map(cb => parseInt(cb.value, 10))
+            .filter(n => n > 0);
+
+        if (!ids.length) {
+            this.toast(t('board_select_first', '삭제할 게시글을 선택하세요.'), 'warning');
+            return;
+        }
+
+        const ok = await this.confirmDelete(
+            `${ids.length}${t('board_delete_confirm_count', '개의 게시글을 삭제하시겠습니까?')}`
+        );
+        if (!ok) return;
+
+        const btn = document.getElementById('btn-board-manage');
+        if (btn) btn.disabled = true;
+        try {
+            const res = await this.api('board_posts_delete', {
+                board_id: this.currentBoardId,
+                post_ids: ids
+            });
+            if (!res || !res.success) {
+                this.toast((res && res.error) || t('delete_failed', '삭제 실패'), 'error');
+                return;
+            }
+            this.toast(`${res.deleted || 0}${t('board_deleted_count', '개 삭제됨')}`, 'success');
+            await this.loadBoardPosts();
+        } finally {
+            // loadBoardPosts가 액션 바를 다시 그리므로 남아있을 때만 복구
+            const b = document.getElementById('btn-board-manage');
+            if (b) b.disabled = false;
+        }
     },
     
     // 게시판 뒤로가기 - 글 보기→목록, 목록→그대로 유지
@@ -23183,6 +23311,7 @@ const App = {
         document.getElementById('board-inline-empty').style.display = 'none';
         document.getElementById('board-inline-detail').style.display = 'none';
         document.getElementById('board-inline-pagination').innerHTML = '';
+        this._boardRenderAdminBar(false);
         const writeToolbar = document.getElementById('board-inline-toolbar');
         writeToolbar.style.display = '';
         // 검색/글쓰기/글 수 숨기기
@@ -23261,7 +23390,7 @@ const App = {
     // 글 저장
     async saveBoardPost() {
         const saveBtn = document.getElementById('btn-board-save');
-        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = t('saving', '저장 중...'); }
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = t('board_post_submitting', '등록 중...'); }
         
         try {
         const postId = document.getElementById('board-post-edit-id').value;
@@ -23400,7 +23529,7 @@ const App = {
         }
         } finally {
             const saveBtn = document.getElementById('btn-board-save');
-            if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = t('save', '저장'); }
+            if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = t('board_post_submit', '등록'); }
             this._hideBoardUploadProgress();
         }
     },
@@ -23410,6 +23539,12 @@ const App = {
         if (!await this.confirmDelete(t('confirm_delete_post','이 게시글을 삭제하시겠습니까?'), t('delete_post','게시글 삭제'))) return;
         
         const res = await this.api('board_post_delete', { post_id: postId });
+        if (!res) return;   // 요청 취소 등
+        if (!res.success) {
+            // 서버가 권한 없음/대상 없음을 알려주므로 반드시 표시 (예전엔 항상 success라 else가 없었음)
+            this.toast(res.error || t('delete_failed', '삭제 실패'), 'error');
+            return;
+        }
         if (res.success) {
             await this.showConfirmModal({
                 title: t('board_delete_done','삭제 완료'),
@@ -23959,6 +24094,12 @@ const App = {
     async deleteBoardComment(commentId, postId) {
         if (!await this.confirmDelete(t('confirm_delete_comment','이 댓글을 삭제하시겠습니까?'), t('delete_comment','댓글 삭제'))) return;
         const res = await this.api('board_comment_delete', { comment_id: commentId });
+        if (!res) return;   // 요청 취소 등
+        if (!res.success) {
+            // '답글이 달린 댓글은 삭제할 수 없습니다.' 등 서버 안내를 표시
+            this.toast(res.error || t('delete_failed', '삭제 실패'), 'error');
+            return;
+        }
         if (res.success) {
             await this.showConfirmModal({
                 title: t('board_delete_done','삭제 완료'),
@@ -34398,6 +34539,8 @@ const App = {
                     ${toggleBtnHtml}
                     <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-width:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
                     <div class="video-play-overlay" id="video-play-overlay"><svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></div>
+                    <button type="button" class="video-play-overlay video-seek-btn video-seek-btn-back" aria-label="${t('seek_back_5', '5초 뒤로')}" title="${t('seek_back_5', '5초 뒤로')}"><svg viewBox="0 0 24 24" width="26" height="26" fill="white" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif">5</text></svg></button>
+                    <button type="button" class="video-play-overlay video-seek-btn video-seek-btn-fwd" aria-label="${t('seek_fwd_5', '5초 앞으로')}" title="${t('seek_fwd_5', '5초 앞으로')}"><svg viewBox="0 0 24 24" width="26" height="26" fill="white" aria-hidden="true"><path d="M4 13c0 4.42 3.58 8 8 8s8-3.58 8-8h-2c0 3.31-2.69 6-6 6s-6-2.69-6-6 2.69-6 6-6v4l5-5-5-5v4c-4.42 0-8 3.58-8 8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif">5</text></svg></button>
                     <div class="video-seek-overlay video-seek-left">-5</div>
                     <div class="video-seek-overlay video-seek-right">+5</div>
                 </div>`;
@@ -35779,6 +35922,9 @@ const App = {
                     });
                 }
             }
+            // 재생 버튼 좌우 탐색 버튼 바인딩 (±5초)
+            // (이 블록은 this 바인딩이 보장되지 않아 같은 메서드의 다른 코드와 같이 App.으로 직접 호출)
+            App._bindVideoSeekButtons();
         }
         
         // 비디오 전체화면 버튼 + UI 최적화 (PC+모바일 공통)
@@ -38326,6 +38472,8 @@ const App = {
         
         // 배속/PIP 재바인딩
         this._bindVideoExtraControls();
+        // 좌우 탐색 버튼 재바인딩 (clone 교체 방식이라 중복 등록되지 않음)
+        this._bindVideoSeekButtons();
         
         // play/pause 오버레이 재바인딩
         const playOverlay = wrap.querySelector('.video-play-overlay') || document.getElementById('video-play-overlay');
@@ -39037,6 +39185,44 @@ const App = {
             if (badge) badge.innerHTML = '⚡ Pipe ' + t('streaming', '스트리밍');
             video._streamMethod = 'Pipe';
         }
+    },
+
+    // 재생 오버레이 좌우 탐색 버튼 바인딩 (±5초 — 키보드 좌우 방향키와 동일 동작)
+    //  · 클릭 인식은 이 버튼 위에서만. 버튼 밖 클릭으로 재생/일시정지되는 기존 동작은 건드리지 않는다.
+    //    (stopPropagation으로 wrap/video 쪽 토글에 전달되지 않게 함)
+    //  · 버튼에 video-play-overlay 클래스를 함께 준 이유: 재생중/호버/전체화면 idle/모바일 숨김 등
+    //    재생 버튼의 표시 규칙을 그대로 따르게 하기 위함. (마크업 순서상 재생 버튼이 항상 먼저라
+    //    기존 querySelector('.video-play-overlay')는 계속 재생 버튼을 가리킨다)
+    //  · 여러 번 호출될 수 있으므로 clone 교체로 이전 리스너를 제거한 뒤 다시 건다.
+    _bindVideoSeekButtons() {
+        const video = document.querySelector('#preview-content .preview-video');
+        if (!video) return;
+        const ua = navigator.userAgent.toLowerCase();
+        const isRealMobileDevice = /android|iphone|ipad|ipod/i.test(ua) && ('ontouchend' in document);
+
+        document.querySelectorAll('#preview-content .video-seek-btn').forEach(oldBtn => {
+            // 실기기 모바일은 재생 오버레이를 숨기고 브라우저 기본 컨트롤을 쓰므로 탐색 버튼도 함께 숨김
+            if (isRealMobileDevice) { oldBtn.style.display = 'none'; return; }
+            const btn = oldBtn.cloneNode(true);
+            oldBtn.parentNode.replaceChild(btn, oldBtn);
+
+            const back = btn.classList.contains('video-seek-btn-back');
+            const seek = (e) => {
+                e.stopPropagation();
+                if (e.type === 'touchend') e.preventDefault();
+                // duration은 트랜스코딩(MSE)·라이브 스트림에서 Infinity/NaN일 수 있다.
+                // 여기서 무조건 막으면 '키보드 좌우는 되는데 버튼만 안 되는' 상태가 되므로,
+                // 키보드 탐색과 동일하게 길이가 유한할 때만 상한을 적용한다.
+                const dur = video.duration;
+                const target = video.currentTime + (back ? -5 : 5);
+                video.currentTime = Math.max(0, (isFinite(dur) && dur > 0) ? Math.min(dur, target) : target);
+                // 키보드 탐색과 동일한 ±5 피드백 오버레이 재사용
+                const fb = document.querySelector(back ? '.video-seek-left' : '.video-seek-right');
+                if (fb) { fb.classList.remove('show'); void fb.offsetWidth; fb.classList.add('show'); }
+            };
+            btn.addEventListener('click', seek);
+            btn.addEventListener('touchend', seek);
+        });
     },
 
     // 배속/PIP 컨트롤 바인딩 (미리보기 footer에 추가)

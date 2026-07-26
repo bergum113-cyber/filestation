@@ -621,6 +621,15 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         .player-wrap.playing:hover .video-play-overlay:hover { opacity: 1; }
         .player-wrap:not(.playing) .video-play-overlay { opacity: 1; pointer-events: auto; }
         .player-wrap.has-initial-overlay .video-play-overlay { opacity: 0 !important; pointer-events: none !important; }
+        /* 재생 버튼 좌우 탐색 버튼 (±5초) — video-play-overlay 규칙을 그대로 따르고 위치·크기만 덮어씀 */
+        .video-play-overlay.video-seek-btn { width: 52px; height: 52px; border-width: 1px; padding: 0; color: #fff; }
+        /* 간격은 영상 폭에 비례(20%)하되 96~150px로 제한 — 크기 변할 때 자동 조정, 겹침/밀림 방지 */
+        .video-play-overlay.video-seek-btn-back { left: calc(50% - clamp(96px, 20%, 150px)); }
+        .video-play-overlay.video-seek-btn-fwd { left: calc(50% + clamp(96px, 20%, 150px)); }
+        /* ★ 재생 중 재생 버튼은 opacity:0 이어도 클릭을 받는다(가운데 눌러 일시정지). 탐색 버튼까지
+           그러면 보이지 않는 버튼이 클릭을 가로채 기존 재생/일시정지가 막히므로, 보일 때만 클릭 허용 */
+        .player-wrap.playing .video-play-overlay.video-seek-btn { pointer-events: none; }
+        .player-wrap.playing:hover .video-play-overlay.video-seek-btn { pointer-events: auto; }
         @media (max-width: 1024px) { .video-play-overlay { display: none !important; } }
         
         /* 시킹 오버레이 (메인 .video-seek-overlay 패턴 동일) */
@@ -1530,6 +1539,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     <svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
                 </div>
                 <?php endif; ?>
+                <!-- 재생 버튼 좌우 탐색 버튼 (±5초, 메인 패턴 동일) — 두 분기 공용 -->
+                <button type="button" class="video-play-overlay video-seek-btn video-seek-btn-back" aria-label="<?= __('seek_back_5', '5초 뒤로') ?>" title="<?= __('seek_back_5', '5초 뒤로') ?>"><svg viewBox="0 0 24 24" width="26" height="26" fill="white" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif">5</text></svg></button>
+                <button type="button" class="video-play-overlay video-seek-btn video-seek-btn-fwd" aria-label="<?= __('seek_fwd_5', '5초 앞으로') ?>" title="<?= __('seek_fwd_5', '5초 앞으로') ?>"><svg viewBox="0 0 24 24" width="26" height="26" fill="white" aria-hidden="true"><path d="M4 13c0 4.42 3.58 8 8 8s8-3.58 8-8h-2c0 3.31-2.69 6-6 6s-6-2.69-6-6 2.69-6 6-6v4l5-5-5-5v4c-4.42 0-8 3.58-8 8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif">5</text></svg></button>
                 <!-- 시킹 오버레이 (-5/+5초 시각 피드백, 메인 패턴 동일) -->
                 <div class="video-seek-overlay video-seek-left">-5</div>
                 <div class="video-seek-overlay video-seek-right">+5</div>
@@ -1827,6 +1839,31 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             player.addEventListener('play', () => showPauseIcon());
             player.addEventListener('pause', () => { if (!player.ended) showPlayIcon(); });
             player.addEventListener('ended', () => showPlayIcon());
+        }
+
+        // 재생 버튼 좌우 탐색 버튼 (±5초 — 키보드 좌우 방향키와 동일 동작)
+        //  · 인식 영역은 버튼 위로 한정. stopPropagation으로 기존 재생/일시정지 동작에 영향 없음
+        //  · 실기기 모바일은 재생 오버레이를 숨기고 브라우저 기본 컨트롤을 쓰므로 함께 숨김
+        {
+            const _ua = navigator.userAgent.toLowerCase();
+            const _isRealMobile = /android|iphone|ipad|ipod/i.test(_ua) && ('ontouchend' in document);
+            document.querySelectorAll('.video-seek-btn').forEach(btn => {
+                if (_isRealMobile) { btn.style.display = 'none'; return; }
+                const back = btn.classList.contains('video-seek-btn-back');
+                const seek = (e) => {
+                    e.stopPropagation();
+                    if (e.type === 'touchend') e.preventDefault();
+                    // duration은 트랜스코딩(MSE)·라이브에서 Infinity/NaN일 수 있어 무조건 막으면
+                    // 키보드 좌우는 되는데 버튼만 안 되는 상태가 된다 — 키보드와 동일 처리
+                    const dur = player.duration;
+                    const target = player.currentTime + (back ? -5 : 5);
+                    player.currentTime = Math.max(0, (isFinite(dur) && dur > 0) ? Math.min(dur, target) : target);
+                    const fb = document.querySelector(back ? '.video-seek-left' : '.video-seek-right');
+                    if (fb) { fb.classList.remove('show'); void fb.offsetWidth; fb.classList.add('show'); }
+                };
+                btn.addEventListener('click', seek);
+                btn.addEventListener('touchend', seek);
+            });
         }
         
         

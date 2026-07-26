@@ -1,10 +1,10 @@
-# FileStation v5.8.3
+# FileStation v5.8.3b
 
-![version](https://img.shields.io/badge/version-v5.8.3-blue)
+![version](https://img.shields.io/badge/version-v5.8.3b-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
-![rhwp](https://img.shields.io/badge/rhwp-0.7.18-9cf)
+![rhwp](https://img.shields.io/badge/rhwp-0.7.19-9cf)
 ![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
@@ -15,7 +15,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.7.18 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.8.0 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -200,7 +200,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, WAV, FLAC, OGG, M4A, AAC, WMA, OPUS |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.7.18 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.8.0 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, PPTX (OnlyOffice 직접 편집)** |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -488,7 +488,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.7.18** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.8.0** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -663,9 +663,9 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.18
+버전: 0.7.19
 파일: assets/rhwp/
-업그레이드: rhwp_업그레이드_가이드_v6.3.md 참조
+업그레이드: rhwp_업그레이드_가이드_v6.4.md 참조
 ```
 
 ### WebDAV 서버
@@ -684,8 +684,8 @@ macOS: Finder → 서버에 연결 → https://your-domain/mydav.php
 - ❌ **모바일/데스크톱 네이티브 앱 없음** — 웹 UI만 (모바일 반응형은 지원)
 - ❌ **태그 자동완성 미지원** — 기본 검색은 지원
 - ⚠ **JsonDB는 다중 사용자 환경에서 한계** — 수십 명 미만 환경 권장
-- **rhwp 0.7.18 업그레이드 (2026-07-11)** — 코어(npm shasum 검증 진본) + studio 소스 빌드 후 패치(J1 file:save, J2 file:print, P1/P2 CSS경로) 재적용. 렌더링 정합·초대형 표 성능·편집기 캐럿/undo/OLE 정합 개선(공개 API 하위호환 PATCH). HWPX 저장 차단(#11 sourceFormat 가드) 원본 유지. studio JS 구문 검증 통과. ⚠️ 렌더/편집 실동작은 실기기 확인 필요.
-- ⚠ **HWPX 직접 저장 미지원** — rhwp 0.7.18의 베타 단계 제한, HWP 형식만 저장 가능
+- **rhwp 0.7.19 업그레이드 (2026-07-19)** — 코어(npm shasum 검증 진본) + studio 소스 빌드 후 패치(J1 file:save, J2 file:print, P2 CSS경로) 재적용. 저장 지오메트리 신호 존중 계보의 렌더·편집 정합, 표 페이지네이션 정밀도, BinData 지연 로딩(RSS 244MB→49MB), HML 열기·저장 신규(공개 API 하위호환 PATCH). HWPX 저장 차단은 `rhwp_editor.php` 서버측 확장자 검증(.hwp만 허용)으로 건재 — 단, 가이드 검증 #11의 `sourceFormat` 가드 패턴은 0.7.18에서 이미 업스트림에서 사라진 스테일 패턴으로 확인됨(회귀 아님, 가이드 개정 권장). studio JS 구문 검증 통과. ⚠️ 렌더/편집 실동작은 실기기 확인 필요.
+- ✅ **HWPX 직접 저장 지원 (2026-07-26 개방)** — HWPX 문서를 HWP로 변환하지 않고 **HWPX 그대로** 저장/다른 이름으로 저장 가능. 저장 형식은 원본 형식을 따름(HWP→HWP, HWPX→HWPX)
 
 ---
 
@@ -720,11 +720,165 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.3 (rhwp 0.7.18 기반)
+**현재 버전**: v5.8.3b (rhwp 0.8.0 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.3 (2026-07-11) ⭐ 현재
+#### v5.8.3b (2026-07-22~24) ⭐ 현재
+
+**[버그 수정] H264/MP4 변환 후 파일 인덱스 미갱신 — 대용량 스토리지 목록에 변환 결과 미반영 (2026-07-22, 펜닐님 제보)**
+
+- **증상**: 대용량 스토리지에서 동영상을 H264/MP4로 변환하면, **서버 실제 파일은 정상적으로 `.mp4`로 생성**되고 원본(`.ts` 등)은 휴지통으로 이동되는데, **목록에는 변환 전 원본(`.ts`)이 유령처럼 그대로 표시**되고 그 항목의 정보를 조회하면 "파일을 찾을 수 없습니다"가 뜸. 목록에 mp4로 보이는 파일은 정상.
+- **원인**: FileStation은 네트워크 마운트/대용량 스토리지의 콜드 접근 지연을 피하려 목록을 **파일 인덱스(SQLite)로 즉답**함(`tryListFromIndex` — 원격 스토리지 또는 파일 3만 개 이상 로컬 + 완전동기화 이력이 있을 때만 발동). 폴더생성·삭제·이름변경·이동·복사·압축·압축해제·업로드·복원 등 **다른 모든 쓰기 작업은 인덱스를 갱신**하는데, **H264 변환 경로만 인덱스 갱신이 누락**돼 있었음. 그 결과 인덱스에는 새 `.mp4`가 추가되지 않고 원본 `.ts`도 제거되지 않아, 인덱스 즉답 목록에 옛 항목이 유령으로 남음. (소용량 로컬 스토리지는 실시간 stat로 목록을 만들어 애초에 이 증상이 없음 — 대용량 인덱스 스토리지에서만 발현.)
+- **왜 변환만 누락됐나**: 다른 작업은 `api.php` 액션 핸들러 레벨에서 인덱스를 후처리하는데, `convert_h264` 액션은 **SSE 스트리밍**이라 함수가 스트림을 직접 끝내고 바로 `break`하므로 액션 레벨 후처리가 불가능. 즉 **변환 함수 내부에서 갱신하는 것이 유일하게 가능한 위치**.
+- **수정** (`api/FileManager.php` `convertToH264Mp4`, 성공 경로에 추가):
+  - 변환 산출물 rename 성공 직후 → `reindexPath()`로 새 `.mp4`를 인덱스에 추가(다른 작업의 `addFile`/`indexFolder`와 동일 계열, 경로는 슬래시 정규화로 `getFolderListing` 조회 형식과 일치).
+  - 원본을 휴지통으로 이동한 경우(`$trashed`)에 한해 → `fileIndex->removeFile()`로 원본을 인덱스에서 제거(일반 `delete()`가 `moveToTrash` 후 `removeFile`을 부르는 것과 동일 패턴). 권한 없어 보존됐거나 출력=원본이면 원본이 디스크에 남으므로 인덱스도 유지.
+  - **두 갱신 모두 `try/catch(\Throwable)`로 방어**: 이 함수는 SSE라 인덱스 갱신이 예외를 던지면 `done` 이벤트를 못 보내 "변환은 성공했는데 실패로 보이는" 문제가 생길 수 있음. 인덱스 갱신은 부가 후처리이므로 실패해도 변환 성공 자체는 그대로 완료(실패 시 `convert_debug.log`에만 기록).
+  - 인덱스 미사용(available=false) 스토리지에선 `addFile`/`removeFile`이 무해한 no-op — 소용량 로컬 등 기존 정상 동작에 영향 없음.
+- **범위 점검**: 나열된 전체 쓰기 작업(업로드·폴더생성·새파일·삭제·이름변경·이동/잘라내기·복사/붙여넣기·압축 생성·압축 해제·복원·파일버전 복원·휴지통 비우기·검색 인덱스 재구축/동기화)의 인덱스 갱신 여부를 소스로 전수 확인 → **변환만 누락**이었고 나머지는 정상(함수 또는 액션 레벨에서 처리)임을 확인. 휴지통 비우기는 휴지통이 인덱스 대상 밖이라 갱신 불필요(정상).
+- **진단 로그 (v5.8.3b 초기 진단판에서 도입, 유지)**: 변환 성공 경로에도 `data/convert_debug.log` 기록 추가(`PROBE`/`OK_OUTPUT`/`VERIFY`/`RENAMED`/`TRASH`/`INDEX`) — 기존엔 실패 시에만 로그가 남아 "성공했는데 로그가 없어 실패처럼 보이는" 착시가 있었음. 이제 성공/실패 모두 기록.
+- **로그 게이트 방식 통일**: `convert_debug.log`가 다른 진단 로그와 달리 **파일을 무조건 자동 생성**하던 것을, `files_perf.log`·`scan_perf.log`와 동일한 **`is_file()` 게이트 방식**으로 변경 — **`data/convert_debug.log` 빈 파일이 미리 있을 때만 기록**하고, 없으면 아무것도 하지 않음(자동 생성 안 함). 변환 진단이 필요할 때만 빈 파일을 만들어 두면 되고, 평상시엔 불필요한 로그가 안 쌓임. (전체 로그 지점을 전수 점검한 결과 나머지 로그 — `files_perf`/`scan_perf`/`extract_debug`(EXTRACT_DEBUG 스위치)/`hls_diag`·`webdav_debug`·`folder_stream_debug`(주석)/`onlyoffice_debug`(file_exists 게이트)/`debug_upload`(DEBUG_UPLOAD 스위치) — 는 이미 게이트/스위치/주석으로 자동 생성되지 않음을 확인. `filestation.log`는 정식 정보 로거라 대상 아님.)
+- **[UI] 인덱스 동기화 버튼 완료 후 목록 자동 새로고침**: 폴더의 인덱스 동기화 버튼(`#btn-index-sync`)이 서버 인덱스는 정상 재구축(`index_rebuild_stream` → `rebuildStorage`, 파일시스템 재스캔)하지만, 완료 후 **클라이언트 목록을 다시 불러오지 않아** 수동 새로고침을 눌러야 변경(예: 변환된 확장자)이 화면에 반영되던 문제를 개선. 동기화 성공 시 `loadFiles(false)`(캐시 무시, 서버에서 재로드)를 호출하도록 추가 — 다른 작업(변환/삭제/업로드 등)이 완료 후 목록을 갱신하는 것과 동일한 방식. 이제 동기화 버튼 한 번으로 화면까지 갱신됨. (`assets/js/app.js`, 서버측 인덱스 로직·동기화 동작 자체는 미변경 — 순수 클라이언트 UI 갱신 보강.)
+- **[버그 수정] 지연 발생 시 좌측 사이드바 스토리지 목록이 안 뜨는 문제 (2026-07-23, 펜닐님 제보)**
+  - **증상**: 지연이 걸리면 좌측 사이드바에 스토리지(내 파일 / 공용 폴더 / 외부 스토리지)가 **아예 표시되지 않고**, 아무 오류 메시지도 없음. 새로고침을 몇 번 하면 정상 로딩됨.
+  - **원인 1 — 재시도가 1회뿐이고 실패 시 영구 포기**: `loadStorages()`는 실패 시 1초 뒤 딱 1회만 재시도하는데, 재시도 플래그(`_storageRetried`)가 **성공했을 때만** 리셋되는 구조여서 **연속 2회 실패하면 그 뒤로는 재시도가 아예 없었음** → 사이드바가 빈 채로 굳어 수동 새로고침이 필요했음. 지연 상황에서는 1초 뒤 재시도도 함께 실패하기 쉬워 딱 이 경로를 탐.
+  - **원인 2 — 요청 취소(abort) 시 널 가드 누락**: `api()`는 `AbortError`일 때 `null`을 반환하는데(`loadFiles`에는 `if (!res) return` 가드가 있으나 `loadStorages`에는 없었음), 가드 없이 `res.success`를 참조해 **TypeError**가 발생. 이 예외는 async 내부에서 나므로 호출부의 `try/catch`(동기 호출만 감쌈)에도 잡히지 않고 전역 `unhandledrejection` 핸들러도 없어 **완전히 무음으로 죽으면서 재시도 로직조차 타지 못했음**.
+  - **수정** (`assets/js/app.js` `loadStorages`):
+    - 재시도 스케줄러 `_retryLoad()` 도입 — **최대 3회(1초→2초→3초 백오프)** 재시도하고, 소진되면 카운터(`_storageRetryCount`)를 **리셋**해 다음 트리거(페이지 새로고침 / 탭 복귀 자동갱신)에서 다시 재시도할 수 있게 함.
+    - `api()` 응답에 **`if (!res)` 널 가드** 추가(`loadFiles`와 동일 계열) — abort 시 TypeError 대신 재시도 경로로 진입.
+    - 세션 만료 시에는 단축평가로 재시도하지 않는 **기존 동작 유지**. 성공 시 카운터 0 리셋.
+    - 진단 로그 보강: `loadStorages_start`에 `retryAttempt`, `loadStorages_retry_scheduled`에 `attempt`/`reason`, `loadStorages_failed_final`에 `reason` 추가.
+  - **무한 루프 없음**: 재시도는 3회에서 종료되며 소진 시 새 예약을 걸지 않음(요청 총 4회 / 약 6초). 동시 호출 시에도 카운터를 공유해 재시도 총량이 오히려 줄어드는 방향(fail-closed).
+  - **원인이 아니었던 것(오진 방지 확인)**: 무거운 액션(`files`/`index_rebuild_stream`/`index_sync`/`convert_h264`/압축·해제 스트림)은 모두 `session_write_close()`로 세션 락을 조기 해제하므로 **세션 락 대기 아님**. 서버 `storages` 액션도 `getStorages()`가 DB 기반이라 빠름(실측 17~91ms, 최대 485ms).
+  - ⚠️ **실기기 확인 필요**: 지연 상황에서 사이드바가 **자동으로** 복구되는지(수동 새로고침 없이). 제보 로그(2026-07-22)에는 `loadStorages` 26회가 전부 성공해 실패 사례가 담기지 않았으므로, 위 두 원인은 **소스상 확인된 결함**이며 실제 발생 사례로 확증된 것은 아님. 재발 시 진단 지문: `loadStorages_start`만 있고 뒤따르는 `loadStorages_response`가 없으면 원인 2, `loadStorages_failed_final`이 있으면 원인 1.
+- **[UI] 게시판 검색창 — 모바일에서 포커스 시 가로 확장이 동작하지 않던 문제 (2026-07-24, 펜닐님 제보)**
+  - **증상**: PC에서는 게시판 목록 툴바의 검색창을 클릭하면 가로로 살짝 넓어지는데(180px → 220px), 모바일에서는 기본 폭이 작은데도 클릭해도 전혀 넓어지지 않음.
+  - **원인**: PC의 확장은 CSS `:focus`가 아니라 엘리먼트의 **인라인 `onfocus`/`onblur`가 `this.style.width`를 직접 바꾸는 방식**(`index.php`의 `#board-inline-search`). 그런데 모바일용 규칙 `@media (max-width:1024px) { #board-inline-toolbar #board-inline-search { width: 80px !important; } }`가 **`!important`**여서, 스타일시트의 `!important`가 일반 인라인 스타일을 이겨 `onfocus`가 넣은 폭이 무시됐음. 모바일에는 `:focus` 규칙도 없었음.
+  - **수정** (`assets/css/style.css`, 위 미디어쿼리 블록 내부에 추가):
+    ```css
+    #board-inline-toolbar #board-inline-search { width: 100px !important; }   /* 기본 폭 */
+    #board-inline-toolbar #board-inline-search:focus { width: 140px !important; }  /* 포커스 확장 */
+    ```
+    모바일 기본 폭을 **80px → 100px**로 키우고, 포커스 시 **140px**로 확장(펜닐님 지정값). 같은 `!important`끼리는 특이도가 높은 `:focus`(ID 2개+의사클래스)가 이기므로 적용되고, 포커스 해제 시 `:focus`가 풀리며 기본 규칙(100px)으로 자연히 복귀함. 전환 애니메이션은 엘리먼트 인라인 `transition: width 0.2s`가 그대로 적용됨.
+  - **영향 범위 한정**: 폭 1024px 초과인 모바일 UA 기기는 이 미디어쿼리가 적용되지 않아 기존처럼 인라인 방식(180→220px)으로 동작하며 **변경 없음**. PC 동작도 미변경.
+  - **값 일치 정리**: 같은 요소의 모바일 기본 폭을 선언하는 `body.is-mobile #board-inline-toolbar #board-inline-search`도 80px → 100px로 함께 맞춤. 이 규칙은 `!important`가 없어 엘리먼트 인라인 `style="width:180px"`에 항상 밀리는(=실제 렌더링에 관여하지 않는) 선언이라 **동작 변화는 없으며**, 두 곳의 기본 폭 값이 어긋나 생길 혼선을 막기 위한 정리임.
+  - **미적용(별건)**: 상세화면 검색창 `#board-detail-search`는 인라인 스타일에 `onfocus`/`onblur`와 `transition`이 아예 없어 **PC에서도 확장 동작이 없음**. 이번 수정 범위에 포함하지 않음.
+  - ⚠️ **실기기 확인 필요**: 모바일에서 검색창이 기본 100px로 보이고 클릭 시 140px로 부드럽게 넓어지는지, 넓어진 상태에서 글쓰기 버튼이 밀리거나 툴바가 넘치지 않는지(breadcrumb은 `min-width:0` + 말줄임이라 줄어들도록 되어 있음).
+- **[기능] 게시판관리 — 게시글 일괄(선택) 삭제 (2026-07-24, 펜닐님 요청)**
+  - **배경**: 글을 하나씩 열어 들어가 삭제해야 해서 정리가 번거로웠음. 목록에서 여러 글을 골라 한 번에 지울 수 있게 함.
+  - **동작**:
+    - 관리자(`admin`/`sub_admin`)에게만 목록 맨 앞에 **체크박스 열**이 상시 표시됨. 헤더의 전체선택 체크박스는 **현재 페이지에 보이는 글**을 토글(일부만 선택 시 indeterminate 표시).
+    - **공지글은 체크박스를 아예 만들지 않아 선택 자체가 불가** — 공지는 저장 시 `is_notice`/`is_pinned`가 함께 설정되므로 둘 중 하나라도 켜져 있으면 제외.
+    - 목록 **오른쪽 하단**에 `🗑️ 게시판관리` 버튼(관리자 전용). 누르면 `N개의 게시글을 삭제하시겠습니까?` 확인 팝업(기존 `confirmDelete` 빨간 모달 재사용) → 확인 시 일괄 삭제 후 목록 자동 갱신.
+    - 체크박스/셀 클릭은 `event.stopPropagation()`으로 행 클릭(글 열기)과 분리.
+  - **서버**(`api.php`, 신규 액션 `board_posts_delete` 추가 — 기존 `board_post_delete`는 미변경):
+    - 이 DB는 JSON 파일 방식이라 단건 액션을 N번 부르면 `board_posts` 전체를 **N번 다시 쓰게** 됨. 그래서 일괄 액션을 따로 두어 **한 번의 load/save**로 처리.
+    - 권한은 단건 삭제와 동일(작성자 본인 또는 관리자), 글·댓글·첨부 폴더까지 동일하게 정리.
+    - 안전장치: 입력 ID 정수화·중복 제거, 최대 500건 제한, **공지글 서버측 재차 제외**, `board_id` 범위 가드(오래된 화면에서 다른 게시판 ID가 섞여 와도 삭제되지 않음), 첨부 정리 실패는 `try/catch`로 삼켜 글 삭제 자체를 되돌리지 않음. 응답에 `deleted`/`skipped` 수 반환.
+  - **검증**: `php -l`·`node --check` 통과, 4개 파일 모두 **삭제된 줄 0(순수 추가)**. 서버 판정 로직을 추출해 시뮬레이션 — 관리자 전체선택 시 공지·타 게시판·고정글은 보존하고 일반글만 삭제, 일반 사용자는 본인 글만 삭제, 중복/음수/문자 혼입 입력도 정상 정규화됨을 확인.
+  - **변경 파일**: `api.php`(신규 액션), `assets/js/app.js`(체크박스 열·액션 바·함수 4개), `index.php`(하단 액션 영역 div), `assets/css/style.css`(체크박스 열 폭 PC/모바일).
+  - ⚠️ **실기기 확인 필요**: 관리자 계정에서 체크박스 열과 하단 버튼이 보이는지, 체크박스를 눌러도 글이 열리지 않는지, 공지글에는 체크박스가 없는지, 전체선택이 현재 페이지 글만 잡는지, 삭제 후 목록·페이지네이션이 정상 갱신되는지. 일반 사용자 화면에는 체크박스/버튼이 보이지 않아야 함.- **무손상 확인**: 변경은 `api/FileManager.php` 단일 파일, **순수 추가만(기존 줄 삭제·변경 0)**. `php -l` 통과. 버전 규칙에 따라 버그 수정이므로 버전 번호는 유지(5.8.3b 재패키징).
+- **[UI] 게시글 작성 버튼 라벨 '저장' → '등록' (2026-07-24, 펜닐님 요청)**
+  - 게시글 작성/수정 폼의 확정 버튼 라벨을 **등록**(영문 Submit)으로 변경.
+  - **주의점**: 이 버튼은 `index.php`의 라벨 외에, 저장 진행 중 `saving`으로 바꿨다가 완료 시 `save`로 **되돌리는 JS가 두 곳**(`saveBoardPost` 진입부·finally) 있어, HTML만 고치면 첫 등록 직후 다시 '저장'으로 돌아감. 세 곳을 함께 변경.
+  - **공용 키 오염 방지**: `save`/`saving`은 앱 전역에서 쓰는 공용 번역 키(텍스트 편집기 저장 버튼 등)라 값을 바꾸면 모든 저장 버튼이 함께 바뀜. 그래서 값을 건드리지 않고 **전용 키 `board_post_submit`/`board_post_submitting`을 신규 추가**(`lang/ko.json`, `lang/en.json`)해 게시글 버튼에서만 사용.
+  - 텍스트 편집기(`saveTextEditor`)의 동일한 형태의 코드는 **미변경**(같은 문자열이라 문맥으로 구분해 교체).
+  - **검증**: `node --check`·`php -l` 통과, 두 언어파일 JSON 파싱 정상, 기존 키 값 변경 0건(추가 2개만).- ⚠️ **실기기 확인 필요**: ① 대용량(인덱스) 스토리지에서 `.ts`→mp4 변환 후 **목록에 즉시 mp4로 반영**되는지 ② 원본 휴지통 이동 시 옛 `.ts` 유령 항목이 사라지는지 ③ 소용량 로컬 등 기존 정상 스토리지의 변환 동작에 변화 없는지. (기존에 이미 어긋난 유령 항목은 해당 폴더 검색 인덱스 재동기화로 정리됨.)
+- **[UI] 게시판관리 버튼을 페이지네이션과 같은 줄로 이동 (2026-07-24, 펜닐님 요청)**
+  - 기존에는 페이지네이션 **아래 줄** 오른쪽에 있던 `🗑️ 게시판관리` 버튼을, 페이지네이션과 **같은 줄 오른쪽**에 배치.
+  - **구현**: 페이지네이션(`#board-inline-pagination`)과 버튼(`#board-admin-actions`)을 `#board-bottom-row`(`position:relative`)로 감싸고, 버튼만 `position:absolute; right:14px; top:50%`로 오른쪽에 겹쳐 올림. 페이지네이션의 **가운데 정렬과 전체 폭 상단 구분선(`.board-paginate`의 `border-top`)을 그대로 보존**하기 위해 flex 재배치 대신 오버레이 방식을 택함(기존 `.board-paginate` 규칙 미변경).
+  - **좁은 화면(≤1024px)도 PC와 동일한 배치로 통일 (2026-07-24, 화면 비교 후 재수정)**: 처음에는 겹침을 우려해 모바일에서 버튼을 아래 줄로 내렸고, 이후 flex로 자리를 나눠 같은 줄에 뒀으나 **페이지네이션이 왼쪽으로 밀려 PC와 모양이 달라지는** 문제가 있었음(모바일/PC 화면 비교로 확인). 최종적으로 **모바일도 PC와 동일한 absolute 오버레이**로 통일 — 페이지네이션은 전체 폭 기준 가운데 정렬을 유지하고 버튼만 오른쪽에 겹쳐 올림.
+    - 겹침 방지: 모바일 `.board-paginate`에 **좌우 대칭 여백(90px)** + `flex-wrap: wrap` 적용. 대칭이라 가운데 정렬은 유지되고, 페이지 번호가 많아져도 버튼 영역을 침범하지 않고 아래 줄로 줄바꿈됨. 상하 패딩(20/24)과 전체 폭 상단 구분선은 원본 그대로.
+  - **버튼 크기 조정**: 기본 `.btn`(padding 10/20, 14px)이 페이지네이션 줄에 비해 커 보이는 문제를 개선 — 앱의 게시판 버튼 관례(글쓰기 버튼과 동일 규격)에 맞춰 **PC 32px/12px, 모바일 28px/11px**로 축소(`#btn-board-manage`).
+  - **검색 조건 select 가운데 정렬**: 닫힌 상태의 선택값이 왼쪽으로 붙어 보이던 것을 `text-align: center` + `text-align-last: center`로 가운데 정렬(PC·모바일 공통).
+  - **구조 변경 영향 점검**: 기존 `#board-inline-pagination { flex-shrink: 0; }`은 부모 `#board-list-scroll-wrap`이 flex 컨테이너가 아니라 실제로는 무효였으나, 의도 보존을 위해 감싼 행에도 `flex-shrink:0`을 부여. 두 요소의 **id는 유지**되어 JS(`paginEl`, `_boardRenderAdminBar`)는 변경 없음.
+  - **검증**: `php -l`·`node --check` 통과, CSS 삭제 줄 0(순수 추가), 중괄호 균형 유지, id 중복 없음(각 1개).
+- **[기능/버그] 게시판 검색 조건 선택 + 삭제 규칙 정리 (2026-07-24, 펜닐님 요청)**
+  - **검색 조건 선택 추가**: 검색창 왼쪽에 `#board-search-type` 셀렉트 추가 — **제목+내용(기본) / 제목 / 내용 / 댓글내용 / 작성자이름**. 조건을 바꾸면 입력된 검색어가 있을 때 즉시 재검색. 서버는 `search_type` 파라미터로 분기(`board_posts`).
+    - `댓글내용`은 같은 게시판의 댓글에서 일치하는 `post_id`를 모아 해당 글만 남기며, **삭제된 댓글(`is_deleted`)과 다른 게시판 댓글은 제외**.
+    - `작성자이름`은 글의 `author_name`으로 검색. 모두 `stripos` 부분일치(대소문자 무시).
+  - **[버그 수정] 게시글 삭제 시 댓글 첨부파일이 남던 문제**: 첨부 경로가 게시글 `data/board_files/{board}/{post}/`, 댓글 `data/board_files/{board}/comments/{comment}/`로 **형제 관계**인데 게시글 폴더만 지우고 있었음(소스 주석엔 "댓글 첨부 포함"이라 적혀 있었으나 실제로는 미포함). 삭제될 댓글 id를 먼저 수집해 **댓글 첨부 폴더까지 정리**하도록 수정 — 단건 삭제(`board_post_delete`)와 일괄 삭제(`board_posts_delete`) **양쪽 모두**.
+  - **[정책] 답글 달린 댓글 삭제 규칙**: 답글이 있는 댓글은 **작성자 본인은 삭제 불가**(“답글이 달린 댓글은 삭제할 수 없습니다.” 안내), **관리자만 소프트 삭제**(내용·첨부 제거, 항목은 남겨 답글 트리 유지). 답글이 없으면 기존대로 완전 삭제하며, 소프트 삭제된 부모의 마지막 답글이 지워지면 부모까지 정리하는 기존 로직 유지(정리 시 부모 첨부도 함께 제거).
+    - 참고: XE/라이믹스 계열도 코어는 부모 댓글 삭제 시 하위 답글이 함께 사라지는 문제가 알려져 있고, 커뮤니티 권장 방식이 "하위 댓글이 있으면 삭제 대신 '삭제되었습니다'로 바꾸고 그 상태에서는 수정·삭제를 막는" 것 — 이번 정책이 그와 같은 방향.
+  - **[개선] 권한 없을 때 조용한 성공 응답 제거**: 게시글·댓글 삭제가 권한이 없어도 `success: true`를 반환해 삭제된 것처럼 보이던 문제를 고쳐 **"권한이 없습니다."** 에러를 반환. 대상이 없으면 "게시글/댓글을 찾을 수 없습니다." 반환. (권한 규칙 자체는 기존과 동일 — 작성자 본인 또는 관리자)
+  - **[중요] 클라이언트 실패 처리 누락 보완**: `deleteBoardPost`·`deleteBoardComment`는 `if (res.success)`만 있고 **else가 없어서**, 서버가 위와 같이 에러를 돌려주도록 바꾸자 **아무 메시지 없이 조용히 아무 일도 일어나지 않는** 상태가 됐음(특히 "답글이 달린 댓글은 삭제할 수 없습니다." 안내가 화면에 전혀 뜨지 않음). 같은 파일의 `deleteCommentAttachment`가 이미 쓰던 패턴(`else { toast(res.error) }`)을 그대로 적용하고, 요청 취소(`res === null`) 가드도 함께 추가.
+  - **검증**: `php -l`·`node --check` 통과, 언어파일 JSON 정상, CSS 중괄호 균형 유지. 검색 5개 조건과 댓글 삭제 6개 시나리오(작성자/관리자/타인 × 답글 유무)를 로직 시뮬레이션으로 확인.
+  - ⚠️ **실기기 확인 필요**: 조건 선택 후 검색 결과, 게시글 삭제 후 `data/board_files/{board}/comments/` 잔여 폴더 유무, 답글 달린 댓글 삭제 시 작성자에게 안내 문구 노출 여부.#### v5.8.3a (2026-07-19)
+
+**[기능] HWPX 직접 저장 개방 (2026-07-26, 펜닐님 요청)**
+
+- **배경**: HWPX 문서를 열면 "저장"·"다른 이름으로 저장" 메뉴는 활성으로 보이는데 실제로는 저장되지 않았음. rhwp 엔진 제약이 아니라 **FileStation이 5중으로 막아둔 것**이 원인(0.7.3 시절 `exportHwpx()`가 문서를 손상시켜 넣은 차단). rhwp studio는 0.7.18 무렵부터 HWPX 저장을 정식 지원하고, 0.8.0에서 HWPX 왕복 속성 보존이 대폭 보강되어 차단을 해제함.
+  - 메뉴가 활성으로 보였던 이유: HWPX일 때는 MutationObserver를 돌리지 않고 0/2/5초 타이머로만 비활성화했는데, 메뉴를 여는 시점에 studio가 다시 그리면서 활성 상태로 되돌아갔음. 클릭하면 `notifyHwpxNotSupported()`가 하단 상태바에 4초간 안내만 띄우고 종료 → 사용자에겐 "아무 반응 없음"으로 보임.
+- **변경** (`rhwp_editor.php` 단일 파일, 9개 지점):
+  - **PHP `action=save`**: `.hwpx` 거부 → **`.hwp` / `.hwpx` 화이트리스트**로 변경.
+  - **PHP `action=save-as`**(덮어쓰기 재시도 포함): `.hwp` 강제 → **원본과 같은 확장자만 허용**(`pathinfo` 비교). 내용은 원본 형식으로 저장되므로 확장자만 바꾸면 깨진 파일이 되기 때문 — HWP 문서를 `.hwpx`로 저장하는 사고를 서버에서 차단.
+  - **JS Blob 훅**: `application/x-hwp`만 캡처하던 것을 **`application/hwp+zip`(HWPX)도 캡처**. studio 정의(`hwpx: { mimeType: 'application/hwp+zip' }`)와 실제 Blob 생성부를 직접 확인해 MIME 일치 검증. 이 훅이 없으면 앞단만 열어도 "Blob 미생성"으로 저장 실패함.
+  - **JS Ctrl+S 핸들러 / 메뉴 클릭 핸들러 2곳**: `IS_HWPX_DOC` 차단 분기 제거.
+  - **JS 파일명 검증**: `.hwp` 강제 → 원본 형식에 맞춰 `.hwp` 또는 `.hwpx` 요구(클라이언트 1차, 서버 2차 이중 검증).
+  - **JS 메뉴 상태 동기화**: HWPX 전용 비활성화 분기 제거 → HWP와 동일 처리. HWPX에서 observer를 건너뛰던 예외도 제거해 실시간 동기화 통일.
+  - 이제 호출부가 없어진 `notifyHwpxNotSupported()`는 **함수 정의만 남겨둠**(재차단이 필요할 때를 위한 안전망, 동작 영향 없음). 사실과 어긋나게 된 주석 5곳 현행화.
+- **저장 형식 결정은 studio가 담당**: `getSourceFormat()` 결과에 따라 HWP 원본은 `exportHwp()`, HWPX 원본은 `exportHwpx()`가 호출되고 각각 `application/x-hwp` / `application/hwp+zip` Blob으로 나옴. FileStation은 그 바이트를 그대로 서버에 올릴 뿐이라 **형식 변환은 일어나지 않음**.
+- **검증**: `php -l` 통과, 내장 JS를 추출해 PHP 태그를 리터럴로 치환 후 `node --check` 통과(스크립트 블록 4개), 변경 파일은 `rhwp_editor.php` 하나뿐(백업 대비 diff 확인).
+- ⚠️ **실기기 확인 필수**: ① HWPX 문서에서 Ctrl+S 저장 후 **한글에서 정상적으로 열리는지**(가장 중요 — 저장 품질은 코드로 검증 불가), ② Ctrl+Shift+S 다른 이름으로 저장(`.hwpx` 이름 유지되는지), ③ HWP 문서 저장이 기존과 동일한지(회귀 없는지), ④ 저장 후 웹하드 목록 자동 갱신. **중요 문서로 먼저 시험하지 마시고 사본으로 확인 권장.**
+- **[후속] 저장 후 창을 닫을 때 뜨던 "변경사항이 저장되지 않을 수 있습니다" 경고 제거 (2026-07-26, 펜닐님 제보)**
+  - **증상**: 서버 저장이 정상 완료되고 문서를 다시 열면 내용도 제대로 저장돼 있는데, 편집기 창을 닫으면 브라우저의 이탈 경고가 계속 떴음.
+  - **원인**: studio는 문서가 dirty일 때 `beforeunload`로 경고를 띄운다(`beforeUnloadHandler = e => { if (this.dirty) ... }`). 그런데 FileStation의 서버 저장은 로컬 저장을 막으려 `showSaveFilePicker`를 `AbortError`로 던지기 때문에 **studio 입장에서는 "사용자가 저장을 취소함"으로 보여 내부 `markClean()`에 도달하지 못한다.** 실제로는 서버에 저장됐는데 dirty 플래그만 남아 경고가 뜬 것.
+  - **수정**: rhwp **0.8.0에서 새로 추가된 호스트용 API** `window.rhwpStudio.notifySaved()`를 서버 저장 성공 직후 호출하도록 헬퍼 `markStudioSaved()` 추가(`rhwp_editor.php`). 이 API는 `markClean('host-save')`와 자동 임시저장 초안 폐기를 함께 수행한다. 0.7.19에는 없던 API이므로(`window.rhwpStudio` 0건 → 1건) **존재 확인 후 호출**하고, 실패해도 저장 자체에는 영향이 없도록 `try/catch`로 감쌌다.
+  - **적용 범위**: 저장(Ctrl+S), 다른 이름으로 저장, 다른 이름으로 저장-덮어쓰기 **3곳 모두**. 저장은 원본 파일명을 인자로 넘기고(동일 이름이라 무변화), save-as 계열은 **인자를 넘기지 않는다** — 인자를 주면 studio의 표시 파일명이 사본 이름으로 바뀌는데 FileStation의 저장 대상은 여전히 원본이라 혼동을 부르기 때문.
+  - ⚠️ **참고**: save-as 후에도 dirty가 해제되므로, 사본에만 저장하고 원본에는 반영하지 않은 채 창을 닫아도 경고가 뜨지 않는다(studio 자체 save-as 동작과 동일). 원본 보호를 위해 save-as에서는 경고를 유지하고 싶다면 해당 호출 2곳만 제거하면 됨.
+  - **검증**: `php -l` 통과, 내장 JS 추출 후 `node --check` 통과, 헬퍼 정의와 호출 3곳이 동일 스크립트 블록임을 확인, 백업 대비 **삭제된 줄 0(순수 추가)**.
+
+**[기능] 동영상 플레이어 좌우 탐색 버튼 추가 (2026-07-26, 펜닐님 요청)**
+
+- **배경**: 키보드 좌우 방향키로는 ±5초 탐색이 되지만, 마우스·터치로는 화면 가운데의 재생/일시정지 버튼밖에 없었음. 재생 버튼 좌우에 탐색 버튼을 추가.
+- **적용 범위**: 일반(미리보기 모달, `assets/js/app.js`)과 공유 페이지(`share.php`) **양쪽**.
+- **동작**: 버튼 클릭 시 ±5초 이동 — 키보드 방향키와 **동일한 동작·동일한 ±5 피드백 오버레이**(`.video-seek-left/right`) 재사용.
+  - ⚠️ **`duration` 처리 (2026-07-26 재점검에서 수정)**: 처음에는 `if (!isFinite(dur) || dur <= 0) return;`으로 막았으나, 트랜스코딩 재생은 MSE 기반이라 `video.duration`이 **Infinity/NaN**이 될 수 있어(그래서 재생시간을 `.transcode-duration`으로 따로 표시함) **키보드 좌우는 되는데 버튼만 아무 반응 없는** 상태가 됨. 키보드와 같이 **길이가 유한할 때만 상한을 적용**하도록 완화. 두 로직을 같은 입력으로 시뮬레이션해 일반 영상·끝부근·시작·트랜스코딩(Infinity) 전 구간에서 결과가 일치함을 확인.
+  - 남는 차이는 메타데이터 미로드(`NaN`)·`duration 0` 뿐 — 키보드는 0으로 점프하고 버튼은 목표 지점을 그대로 설정한다(브라우저가 재생 시작 위치로 보관). 실사용 영향은 없으며 버튼 쪽이 의도에 더 가까움.
+- **인식 영역 한정**: 탐색은 **버튼 위에서만** 인식. 핸들러에서 `stopPropagation()`으로 기존 재생/일시정지 경로에 전달되지 않게 했고, **버튼 밖을 클릭하면 기존대로 재생/일시정지가 동작**함(해당 로직은 손대지 않음).
+- **표시 규칙 상속**: 버튼에 `video-play-overlay` 클래스를 함께 부여해 재생중·호버·전체화면 idle·모바일 숨김·버퍼 미준비 등 **재생 버튼의 표시 규칙을 그대로 따르게** 함. 위치·크기만 별도 CSS로 덮어씀(52px, 중심에서 좌우 **104px**).
+- **아이콘·간격 (2026-07-26 화면 확인 후 조정)**: 처음에는 이중 삼각형(빨리감기 계열) 아이콘에 좌우 84px였으나, 재생 버튼에 너무 붙어 보이고 이동 초 수가 드러나지 않아 조정.
+  - 아이콘을 **원형 화살표 + 숫자(5)** 형태(Material `replay_5`/`forward_5` 계열)로 교체. 숫자는 경로가 아닌 SVG `<text>`로 그려 렌더 실패 위험을 없앰. 새 SVG 4개 모두 XML 파싱으로 구조 검증.
+  - 좌우 간격: 고정 px이 아니라 **영상 폭에 비례(20%)하되 96~150px로 제한**(`left: calc(50% ± clamp(96px, 20%, 150px))`). 실제 플레이어들이 쓰는 비율 배치 방식으로, 영상 크기가 바뀌어도 자동으로 맞춰진다 — 폭 750px 이상이면 최대 150px(버튼 사이 여백 88px)까지 시원하게 벌어지고, 좁아지면 96px까지 좁혀져 재생 버튼과 겹치거나 영상 밖으로 밀리지 않는다. (고정 150px이면 폭 320px 영상에서 3버튼 352px로 넘침 — 폭별 계산으로 확인)
+  - 마크업 순서상 재생 버튼이 항상 먼저라, 기존 `wrap.querySelector('.video-play-overlay')`(에러 오버레이·재바인딩용)는 계속 **재생 버튼**을 가리킴 — 순서 의존이므로 이후 마크업 수정 시 주의.
+- ⚠️ **클릭 가로채기 방지 (중요)**: 재생 중에는 재생 버튼이 `opacity:0`이면서도 `pointer-events:auto`(가운데를 눌러 일시정지하는 기존 동작)라, 탐색 버튼이 그 규칙을 그대로 따르면 **보이지 않는 버튼이 클릭을 가로채** 원래 그 자리를 눌렀을 때 되던 재생/일시정지가 막힌다. 그래서 탐색 버튼만 `.playing` 상태에서 `pointer-events:none`, `.playing:hover`에서 `auto`로 두어 **실제로 보일 때만** 클릭을 받도록 함(일반·공유 동일).
+- **모바일**: 실기기 모바일은 재생 오버레이를 숨기고 브라우저 기본 컨트롤을 쓰므로(`isRealMobileDevice` 분기 + `@media (max-width:1024px)` 숨김) **탐색 버튼도 함께 숨김** — 재생 버튼과 노출 조건을 일치시킴.
+- **중복 바인딩 방지**: `_bindVideoSeekButtons()`는 clone 교체 후 리스너를 다시 거는 방식이라, 최초 렌더와 화질/트랙 변경 후 재바인딩에서 여러 번 호출돼도 중복 등록되지 않음.
+- **언어 키 신규**: `seek_back_5`, `seek_fwd_5` (ko/en). 기존 키 변경 0건.
+- **검증**: `php -l`·`node --check`·JSON 파싱 통과, CSS 중괄호 균형, 변경 4파일 모두 **삭제된 줄 0(순수 추가)**.
+- ⚠️ **실기기 확인 필요**: 버튼이 재생 버튼 좌우에 자연스럽게 보이는지, 클릭 시 ±5초 이동과 피드백 표시, **버튼 밖 클릭의 재생/일시정지가 그대로인지(회귀 확인)**, 재생 중 버튼이 안 보일 때 그 자리를 클릭하면 기존대로 재생/일시정지되는지, 전체화면·좁은 화면에서 겹치지 않는지.
+
+**[업그레이드] rhwp 0.7.19 → 0.8.0 (2026-07-26, 가이드 v6.4 준수)**
+
+- **rhwp 0.8.0** (npm latest, shasum `95d5be3a…` 진본 확인) 적용. 업스트림 성격: **MINOR 릴리즈 — v0.7.19 이후 265개 PR 통합**. 버전이 0.8.0으로 올라간 주된 이유는 브라우저 확장 버전을 라이브러리와 통일(0.2.8 → 0.8.0)한 것이며, **공개 API breaking change 없음**.
+- **주요 변경**: 저장 왕복 보존 대공사(무효화 계약 확립, HWPX/HWP5 속성 왕복 수십 건), 에이전트용 CLI 조회·검증 도구군 신설, cargo-fuzz 파서 퍼징 인프라 + 악성/손상 입력 방어(WMF/EMF/CFB/DIB 패닉·과대할당), 편집 undo 충실도 연작, 렌더·폰트 정합(10k 오라클 서베이 r23, 쪽수 회귀 0), studio 반응성·한글 입력 지연 개선.
+- **ABI 호환성 확인**: `export_hwp` / `renderPageSvg` / `version` + `exportHwp` / `renderPageToCanvas` 모두 0.8.0 `rhwp.d.ts`에 보존 → `rhwp_viewer.php`(SVG)·`rhwp_editor.php`(Blob 훅 + 무인자 `exportHwp`) 커스텀 저장 **무영향**.
+- **패치 재적용**: J1(`file:save` Ctrl+S 매핑) 1건 제거, J2(`file:print` Ctrl+P 매핑) 1건 제거 — `file:save` 메뉴 정의는 유지(마우스 클릭 정상). P2(`url(../images/`) 1건 → `url(images/)` 정규화, P1은 0건(0.7.8 이후 동일 패턴). 패치 후 studio JS `node --check` 통과.
+- **CanvasKit**: `canvaskit-DB1zH3nD.wasm`은 0.7.19와 **동일 해시**(skia 정적 자산 무변경 지속), renderer JS만 `Cn_7bIBe`로 갱신. studio 폴더에 함께 배치.
+- 🔵 **HWPX 저장 관련 사실 확인 (0.8.0에서 바뀐 것 없음 — 작업 중 서술 정정)** — studio의 `file:save-as-hwpx`("HWPX 형식으로 저장", `canExecute: e=>e.hasDocument`)와 "HWPX 원본은 HWPX로 저장"하는 포맷 결정 로직은 **이미 0.7.19 빌드에 동일하게 존재**했다. 0.7.19 studio JS와 0.8.0 studio JS를 직접 대조한 결과 해당 항목 전부 동일(메뉴 1건/1건, 포맷 결정 로직 2건/2건, 구 가드 `sourceFormat!==` + backtick hwpx 0건/0건). 즉 **0.8.0에서 새로 열린 것이 아니라**, 업스트림이 0.7.15부터 HWPX 저장 계약(serializer fidelity)을 다듬어 오다 0.7.18 무렵 studio 차단을 해제한 것의 연장선이다(README 0.7.19 항목의 "스테일 패턴" 기록과 일치).
+  - 잔존 문구 `"HWPX 문서는 현재 직접 저장할 수 없습니다."`는 저장 확인 대화상자의 `canSave`가 false일 때만 노출되는 툴팁인데, 호출부가 `canSave: !0`(항상 true)로 고정되어 있어 **실제로는 표시되지 않는 죽은 문구**(0.7.19·0.8.0 동일).
+  - **FileStation 영향 없음**: HWPX 차단은 studio canExecute에 의존하지 않는다. ⑤ `rhwp_editor.php` 서버측 확장자 검증(`action=save`/`save-as`에서 `.hwp`만 허용), ②③④ `IS_HWPX_DOC` + `notifyHwpxNotSupported`(11건), 그리고 커스텀 저장이 **무인자 `exportHwp()`**라 HWPX와 무관하게 항상 HWP로 저장 — 모두 건재. FileStation을 통한 저장 경로는 여전히 HWP 전용.
+  - ✅ **가이드 개정 완료 (v6.4 → v6.5, 2026-07-26)**: STEP 10 검증 #11/#12를 폐지하고 **서버측 확장자 검증 + HWPX Blob 캡처 확인**으로 대체, `notifySaved` 검증 #18 신설, HWPX 직접 저장 지원으로 커스텀 기능 표·트러블슈팅·체크리스트 갱신, 버전 이력 0.7.19/0.8.0 추가, 환경 주의(php 미설치·`/home/claude/work` 휘발) 명시.
+- **FileStation 버전 유지** (v5.8.3b — 펜닐 룰, "버전 올려줘" 명시 없음 → rhwp 버전만 갱신 후 재패키징).
+- **변경 범위 검증**: 백업 대비 `rhwp_editor.php` 3줄(studio JS/CSS 파일명 2 + `@rhwp_version` 1), `rhwp_viewer.php` 1줄(`@rhwp_version`), `README.md`, `assets/rhwp/` 자산만 변경. **게시판 작업이 든 `api.php`·`assets/js/app.js`·`assets/css/style.css`·`lang/*.json`은 무변경 확인.** PHP 문법(`php -l` 5개 파일)·JS(`node --check`) 전부 통과.
+- ⚠️ **실기기 확인 필요**: HWP 뷰어 렌더, 에디터 Ctrl+S 서버 저장, Ctrl+Shift+S 다른 이름으로 저장, HWPX 파일이 FileStation에서 여전히 저장 차단되는지, CanvasKit 렌더, 다크테마와 커스텀 메뉴 공존.
+
+**[업그레이드] rhwp 0.7.18 → 0.7.19 (2026-07-19, 가이드 v6.4 준수)**
+
+- **rhwp 0.7.19** (npm 배포 2026-07-17) 적용. 업스트림 성격: v0.7.18 후속 **PATCH — 공개 API 하위 호환 유지**, breaking change 없음.
+- **주요 업스트림 변경**: 저장 지오메트리 신호(intra-para vpos 리셋) 존중 계보의 렌더·편집 경로 정합, 표 페이지네이션 정밀도(rowspan 선언-잔여, 서식 문서 과소분할), 편집 vpos 재계산이 저장 리셋 보존(편집 스윕 574건 중 가짜 페이지 변동 60건 해소), BinData 지연 로딩(RSS 244MB→49MB), **HML(HWPML) 문서 열기·의미 보존 저장 신규**, CanvasKit readiness gate 강화, legacy `/web` 개발 앱 제거(스튜디오 무영향).
+- **작업 절차** (가이드 STEP 0~12):
+  - core: npm `@rhwp/core@0.7.19` tarball **shasum 진본 검증 통과**(`df3d303e965bb207a6ef66ce9f6beb13d94ccc60` 일치) → `assets/rhwp/rhwp.js`·`rhwp_bg.wasm` 교체.
+  - studio: GitHub `v0.7.19` 태그 clone → `vite.config.ts`에 **옵션 B(base만 안전 추가)** 적용해 **VitePWA·serve-samples-dir 플러그인 보존** → `npm install`+`tsc`(에러 0)+`vite build` → 산출물 교체(`index-C2tVKY8p.js`, `index-DXdWbUsL.css`, `rhwp_bg-PSxFoLe6.wasm`, `canvaskit-DB1zH3nD.wasm`, `canvaskit-renderer-Dh3baHL6.js`, fonts/images/icons/favicon).
+  - 패치 재적용: **J1**(file:save Ctrl+S 매핑 제거) 1건 ✅, **J2**(file:print Ctrl+P 매핑 제거) 1건 ✅, **P2**(CSS `../images/` → `images/`) ✅ — P1은 해당 없음(0.7.19 빌드는 상위참조 패턴).
+  - `rhwp_editor.php`: studio 파일명 갱신(`index-BbUFqbC-.js`→`index-C2tVKY8p.js`, `index-BKc-ZB2H.css`→`index-DXdWbUsL.css`) + `@rhwp_version 0.7.19`. `rhwp_viewer.php`: `@rhwp_version 0.7.19`. **그 외 커스텀 로직 일절 미변경**(diff 3줄만).
+- **검증 (STEP 10, 17항목)**: 1~10 커스텀 보존 전부 기준 충족(save/save-as 엔드포인트, Blob 캡처, MutationObserver, 캐시버스팅 2, `e.code==='KeyS'`, syncSuspended 6, notifyParentFileChanged 4, app.js `rhwp-file-changed`). 13/14/15/16/17 ✅(J1·J2 제거 확인, CSS 정규화, `Version 0.7.19`, CanvasKit 배치). studio JS `node --check` 통과, PHP 6파일 `php -l` 통과.
+- ⚠️ **검증 #11 항목은 가이드 패턴 스테일 — 회귀 아님(조사 완료)**: `sourceFormat!==`hwpx`` 패턴이 0.7.19에서 매칭 0건이나, **0.7.18(직전 운영 버전)에서도 동일하게 0건**임을 백업본 대조로 확인. 양 버전 모두 `file:save`의 `canExecute:e=>e.hasDocument`로 동일하여 **업스트림 동작 차이 없음**. HWPX 저장 차단의 실질 방어선은 `rhwp_editor.php`의 **서버측 확장자 검증(.hwp만 허용)** 이며 건재. → 가이드 #11 패턴은 0.7.18 이전에 업스트림에서 사라진 낡은 패턴이므로 **다음 가이드 개정 시 갱신 권장**.
+- **v5.8.3의 OnlyOffice PDF 연동 작업분 무손상**(배선 12건 유지, app.js `node --check` 통과).
+- ⚠️ **실기기 확인 필요**: ① HWP 문서 뷰어 렌더링 ② 에디터 열기 → 편집 → **Ctrl+S 서버 저장** ③ 다른 이름으로 저장 ④ Ctrl+P 브라우저 인쇄 대화상자 ⑤ HWPX 열람(저장 차단 유지 확인) ⑥ 표/다단 문서 페이지 정합(0.7.19 렌더 변경 영향 확인).
+
+#### v5.8.3 (2026-07-11)
 
 **[기능] PDF를 OnlyOffice로 편집 — 서버 버전 게이트 + pdf.js 미리보기 유지 (2026-07-11, 펜닐님 요청)**
 
@@ -3002,4 +3156,4 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 ---
 
 *FileStation v5.8.2d — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-07-11 (v5.8.2e, rhwp 0.7.18 기준)*
+*최종 업데이트: 2026-07-26 (v5.8.3b, rhwp 0.8.0 기준)*

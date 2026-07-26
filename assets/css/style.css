@@ -482,6 +482,46 @@ body {
     white-space: nowrap;
 }
 
+/* 게시판 검색 조건 select (검색창 왼쪽) */
+#board-search-type {
+    height: 32px;
+    font-size: 12px;
+    padding: 0 6px;
+    text-align: center;
+    text-align-last: center;   /* 닫힌 상태의 선택값을 가운데 정렬 */
+    border: 1px solid var(--theme-border, var(--border, #ddd));
+    border-radius: 16px;
+    background: var(--theme-hover, var(--bg-secondary, #f8f9fa));
+    color: var(--theme-text, #333);
+    outline: none;
+    cursor: pointer;
+    flex: 0 0 auto;
+}
+@media (max-width: 1024px) {
+    #board-search-type {
+        height: 28px;
+        font-size: 11px;
+        padding: 0 2px;
+        max-width: 84px;
+    }
+}
+
+/* 게시판관리(관리자 전용) 체크박스 열 */
+.board-table .board-col-check {
+    text-align: center;
+    width: 34px;
+    padding-left: 6px;
+    padding-right: 0;
+    white-space: nowrap;
+}
+.board-table .board-col-check input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
 .board-table .board-col-title {
     text-align: left;
     overflow: hidden;
@@ -547,6 +587,14 @@ body {
     .board-table .board-col-num {
         width: 35px;
         padding: 8px 2px;
+    }
+    .board-table .board-col-check {
+        width: 26px;
+        padding: 8px 0 8px 2px;
+    }
+    .board-table .board-col-check input[type="checkbox"] {
+        width: 15px;
+        height: 15px;
     }
     .board-table .board-col-author {
         width: 50px;
@@ -752,6 +800,52 @@ body {
     user-select: none;
     border-top: 1px solid var(--theme-border, var(--border, #eee));
     margin-top: 4px;
+}
+
+/* 게시판 하단 바: '게시판관리' 버튼을 페이지네이션과 같은 줄 오른쪽에 배치.
+   페이지네이션은 전체 폭 기준 가운데 정렬 + 상단 구분선을 그대로 유지해야 하므로,
+   레이아웃을 바꾸지 않고 버튼만 absolute로 오른쪽에 겹쳐 올린다. */
+#board-bottom-row {
+    flex-shrink: 0;   /* 기존 #board-inline-pagination의 flex-shrink:0 의도를 감싼 행에도 유지 */
+}
+#board-bottom-row #board-admin-actions {
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+/* 게시판관리 버튼 크기: 기본 .btn(padding 10/20, 14px)은 페이지네이션 줄에 비해 커서
+   앱의 게시판 버튼 관례(글쓰기 버튼과 동일 규격)로 맞춘다 — PC 32px/12px, 모바일 28px/11px */
+#btn-board-manage {
+    height: 32px;
+    line-height: 1;
+    padding: 0 14px;
+    font-size: 12px;
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+/* 좁은 화면도 PC와 동일한 배치(페이지네이션은 전체 폭 기준 가운데 정렬 유지, 버튼만 오른쪽에 겹쳐 올림).
+   이전에는 flex로 자리를 나눴는데 그러면 페이지네이션이 왼쪽으로 밀려 PC와 모양이 달라져서 되돌림.
+   버튼은 더 작게 하고, 페이지 번호가 많으면 가로로 넘치는 대신 줄바꿈되게 한다. */
+@media (max-width: 1024px) {
+    #board-bottom-row .board-paginate {
+        /* 좌우 '대칭' 여백으로 버튼 영역을 비워둔다 — 대칭이라 가운데 정렬은 그대로 유지되고,
+           페이지 번호가 많아져도 버튼 위로 넘어가지 않고 아래 줄로 줄바꿈된다. */
+        padding-left: 90px;
+        padding-right: 90px;
+        flex-wrap: wrap;
+    }
+    #board-bottom-row #board-admin-actions {
+        right: 10px;
+    }
+    #btn-board-manage {
+        height: 28px;
+        padding: 0 8px;
+        font-size: 11px;
+    }
 }
 
 .board-paginate a,
@@ -4685,6 +4779,29 @@ video::cue {
     opacity: 0;
     pointer-events: none;
 }
+
+/* 재생 버튼 좌우 탐색 버튼 (±5초)
+   video-play-overlay 클래스를 함께 부여해 재생중/호버/전체화면 idle/모바일 숨김 등
+   표시 규칙을 그대로 따르게 하고, 여기서는 위치·크기만 덮어쓴다.
+   좌우 인식 영역은 이 버튼 안으로 한정되며, 버튼 밖 클릭의 재생/일시정지 동작은 그대로 유지된다. */
+.video-play-overlay.video-seek-btn {
+    width: 52px;
+    height: 52px;
+    border-width: 1px;
+    padding: 0;
+    color: #fff;
+}
+/* 간격은 영상 폭에 비례(20%)하되 96~150px로 제한 — 실제 플레이어들이 쓰는 비율 배치 방식.
+   넓은 영상에서는 최대 150px까지 시원하게 벌어지고, 좁은 영상에서는 96px까지 좁혀져
+   버튼이 영상 밖으로 밀리거나 재생 버튼과 겹치지 않는다.
+   (percentage는 containing block인 .video-player-wrap의 폭 기준으로 해석됨) */
+.video-play-overlay.video-seek-btn-back { left: calc(50% - clamp(96px, 20%, 150px)); }
+.video-play-overlay.video-seek-btn-fwd  { left: calc(50% + clamp(96px, 20%, 150px)); }
+/* ★ 재생 중에는 재생 버튼이 opacity:0 이면서도 클릭은 받도록 되어 있다(가운데를 눌러 일시정지).
+   탐색 버튼까지 그 규칙을 따르면 '보이지 않는 버튼'이 클릭을 가로채, 원래 그 자리를 눌렀을 때
+   되던 재생/일시정지가 동작하지 않게 된다. 그래서 탐색 버튼은 실제로 보일 때만 클릭을 받는다. */
+.video-player-wrap.playing .video-play-overlay.video-seek-btn { pointer-events: none; }
+.video-player-wrap.playing:hover .video-play-overlay.video-seek-btn { pointer-events: auto; }
 @media (max-width: 1024px) {
     .video-play-overlay { display: none !important; }
 }
@@ -8010,7 +8127,7 @@ body.is-mobile #board-inline-toolbar .toolbar-right {
 }
 
 body.is-mobile #board-inline-toolbar #board-inline-search {
-    width: 80px;
+    width: 100px;
     height: 28px;
     font-size: 11px;
     padding-left: 24px;
@@ -11415,10 +11532,19 @@ tr:hover,
     }
     
     #board-inline-toolbar #board-inline-search {
-        width: 80px !important;
+        width: 100px !important;
         height: 28px !important;
         font-size: 11px !important;
         padding-left: 24px !important;
+    }
+    
+    /* 포커스 시 가로 확장 (100px → 140px).
+       PC는 인라인 onfocus가 this.style.width를 바꿔 넓히지만, 모바일에서는 위 규칙의
+       !important가 인라인 스타일을 이겨 확장이 무시됐다. 그래서 :focus에도 !important 필요.
+       전환 애니메이션은 엘리먼트 인라인 style의 transition(width 0.2s)이 그대로 적용된다.
+       해제 시에는 위 기본 규칙(100px)으로 자연히 되돌아간다. */
+    #board-inline-toolbar #board-inline-search:focus {
+        width: 140px !important;
     }
     
     #board-inline-toolbar .btn-board-write,

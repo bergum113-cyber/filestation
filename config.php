@@ -4,7 +4,7 @@
  * 시놀로지 파일스테이션 대체용 셀프호스팅 파일 관리 시스템
  *
  * @author   펜닐 (Pennil)
- * @version  5.8.3
+ * @version  5.8.3b
  * @license  All rights reserved
  */
 
@@ -13,7 +13,7 @@
 // ini_set('error_log', __DIR__ . '/data/php_error.log');
 
 // 버전 (수정 시 상단 @version 주석도 함께 업데이트할 것!)
-define('APP_VERSION', '5.8.3');
+define('APP_VERSION', '5.8.3b');
 
 // 압축 해제/목록 디버그 로그 스위치 (진단 시에만 true)
 // true로 바꾸면 <DATA_PATH>/extract_debug.log 에 압축 처리 과정이 기록됨.
