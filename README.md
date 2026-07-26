@@ -4,7 +4,7 @@
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
-![rhwp](https://img.shields.io/badge/rhwp-0.7.19-9cf)
+![rhwp](https://img.shields.io/badge/rhwp-0.8.0-9cf)
 ![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
@@ -663,9 +663,9 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.7.19
+버전: 0.8.0
 파일: assets/rhwp/
-업그레이드: rhwp_업그레이드_가이드_v6.4.md 참조
+업그레이드: rhwp_업그레이드_가이드_v6.5.md 참조
 ```
 
 ### WebDAV 서버
@@ -724,7 +724,7 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ### 주요 변경 이력
 
-#### v5.8.3b (2026-07-22~24) ⭐ 현재
+#### v5.8.3b (2026-07-22~26) ⭐ 현재
 
 **[버그 수정] H264/MP4 변환 후 파일 인덱스 미갱신 — 대용량 스토리지 목록에 변환 결과 미반영 (2026-07-22, 펜닐님 제보)**
 
