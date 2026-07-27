@@ -1,10 +1,10 @@
-# FileStation v5.8.3b
+# FileStation v5.8.3c
 
-![version](https://img.shields.io/badge/version-v5.8.3b-blue)
+![version](https://img.shields.io/badge/version-v5.8.3c-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
-![rhwp](https://img.shields.io/badge/rhwp-0.8.0-9cf)
+![rhwp](https://img.shields.io/badge/rhwp-0.8.2-9cf)
 ![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
@@ -663,9 +663,9 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.8.0
+버전: 0.8.2
 파일: assets/rhwp/
-업그레이드: rhwp_업그레이드_가이드_v6.5.md 참조
+업그레이드: rhwp_업그레이드_가이드_v6.6.md 참조
 ```
 
 ### WebDAV 서버
@@ -720,11 +720,16 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.8.3b (rhwp 0.8.0 기반)
+**현재 버전**: v5.8.3c (rhwp 0.8.2 기반)
 
 ### 주요 변경 이력
 
-#### v5.8.3b (2026-07-22~26) ⭐ 현재
+#### v5.8.3c (2026-07-27) ⭐ 현재
+
+- **[업그레이드] rhwp 0.8.0 → 0.8.2** — 아래 "rhwp 업그레이드 이력" 참조. 커스텀 로직 변경 없음(`rhwp_editor.php` diff 2줄: studio JS 파일명 + `@rhwp_version`).
+- 버전 번호 상향(5.8.3b → 5.8.3c)에 따라 `?v=APP_VERSION` 캐시 버스팅이 자동 무효화되어, 브라우저가 갱신된 studio 자산을 새로 받는다.
+
+#### v5.8.3b (2026-07-22~26)
 
 **[버그 수정] H264/MP4 변환 후 파일 인덱스 미갱신 — 대용량 스토리지 목록에 변환 결과 미반영 (2026-07-22, 펜닐님 제보)**
 
@@ -848,6 +853,24 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 - **언어 키 신규**: `seek_back_5`, `seek_fwd_5` (ko/en). 기존 키 변경 0건.
 - **검증**: `php -l`·`node --check`·JSON 파싱 통과, CSS 중괄호 균형, 변경 4파일 모두 **삭제된 줄 0(순수 추가)**.
 - ⚠️ **실기기 확인 필요**: 버튼이 재생 버튼 좌우에 자연스럽게 보이는지, 클릭 시 ±5초 이동과 피드백 표시, **버튼 밖 클릭의 재생/일시정지가 그대로인지(회귀 확인)**, 재생 중 버튼이 안 보일 때 그 자리를 클릭하면 기존대로 재생/일시정지되는지, 전체화면·좁은 화면에서 겹치지 않는지.
+
+**[업그레이드] rhwp 0.8.0 → 0.8.2 (2026-07-27, 가이드 v6.5 준수 → 이후 v6.6으로 개정)**
+
+- **rhwp 0.8.2** (npm latest, shasum `af134d04e67e8822923435d31a285991bbce23ab` 진본 확인) 적용. 0.8.1·0.8.2를 한 번에 건너뛰어 올림.
+- **업스트림 성격 — 공개 API 변경 없음**
+  - **0.8.1 (PATCH)**: 렌더 정정(바탕쪽 머리말 개체가 용지 가장자리로 튀어나가던 문제, HWP3 글맵시 내장 OLE 추출, HWP3 문단 테두리 '선 없음' 오렌더), CLI 계약 정합·신규 기능(`edit fill-fields`/`replace-text`/`set-cell` 등 — 전부 CLI 계층), studio는 스타일 생성·수정·삭제를 편집 히스토리에 기록(`Ctrl+Z` 가능)·외부 그림 dev fetch 가드. CHANGELOG 명시: **라이브러리 공개 API 변경 없음**.
+  - **0.8.2 (핫픽스)**: 브라우저 확장의 인쇄가 "파일을 찾을 수 없음"으로 실패하던 문제 복구(`print.html`이 확장 빌드 산출물에서 빠져 있었음 — v0.8.0부터 영향). 빌드에 **필수 산출물 게이트** 추가(자산 복사 실패 시 경고만 남기고 성공하던 동작 제거). 렌더 정정 1건(TAC 인라인 표 x-원점 바깥여백).
+  - → 두 릴리즈 모두 **FileStation 사용 경로(뷰어 SVG·에디터 저장)와 무관한 영역**이 중심. 확장 인쇄는 FileStation이 쓰지 않음.
+- **ABI 호환성**: `exportHwp`/`exportHwpx`/`exportHml`/`renderPageSvg`/`renderPageToCanvas`/`renderPageHtml`/`version` — 0.8.0과 **심볼 집합 완전 동일**(사라진 심볼 0). 커스텀 저장·뷰어 렌더 무영향.
+- **호스트 API 존속 확인**: 저장 후 이탈 경고 제거에 쓰는 `window.rhwpStudio.notifySaved()`가 0.8.2 studio 번들에도 존재(1건) → 해당 기능 유지.
+- **코어 파일 대조로 API 무변경 교차 확인**: `rhwp.js`(wasm-bindgen 글루)가 0.8.0과 **바이트 단위 동일**(md5 `a771a8b7047c`, 347,437B) — 내보내는 API 표면이 바뀌지 않았다는 뜻으로 CHANGELOG의 "공개 API 변경 없음"과 일치. 엔진 본체 `rhwp_bg.wasm`만 갱신(7,175,465B → 7,189,247B). 배포본 두 파일 모두 npm 0.8.2 원본과 md5 일치 확인.
+- **빌드 산출물**: `index-1A4EvFd5.js`(신규), **`index-CX93BaKm.css`는 0.8.0과 동일 해시**(CSS 무변경), `rhwp_bg-DPb8Hj0A.wasm`, `canvaskit-renderer-BRkR7HEv.js`. **`canvaskit-DB1zH3nD.wasm`은 0.7.16 이후 계속 동일 해시**(md5 대조 확인).
+- **패치 재적용**: J1(`file:save` Ctrl+S 매핑) 1건 제거, J2(`file:print` Ctrl+P 매핑) 1건 제거 — `file:save` 메뉴 정의 유지. P1 0건 / P2(`../images/`) 1건 정규화. 패치 후 studio JS `node --check` 통과.
+- **`vite.config.ts`**: PWA·커스텀 플러그인이 있어 **옵션 B**(`base: './'`만 안전 추가)로 처리 — PWA 생성 정상(`sw.js`, precache 57 entries).
+- **변경 범위**: `rhwp_editor.php` **2줄**(studio JS 파일명, `@rhwp_version`), `rhwp_viewer.php` 1줄(`@rhwp_version`), `config.php` 1줄(APP_VERSION), `README.md`, `assets/rhwp/` 자산. **커스텀 로직·게시판·동영상 플레이어 코드 일절 미변경**(백업 대비 diff 확인).
+- **STEP 10 검증 (v6.5)**: 1~10 커스텀 보존 전부 기준 충족, 개정 항목 11/11b/12(서버측 확장자 검증·save-as 원본확장자 비교·HWPX Blob 캡처)와 신설 18/18b(`markStudioSaved` 4건·studio API 노출 1건) 충족, 13~17(J1·J2 제거, CSS 정규화, `@rhwp_version 0.8.2`, CanvasKit 배치) ✅. PHP 6파일 `php -l` 통과.
+- **검증 #5 관련 기록 정정**: 작업 중 `MutationObserver` 카운트가 0.8.0 때 관측한 3에서 2로 줄어 회귀를 의심했으나, **가이드의 기대값은 원래 `1 이상`**이라 현재 2는 정상 통과다(관측값을 기준값으로 착각한 오진). 감소 원인은 HWPX 저장 개방 작업에서 observer 관련 주석 한 줄이 정리된 것이며, 기능 코드(`new MutationObserver` 1 + `observer.observe` 2건)는 0.8.0 백업과 **완전히 동일**함을 diff로 확인했다. 가이드 수정 불필요.
+- ⚠️ **실기기 확인 필요**: HWP 뷰어 렌더, 에디터 Ctrl+S 서버 저장, Ctrl+Shift+S 다른 이름으로 저장, HWPX 직접 저장(0.8.0에서 개방한 기능 유지 확인), 저장 후 이탈 경고 미표시, CanvasKit 렌더, 표/다단 문서 페이지 정합(0.8.1 렌더 정정 영향 확인).
 
 **[업그레이드] rhwp 0.7.19 → 0.8.0 (2026-07-26, 가이드 v6.4 준수)**
 
@@ -3156,4 +3179,4 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 ---
 
 *FileStation v5.8.2d — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-07-26 (v5.8.3b, rhwp 0.8.0 기준)*
+*최종 업데이트: 2026-07-27 (v5.8.3c, rhwp 0.8.2 기준)*
