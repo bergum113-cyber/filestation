@@ -290,6 +290,49 @@
 }
 .fap-seek-bar:hover .fap-seek-thumb,
 .fap-seek-bar:active .fap-seek-thumb { opacity: 1; }
+/* ★ 구간 반복(A-B) 표시 — 스킨 강조색과 겹치지 않게 앰버 계열 고정 */
+.fap-seek-ab-range {
+    position: absolute;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    background: rgba(255,179,0,0.55);
+    border-radius: 2px;
+    width: 0;
+    pointer-events: none;
+    z-index: 3;  /* played(2) 위에 얹어 구간이 가려지지 않게 */
+}
+.fap-seek-ab-mark {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 2px;
+    height: 14px;
+    background: #ffb300;
+    border-radius: 1px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 4;
+    /* 밝은 스킨(ap-fixed 흰 배경)과 금색/주황 계열 스킨(cassette·soundcloud)에서도
+       눈금이 배경에 묻히지 않도록 얇은 외곽선을 둘러 형태로 구분되게 한다 */
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.45);
+}
+/* ★ 구간 반복이 실제로 걸린 상태(A·B 모두 지정) 표시 —
+   'A만 지정(대기)'과 'A-B 반복 중'을 라벨 글자 외에 밑줄로도 구분.
+   스킨 강조색과 무관한 앰버 고정 = 시크바 눈금과 같은 색으로 연결지어 인지시킨다 */
+.fap-btn-ab { position: relative; }
+.fap-btn-ab.ab-set::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    width: 14px;
+    height: 2px;
+    transform: translateX(-50%);
+    background: #ffb300;
+    border-radius: 1px;
+    pointer-events: none;
+}
 /* 컨트롤 버튼 */
 .fap-controls {
     display: flex;
@@ -333,19 +376,22 @@
 /*    펜닐님 요청: 클릭 후 마우스 떠도 active 색만 유지되어야 함 */
 /*    Default: 비활성 색(rgba(255,255,255,0.6))을 hover 시도 유지 */
 .fap-btn-shuffle:hover,
-.fap-btn-loop:hover {
+.fap-btn-loop:hover,
+.fap-btn-ab:hover {
     color: rgba(255,255,255,0.6);  /* 비활성 색 유지 (hover로 흰색 안 됨) */
     background: transparent !important;
 }
 /* 활성 상태 hover는 active 색 유지 */
 .fap-btn-shuffle.active:hover,
-.fap-btn-loop.active:hover {
+.fap-btn-loop.active:hover,
+.fap-btn-ab.active:hover {
     color: #7c6ef6;  /* active 보라 그대로 */
 }
 /* ★ Active 상태 (셔플/반복 켜짐) — 색상만 변경 (배경 없음, 통일감) */
 /*    각 스킨에서 재생바/볼륨바 색과 동일한 강조색 사용 */
 .fap-btn-shuffle.active,
-.fap-btn-loop.active {
+.fap-btn-loop.active,
+.fap-btn-ab.active {
     color: #7c6ef6;
 }
 .fap-btn-loop.active-one { position: relative; }
@@ -812,9 +858,11 @@
 .fap-skin-soundcloud .fap-btn:hover { color: #f50 !important; }
 /* ★ 셔플/반복 hover 시 색상 변화 X (active와 헷갈림 방지) */
 .fap-skin-soundcloud .fap-btn-shuffle:hover,
-.fap-skin-soundcloud .fap-btn-loop:hover { color: #666 !important; }
+.fap-skin-soundcloud .fap-btn-loop:hover,
+.fap-skin-soundcloud .fap-btn-ab:hover { color: #666 !important; }
 .fap-skin-soundcloud .fap-btn-shuffle.active:hover,
-.fap-skin-soundcloud .fap-btn-loop.active:hover { color: #f50 !important; }
+.fap-skin-soundcloud .fap-btn-loop.active:hover,
+.fap-skin-soundcloud .fap-btn-ab.active:hover { color: #f50 !important; }
 .fap-skin-soundcloud .fap-btn-play {
     background: #f50 !important; color: #fff !important;
 }
@@ -825,7 +873,8 @@
 }
 /* ★ Soundcloud active: 주황 색상만 (재생바와 동일) */
 .fap-skin-soundcloud .fap-btn-shuffle.active,
-.fap-skin-soundcloud .fap-btn-loop.active {
+.fap-skin-soundcloud .fap-btn-loop.active,
+.fap-skin-soundcloud .fap-btn-ab.active {
     color: #f50 !important;
 }
 .fap-skin-soundcloud .fap-vol-bar::before { background: #ddd !important; }
@@ -912,11 +961,13 @@
 /* ★ Cassette: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
 /*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
 .fap-skin-cassette .fap-btn-shuffle,
-.fap-skin-cassette .fap-btn-loop {
+.fap-skin-cassette .fap-btn-loop,
+.fap-skin-cassette .fap-btn-ab {
     opacity: 0.5;
 }
 .fap-skin-cassette .fap-btn-shuffle.active,
-.fap-skin-cassette .fap-btn-loop.active {
+.fap-skin-cassette .fap-btn-loop.active,
+.fap-skin-cassette .fap-btn-ab.active {
     color: #ffd700 !important;
     opacity: 1;
 }
@@ -1051,7 +1102,8 @@
 /* ★ 셔플/반복 hover 색상/배경/보더 변화 X (active와 헷갈림 방지) */
 /*    기본 보더 (#30363d)는 유지, 형광초록으로 안 변하게 */
 .fap-skin-terminal .fap-btn-shuffle:hover,
-.fap-skin-terminal .fap-btn-loop:hover {
+.fap-skin-terminal .fap-btn-loop:hover,
+.fap-skin-terminal .fap-btn-ab:hover {
     background: transparent !important;
     border-color: #30363d !important;
 }
@@ -1062,11 +1114,13 @@
 /* ★ Terminal: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
 /*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
 .fap-skin-terminal .fap-btn-shuffle,
-.fap-skin-terminal .fap-btn-loop {
+.fap-skin-terminal .fap-btn-loop,
+.fap-skin-terminal .fap-btn-ab {
     opacity: 0.5;
 }
 .fap-skin-terminal .fap-btn-shuffle.active,
-.fap-skin-terminal .fap-btn-loop.active {
+.fap-skin-terminal .fap-btn-loop.active,
+.fap-skin-terminal .fap-btn-ab.active {
     color: #00ff41 !important;
     opacity: 1;
 }
@@ -1192,18 +1246,21 @@
 .fap-skin-pixel .fap-btn:hover { background: #306230 !important; }
 /* ★ 셔플/반복 hover 배경 변화 X (active와 헷갈림 방지) — 원래 배경 유지 */
 .fap-skin-pixel .fap-btn-shuffle:hover,
-.fap-skin-pixel .fap-btn-loop:hover {
+.fap-skin-pixel .fap-btn-loop:hover,
+.fap-skin-pixel .fap-btn-ab:hover {
     background: #0f380f !important;  /* 픽셀 기본 배경 유지 */
 }
 .fap-skin-pixel .fap-btn-play { background: #306230 !important; }
 /* ★ Pixel: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
 /*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
 .fap-skin-pixel .fap-btn-shuffle,
-.fap-skin-pixel .fap-btn-loop {
+.fap-skin-pixel .fap-btn-loop,
+.fap-skin-pixel .fap-btn-ab {
     opacity: 0.5;
 }
 .fap-skin-pixel .fap-btn-shuffle.active,
-.fap-skin-pixel .fap-btn-loop.active {
+.fap-skin-pixel .fap-btn-loop.active,
+.fap-skin-pixel .fap-btn-ab.active {
     color: #9bbc0f !important;
     opacity: 1;
 }
@@ -1427,17 +1484,21 @@
 .fap-skin-ap-fixed .fap-btn:hover { color: #3ac0ff !important; background: rgba(58,192,255,0.1) !important; }
 /* ★ 셔플/반복 hover 색상 변화 X (active와 헷갈림 방지) */
 .fap-skin-ap-fixed .fap-btn-shuffle:hover,
-.fap-skin-ap-fixed .fap-btn-loop:hover { color: #999 !important; background: transparent !important; }
+.fap-skin-ap-fixed .fap-btn-loop:hover,
+.fap-skin-ap-fixed .fap-btn-ab:hover { color: #999 !important; background: transparent !important; }
 .fap-skin-ap-fixed .fap-btn-shuffle.active:hover,
-.fap-skin-ap-fixed .fap-btn-loop.active:hover { color: #3ac0ff !important; }
+.fap-skin-ap-fixed .fap-btn-loop.active:hover,
+.fap-skin-ap-fixed .fap-btn-ab.active:hover { color: #3ac0ff !important; }
 /* ★ ap-fixed: 비활성은 중성 회색 (다른 스킨과 통일감) */
 .fap-skin-ap-fixed .fap-btn-shuffle,
-.fap-skin-ap-fixed .fap-btn-loop {
+.fap-skin-ap-fixed .fap-btn-loop,
+.fap-skin-ap-fixed .fap-btn-ab {
     color: #999 !important;
 }
 /* ★ ap-fixed active: 스카이블루 (재생바와 동일) */
 .fap-skin-ap-fixed .fap-btn-shuffle.active,
-.fap-skin-ap-fixed .fap-btn-loop.active {
+.fap-skin-ap-fixed .fap-btn-loop.active,
+.fap-skin-ap-fixed .fap-btn-ab.active {
     color: #3ac0ff !important;
 }
 .fap-skin-ap-fixed .fap-btn-play {

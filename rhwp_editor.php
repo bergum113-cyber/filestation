@@ -3,7 +3,7 @@ require_once __DIR__ . '/php_version_check.php';
 /**
  * rhwp-studio HWP 에디터 래퍼
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.8.2
+ * @rhwp_version 0.8.4
  */
 
 require_once __DIR__ . '/config.php';
@@ -400,8 +400,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
   window.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   document.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   </script>
-  <script type="module" crossorigin src="index-1A4EvFd5.js?v=<?php echo APP_VERSION; ?>"></script>
-  <link rel="stylesheet" crossorigin href="index-CX93BaKm.css?v=<?php echo APP_VERSION; ?>">
+  <script type="module" crossorigin src="index-BsGOrzbg.js?v=<?php echo APP_VERSION; ?>"></script>
+  <link rel="stylesheet" crossorigin href="index-RCGbZ9bS.css?v=<?php echo APP_VERSION; ?>">
 </head>
 <body>
   <div id="studio-root">

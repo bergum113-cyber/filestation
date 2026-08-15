@@ -4475,6 +4475,18 @@ body.board-mode #transfer-progress {
     color: #fff;
     border-color: rgba(102, 126, 234, 0.8);
 }
+/* ★ 구간 반복(A-B) 시간 표시 — 동영상은 진행바가 브라우저 기본 컨트롤이라
+   시크바에 눈금을 못 그리므로 컨트롤 줄에 텍스트로 구간을 보여준다.
+   음악 플레이어의 A-B 눈금과 같은 앰버 계열로 맞춰 인지 연결. */
+.vec-ab-range {
+    font-size: 11px;
+    font-weight: 700;
+    color: #ffb300;
+    font-family: monospace;
+    white-space: nowrap;
+    align-self: center;
+    padding: 0 2px;
+}
 .vec-sep {
     width: 1px;
     height: 18px;
@@ -5179,6 +5191,49 @@ video::cue {
 }
 .fap-seek-bar:hover .fap-seek-thumb,
 .fap-seek-bar:active .fap-seek-thumb { opacity: 1; }
+/* ★ 구간 반복(A-B) 표시 — 스킨 강조색과 겹치지 않게 앰버 계열 고정 */
+.fap-seek-ab-range {
+    position: absolute;
+    top: 50%;
+    height: 4px;
+    transform: translateY(-50%);
+    background: rgba(255,179,0,0.55);
+    border-radius: 2px;
+    width: 0;
+    pointer-events: none;
+    z-index: 3;  /* played(2) 위에 얹어 구간이 가려지지 않게 */
+}
+.fap-seek-ab-mark {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 2px;
+    height: 14px;
+    background: #ffb300;
+    border-radius: 1px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 4;
+    /* 밝은 스킨(ap-fixed 흰 배경)과 금색/주황 계열 스킨(cassette·soundcloud)에서도
+       눈금이 배경에 묻히지 않도록 얇은 외곽선을 둘러 형태로 구분되게 한다 */
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.45);
+}
+/* ★ 구간 반복이 실제로 걸린 상태(A·B 모두 지정) 표시 —
+   'A만 지정(대기)'과 'A-B 반복 중'을 라벨 글자 외에 밑줄로도 구분.
+   스킨 강조색과 무관한 앰버 고정 = 시크바 눈금과 같은 색으로 연결지어 인지시킨다 */
+.fap-btn-ab { position: relative; }
+.fap-btn-ab.ab-set::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    width: 14px;
+    height: 2px;
+    transform: translateX(-50%);
+    background: #ffb300;
+    border-radius: 1px;
+    pointer-events: none;
+}
 /* 컨트롤 버튼 */
 .fap-controls {
     display: flex;
@@ -5222,19 +5277,22 @@ video::cue {
 /*    펜닐님 요청: 클릭 후 마우스 떠도 active 색만 유지되어야 함 */
 /*    Default: 비활성 색(rgba(255,255,255,0.6))을 hover 시도 유지 */
 .fap-btn-shuffle:hover,
-.fap-btn-loop:hover {
+.fap-btn-loop:hover,
+.fap-btn-ab:hover {
     color: rgba(255,255,255,0.6);  /* 비활성 색 유지 (hover로 흰색 안 됨) */
     background: transparent !important;
 }
 /* 활성 상태 hover는 active 색 유지 */
 .fap-btn-shuffle.active:hover,
-.fap-btn-loop.active:hover {
+.fap-btn-loop.active:hover,
+.fap-btn-ab.active:hover {
     color: #7c6ef6;  /* active 보라 그대로 */
 }
 /* ★ Active 상태 (셔플/반복 켜짐) — 색상만 변경 (배경 없음, 통일감) */
 /*    각 스킨에서 재생바/볼륨바 색과 동일한 강조색 사용 */
 .fap-btn-shuffle.active,
-.fap-btn-loop.active {
+.fap-btn-loop.active,
+.fap-btn-ab.active {
     color: #7c6ef6;
 }
 .fap-btn-loop.active-one { position: relative; }
@@ -5928,9 +5986,11 @@ video::cue {
 .fap-skin-soundcloud .fap-btn:hover { color: #f50 !important; }
 /* ★ 셔플/반복 hover 시 색상 변화 X (active와 헷갈림 방지) */
 .fap-skin-soundcloud .fap-btn-shuffle:hover,
-.fap-skin-soundcloud .fap-btn-loop:hover { color: #666 !important; }
+.fap-skin-soundcloud .fap-btn-loop:hover,
+.fap-skin-soundcloud .fap-btn-ab:hover { color: #666 !important; }
 .fap-skin-soundcloud .fap-btn-shuffle.active:hover,
-.fap-skin-soundcloud .fap-btn-loop.active:hover { color: #f50 !important; }
+.fap-skin-soundcloud .fap-btn-loop.active:hover,
+.fap-skin-soundcloud .fap-btn-ab.active:hover { color: #f50 !important; }
 .fap-skin-soundcloud .fap-btn-play {
     background: #f50 !important; color: #fff !important;
 }
@@ -5941,7 +6001,8 @@ video::cue {
 }
 /* ★ Soundcloud active: 주황 색상만 (재생바와 동일) */
 .fap-skin-soundcloud .fap-btn-shuffle.active,
-.fap-skin-soundcloud .fap-btn-loop.active {
+.fap-skin-soundcloud .fap-btn-loop.active,
+.fap-skin-soundcloud .fap-btn-ab.active {
     color: #f50 !important;
 }
 .fap-skin-soundcloud .fap-vol-bar::before { background: #ddd !important; }
@@ -6028,11 +6089,13 @@ video::cue {
 /* ★ Cassette: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
 /*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
 .fap-skin-cassette .fap-btn-shuffle,
-.fap-skin-cassette .fap-btn-loop {
+.fap-skin-cassette .fap-btn-loop,
+.fap-skin-cassette .fap-btn-ab {
     opacity: 0.5;
 }
 .fap-skin-cassette .fap-btn-shuffle.active,
-.fap-skin-cassette .fap-btn-loop.active {
+.fap-skin-cassette .fap-btn-loop.active,
+.fap-skin-cassette .fap-btn-ab.active {
     color: #ffd700 !important;
     opacity: 1;
 }
@@ -6167,7 +6230,8 @@ video::cue {
 /* ★ 셔플/반복 hover 색상/배경/보더 변화 X (active와 헷갈림 방지) */
 /*    기본 보더 (#30363d)는 유지, 형광초록으로 안 변하게 */
 .fap-skin-terminal .fap-btn-shuffle:hover,
-.fap-skin-terminal .fap-btn-loop:hover {
+.fap-skin-terminal .fap-btn-loop:hover,
+.fap-skin-terminal .fap-btn-ab:hover {
     background: transparent !important;
     border-color: #30363d !important;
 }
@@ -6178,11 +6242,13 @@ video::cue {
 /* ★ Terminal: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
 /*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
 .fap-skin-terminal .fap-btn-shuffle,
-.fap-skin-terminal .fap-btn-loop {
+.fap-skin-terminal .fap-btn-loop,
+.fap-skin-terminal .fap-btn-ab {
     opacity: 0.5;
 }
 .fap-skin-terminal .fap-btn-shuffle.active,
-.fap-skin-terminal .fap-btn-loop.active {
+.fap-skin-terminal .fap-btn-loop.active,
+.fap-skin-terminal .fap-btn-ab.active {
     color: #00ff41 !important;
     opacity: 1;
 }
@@ -6308,18 +6374,21 @@ video::cue {
 .fap-skin-pixel .fap-btn:hover { background: #306230 !important; }
 /* ★ 셔플/반복 hover 배경 변화 X (active와 헷갈림 방지) — 원래 배경 유지 */
 .fap-skin-pixel .fap-btn-shuffle:hover,
-.fap-skin-pixel .fap-btn-loop:hover {
+.fap-skin-pixel .fap-btn-loop:hover,
+.fap-skin-pixel .fap-btn-ab:hover {
     background: #0f380f !important;  /* 픽셀 기본 배경 유지 */
 }
 .fap-skin-pixel .fap-btn-play { background: #306230 !important; }
 /* ★ Pixel: 비활성 흐릿하게 (opacity), 활성 진하게 (구분) */
 /*    hover 시 opacity 변화 없음 — active와 헷갈림 방지 */
 .fap-skin-pixel .fap-btn-shuffle,
-.fap-skin-pixel .fap-btn-loop {
+.fap-skin-pixel .fap-btn-loop,
+.fap-skin-pixel .fap-btn-ab {
     opacity: 0.5;
 }
 .fap-skin-pixel .fap-btn-shuffle.active,
-.fap-skin-pixel .fap-btn-loop.active {
+.fap-skin-pixel .fap-btn-loop.active,
+.fap-skin-pixel .fap-btn-ab.active {
     color: #9bbc0f !important;
     opacity: 1;
 }
@@ -6547,17 +6616,21 @@ video::cue {
 .fap-skin-ap-fixed .fap-btn:hover { color: #3ac0ff !important; background: rgba(58,192,255,0.1) !important; }
 /* ★ 셔플/반복 hover 색상 변화 X (active와 헷갈림 방지) */
 .fap-skin-ap-fixed .fap-btn-shuffle:hover,
-.fap-skin-ap-fixed .fap-btn-loop:hover { color: #999 !important; background: transparent !important; }
+.fap-skin-ap-fixed .fap-btn-loop:hover,
+.fap-skin-ap-fixed .fap-btn-ab:hover { color: #999 !important; background: transparent !important; }
 .fap-skin-ap-fixed .fap-btn-shuffle.active:hover,
-.fap-skin-ap-fixed .fap-btn-loop.active:hover { color: #3ac0ff !important; }
+.fap-skin-ap-fixed .fap-btn-loop.active:hover,
+.fap-skin-ap-fixed .fap-btn-ab.active:hover { color: #3ac0ff !important; }
 /* ★ ap-fixed: 비활성은 중성 회색 (다른 스킨과 통일감) */
 .fap-skin-ap-fixed .fap-btn-shuffle,
-.fap-skin-ap-fixed .fap-btn-loop {
+.fap-skin-ap-fixed .fap-btn-loop,
+.fap-skin-ap-fixed .fap-btn-ab {
     color: #999 !important;
 }
 /* ★ ap-fixed active: 스카이블루 (재생바와 동일) */
 .fap-skin-ap-fixed .fap-btn-shuffle.active,
-.fap-skin-ap-fixed .fap-btn-loop.active {
+.fap-skin-ap-fixed .fap-btn-loop.active,
+.fap-skin-ap-fixed .fap-btn-ab.active {
     color: #3ac0ff !important;
 }
 .fap-skin-ap-fixed .fap-btn-play {
@@ -10971,6 +11044,22 @@ tr:hover,
     .video-audio-select.has-toggle-sibling.has-quality-sibling {
         right: 6px !important; /* audio도 그대로 우측 — quality는 아래로 */
     }
+    /* ★ 모바일 목록 버튼 위치 (2026-08-15) — 세로/가로 모두 겹침 방지.
+       모바일 오버레이는 좌우로 나누지 않고 세로로 쌓는 설계다(오디오 6px → 화질 44px).
+       목록 버튼이 모바일에서 보이게 되면서 우상단에서 화질 셀렉트와 겹쳤으므로
+       같은 규칙으로 한 줄 더 아래에 놓는다. 화질/오디오 셀렉트 위치는 건드리지 않는다.
+       (배지는 좌상단 pointer-events:none이라 세로로만 안 겹치면 됨) */
+    .fs-vp-toggle {
+        top: 82px !important;      /* 오디오 있음: 배지·오디오(6) → 화질(44) → 목록(82) */
+        right: 6px !important;
+    }
+    /* 오디오 셀렉트가 없거나 비었으면 화질이 6px로 올라가므로 목록도 한 칸 올린다
+       (조건은 위 화질 셀렉트 top:6px 규칙과 동일하게 맞춤) */
+    .video-player-wrap:has(.video-audio-select:empty) .fs-vp-toggle,
+    .video-player-wrap:not(:has(.video-audio-select)) .fs-vp-toggle,
+    .video-player-wrap:has(.video-stream-badge.native) .fs-vp-toggle {
+        top: 44px !important;
+    }
     .quality-label {
         display: none !important;
     }
@@ -11016,6 +11105,22 @@ tr:hover,
         padding: 2px 6px !important;
         top: 6px !important;
         left: 6px !important;
+        /* ★ (2026-08-15) 배지가 길면 같은 줄 우측의 화질 셀렉트와 겹치는 문제.
+           배지(좌)와 화질 셀렉트(우, max-width:55%)가 row 0을 좌우로 나눠 쓰는데
+           배지에는 폭 제한이 없어 해상도·용량이 길게 붙으면 우측을 침범했다
+           (예: "▶ 일반 재생 (H264 1920x1080 3.5 GB)").
+           → 좌측 몫을 40%로 묶고 넘치면 말줄임. 세로가 좁아 줄을 더 늘리는 대신
+             폭을 제한하는 쪽을 택했다(줄을 늘리면 짧은 영상 화면을 과하게 덮음). */
+        max-width: 40% !important;
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        text-overflow: ellipsis !important;
+    }
+    /* 화질 셀렉트가 없거나 비어 우측을 안 쓰면 배지가 폭을 다 써도 된다
+       (빈 .video-quality-select는 위에서 display:none 처리됨) */
+    .video-player-wrap:has(.video-quality-select:empty) .video-stream-badge,
+    .video-player-wrap:not(:has(.video-quality-select)) .video-stream-badge {
+        max-width: calc(100% - 12px) !important;
     }
     
     /* 모바일: 재생 중 뱃지/오디오 숨김 - 터치 시 표시 */
@@ -11119,16 +11224,26 @@ tr:hover,
         margin-top: 0 !important;
         overflow: hidden;
         transition: opacity 0.3s, max-height 0.25s ease;
+        /* ★ (2026-08-15) 폭 되돌리기 — PC용 .playing 규칙이 width/flex-basis를 0으로,
+           hover 시 320px로 잡는다. 모바일은 세로 배치라 폭은 항상 100%여야 하는데
+           여기서 되돌리지 않아 재생 중 목록을 열면 320px로 줄어들어 있었다
+           (터치가 :hover를 트리거해 320px 규칙이 걸림). */
+        width: 100% !important;
+        flex-basis: auto !important;
     }
     .fs-vp-flex:has(.video-player-wrap.playing.show-controls) .fs-vp-panel.open {
         opacity: 1 !important;
         pointer-events: auto;
         max-height: 35vh !important;
+        width: 100% !important;
+        flex-basis: auto !important;
     }
     .fs-vp-flex:has(.video-player-wrap.playing:not(.show-controls)):hover .fs-vp-panel.open {
         opacity: 0 !important;
         pointer-events: none;
         max-height: 0 !important;
+        width: 100% !important;
+        flex-basis: auto !important;
     }
     
     /* 모바일: 자막 오버레이 컨트롤바 겹침 방지 */
@@ -16085,6 +16200,23 @@ body.video-pseudo-fs {
     border-radius: 4px;
     outline: none;
 }
+/* ★ (2026-08-15) 모바일에서 검색창이 깨지던 문제 — 아이콘이 글자와 겹치고 오른쪽이 넘침.
+   원인: 이 입력은 미리보기 모달 안(.modal-body → #preview-content → 패널)에 있어서
+   모바일 전역 규칙 `.modal-body input[type="text"]`(특이도 0,2,1)이 아래를 덮어썼다.
+     · padding: 10px 12px      → 좌측 30px 자리가 12px로 줄어 배경 아이콘(10px)과 글자가 겹침
+     · width: 100% !important  → margin 8px 16px와 겹쳐 폭이 32px 넘침
+     · font-size: 13px !important
+   기본 `.fs-vp-search`는 (0,1,0)이라 특이도로 지고, width는 상대도 !important라
+   !important만으로는 못 이긴다 → 특이도를 (0,3,1)로 올려 되돌린다.
+   PC에는 원래 이 전역 규칙이 안 걸리므로(모바일 미디어쿼리 안) 값이 그대로라 영향 없음.
+   같은 모달의 음악 검색창(.fap-playlist-search)은 이미 !important로 같은 문제를 막아둔 상태. */
+.fs-vp-panel input[type="text"].fs-vp-search {
+    width: auto !important;
+    padding: 0 10px 0 30px !important;
+    font-size: 12px !important;
+    height: 30px !important;
+    box-sizing: border-box !important;
+}
 .fs-vp-search::placeholder { color: rgba(255,255,255,0.4); }
 .fs-vp-search:focus { border-color: rgba(255,255,255,0.5); background-color: rgba(255,255,255,0.12); }
 .fs-vp-item.fs-vp-search-hit {
@@ -16386,11 +16518,233 @@ body.video-pseudo-fs {
     .fs-vp-flex .video-player-wrap {
         flex: 1 1 auto;
     }
-    /* ★ 모바일: 사이드 패널 토글 버튼 + 패널 자체 완전 숨김 (펜닐님 요청 — 모바일 UX 단순화) */
-    .fs-vp-toggle {
-        display: none !important;
+    /* ★ 모바일에서도 목록·토글 표시 (2026-08-15 펜닐님 요청 — 공유 페이지와 동작 통일).
+       이전에는 여기서 .fs-vp-toggle / .fs-vp-panel을 display:none으로 완전히 숨겼으나,
+       그 때문에 모바일 일반 플레이어에는 목록도 자동 다음 재생도 없었다.
+       위쪽 모바일 레이아웃(세로 배치·max-height 35vh)과 재생 중 접힘 규칙이
+       이미 갖춰져 있어 숨김 규칙만 제거하면 그대로 동작한다. */
+}
+
+/* ★ 모바일 가로모드(폰): 세로 배치를 되돌려 목록을 영상 '옆'에 둔다 (2026-08-15 펜닐님 결정 A안).
+   가로모드는 높이가 약 390px뿐이라 위 블록의 35vh(=137px)로는 패널 고정 요소
+   (헤더 69 + 검색창 46 + body 여백 12 = 127px)만으로 다 차서 목록이 0개 보였다.
+   반면 폭은 844px로 넉넉하다. 영상은 어차피 높이에 먼저 걸려 최대 587x330이므로
+   패널로 260~300px을 떼도 576x324 → 실질 손해가 거의 없고 목록은 5개까지 보인다.
+   ※ 이 블록은 반드시 바로 위 '세로 배치 전환' 블록보다 뒤에 있어야 한다
+     (셀렉터가 같아 특이도가 동일 → 소스 순서로 승부가 갈린다). */
+@media (orientation: landscape) and (max-width: 1024px) {
+    .fs-vp-flex {
+        flex-direction: row;
+        align-items: stretch;
     }
     .fs-vp-panel {
-        display: none !important;
+        flex: 0 0 auto;
+        width: clamp(220px, 34%, 300px);
+        max-width: 300px;
+        max-height: 100%;
+    }
+    /* 재생 중 접힘/펼침: 세로모드는 높이를 접지만 가로모드는 PC처럼 '폭'을 접는다.
+       표시 여부는 세로모드와 동일하게 .show-controls가 결정한다(opacity 규칙은 위 블록 것을 그대로 사용). */
+    .fs-vp-flex:has(.video-player-wrap.playing) .fs-vp-panel.open {
+        max-height: 100% !important;
+        width: 0 !important;
+        flex-basis: 0 !important;
+        margin-top: 0 !important;
+        transition: opacity 0.3s, width 0.25s ease !important;
+    }
+    .fs-vp-flex:has(.video-player-wrap.playing.show-controls) .fs-vp-panel.open {
+        max-height: 100% !important;
+        width: clamp(220px, 34%, 300px) !important;
+        flex-basis: auto !important;
+    }
+    .fs-vp-flex:has(.video-player-wrap.playing:not(.show-controls)):hover .fs-vp-panel.open {
+        max-height: 100% !important;
+        width: 0 !important;
+        flex-basis: 0 !important;
     }
 }
+
+
+
+/* ★ 음악 플레이어 — 모바일 가로모드(폰) 2열 배치 (2026-08-15 펜닐님 요청, 동영상 목록과 같은 취지).
+   세로 스택 고정 요소가 상단패딩 40 + 커버줄 74 + 비주얼라이저 48 + 시킹 34 + 컨트롤 58
+   + 볼륨 36 + 목록헤더 38 + 하단패딩 12 = 약 340px인데, 가로모드 모달 본문은 약 330px뿐이라
+   재생목록이 0곡 보였다(세로모드는 784px라 10곡 정상). 가로모드는 폭이 넉넉하므로
+   왼쪽에 재생부, 오른쪽에 재생목록을 두는 2열로 바꿔 목록이 전체 높이를 쓰게 한다.
+   ※ 이 블록은 위쪽 (max-width:1024px) 블록들보다 뒤에 있어야 이긴다(특이도 동일 → 순서). */
+@media (orientation: landscape) and (max-width: 1024px) {
+    /* ── ① 높이 체인 되돌리기 (2026-08-15 2차 — 펜닐님 화면 확인) ──
+       가로모드에는 원래 오디오 전용 블록이 있어 모달 본문부터 .fap까지 전부
+       height:auto + min-height:100% + align-items:flex-start로 풀어놓고 있었다.
+       세로 스택 시절엔 "플레이어가 길어지면 페이지가 늘어나며 스크롤" 하려는 의도였지만,
+       2열 grid에서는 높이가 확정되지 않아 다음 세 증상이 한꺼번에 생겼다:
+         · 목록 행(1fr)이 내용 높이로 접혀 목록이 잘게 보이거나 안 보임
+         · .fap이 컨테이너보다 짧아져 그 아래로 컨테이너 배경(검정)이 드러남
+         · align-items:flex-start로 카드가 맨 위에 붙어 플레이어가 위로 쏠려 보임
+       → 가로모드 2열에서는 높이를 확정하고 목록이 내부 스크롤을 갖게 한다. */
+    .modal-preview .modal-body:has(.preview-audio-wrap) {
+        align-items: stretch !important;
+    }
+    .modal-preview .modal-body:has(.preview-audio-wrap) #preview-content,
+    .modal-preview .modal-body .preview-audio-wrap,
+    .modal-preview .modal-body #fs-audio-player,
+    .modal-preview .modal-body .fap {
+        height: 100% !important;
+        min-height: 0 !important;
+    }
+    /* 목록은 확정된 높이 안에서 스크롤 — 세로 스택 시절의 60vh 상한은 여기선 목록을 자른다 */
+    .modal-preview .modal-body .fap-playlist-list {
+        max-height: none !important;
+    }
+
+    /* ── ② 기본 스킨 + 리스타일 스킨(soundcloud·cassette·terminal·pixel) ──
+       이 스킨들은 색만 바꾸고 레이아웃은 .fap의 세로 flex를 그대로 쓴다 → grid 2열로 전환.
+       ★ 스킨 장식 자리(2026-08-15 3차): terminal(타이틀바 prepend + 프롬프트 append)과
+         cassette(카세트창)는 장식을 .fap의 '직계 자식'으로 넣기 때문에 grid에서 자동배치 대상이 된다.
+         자리를 안 잡아주면 엉뚱한 칸에 떨어지고 재생부가 타이틀바 자리까지 올라와 붙는다
+         (펜닐님 "Terminal 스킨은 조금 아래로 내려야 할 것 같다"의 원인).
+         → 맨 윗행/맨 아랫행을 장식 전용으로 두고 좌우 열 전체를 가로지르게 한다.
+         장식이 없는 스킨은 그 행이 0 높이로 접히므로 영향 없다.
+       재생부는 재생목록과 같은 줄(맨 위)에서 시작하도록 위쪽 스페이서를 두지 않는다
+       (2026-08-15 2차 요청 — 앞서 세로 가운데로 내렸던 것을 되돌림. '플레이어가 위로 쏠려 보이던' 것은
+        스페이서 문제가 아니라 아래 ①의 height:auto + align-items:flex-start가 원인이었다).
+       마지막 1fr은 남는 공간을 아래로 몰아주는 채움 행이고, 재생목록은 1/-1로 그 행까지 포함해
+       전체 높이를 쓰므로 두 열이 같은 줄에서 시작해 같은 높이로 끝난다.
+       .fap-lyrics-modal(position:fixed)·.fap-skin-selector(absolute)는 grid 항목이 아니라 무영향. */
+    .fap:not(.fap-skin-ap-fixed) {
+        display: grid;
+        grid-template-columns: 55% 45%;
+        /* 1=상단 장식 / 2~7=재생부 6개 / 8=채움 / 9=하단 장식 (장식 없으면 해당 행 0) */
+        grid-template-rows: auto auto auto auto auto auto auto 1fr auto;
+        column-gap: 12px;
+        align-content: stretch;
+    }
+    .fap:not(.fap-skin-ap-fixed) > .fap-now          { grid-column: 1; grid-row: 2; }
+    /* 비주얼라이저는 VU 모드에서 .fap-vu-canvas-wrap로 감싸이므로 둘 다 같은 행에 둔다 */
+    .fap:not(.fap-skin-ap-fixed) > .fap-visualizer,
+    .fap:not(.fap-skin-ap-fixed) > .fap-vu-canvas-wrap { grid-column: 1; grid-row: 3; }
+    .fap:not(.fap-skin-ap-fixed) > .fap-lyrics-wrap  { grid-column: 1; grid-row: 4; min-height: 0; }
+    .fap:not(.fap-skin-ap-fixed) > .fap-seek         { grid-column: 1; grid-row: 5; }
+    .fap:not(.fap-skin-ap-fixed) > .fap-controls     { grid-column: 1; grid-row: 6; }
+    .fap:not(.fap-skin-ap-fixed) > .fap-volume       { grid-column: 1; grid-row: 7; }
+    .fap:not(.fap-skin-ap-fixed) > .fap-playlist     { grid-column: 2; grid-row: 2 / 9; min-height: 0; }
+    /* 카세트는 상단 장식이 왼쪽 열에만 있으므로, 오른쪽 목록은 맨 윗행부터 쓴다
+       (안 그러면 카세트창 높이만큼 목록 위에 빈 칸이 생긴다) */
+    .fap:not(.fap-skin-ap-fixed).fap-skin-cassette > .fap-playlist { grid-row: 1 / 9; }
+    /* 장식 기본값(안전망) — 새 장식이 추가돼도 오른쪽 목록 칸으로 새지 않게.
+       ※ 아래 개별 규칙과 특이도가 (0,3)로 같으므로 반드시 **앞**에 둬야 개별 규칙이 이긴다.
+         (뒤에 두면 카세트창의 grid-column:1 지정이 이 규칙에 덮인다 — 실제로 그럴 뻔했다) */
+    .fap:not(.fap-skin-ap-fixed) > .fap-skin-decoration { grid-column: 1 / -1; }
+
+    /* 상단 장식 배치 — 성격이 달라 열 범위를 나눈다.
+       · terminal 타이틀바: 창 테두리(macOS 창) 성격이라 양쪽 열을 가로지른다.
+       · cassette 카세트창: 재생 장치 자체를 표현하는 것이라 **재생부(왼쪽 열)에만** 둔다
+         (2026-08-15 펜닐님 요청 — 목록 위까지 덮으면 어색함). */
+    .fap:not(.fap-skin-ap-fixed) > .fap-term-titlebar { grid-column: 1 / -1; grid-row: 1; }
+    .fap:not(.fap-skin-ap-fixed) > .fap-cass-window   { grid-column: 1;      grid-row: 1; }
+    /* 하단 장식(terminal 프롬프트)은 맨 아랫행에서 양쪽 열을 가로지른다 */
+    .fap:not(.fap-skin-ap-fixed) > .fap-term-prompt   { grid-column: 1 / -1; grid-row: 9; }
+
+    /* ── ④ 스킨별 세로 넘침 방지 (2026-08-15 5차, 실측 재계산 결과) ──
+       가로모드 왼쪽 열 필요 높이(볼륨 포함) 실측:
+         기본 302 · soundcloud 294 · terminal 315 · pixel 326 · cassette 422
+       본문 높이는 375높이 기기에서 315px뿐이라 pixel·cassette가 넘친다.
+       .fap에는 overflow 지정이 없지만 조상 .preview-audio-wrap이 overflow:hidden이라
+       넘친 만큼 아래가 잘려 안 보인다(ap-fixed의 잘림과 결과가 같다).
+       ※ 앞서 카세트창을 74px로 추정했으나 실측은 릴60+패딩30+테두리6+마진16 = 112px이었다. */
+
+    /* pixel: 커버가 다른 스킨의 56px 대신 100px 정사각형이라 44px 더 먹는다.
+       ap-fixed와 같은 방식으로 상한만 100px로 두고 화면이 낮으면 줄인다(정사각 유지). */
+    .fap-skin-pixel .fap-now-cover {
+        width: min(100px, calc(100vh - 300px)) !important;
+        height: min(100px, calc(100vh - 300px)) !important;
+    }
+
+    /* cassette: 카세트창 장식 하나가 112px(릴60+패딩30+테두리6+마진16)로 가장 무겁다.
+       세로가 아주 낮은 기기에서는 넣을 자리가 없어 숨기지만, 그러면 스킨의 상징이 사라지고
+       왼쪽 열에 빈 공간만 남는다(펜닐님 화면 확인). → **높이에 따라 나눈다**:
+         · 세로 400px 미만: 숨김 (창 제외 좌열이 282px인데 본문이 340px 미만이라 자리가 없음)
+         · 세로 400px 이상: 남는 공간에 맞춰 릴 지름을 줄여 되살림
+       여유 공간 = 본문(100vh-60) - 좌열 282. 릴은 min(60px, calc(100vh - 378px))로
+       400→22px · 430→52px · 768→60px(상한)이 되어 항상 8px 안팎의 여유가 남는다. */
+    .fap:not(.fap-skin-ap-fixed) > .fap-cass-window {
+        display: none !important;
+    }
+    /* 카세트는 스킨 자체 패딩(30px 25px)도 커서 가로모드에서만 줄인다 */
+    .fap.fap-skin-cassette {
+        padding: 16px 16px !important;
+    }
+
+    /* terminal: 315px로 375높이 기기에서 여유가 0이라, 장식 패딩만 살짝 줄여 여유를 만든다 */
+    .fap-skin-terminal .fap-term-titlebar,
+    .fap-skin-terminal .fap-term-prompt {
+        padding: 5px 12px !important;
+    }
+
+    /* ── ③ ap-fixed 스킨 ── 이미 grid라 열만 2열로 되돌린다.
+       여기는 위아래 스페이서를 쓰지 않는다: 곡 정보(.fap-now)가 .fap 기준 absolute(top:0)로
+       커버 위에 겹쳐 있어서 커버를 아래로 내리면 글자만 위에 남아 어긋나기 때문이다.
+       커버 높이는 **고정 대신 화면 높이에 맞춰 줄어드는 값**을 쓴다(2026-08-15 4차).
+       고정 250px이면 세로가 낮은 기기에서 왼쪽 열(커버+시킹+컨트롤[+볼륨])이 본문을 넘어
+       ap-fixed의 overflow:hidden에 잘린다 → min(250px, 남는 높이)로 상한만 250px로 두고
+       모자라면 자동으로 줄인다. 여유가 있는 기기에서는 펜닐님이 맞춘 250px 그대로 나온다.
+       빼는 값이 두 가지인 이유: 볼륨 영역은 화면 크기가 아니라 **iOS 판별(.fap-ios)** 로 숨기므로
+       (iOS는 정책상 audio.volume 변경 불가) iOS 기기는 볼륨 높이만큼 커버에 더 쓸 수 있다.
+       행 트랙이 고정값이라 커버 요소 높이만 줄여서는 행이 안 줄어들므로 변형 4가지 모두 지정. */
+    .fap.fap-skin-ap-fixed {
+        /* 볼륨 있음(비iOS): 시킹50 + 컨트롤58 + 볼륨36 + 여유8 + 모달헤더60 ≈ 212 → 215 차감 */
+        --fap-ap-cover-h: min(250px, calc(100vh - 215px));
+        grid-template-columns: 55% 45% !important;
+        grid-template-rows: var(--fap-ap-cover-h) auto auto auto auto 1fr !important;
+    }
+    /* 볼륨 없음(iOS): 시킹50 + 컨트롤58 + 여유8 + 모달헤더60 ≈ 176 → 175 차감 */
+    .fap.fap-skin-ap-fixed.fap-ios {
+        --fap-ap-cover-h: min(250px, calc(100vh - 175px));
+        grid-template-rows: var(--fap-ap-cover-h) auto auto auto 1fr !important;
+    }
+    .fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
+        grid-template-rows: var(--fap-ap-cover-h) 0 auto auto auto 1fr !important;
+    }
+    .fap.fap-skin-ap-fixed.fap-no-inline-lyrics.fap-ios {
+        --fap-ap-cover-h: min(250px, calc(100vh - 175px));
+        grid-template-rows: var(--fap-ap-cover-h) 0 auto auto 1fr !important;
+    }
+    .fap-skin-ap-fixed .fap-ap-cover-big {
+        height: var(--fap-ap-cover-h) !important;
+        max-height: var(--fap-ap-cover-h) !important;
+    }
+    /* 곡 정보 오버레이는 .fap(padding 0) 기준 absolute라 왼쪽 열 폭에 맞춘다
+       (모바일 세로 규칙의 width:100%를 그대로 두면 오른쪽 목록 위까지 덮는다) */
+    .fap-skin-ap-fixed .fap-now {
+        width: 55% !important;
+    }
+    .fap-skin-ap-fixed .fap-playlist {
+        grid-column: 2 !important;
+        grid-row: 1 / -1 !important;
+        max-height: none !important;
+        border-top: none !important;
+        border-left: 1px solid #eee !important;
+    }
+}
+
+/* ★ 카세트 스킨 — 가로모드에서도 세로가 충분하면(400px 이상) 카세트창을 되살린다.
+   위 블록에서 display:none으로 숨겼으므로 여기서 되살리며, 남는 공간에 맞춰 크기를 줄인다.
+   반드시 위 블록보다 뒤에 있어야 한다(같은 셀렉터·같은 !important → 순서로 승부). */
+@media (orientation: landscape) and (max-width: 1024px) and (min-height: 400px) {
+    .fap:not(.fap-skin-ap-fixed) > .fap-cass-window {
+        display: flex !important;
+        padding: 8px !important;
+        margin-bottom: 6px !important;
+        min-height: 0;
+    }
+    .fap-skin-cassette .fap-cass-reel {
+        width: min(60px, calc(100vh - 378px));
+        height: min(60px, calc(100vh - 378px));
+    }
+    /* 릴이 작아지면 가운데 글자도 같이 줄여 창이 글자 높이에 끌려 커지지 않게 한다 */
+    .fap-skin-cassette .fap-cass-center {
+        font-size: 9px;
+        line-height: 1.25;
+    }
+}
+

@@ -280,6 +280,9 @@ class FSAudioPlayer {
         this._shuffleOrder = [];
         this._shufflePlayed = new Set();  // ★ 셔플 한 바퀴 진행 추적 (소진 시 재셔플)
         this._optReuseShuffle = !!opts.reuseShuffleOrder;  // ★ 재생 중 재생성이면 순서 유지
+        // ★ 구간 반복(A-B): 곡 단위 임시 상태 — 곡 바뀌면 해제, localStorage 저장 안 함
+        this._abA = null;  // A 지점(초), null=미지정
+        this._abB = null;  // B 지점(초), null=미지정
 
         // iOS 감지
         this._isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -461,7 +464,10 @@ class FSAudioPlayer {
                 <span class="fap-time fap-time-cur">0:00</span>
                 <div class="fap-seek-bar" title="${isKo ? '←/→로 5초 이동' : '←/→ to seek 5s'}">
                     <div class="fap-seek-loaded"></div>
+                    <div class="fap-seek-ab-range" style="display:none;"></div>
                     <div class="fap-seek-played"></div>
+                    <div class="fap-seek-ab-mark fap-seek-ab-a" style="display:none;"></div>
+                    <div class="fap-seek-ab-mark fap-seek-ab-b" style="display:none;"></div>
                     <div class="fap-seek-thumb"></div>
                 </div>
                 <span class="fap-time fap-time-dur">0:00</span>
@@ -482,6 +488,9 @@ class FSAudioPlayer {
                 </button>
                 <button class="fap-btn fap-btn-loop" title="${isKo ? '반복 모드 (L)' : 'Repeat (L)'}">
                     <svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" fill="currentColor"/></svg>
+                </button>
+                <button class="fap-btn fap-btn-ab" title="${isKo ? '구간 반복: 눌러서 A 지정' : 'A-B Repeat: click to set A'}">
+                    <svg viewBox="0 0 24 24" width="18" height="18"><text class="fap-ab-label" x="12" y="16.5" text-anchor="middle" font-size="13" font-weight="700" fill="currentColor" font-family="system-ui,-apple-system,'Segoe UI',sans-serif">A-B</text></svg>
                 </button>
                 <button class="fap-btn fap-btn-lyrics" title="${isKo ? '가사 보기 (Ctrl+L)' : 'Show lyrics (Ctrl+L)'}" style="display:none;">
                     <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16v2H4V6zm0 4h12v2H4v-2zm0 4h16v2H4v-2zm0 4h12v2H4v-2z" fill="currentColor"/></svg>
@@ -545,6 +554,11 @@ class FSAudioPlayer {
             btnNext: this.container.querySelector('.fap-btn-next'),
             btnLoop: this.container.querySelector('.fap-btn-loop'),
             btnShuffle: this.container.querySelector('.fap-btn-shuffle'),
+            btnAb: this.container.querySelector('.fap-btn-ab'),
+            abLabel: this.container.querySelector('.fap-ab-label'),
+            seekAbRange: this.container.querySelector('.fap-seek-ab-range'),
+            seekAbA: this.container.querySelector('.fap-seek-ab-a'),
+            seekAbB: this.container.querySelector('.fap-seek-ab-b'),
             btnVol: this.container.querySelector('.fap-btn-vol'),
             iconVolOn: this.container.querySelector('.fap-icon-vol-on'),
             iconVolOff: this.container.querySelector('.fap-icon-vol-off'),
@@ -947,6 +961,10 @@ class FSAudioPlayer {
             this._updateLoopUI();
             this._saveLoopPref();  // ★ localStorage 저장
         });
+        // ★ 구간 반복 A-B (한 버튼 3단계: A 지정 → B 지정 → 해제)
+        if (this.$.btnAb) {
+            this.$.btnAb.addEventListener('click', () => this._cycleAb());
+        }
         // ★ 가사 모달 (v5.8.1c — 옵션 A)
         if (this.$.btnLyrics) {
             this.$.btnLyrics.addEventListener('click', () => this._openLyricsModal());
@@ -1003,6 +1021,10 @@ class FSAudioPlayer {
         // Audio events
         a.addEventListener('timeupdate', () => {
             if (this._draggingSeek || !a.duration) return;
+            // ★ 구간 반복: B를 넘으면 A로 되돌림 (timeupdate 주기가 약 250ms라 그만큼 오차 있음)
+            if (this._abB !== null && this._abA !== null && a.currentTime >= this._abB) {
+                a.currentTime = this._abA;
+            }
             const pct = a.currentTime / a.duration;
             this.$.seekPlayed.style.width = (pct * 100) + '%';
             this.$.seekThumb.style.left = (pct * 100) + '%';
@@ -1014,6 +1036,9 @@ class FSAudioPlayer {
         a.addEventListener('loadedmetadata', () => {
             this.$.durTime.textContent = this._fmt(a.duration);
             this._updateTrackMeta();
+            // ★ duration이 확정된 시점에 구간 반복 마커 위치 재계산
+            //   (메타데이터 로드 전에 A를 찍으면 duration이 없어 눈금을 못 그리므로 여기서 반영)
+            this._updateAbUI();
             
             // ★ 재생 시 duration 자동 캐시 (FTP 등 사전 측정 실패한 곡 대비)
             // 플레이리스트에 duration 표시 + 서버 캐시에 저장
@@ -1239,6 +1264,7 @@ class FSAudioPlayer {
     _loadTrack(idx, autoplay) {
         if (idx < 0 || idx >= this.playlist.length) return;
         this.currentIndex = idx;
+        this._clearAb();  // ★ 구간 반복은 곡 단위 — 곡이 바뀌면 해제
         this._markShufflePlayed(idx);  // ★ 셔플 진행 추적 (전곡 소진 시 자동 재셔플)
         const track = this.playlist[idx];
         // ★ [HLS_DIAG] 음악 공유 폴더 트랙 로드
@@ -1274,14 +1300,18 @@ class FSAudioPlayer {
         this._vsRender();
         // Scroll active into view
         this._vsScrollToIndex(idx);
+        // ★ Media Session은 재생을 시작하기 '전에' 설정한다.
+        //   브라우저는 재생이 시작되는 순간 미디어 세션을 활성화하는데, 그 시점에 metadata가
+        //   비어 있거나(첫 재생) 이전 트랙 것이면 잠금화면·알림 카드에 우리 정보가 실리지 못한다.
+        //   그러면 다른 탭(예: 재생하다 멈춘 동영상 사이트)이 카드를 계속 쥐고 있어
+        //   커버가 안 뜨거나 그 사이트 정보가 표시되는 문제가 생긴다. (모바일에서 특히 두드러짐)
+        //   artwork는 이 시점에 이전 트랙 것이 남을 수 있으나,
+        //   _updateTrackCover의 비동기 콜백에서 다시 호출되어 확정됨 (iOS Safari 대응)
+        this._updateMediaSession(track);
         if (autoplay) {
             this.audio.play().catch(() => {});
         }
         if (this.onTrackChange) this.onTrackChange(idx);
-        // Media Session 즉시 업데이트 (title/artist — 잠금화면 즉시 반영)
-        // artwork는 이 시점에 이전 트랙 artwork가 남을 수 있지만,
-        // _updateTrackCover의 비동기 콜백에서 다시 호출되어 확정됨 (iOS Safari 대응)
-        this._updateMediaSession(track);
         // 가사 로드 (LRC > USLT > TXT) — 비동기, 실패해도 무시
         this._loadLyrics(track);
     }
@@ -1978,6 +2008,12 @@ class FSAudioPlayer {
 
     // ── End handler ──
     _onEnded() {
+        // ★ 구간 반복 중이면 다음 곡/한곡반복보다 우선 (B가 곡 끝에 붙어 있어 ended가 먼저 오는 경우)
+        if (this._abA !== null && this._abB !== null) {
+            this.audio.currentTime = this._abA;
+            this.audio.play().catch(() => {});
+            return;
+        }
         if (this.loop === 'one') {
             this.audio.currentTime = 0;
             this.audio.play().catch(() => {});
@@ -2098,6 +2134,70 @@ class FSAudioPlayer {
             btn.title = _ko ? '반복: 한 곡 (L)' : 'Repeat: One (L)';
         } else {
             btn.title = _ko ? '반복: 끔 (L)' : 'Repeat: Off (L)';
+        }
+    }
+
+    // ── 구간 반복 (A-B) ──
+    // 버튼 한 개로 3단계 순환: (없음) → A 지정 → B 지정=반복 시작 → 해제
+    // A만 찍힌 상태에서 A보다 앞이나 같은 위치를 누르면 잘못된 구간이 생기지 않게 A를 그 자리로 다시 찍는다.
+    _cycleAb() {
+        const t = this.audio.currentTime || 0;
+        if (this._abA === null) {
+            this._abA = t;
+        } else if (this._abB === null) {
+            if (t <= this._abA + 0.3) this._abA = t;
+            else this._abB = t;
+        } else {
+            this._abA = null;
+            this._abB = null;
+        }
+        this._updateAbUI();
+    }
+    _clearAb() {
+        if (this._abA === null && this._abB === null) return;
+        this._abA = null;
+        this._abB = null;
+        this._updateAbUI();
+    }
+    _updateAbUI() {
+        if (!this.$ || !this.$.btnAb) return;
+        const btn = this.$.btnAb;
+        const _ko = (document.documentElement.lang || navigator.language || '').startsWith('ko');
+        const hasA = this._abA !== null;
+        const hasB = this._abB !== null;
+        btn.classList.toggle('active', hasA);
+        btn.classList.toggle('ab-set', hasB);
+        if (this.$.abLabel) this.$.abLabel.textContent = (hasA && !hasB) ? 'A' : 'A-B';
+        if (hasB) {
+            btn.title = _ko ? `구간 반복 중: ${this._fmt(this._abA)} ~ ${this._fmt(this._abB)} (눌러서 해제)`
+                            : `A-B repeat: ${this._fmt(this._abA)} - ${this._fmt(this._abB)} (click to clear)`;
+        } else if (hasA) {
+            btn.title = _ko ? `A = ${this._fmt(this._abA)} · 눌러서 B 지정` : `A = ${this._fmt(this._abA)} · click to set B`;
+        } else {
+            btn.title = _ko ? '구간 반복: 눌러서 A 지정' : 'A-B Repeat: click to set A';
+        }
+        // 시크바 마커/구간 표시 (duration 없으면 숨김)
+        const dur = this.audio.duration;
+        const ok = !!(dur && isFinite(dur) && dur > 0);
+        const pos = (sec) => Math.max(0, Math.min(100, sec / dur * 100));
+        const setMark = (el, sec) => {
+            if (!el) return;
+            if (!ok || sec === null) { el.style.display = 'none'; return; }
+            el.style.left = pos(sec) + '%';
+            el.style.display = '';
+        };
+        setMark(this.$.seekAbA, this._abA);
+        setMark(this.$.seekAbB, this._abB);
+        const range = this.$.seekAbRange;
+        if (range) {
+            if (ok && hasA && hasB) {
+                const l = pos(this._abA);
+                range.style.left = l + '%';
+                range.style.width = Math.max(0, pos(this._abB) - l) + '%';
+                range.style.display = '';
+            } else {
+                range.style.display = 'none';
+            }
         }
     }
 
@@ -3764,9 +3864,30 @@ class FSAudioPlayer {
             //   - 둘 다 없음 → null → 기본 SVG 아이콘
             //
             // 첫 호출 시 (ID3 로드 전) _activeCoverUrl이 undefined일 수 있음 — 폴더 이미지로 시작
-            const resolved = (typeof this._activeCoverUrl !== 'undefined')
+            let resolved = (typeof this._activeCoverUrl !== 'undefined')
                 ? this._activeCoverUrl
                 : (this.cover || null);
+            // ★ 잠금화면 artwork에는 blob: URL을 쓸 수 없다.
+            //   커버 캐시(_getCachedCoverUrl)는 데이터 절감을 위해 blob: URL을 돌려주는데,
+            //   페이지 안 <img>는 이를 정상 표시하지만 잠금화면·알림 카드의 커버는
+            //   OS(브라우저 밖 별도 프로세스)가 직접 받아가므로 문서 스코프인 blob: URL을
+            //   해석하지 못해 커버가 빈 채로 남는다. (iOS에서 확인 — 화면 안 커버는 정상인데
+            //   잠금화면만 비어 있던 증상의 원인)
+            //   → 캐시를 역조회해 원본 http(s) URL을 찾아 artwork로 사용한다.
+            //     화면 표시 경로(_activeCoverUrl)는 blob 그대로 두므로 캐시 절감 효과는 유지된다.
+            if (resolved && typeof resolved === 'string' && resolved.indexOf('blob:') === 0) {
+                let origUrl = null;
+                try {
+                    if (this._coverBlobCache) {
+                        // Map(원본URL → blobURL) 이므로 값으로 키를 되찾는다 (항목 수가 적어 부담 없음)
+                        for (const [origKey, blobVal] of this._coverBlobCache) {
+                            if (blobVal === resolved) { origUrl = origKey; break; }
+                        }
+                    }
+                } catch(e) {}
+                // 원본을 못 찾으면 깨진 blob을 넘기지 말고 기본 음표 아이콘으로 넘어가게 한다
+                resolved = origUrl || null;
+            }
             
             if (resolved) {
                 // 이미지 MIME 자동 감지 (z_music/simple_mp3_player 참조)

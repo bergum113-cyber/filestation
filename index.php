@@ -1408,6 +1408,9 @@ password=mypass</pre>
                             <button id="btn-copy-url" class="btn">📋 <?php echo $currentLang === 'en' ? 'Copy' : '복사'; ?></button>
                         </div>
                     </div>
+                    <!-- ★ 일괄 공유 결과 (여러 항목 선택 시) — 단일 공유의 #share-result와 별도로 둔다
+                         (단일용 #share-url 입력을 건드리지 않기 위해) -->
+                    <div id="share-bulk-result" style="display:none;"></div>
                     <div id="share-existing-container"></div>
                 </div>
                 <div class="modal-footer">

@@ -631,6 +631,9 @@ class FSAudioPlayer {
         this._shuffleOrder = [];
         this._shufflePlayed = new Set();  // ★ 셔플 한 바퀴 진행 추적 (소진 시 재셔플)
         this._optReuseShuffle = !!opts.reuseShuffleOrder;  // ★ 재생 중 재생성이면 순서 유지
+        // ★ 구간 반복(A-B): 곡 단위 임시 상태 — 곡 바뀌면 해제, localStorage 저장 안 함
+        this._abA = null;  // A 지점(초), null=미지정
+        this._abB = null;  // B 지점(초), null=미지정
 
         // iOS 감지
         this._isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
@@ -816,7 +819,10 @@ class FSAudioPlayer {
                 <span class="fap-time fap-time-cur">0:00</span>
                 <div class="fap-seek-bar" title="${isKo ? '←/→로 5초 이동' : '←/→ to seek 5s'}">
                     <div class="fap-seek-loaded"></div>
+                    <div class="fap-seek-ab-range" style="display:none;"></div>
                     <div class="fap-seek-played"></div>
+                    <div class="fap-seek-ab-mark fap-seek-ab-a" style="display:none;"></div>
+                    <div class="fap-seek-ab-mark fap-seek-ab-b" style="display:none;"></div>
                     <div class="fap-seek-thumb"></div>
                 </div>
                 <span class="fap-time fap-time-dur">0:00</span>
@@ -837,6 +843,9 @@ class FSAudioPlayer {
                 </button>
                 <button class="fap-btn fap-btn-loop" title="${isKo ? '반복 모드 (L)' : 'Repeat (L)'}">
                     <svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z" fill="currentColor"/></svg>
+                </button>
+                <button class="fap-btn fap-btn-ab" title="${isKo ? '구간 반복: 눌러서 A 지정' : 'A-B Repeat: click to set A'}">
+                    <svg viewBox="0 0 24 24" width="18" height="18"><text class="fap-ab-label" x="12" y="16.5" text-anchor="middle" font-size="13" font-weight="700" fill="currentColor" font-family="system-ui,-apple-system,'Segoe UI',sans-serif">A-B</text></svg>
                 </button>
                 <button class="fap-btn fap-btn-lyrics" title="${isKo ? '가사 보기 (Ctrl+L)' : 'Show lyrics (Ctrl+L)'}" style="display:none;">
                     <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16v2H4V6zm0 4h12v2H4v-2zm0 4h16v2H4v-2zm0 4h12v2H4v-2z" fill="currentColor"/></svg>
@@ -900,6 +909,11 @@ class FSAudioPlayer {
             btnNext: this.container.querySelector('.fap-btn-next'),
             btnLoop: this.container.querySelector('.fap-btn-loop'),
             btnShuffle: this.container.querySelector('.fap-btn-shuffle'),
+            btnAb: this.container.querySelector('.fap-btn-ab'),
+            abLabel: this.container.querySelector('.fap-ab-label'),
+            seekAbRange: this.container.querySelector('.fap-seek-ab-range'),
+            seekAbA: this.container.querySelector('.fap-seek-ab-a'),
+            seekAbB: this.container.querySelector('.fap-seek-ab-b'),
             btnVol: this.container.querySelector('.fap-btn-vol'),
             iconVolOn: this.container.querySelector('.fap-icon-vol-on'),
             iconVolOff: this.container.querySelector('.fap-icon-vol-off'),
@@ -1325,6 +1339,10 @@ class FSAudioPlayer {
             this._updateLoopUI();
             this._saveLoopPref();  // ★ localStorage 저장
         });
+        // ★ 구간 반복 A-B (한 버튼 3단계: A 지정 → B 지정 → 해제)
+        if (this.$.btnAb) {
+            this.$.btnAb.addEventListener('click', () => this._cycleAb());
+        }
         // ★ 가사 모달 (v5.8.1c — 옵션 A)
         if (this.$.btnLyrics) {
             this.$.btnLyrics.addEventListener('click', () => this._openLyricsModal());
@@ -1383,6 +1401,10 @@ class FSAudioPlayer {
         // Audio events
         a.addEventListener('timeupdate', () => {
             if (this._draggingSeek || !a.duration) return;
+            // ★ 구간 반복: B를 넘으면 A로 되돌림 (timeupdate 주기가 약 250ms라 그만큼 오차 있음)
+            if (this._abB !== null && this._abA !== null && a.currentTime >= this._abB) {
+                a.currentTime = this._abA;
+            }
             const pct = a.currentTime / a.duration;
             this.$.seekPlayed.style.width = (pct * 100) + '%';
             this.$.seekThumb.style.left = (pct * 100) + '%';
@@ -1394,6 +1416,9 @@ class FSAudioPlayer {
         a.addEventListener('loadedmetadata', () => {
             this.$.durTime.textContent = this._fmt(a.duration);
             this._updateTrackMeta();
+            // ★ duration이 확정된 시점에 구간 반복 마커 위치 재계산
+            //   (메타데이터 로드 전에 A를 찍으면 duration이 없어 눈금을 못 그리므로 여기서 반영)
+            this._updateAbUI();
             
             // ★ 재생 시 duration 자동 캐시 (FTP 등 사전 측정 실패한 곡 대비)
             // 플레이리스트에 duration 표시 + 서버 캐시에 저장
@@ -1436,6 +1461,9 @@ class FSAudioPlayer {
             // 재생 중 세션 keepalive + 화면 자동 잠금 방지
             this._startMediaKeepalive();
             this._acquireWakeLock();
+            this._msLog('play');
+            // 다른 탭 동영상 등으로 오디오 포커스를 뺏긴 뒤라면 여기서 컨텍스트를 되살린다
+            this._resumeAudioCtx('play');
         });
         a.addEventListener('pause', () => {
             this._updatePlayUI(false);
@@ -1443,6 +1471,18 @@ class FSAudioPlayer {
             // 일시정지 시 keepalive/wake lock 해제
             this._stopMediaKeepalive();
             this._releaseWakeLock();
+            // ★ 외부 요인에 의한 정지 감지 (2026-08-06)
+            //   다른 탭(동영상 등)이 오디오 포커스를 가져가면 iOS가 우리 재생을 중단시킨다.
+            //   실제 로그에서 백그라운드 중 우리가 시키지 않은 ms_pause가 확인됐다.
+            //   다른 탭 자체는 막을 수 없지만(브라우저 탭 격리), '뺏긴 신호'로 삼아
+            //   세션을 다시 잡아 잠금화면 표시를 우리 것으로 되돌린다.
+            const wasSelf = !!this._selfPause;
+            this._selfPause = false;
+            this._msLog(wasSelf ? 'pause' : 'pause_external');
+            if (!wasSelf && !this._destroyed) {
+                const t = this.playlist[this.currentIndex];
+                if (t) this._reacquireMediaSession(t, 'pause_external');
+            }
         });
         a.addEventListener('ended', () => {
             // 마지막 곡 종료 시 keepalive/wake lock 해제 (다음 곡이 자동 재생되면 play 이벤트가 다시 켬)
@@ -1495,6 +1535,15 @@ class FSAudioPlayer {
         // 재생 성공적으로 시작되면 에러 카운터 리셋
         a.addEventListener('playing', () => {
             this._errorSkipCount = 0;
+            // ★ 미디어 세션 재획득은 '재생이 확립된 뒤'에만 한다 (트랙당 1회).
+            //   곡 전환 시점에 하면 세션을 비운 순간에 play 이벤트가 끼어들어
+            //   metadata 없는 상태로 재생이 시작된다(로그에서 meta=false/art=0 확인).
+            //   여기서는 이미 재생 중이라 그 빈틈이 생기지 않는다.
+            if (this._reacqDoneFor !== this.currentIndex) {
+                this._reacqDoneFor = this.currentIndex;
+                const t = this.playlist[this.currentIndex];
+                if (t) this._reacquireMediaSession(t, 'playing');
+            }
         });
         
         // 비주얼라이저 클릭/탭 → 모드 순환
@@ -1564,6 +1613,13 @@ class FSAudioPlayer {
             // 탭 전환/복귀 시 iOS가 MediaMetadata를 지우는 경우가 있어서 복귀할 때 재설정
             this._mediaSessionVisHandler = () => {
                 if (this._destroyed) return;
+                // 백그라운드로 '들어가는' 순간도 기록한다 — 재현 절차상 이 구간에서 썸네일이 사라짐
+                this._msLog(document.hidden ? 'vis_hidden' : 'vis_visible');
+                // ★ 탭을 벗어나 있는 동안 다른 탭(동영상 등)이 미디어 세션을 가져갔을 수 있다.
+                //   복귀 후 첫 재생에서 다시 세션을 잡도록 '트랙당 1회' 가드를 푼다.
+                //   (가드가 없으면 같은 곡을 이어 재생할 때 재획득이 건너뛰어졌음 — 로그로 확인)
+                if (document.hidden) this._reacqDoneFor = null;
+                if (!document.hidden) this._resumeAudioCtx('visible');
                 if (!document.hidden) {
                     // 복귀: 500ms 지연 후 재설정 (iOS Safari가 처리할 시간 확보)
                     setTimeout(() => {
@@ -1574,6 +1630,7 @@ class FSAudioPlayer {
                             try {
                                 navigator.mediaSession.playbackState = a.paused ? 'paused' : 'playing';
                             } catch(e) {}
+                            this._msLog('vis_resync');
                         }
                     }, 500);
                 }
@@ -1620,8 +1677,13 @@ class FSAudioPlayer {
     _loadTrack(idx, autoplay) {
         if (idx < 0 || idx >= this.playlist.length) return;
         this.currentIndex = idx;
+        this._clearAb();  // ★ 구간 반복은 곡 단위 — 곡이 바뀌면 해제
         this._markShufflePlayed(idx);  // ★ 셔플 진행 추적 (전곡 소진 시 자동 재셔플)
         const track = this.playlist[idx];
+        // ★ 재생 중에 src를 바꾸면 HTML5 미디어 로드 알고리즘이 pause 이벤트를 발생시킨다.
+        //   이를 '외부 요인 정지'로 오판하면 곡 전환 때마다 불필요한 세션 재획득이 돌아
+        //   metadata가 잠깐 비는 구간이 생긴다(앞서 제거한 해로운 패턴). 우리 의도임을 표시한다.
+        this._selfPause = true;
         this.audio.src = track.url;
         // ★ v5.8.1j: 트랙 변경 시 force refresh 분 경계 리셋 (이전 트랙 값 제거)
         this._lastForceRefreshAt = Date.now();
@@ -1646,14 +1708,18 @@ class FSAudioPlayer {
         this._vsRender();
         // Scroll active into view
         this._vsScrollToIndex(idx);
+        // ★ Media Session은 재생을 시작하기 '전에' 설정한다.
+        //   브라우저는 재생이 시작되는 순간 미디어 세션을 활성화하는데, 그 시점에 metadata가
+        //   비어 있거나(첫 재생) 이전 트랙 것이면 잠금화면·알림 카드에 우리 정보가 실리지 못한다.
+        //   그러면 다른 탭(예: 재생하다 멈춘 동영상 사이트)이 카드를 계속 쥐고 있어
+        //   커버가 안 뜨거나 그 사이트 정보가 표시되는 문제가 생긴다. (모바일에서 특히 두드러짐)
+        //   artwork는 이 시점에 이전 트랙 것이 남을 수 있으나,
+        //   _updateTrackCover의 비동기 콜백에서 다시 호출되어 확정됨 (iOS Safari 대응)
+        this._updateMediaSession(track);
         if (autoplay) {
             this.audio.play().catch(() => {});
         }
         if (this.onTrackChange) this.onTrackChange(idx);
-        // Media Session 즉시 업데이트 (title/artist — 잠금화면 즉시 반영)
-        // artwork는 이 시점에 이전 트랙 artwork가 남을 수 있지만,
-        // _updateTrackCover의 비동기 콜백에서 다시 호출되어 확정됨 (iOS Safari 대응)
-        this._updateMediaSession(track);
         // 가사 로드 (LRC > USLT > TXT) — 비동기, 실패해도 무시
         this._loadLyrics(track);
     }
@@ -2290,6 +2356,8 @@ class FSAudioPlayer {
                 this._forceRefreshArtwork();
             }).catch(() => {});
         } else {
+            // 우리가 의도한 정지임을 표시 (외부 요인 정지와 구분)
+            this._selfPause = true;
             this.audio.pause();
         }
     }
@@ -2318,6 +2386,12 @@ class FSAudioPlayer {
 
     // ── End handler ──
     _onEnded() {
+        // ★ 구간 반복 중이면 다음 곡/한곡반복보다 우선 (B가 곡 끝에 붙어 있어 ended가 먼저 오는 경우)
+        if (this._abA !== null && this._abB !== null) {
+            this.audio.currentTime = this._abA;
+            this.audio.play().catch(() => {});
+            return;
+        }
         if (this.loop === 'one') {
             this.audio.currentTime = 0;
             this.audio.play().catch(() => {});
@@ -2438,6 +2512,70 @@ class FSAudioPlayer {
             btn.title = _ko ? '반복: 한 곡 (L)' : 'Repeat: One (L)';
         } else {
             btn.title = _ko ? '반복: 끔 (L)' : 'Repeat: Off (L)';
+        }
+    }
+
+    // ── 구간 반복 (A-B) ──
+    // 버튼 한 개로 3단계 순환: (없음) → A 지정 → B 지정=반복 시작 → 해제
+    // A만 찍힌 상태에서 A보다 앞이나 같은 위치를 누르면 잘못된 구간이 생기지 않게 A를 그 자리로 다시 찍는다.
+    _cycleAb() {
+        const t = this.audio.currentTime || 0;
+        if (this._abA === null) {
+            this._abA = t;
+        } else if (this._abB === null) {
+            if (t <= this._abA + 0.3) this._abA = t;
+            else this._abB = t;
+        } else {
+            this._abA = null;
+            this._abB = null;
+        }
+        this._updateAbUI();
+    }
+    _clearAb() {
+        if (this._abA === null && this._abB === null) return;
+        this._abA = null;
+        this._abB = null;
+        this._updateAbUI();
+    }
+    _updateAbUI() {
+        if (!this.$ || !this.$.btnAb) return;
+        const btn = this.$.btnAb;
+        const _ko = (document.documentElement.lang || navigator.language || '').startsWith('ko');
+        const hasA = this._abA !== null;
+        const hasB = this._abB !== null;
+        btn.classList.toggle('active', hasA);
+        btn.classList.toggle('ab-set', hasB);
+        if (this.$.abLabel) this.$.abLabel.textContent = (hasA && !hasB) ? 'A' : 'A-B';
+        if (hasB) {
+            btn.title = _ko ? `구간 반복 중: ${this._fmt(this._abA)} ~ ${this._fmt(this._abB)} (눌러서 해제)`
+                            : `A-B repeat: ${this._fmt(this._abA)} - ${this._fmt(this._abB)} (click to clear)`;
+        } else if (hasA) {
+            btn.title = _ko ? `A = ${this._fmt(this._abA)} · 눌러서 B 지정` : `A = ${this._fmt(this._abA)} · click to set B`;
+        } else {
+            btn.title = _ko ? '구간 반복: 눌러서 A 지정' : 'A-B Repeat: click to set A';
+        }
+        // 시크바 마커/구간 표시 (duration 없으면 숨김)
+        const dur = this.audio.duration;
+        const ok = !!(dur && isFinite(dur) && dur > 0);
+        const pos = (sec) => Math.max(0, Math.min(100, sec / dur * 100));
+        const setMark = (el, sec) => {
+            if (!el) return;
+            if (!ok || sec === null) { el.style.display = 'none'; return; }
+            el.style.left = pos(sec) + '%';
+            el.style.display = '';
+        };
+        setMark(this.$.seekAbA, this._abA);
+        setMark(this.$.seekAbB, this._abB);
+        const range = this.$.seekAbRange;
+        if (range) {
+            if (ok && hasA && hasB) {
+                const l = pos(this._abA);
+                range.style.left = l + '%';
+                range.style.width = Math.max(0, pos(this._abB) - l) + '%';
+                range.style.display = '';
+            } else {
+                range.style.display = 'none';
+            }
         }
     }
 
@@ -2696,9 +2834,8 @@ class FSAudioPlayer {
         if (!this._visInitialized || this._visRunning) return;
         this._visRunning = true;
         
-        if (this._audioCtx && this._audioCtx.state === 'suspended') {
-            this._audioCtx.resume().catch(() => {});
-        }
+        // 'suspended'뿐 아니라 iOS 전용 'interrupted'도 복구 대상에 포함
+        this._resumeAudioCtx('startVisualizer');
         
         const canvas = this.$.visualizer;
         const ctx = canvas.getContext('2d');
@@ -4115,6 +4252,100 @@ class FSAudioPlayer {
         });
     }
 
+    // ★ 진단 로그 (2026-08-05): 잠금화면 썸네일 사라짐 원인 추적용
+    //   기록 조건은 기존 방식 그대로 — data/debug_logs 폴더가 있을 때만 서버에 남는다.
+    //   (폴더가 없으면 App._debugLog가 즉시 종료되어 평소 부하 0)
+    //   throttleMs를 주면 같은 이벤트가 그 간격 안에서 반복 기록되지 않는다.
+    _msLog(event, extra, throttleMs) {
+        try {
+            if (typeof App === 'undefined' || !App._debugLog) return;
+            if (throttleMs) {
+                if (!this._msLogAt) this._msLogAt = {};
+                const now = Date.now();
+                if (this._msLogAt[event] && now - this._msLogAt[event] < throttleMs) return;
+                this._msLogAt[event] = now;
+            }
+            const ms = ('mediaSession' in navigator) ? navigator.mediaSession : null;
+            const meta = ms ? ms.metadata : null;
+            let artCount = 0, art0 = null;
+            if (meta && meta.artwork && meta.artwork.length) {
+                artCount = meta.artwork.length;
+                const src = String(meta.artwork[0].src || '');
+                art0 = (src.indexOf('blob:') === 0) ? 'blob:' : src.slice(0, 70);
+            }
+            App._debugLog('ms_' + event, Object.assign({
+                vis: document.visibilityState,
+                state: ms ? ms.playbackState : 'na',
+                hasMeta: !!meta,
+                title: meta ? String(meta.title || '').slice(0, 40) : null,
+                artCount: artCount,
+                art0: art0,
+                paused: this.audio ? this.audio.paused : 'na',
+                idx: this.currentIndex,
+                ctx: this._audioCtx ? this._audioCtx.state : 'na',
+                rs: this.audio ? this.audio.readyState : 'na',
+                hasSrc: this.audio ? !!this.audio.currentSrc : 'na'
+            }, extra || {}));
+        } catch(e) {}
+    }
+
+    // ★ AudioContext 복구 (2026-08-05)
+    //   비주얼라이저가 createMediaElementSource로 오디오를 Web Audio에 '영구' 연결하므로
+    //   (요소당 1회만 가능, 되돌릴 수 없음) 오디오 출력이 항상 AudioContext를 거친다.
+    //   그런데 iOS/WebKit은 다른 탭·앱이 오디오 포커스를 가져가면 컨텍스트를
+    //   'interrupted' 상태로 만든다 — 표준 'suspended'가 아니라 WebKit 전용 상태다.
+    //   기존 복구 코드는 'suspended'만 확인했고, _startVisualizer는 이미 실행 중이면
+    //   조기 반환하므로 이 상태가 그대로 남아 있을 수 있었다.
+    //   (플레이어를 닫았다 다시 열면 새 AudioContext가 만들어져 증상이 사라지던 것과 일치)
+    _resumeAudioCtx(reason) {
+        try {
+            const ctx = this._audioCtx;
+            if (!ctx) return;
+            const from = ctx.state;
+            if (from !== 'suspended' && from !== 'interrupted') return;
+            const p = ctx.resume();
+            if (p && typeof p.then === 'function') {
+                p.then(() => {
+                    this._msLog('ctx_resumed', { from: from, reason: reason || '', to: ctx.state });
+                }).catch(() => {
+                    this._msLog('ctx_resume_fail', { from: from, reason: reason || '' });
+                });
+            }
+        } catch(e) {}
+    }
+
+    // ★ 미디어 세션 해제 후 재획득 (2026-08-05)
+    //   증상: 다른 탭에서 동영상을 재생/정지한 뒤 음악을 틀면, 잠금화면 제목이
+    //         우리 곡 ↔ 그 사이트 것으로 번갈아 나오고 커버가 안 뜬다(iOS).
+    //   진단: 진단 로그상 우리 metadata는 항상 정상이고(art=6) 1초마다 재설정까지 되고 있었다.
+    //         즉 '설정'의 문제가 아니라 iOS가 세션 주인을 우리로 확정하지 못하는 상태다.
+    //   근거: 플레이어를 닫았다 다시 열면 증상이 사라지는데, destroy()는 metadata=null +
+    //         playbackState='none'으로 세션을 '놓아준다'. 우리는 지금까지 덮어쓰기만 했지
+    //         놓았다가 다시 잡은 적이 없다. 그 차이를 곡 전환 시점에 재현한다.
+    //   주의: 액션 핸들러는 건드리지 않는다(해제하면 잠금화면 버튼이 잠깐 죽을 수 있음).
+    _reacquireMediaSession(track, reason) {
+        if (!('mediaSession' in navigator)) return;
+        if (!track) return;
+        try {
+            const ms = navigator.mediaSession;
+            const beforeMeta = !!ms.metadata;
+            const beforeState = ms.playbackState;
+            // 1) 세션 놓기
+            ms.metadata = null;
+            ms.playbackState = 'none';
+            this._msLog('reacquire_release', { reason: reason || '', beforeMeta: beforeMeta, beforeState: beforeState });
+            // 2) 다시 잡기 — 같은 틱에 되돌리면 브라우저가 동일 세션으로 볼 수 있어 다음 틱에 설정
+            setTimeout(() => {
+                if (this._destroyed) return;
+                this._updateMediaSession(track);
+                try {
+                    ms.playbackState = (this.audio && !this.audio.paused) ? 'playing' : 'paused';
+                } catch(e) {}
+                this._msLog('reacquire_done', { reason: reason || '' });
+            }, 0);
+        } catch(e) {}
+    }
+
     // ── Media Session (잠금화면/백그라운드 컨트롤) ──
     _updateMediaSession(track) {
         if (!('mediaSession' in navigator)) return;
@@ -4129,9 +4360,30 @@ class FSAudioPlayer {
             //   - 둘 다 없음 → null → 기본 PNG 아이콘 (v5.8.1g, 이전 SVG는 iOS 미지원)
             //
             // 첫 호출 시 (ID3 로드 전) _activeCoverUrl이 undefined일 수 있음 — 폴더 이미지로 시작
-            const resolved = (typeof this._activeCoverUrl !== 'undefined')
+            let resolved = (typeof this._activeCoverUrl !== 'undefined')
                 ? this._activeCoverUrl
                 : (this.cover || null);
+            // ★ 잠금화면 artwork에는 blob: URL을 쓸 수 없다.
+            //   커버 캐시(_getCachedCoverUrl)는 데이터 절감을 위해 blob: URL을 돌려주는데,
+            //   페이지 안 <img>는 이를 정상 표시하지만 잠금화면·알림 카드의 커버는
+            //   OS(브라우저 밖 별도 프로세스)가 직접 받아가므로 문서 스코프인 blob: URL을
+            //   해석하지 못해 커버가 빈 채로 남는다. (iOS에서 확인 — 화면 안 커버는 정상인데
+            //   잠금화면만 비어 있던 증상의 원인)
+            //   → 캐시를 역조회해 원본 http(s) URL을 찾아 artwork로 사용한다.
+            //     화면 표시 경로(_activeCoverUrl)는 blob 그대로 두므로 캐시 절감 효과는 유지된다.
+            if (resolved && typeof resolved === 'string' && resolved.indexOf('blob:') === 0) {
+                let origUrl = null;
+                try {
+                    if (this._coverBlobCache) {
+                        // Map(원본URL → blobURL) 이므로 값으로 키를 되찾는다 (항목 수가 적어 부담 없음)
+                        for (const [origKey, blobVal] of this._coverBlobCache) {
+                            if (blobVal === resolved) { origUrl = origKey; break; }
+                        }
+                    }
+                } catch(e) {}
+                // 원본을 못 찾으면 깨진 blob을 넘기지 말고 기본 음표 아이콘으로 넘어가게 한다
+                resolved = origUrl || null;
+            }
             
             if (resolved) {
                 // 이미지 MIME 자동 감지 (z_music/simple_mp3_player 참조)
@@ -4176,6 +4428,7 @@ class FSAudioPlayer {
             // ★ v5.8.1j: artwork 유지 타이머 시작 (iOS 잠금화면 사라짐 방지)
             //   재생 중일 때만 30초마다 체크하여 손실 시 복구 + 2분마다 강제 갱신
             this._startArtworkMaintenance();
+            this._msLog('set', { art: resolved ? ((String(resolved).indexOf('blob:') === 0) ? 'blob' : 'url') : 'default' });
         } catch(e) {}
     }
 
@@ -4220,6 +4473,8 @@ class FSAudioPlayer {
         } catch(e) {
             needsRestore = true;
         }
+        // ★ 실제로 '유실이 감지된' 경우만 기록 (1초 주기 강제갱신은 제외, 5초 간격 제한)
+        if (needsRestore) this._msLog('artwork_lost', null, 5000);
         // 주기적 강제 갱신 (iOS 시스템 레벨 유실 대응 — z_music 패턴 개선)
         //   v5.8.1j는 재생 시간 2분 경계 → 4분 이내 곡 복구 공백(실사용 보고) → 벽시계 30초로 1차 개선 →
         //   1초 갱신으로 최종 결정(펜닐님 2026-06-10): 빈 썸네일 노출이 최대 1초라 사용자가 사실상 인지 불가.
@@ -4491,6 +4746,7 @@ class FSAudioPlayer {
     destroy() {
         if (this._destroyed) return;
         this._destroyed = true;
+        this._selfPause = true;
         this.audio.pause();
         // 비주얼라이저 정리
         this._stopVisualizer();
@@ -4797,13 +5053,10 @@ const App = {
         // 모바일: 검색창/필터 스크롤 시 상단 고정
         this._initMobileSearchSticky();
         
-        // 모바일 브라우저 실제 viewport 높이를 CSS 변수로 설정
-        // (100vh는 브라우저 바 포함이라 실제 보이는 영역과 다름)
-        const setVH = () => {
-            document.documentElement.style.setProperty('--real-vh', window.innerHeight + 'px');
-        };
-        setVH();
-        window.addEventListener('resize', setVH);
+        // (제거됨 2026-08-13) --real-vh CSS 변수 설정 코드
+        //   window.innerHeight를 --real-vh에 넣고 resize마다 갱신했으나, CSS 어디에서도
+        //   이 변수를 참조하지 않아 실제 레이아웃에 아무 영향이 없는 죽은 코드였다.
+        //   (전 파일 검색 결과 설정 1곳 / 사용 0곳)
         
         let _resizeTimer;
         window.addEventListener('resize', () => {
@@ -9542,7 +9795,9 @@ const App = {
             this.storages.forEach(s => {
                 const opt = document.createElement('option');
                 opt.value = s.id;
-                opt.textContent = `${this.escapeHtml(s.icon || '📁')} ${s.name}`;
+                // textContent는 대입만으로 안전하므로 이스케이프하지 않는다
+                // (escapeHtml이 따옴표를 엔티티로 바꾸면서 여기서는 &quot; 가 그대로 보이게 됨)
+                opt.textContent = `${s.icon || '📁'} ${s.name}`;
                 filterStorage.appendChild(opt);
             });
         }
@@ -12207,7 +12462,11 @@ const App = {
         const _needsTranscode = _isVideoFile && !_nativeVideoExts.includes(_firstExt);
         // 원격에서 미리보기 가능 여부: FTP/SFTP + 트랜스코딩 필요 동영상만 불가
         const _remotePreviewOk = !isRemote || (isFtpSftp ? !_needsTranscode : !_needsTranscode);
-        const isVaultFolder = firstItem && firstItem.isDir ? $(`.file-item[data-path="${this.escapeHtml(firstItem.path)}"]`).data('vault') === true || $(`.file-item[data-path="${this.escapeHtml(firstItem.path)}"]`).data('vault') === 'true' : false;
+        // ★ (2026-08-15) 선택자에는 CSS.escape 사용 — escapeHtml은 HTML 이스케이프라 선택자와 맞지 않는다.
+        //   DOM 속성값은 파싱 시 엔티티가 디코드되므로(예: It&#39;s → It's) escapeHtml 결과로 찾으면 못 찾는다.
+        //   기존에도 '&'가 든 경로에서 이미 어긋났고, escapeHtml이 따옴표까지 이스케이프하게 되면서
+        //   아포스트로피가 든 파일명(It's ...)까지 영향을 받는다. 다른 4곳이 쓰는 방식으로 통일.
+        const isVaultFolder = firstItem && firstItem.isDir ? $(`.file-item[data-path="${CSS.escape(firstItem.path)}"]`).data('vault') === true || $(`.file-item[data-path="${CSS.escape(firstItem.path)}"]`).data('vault') === 'true' : false;
         if (firstItem) firstItem.isVault = isVaultFolder;
         
         // 권한에 따라 메뉴 항목 표시/숨김
@@ -12501,7 +12760,8 @@ const App = {
             'compress': items.length > 0 && !!perms.can_write && !isRemote,
             'convert-h264': items.some(it => !it.isDir && this.getFileType(it.name) === 'video' && !_nativeVideoExts2.includes((it.name || '').split('.').pop().toLowerCase())) && !!perms.can_write && !isLocked && !isRemote,
             'convert-to-vault': !isFile && !!perms.can_write && firstItem && this.currentStorage == this.homeStorageId && !(this.vault && this.vault.isVaultView) && (() => {
-                const el = document.querySelector(`.file-item[data-path="${this.escapeHtml(firstItem.path)}"]`);
+                // ★ (2026-08-15) 위와 같은 이유로 CSS.escape 사용
+            const el = document.querySelector(`.file-item[data-path="${CSS.escape(firstItem.path)}"]`);
                 return el ? el.dataset.vault !== 'true' : true;
             })(),
             'rename': !!perms.can_write && !isLocked,
@@ -12610,7 +12870,8 @@ const App = {
                     this.exitSearchMode();
                     
                     // E2E Vault 폴더인 경우 비밀번호 모달로 진입
-                    const $el = $(`.file-item[data-path="${this.escapeHtml(item.path)}"]`);
+                    // ★ (2026-08-15) 선택자에는 CSS.escape (위 두 곳과 동일한 이유)
+                    const $el = $(`.file-item[data-path="${CSS.escape(item.path)}"]`);
                     if ($el.data('vault') === true || $el.data('vault') === 'true') {
                         this.vaultOpenFolder(item.path);
                     } else {
@@ -12700,7 +12961,9 @@ const App = {
                 }
                 break;
             case 'share':
-                this.showShareModal(item);
+                // ★ 여러 개 선택 시 일괄 공유 (2026-08-15) — 선택 목록 전체를 넘긴다.
+                //   기존에는 item(=items[0])만 넘겨 체크박스로 여러 개 골라도 첫 항목만 공유됐다.
+                this.showShareModal(item, items);
                 break;
             case 'internal_share':
                 this.showInternalShareModal(item);
@@ -18262,10 +18525,72 @@ const App = {
     },
     
     // 공유 모달
-    async showShareModal(item) {
+    // ★ 일괄 공유 — 모달 준비 (2026-08-15)
+    //   단일 공유와 같은 설정(만료·비밀번호·최대 다운로드·공유 유형)을 그대로 쓰되,
+    //   대상이 여러 개이므로 기존 공유 조회(share_check)는 생성 시점에 항목별로 수행한다.
+    _showShareModalBulk(list) {
+        $('#share-filename').html(
+            `<b>${list.length}${t('items_count_unit', '개 항목')}</b>` +
+            `<div style="max-height:120px;overflow-y:auto;margin-top:6px;font-size:12px;opacity:.85;">` +
+            list.map(f => `${(f.is_dir || f.isDir) ? '📁' : '📄'} ${this.escapeHtml ? this.escapeHtml(f.name) : f.name}`).join('<br>') +
+            `</div>`
+        );
+        $('#share-result').hide();
+        $('#btn-create-share').show().prop('disabled', false);
+        $('#share-expire').val('7');
+        $('#share-password').val('');
+        $('#share-max-downloads').val('');
+        $('#share-expire, #share-password, #share-max-downloads').closest('.form-group').show();
+        const existingDiv = document.getElementById('share-existing-container');
+        if (existingDiv) existingDiv.innerHTML = '';
+        
+        // 공유 유형: 선택 항목들이 공통으로 지원하는 것만 남긴다
+        //   폴더 = 다운로드/스트리밍/파일드롭, 미디어 파일 = 다운로드/스트리밍, 그 외 = 다운로드만
+        const mediaExts = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp','mp3','wav','flac','m4a','aac','wma','opus'];
+        const allDirs = list.every(f => f.is_dir || f.isDir);
+        const allStreamable = list.every(f => (f.is_dir || f.isDir) || mediaExts.includes((f.name.split('.').pop() || '').toLowerCase()));
+        const g = document.getElementById('share-type-group');
+        if (g) {
+            if (allDirs || allStreamable) {
+                g.style.display = '';
+                g.innerHTML =
+                    `<label style="font-weight:600;margin-bottom:8px;display:block;">${t('share_type_label','공유 유형')}</label>` +
+                    `<label style="display:inline-flex;align-items:center;margin-right:20px;margin-bottom:0;font-weight:400;cursor:pointer;"><input type="radio" name="share-type" value="download" checked style="width:auto;margin-right:6px;"> 📥 ${t('download_mode','다운로드')}</label>` +
+                    `<label style="display:inline-flex;align-items:center;margin-right:20px;margin-bottom:0;font-weight:400;cursor:pointer;"><input type="radio" name="share-type" value="stream" style="width:auto;margin-right:6px;"> ▶️ ${t('streaming','스트리밍')}</label>` +
+                    (allDirs ? `<label style="display:inline-flex;align-items:center;margin-bottom:0;font-weight:400;cursor:pointer;"><input type="radio" name="share-type" value="filedrop" style="width:auto;margin-right:6px;"> 📤 ${t('filedrop_mode','파일 드롭 (업로드 전용)')}</label>` : '');
+            } else {
+                // 폴더도 미디어도 아닌 항목이 섞여 있으면 다운로드만 가능
+                g.style.display = 'none';
+                $('input[name="share-type"][value="download"]').prop('checked', true);
+            }
+        }
+        this.showModal('modal-share');
+    },
+    
+    async showShareModal(item, items = null) {
+        // ★ 일괄 공유(2026-08-15): 선택이 2개 이상이면 목록 전체를 대상으로 삼는다.
+        //   1개일 때의 동작은 아래 기존 흐름 그대로 유지한다(회귀 방지).
+        const bulkItems = (Array.isArray(items) && items.length > 1) ? items.slice() : null;
+        this._shareBulkItems = bulkItems;
         
         // selectedItems에 item 설정 (공유 생성 시 사용)
-        this.selectedItems = [item];
+        this.selectedItems = bulkItems || [item];
+        
+        // 결과 영역 초기화 (단일/일괄 공용)
+        const bulkBox = document.getElementById('share-bulk-result');
+        if (bulkBox) { bulkBox.innerHTML = ''; bulkBox.style.display = 'none'; }
+        
+        // ★ 생성 버튼 상태 초기화 (2026-08-15 자체 감사에서 발견한 회귀 수정)
+        //   #btn-create-share는 초기화 때 한 번만 바인딩되는 '같은 버튼'을 단일/일괄이 공유한다.
+        //   일괄 공유는 진행 중 disabled로 잠그고 끝나면 hide()만 하므로, 그 뒤 단일 항목 공유를
+        //   열면 버튼이 보이기는 해도 잠긴 채로 남아 생성이 안 됐다(일괄→단일 순서에서만 재현).
+        //   모달을 여는 유일한 경로가 여기이므로, 여기서 한 번 풀어주면 모든 경로가 안전하다.
+        $('#btn-create-share').prop('disabled', false);
+        
+        if (bulkItems) {
+            this._showShareModalBulk(bulkItems);
+            return;
+        }
         
         // 검색 결과에서 선택한 경우 해당 스토리지 ID 사용
         const storageId = item.storageId || this.currentStorage;
@@ -18372,6 +18697,10 @@ const App = {
     
     // 공유 생성
     async createShare() {
+        // ★ 일괄 공유(2026-08-15): 모달을 여러 항목으로 열었으면 전부 처리
+        if (this._shareBulkItems && this._shareBulkItems.length > 1) {
+            return this._createShareBulk(this._shareBulkItems);
+        }
         // 체크박스 또는 클릭 선택된 항목 확인
         const items = this.getSelectedOrCheckedItems();
         const item = items[0];
@@ -18406,6 +18735,115 @@ const App = {
         } else {
             this.toast(res.error || t('err_share_failed', '공유 생성 실패'), 'error');
         }
+    },
+    
+    // ★ 일괄 공유 — 실제 생성 (2026-08-15)
+    //   항목마다 share_check로 기존 링크를 먼저 확인해 **중복 공유를 만들지 않는다**
+    //   (서버 createShare는 중복 검사를 하지 않아 부를 때마다 새 토큰을 만든다.
+    //    단일 공유 화면도 기존 링크가 있으면 그것을 보여주므로 동작을 맞춘 것).
+    //   한 건이 실패해도 나머지는 계속 진행하고, 끝에 결과를 모아 보여준다.
+    async _createShareBulk(list) {
+        const MAX = 100;   // 과도한 연속 요청 방지 (게시판 일괄삭제 500건 상한과 같은 취지)
+        if (list.length > MAX) {
+            this.toast(`${t('err_share_bulk_limit', '한 번에 공유할 수 있는 최대 개수를 넘었습니다')} (${MAX})`, 'error');
+            return;
+        }
+        const opts = {
+            expire_days: $('#share-expire').val() || null,
+            password: $('#share-password').val() || null,
+            max_downloads: $('#share-max-downloads').val() || null,
+            share_type: $('input[name="share-type"]:checked').val() || 'download'
+        };
+        const btn = $('#btn-create-share');
+        btn.prop('disabled', true);
+        const box = document.getElementById('share-bulk-result');
+        const results = [];
+        
+        // ★ (2026-08-15) 원격 스토리지 항목 사전 판별
+        //   컨텍스트 메뉴의 원격 여부 판정은 '현재 스토리지' 기준 1회라, 검색 결과처럼
+        //   스토리지가 섞인 선택에는 원격 항목이 낄 수 있다. 서버도 거르기는 하지만
+        //   "잘못된 경로입니다"라는 엉뚱한 사유로 실패하므로, 여기서 미리 걸러
+        //   불필요한 요청을 줄이고 정확한 사유를 보여준다. (판정 기준은 컨텍스트 메뉴와 동일)
+        const isRemoteStorage = (sid) => {
+            const st = (this.storages || []).find(x => x.id == sid);
+            return !!st && !['home', 'shared', 'local'].includes(st.storage_type);
+        };
+        
+        for (let i = 0; i < list.length; i++) {
+            const f = list[i];
+            const storageId = f.storageId || this.currentStorage;
+            if (isRemoteStorage(storageId)) {
+                results.push({ name: f.name, path: f.path, state: 'fail',
+                               error: t('err_share_remote_unsupported', '외부 스토리지는 공유 링크를 만들 수 없습니다') });
+                continue;
+            }
+            if (box) {
+                box.style.display = '';
+                box.innerHTML = `<div style="padding:8px 0;">${t('share_bulk_progress', '공유 생성 중')} ${i + 1} / ${list.length} …</div>`;
+            }
+            try {
+                // 이미 공유 중이면 그 링크를 재사용
+                const chk = await this.api('share_check', { storage_id: storageId, path: f.path }, 'GET');
+                if (chk && chk.success && chk.share) {
+                    results.push({ name: f.name, path: f.path, url: this.getShareUrl(chk.share.token), state: 'exist', type: chk.share.share_type });
+                    continue;
+                }
+                const res = await this.api('share_create', Object.assign({ storage_id: storageId, path: f.path }, opts));
+                if (res && res.success) {
+                    results.push({ name: f.name, path: f.path, url: res.url, state: 'new', type: opts.share_type });
+                } else {
+                    results.push({ name: f.name, path: f.path, error: (res && res.error) || t('err_share_failed', '공유 생성 실패'), state: 'fail' });
+                }
+            } catch (e) {
+                results.push({ name: f.name, path: f.path, error: String(e && e.message || e), state: 'fail' });
+            }
+        }
+        
+        // 목록 화면의 공유 배지 갱신 (성공한 것만)
+        results.filter(r => r.url).forEach(r => {
+            try { this._updateShareUI(r.path, true, r.type || 'download'); } catch (e) {}
+        });
+        this.updateShareBadges();
+        
+        const made = results.filter(r => r.state === 'new').length;
+        const kept = results.filter(r => r.state === 'exist').length;
+        const bad  = results.filter(r => r.state === 'fail').length;
+        
+        if (box) {
+            const esc = (v) => this.escapeHtml ? this.escapeHtml(v) : v;
+            box.innerHTML =
+                `<label>${t('share_link', '공유 링크')} — ` +
+                `${t('share_bulk_new', '신규')} ${made} · ${t('share_bulk_exist', '기존')} ${kept}` +
+                (bad ? ` · <span style="color:#d33;">${t('share_bulk_fail', '실패')} ${bad}</span>` : '') + `</label>` +
+                `<div style="max-height:240px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;padding:6px;">` +
+                results.map(r => r.url
+                    ? `<div style="display:flex;gap:6px;align-items:center;padding:4px 2px;">
+                           <span style="flex:0 0 auto;font-size:12px;opacity:.7;">${r.state === 'exist' ? '♻️' : '🔗'}</span>
+                           <span style="flex:0 0 34%;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.name)}">${esc(r.name)}</span>
+                           <input type="text" readonly value="${esc(r.url)}" style="flex:1;min-width:0;font-size:12px;">
+                           <button type="button" class="btn btn-sm" onclick="App.copyToClipboard(this.previousElementSibling.value)">📋</button>
+                       </div>`
+                    : `<div style="padding:4px 2px;font-size:12px;color:#d33;">⚠️ ${esc(r.name)} — ${esc(r.error || '')}</div>`
+                ).join('') +
+                `</div>` +
+                (results.some(r => r.url)
+                    ? `<button type="button" class="btn" style="margin-top:8px;" onclick="App.copyBulkShareUrls()">📋 ${t('share_bulk_copy_all', '전체 링크 복사')}</button>`
+                    : '');
+        }
+        this._shareBulkUrls = results.filter(r => r.url).map(r => r.url);
+        
+        btn.hide();
+        this.toast(
+            `${t('share_bulk_done', '일괄 공유 완료')} — ${t('share_bulk_new', '신규')} ${made} · ${t('share_bulk_exist', '기존')} ${kept}` + (bad ? ` · ${t('share_bulk_fail', '실패')} ${bad}` : ''),
+            bad ? 'warning' : 'success'
+        );
+    },
+    
+    // 일괄 공유 결과의 링크 전체 복사 (줄바꿈 구분)
+    copyBulkShareUrls() {
+        const urls = this._shareBulkUrls || [];
+        if (!urls.length) return;
+        this.copyToClipboard(urls.join('\n'));
     },
     
     // 공유 URL 복사
@@ -21352,6 +21790,12 @@ const App = {
         }
         
         this._renderShares();
+        
+        // ★ (2026-08-15) 만료 공유 동기화.
+        //   서버는 만료·다운로드 초과 공유를 getShares() 안에서만 정리한다(cleanupExpiredShares).
+        //   즉 이 모달을 여는 순간 실제로 삭제되는데, 파일 목록은 그대로라 🔗 배지가 남아 있었다.
+        //   목록을 한 번 다시 읽어 배지를 맞춘다(스크롤 위치 유지, 모달 뒤에서 조용히 갱신).
+        this._reloadFilesKeepScroll();
     },
     
     _renderShares() {
@@ -21485,7 +21929,10 @@ const App = {
         const ids = Array.from(document.querySelectorAll('.share-check:checked')).map(cb => parseInt(cb.dataset.id));
         if (!ids.length) return;
         
-        if (!await this.confirmDelete(`${ids.length}${t('confirm_delete_shares','개 공유를 삭제하시겠습니까?')}`, t('delete_shares','공유 삭제'))) return;
+        // ★ (2026-08-15) 번역 문구가 "{count}개 공유를 …" 형태(ko)·"Delete {count} share(s)?"(en)인데
+        //   숫자를 앞에 붙이고 문구를 그대로 이어붙여 "15{count}개 공유를 …"로 나왔다.
+        //   자리표시자를 치환하는 tf()로 바꾸고 앞의 숫자 접두는 제거한다(두 언어 모두 올바른 어순).
+        if (!await this.confirmDelete(tf('confirm_delete_shares', { count: ids.length }, `${ids.length}개 공유를 삭제하시겠습니까?`), t('delete_shares','공유 삭제'))) return;
         
         let success = 0;
         for (const id of ids) {
@@ -21494,9 +21941,13 @@ const App = {
         }
         
         if (success > 0) {
-            this.toast(`${success}${t('shares_deleted','개 공유 삭제됨')}`, 'success');
+            this.toast(tf('shares_deleted', { count: success }, `${success}개 공유 삭제됨`), 'success');
             this.showSharesModal(this.sharesModalAdminMode);
             this.updateShareBadges();
+            // ★ (2026-08-15) 파일 목록의 공유 배지 동기화.
+            //   단일 삭제(deleteShare)는 이미 이 호출을 하는데 선택삭제에는 빠져 있어,
+            //   로그인 상태로 새로고침 없이 있으면 지운 공유의 🔗 배지가 그대로 남았다.
+            this._reloadFilesKeepScroll();
         }
     },
     
@@ -33044,7 +33495,13 @@ const App = {
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
-        return div.innerHTML;
+        // ★ (2026-08-15) 따옴표까지 이스케이프한다.
+        //   textContent→innerHTML 방식은 & < > 만 바꾸고 " ' 는 그대로 두기 때문에,
+        //   title="${escapeHtml(name)}" 같은 **속성 문맥**에서 따옴표가 든 파일명이
+        //   속성을 탈출할 수 있었다(원격 스토리지에는 그런 이름이 존재할 수 있음).
+        //   호출 341곳 중 340곳이 innerHTML 경유이고, 엔티티는 텍스트 노드에서도
+        //   디코드되므로 텍스트 문맥의 화면 표기는 전혀 달라지지 않는다(검증 완료).
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     },
     
     // 색상 어둡게 하기 (그라데이션용)
@@ -38546,12 +39003,15 @@ const App = {
         if (!video || video._fsVpAutoNextBound) return;
         video._fsVpAutoNextBound = true;
         video.addEventListener('ended', () => {
-            // ★ 작은 화면(1024px 이하)에서는 자동 재생 비활성화 (v5.8.1g 펜닐님 결정)
-            //   이유: 모바일/작은 태블릿에서는 사이드 패널 자체가 숨김(display: none) → 토글 버튼도 안 보임
-            //         → 사용자가 자동재생을 끌 방법이 없으므로 화면 크기 기준으로 자동 OFF
-            //   기준: CSS 미디어쿼리 @media (max-width: 1024px)와 일치 (UA 아닌 화면 크기 기반)
-            //   1024px 초과 (PC, 아이패드 가로 등): 토글 설정에 따름
-            if (window.innerWidth <= 1024) return;
+            // ★ (2026-08-15) 화면 크기 기준 차단 제거 — 모바일에서도 목록·토글이 보이므로
+            //   사용자가 자동재생을 끌 수 있게 됐다. 이제 PC·모바일 모두 아래 토글 설정만 따른다.
+            //   (이전에는 모바일에서 패널이 display:none이라 끌 방법이 없어 화면 폭으로 강제 OFF했음)
+            // ★ 반복 재생이 켜져 있으면 다음 트랙으로 넘어가지 않는다 (v5.8.3d 펜닐님 결정).
+            //   loop=true면 원래 ended가 안 오지만 브라우저 편차 대비 명시 가드.
+            if (video.loop) return;
+            // ★ 구간 반복 중이면 다음 트랙으로 넘어가지 않는다 (B가 영상 끝에 붙어 있으면
+            //   되돌림보다 ended가 먼저 와서, 되감기와 다음 트랙 이동이 동시에 일어난다)
+            if (video._abA != null && video._abB != null) return;
             // ★ 자동 다음 재생 토글 체크 (v5.8.1g) — OFF면 다음 트랙으로 안 넘어감
             //   기본 ON (펜닐님 룰), localStorage 영구 저장
             if ((localStorage.getItem('fs_vp_auto_next') ?? '1') !== '1') return;
@@ -39036,7 +39496,16 @@ const App = {
         const body = document.getElementById('fs-vp-body');
         const cur = body && body.querySelector('.fs-vp-item.current');
         if (cur && body) {
-            const offset = cur.offsetTop - body.clientHeight / 2 + cur.clientHeight / 2;
+            // ★ (2026-08-15) offsetTop은 스크롤 컨테이너가 아니라 '가장 가까운 위치 지정 조상'
+            //   기준이다. 여기서는 .fs-vp-body / .fs-vp-item 모두 static이라 기준이
+            //   .modal-body(인라인 position:relative)가 되므로, 목록 위에 있는 것들의 높이가
+            //   그대로 더해진 값이 나온다. body.offsetTop을 빼야 목록 안에서의 실제 위치가 된다.
+            //   (둘의 offsetParent가 같으므로 뺄셈으로 상쇄된다)
+            //   PC는 패널이 영상 '옆'이라 오차가 헤더+검색창 높이(약 100px) 정도로 작아
+            //   큰 목록에서는 티가 안 났지만, 모바일은 영상 '아래'라 영상 높이(300~500px)만큼
+            //   부풀어 현재 트랙이 화면 위로 밀려 안 보였다.
+            //   공유 페이지(share.php)는 처음부터 이 형태로 되어 있어 정상이었다 — 식을 그대로 맞춤.
+            const offset = cur.offsetTop - body.offsetTop - (body.clientHeight / 2) + (cur.clientHeight / 2);
             body.scrollTop = Math.max(0, offset);
         }
     },
@@ -39248,6 +39717,10 @@ const App = {
             <button class="vec-btn" data-speed="1.5">1.5x</button>
             <button class="vec-btn" data-speed="2">2x</button>
             <span class="vec-sep"></span>
+            <button class="vec-btn" id="vec-loop" title="${t('video_loop', '반복 재생')}">🔁</button>
+            <button class="vec-btn" id="vec-ab" title="${t('video_ab_set_a', '구간 반복: 눌러서 A 지정')}">A-B</button>
+            <span class="vec-ab-range" id="vec-ab-range" style="display:none;"></span>
+            <span class="vec-sep"></span>
             <button class="vec-btn" id="vec-pip" title="PIP">🖼️ PIP</button>
         `;
         footer.insertBefore(container, footer.firstChild);
@@ -39261,6 +39734,109 @@ const App = {
             });
         });
         
+        // ★ 반복 재생 (v5.8.3d) — video.loop 사용.
+        //   loop=true면 명세상 ended 이벤트가 발생하지 않으므로 '자동 다음 재생'이 자연히 멈춘다
+        //   (펜닐님 결정: 반복 ON이면 다음 트랙으로 안 넘어가고, OFF면 기존대로 넘어감).
+        //   브라우저 편차 대비로 _fsVpBindAutoNext의 ended 핸들러에도 동일 가드를 둔다.
+        //   localStorage 'fs_vp_loop' 영구 저장, 기본 OFF(기존 "반복 재생 X" 기본 동작 유지).
+        const loopBtn = container.querySelector('#vec-loop');
+        if (loopBtn) {
+            let _loopOn = false;
+            try { _loopOn = localStorage.getItem('fs_vp_loop') === '1'; } catch (e) {}
+            const applyLoop = () => {
+                video.loop = _loopOn;
+                loopBtn.classList.toggle('vec-active', _loopOn);
+                loopBtn.title = _loopOn ? t('video_loop_on', '반복 재생: 켬 (끝나면 처음부터)')
+                                        : t('video_loop_off', '반복 재생: 끔');
+            };
+            applyLoop();   // 요소 교체(트랜스코딩 전환) 후 재바인딩 시에도 상태 복원
+            loopBtn.addEventListener('click', () => {
+                _loopOn = !_loopOn;
+                try { localStorage.setItem('fs_vp_loop', _loopOn ? '1' : '0'); } catch (e) {}
+                applyLoop();
+            });
+        }
+
+        // ★ 구간 반복 A-B (v5.8.3d) — 음악 플레이어와 동일한 버튼 1개 3단계 순환.
+        //   동영상은 진행바가 브라우저 기본 컨트롤이라 A/B 눈금을 그릴 수 없어 시간 텍스트로 표시한다.
+        //   상태는 video 요소에 보관 → 영상이 바뀌면(요소 교체) 자동으로 초기화된다.
+        //   트랜스코딩(MSE)·HLS는 되감기가 불안정하므로 버튼 자체를 숨긴다(펜닐님 결정).
+        const abBtn = container.querySelector('#vec-ab');
+        const abRange = container.querySelector('#vec-ab-range');
+        if (abBtn) {
+            // 트랜스코딩 진행 표시(0:00 / 1:23:45)와 같은 형식
+            const abFmt = (sec) => {
+                const h = Math.floor(sec / 3600);
+                const m = Math.floor((sec % 3600) / 60);
+                const x = Math.floor(sec % 60);
+                return h > 0
+                    ? `${h}:${m.toString().padStart(2,'0')}:${x.toString().padStart(2,'0')}`
+                    : `${m}:${x.toString().padStart(2,'0')}`;
+            };
+            const abSeekable = () => !video.dataset.transcodeBase && !video._hlsInstance
+                                  && isFinite(video.duration) && video.duration > 0;
+            const updateAb = () => {
+                if (!abSeekable()) {
+                    abBtn.style.display = 'none';
+                    if (abRange) abRange.style.display = 'none';
+                    video._abA = null; video._abB = null;
+                    return;
+                }
+                abBtn.style.display = '';
+                const hasA = video._abA != null, hasB = video._abB != null;
+                abBtn.textContent = (hasA && !hasB) ? 'A' : 'A-B';
+                abBtn.classList.toggle('vec-active', hasA);
+                if (hasB) abBtn.title = t('video_ab', '구간 반복') + ' · ' + t('video_ab_clear', '눌러서 해제');
+                else if (hasA) abBtn.title = t('video_ab_set_b', '눌러서 B 지정');
+                else abBtn.title = t('video_ab_set_a', '구간 반복: 눌러서 A 지정');
+                if (abRange) {
+                    if (hasA && hasB) {
+                        abRange.textContent = abFmt(video._abA) + ' ~ ' + abFmt(video._abB);
+                        abRange.style.display = '';
+                    } else {
+                        abRange.style.display = 'none';
+                    }
+                }
+            };
+            abBtn.addEventListener('click', () => {
+                if (!abSeekable()) return;
+                const cur = video.currentTime || 0;
+                if (video._abA == null) video._abA = cur;
+                else if (video._abB == null) {
+                    // A보다 앞이거나 같은 자리를 누르면 잘못된 구간이 생기지 않게 A를 그 자리로 다시 찍는다
+                    if (cur <= video._abA + 0.3) video._abA = cur;
+                    else video._abB = cur;
+                } else { video._abA = null; video._abB = null; }
+                updateAb();
+            });
+            // 이 함수는 같은 video 요소에 두 번 이상 호출될 수 있다
+            // (_bindVideoPlayerEvents가 loadedmetadata와 3초 fallback 양쪽에서 불림).
+            // 리스너는 요소당 1회만 등록하고, 컨트롤 줄은 재바인딩마다 새로 만들어지므로
+            // 최신 updateAb를 요소에 걸어둬 리스너가 옛 버튼을 붙잡지 않게 한다.
+            video._abUpdate = updateAb;
+            if (!video._abBound) {
+                video._abBound = true;
+                // 되돌림은 기존 이벤트에 얹는다 (새 타이머 없음)
+                video.addEventListener('timeupdate', () => {
+                    if (video._abB != null && video._abA != null && video.currentTime >= video._abB) {
+                        video.currentTime = video._abA;
+                    }
+                });
+                // 구간이 영상 끝에 붙어 있으면 되돌림보다 ended가 먼저 올 수 있다
+                video.addEventListener('ended', () => {
+                    if (video._abB != null && video._abA != null) {
+                        video.currentTime = video._abA;
+                        video.play().catch(() => {});
+                    }
+                });
+                // duration은 나중에 확정되고, 네이티브 재생 실패 후 트랜스코딩으로 넘어가기도 한다
+                const _abRefresh = () => { if (video._abUpdate) video._abUpdate(); };
+                video.addEventListener('loadedmetadata', _abRefresh);
+                video.addEventListener('durationchange', _abRefresh);
+            }
+            updateAb();
+        }
+
         // PIP (B-1: 진입 시 모달 숨김→정리 안 함, 종료 시 모달 복원. ffmpeg/HLS는 실제 모달 닫을 때만 정리)
         const pipBtn = container.querySelector('#vec-pip');
         if (pipBtn) {
@@ -42274,7 +42850,7 @@ const App = {
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(a.href), 5000);
             
-            this.toast(`✅ ${selectedItems.length}${t('vault_zip_complete', '개 파일 ZIP 다운로드 완료')}`, 'success');
+            this.toast(`✅ ${tf('vault_zip_complete', { count: selectedItems.length }, `${selectedItems.length}개 파일 ZIP 다운로드 완료`)}`, 'success');
         } catch (e) {
             this.toast(e.message || 'ZIP download failed', 'error');
         }
@@ -44176,7 +44752,7 @@ const App = {
         
         if (!await this.showConfirmModal({
             title: t('confirm', '확인'),
-            content: `<div style="font-size:14px;">${legacyItems.length}${t('vault_migrate_confirm', '개 레거시 파일을 마이그레이션하시겠습니까?')}</div>`,
+            content: `<div style="font-size:14px;">${tf('vault_migrate_confirm', { count: legacyItems.length }, `${legacyItems.length}개 레거시 파일을 마이그레이션하시겠습니까?`)}</div>`,
             buttons: [
                 { text: t('cancel', '취소'), value: false, class: 'btn-secondary' },
                 { text: t('confirm', '확인'), value: true, class: 'btn-primary' }
@@ -44213,9 +44789,9 @@ const App = {
         }
         
         if (errors.length > 0) {
-            this.toast(`${success}/${legacyItems.length} ${t('vault_migrate_partial', '개 마이그레이션 완료')} (${errors.length} ${t('vault_migrate_errors', '개 실패')})`, 'warning');
+            this.toast(`${tf('vault_migrate_partial', { count: success, total: legacyItems.length }, `${success}/${legacyItems.length} 마이그레이션 완료`)} (${tf('vault_migrate_errors', { count: errors.length }, `${errors.length}개 실패`)})`, 'warning');
         } else {
-            this.toast(`✅ ${success}${t('vault_migrate_complete', '개 마이그레이션 완료')}`, 'success');
+            this.toast(`✅ ${tf('vault_migrate_complete', { count: success }, `${success}개 마이그레이션 완료`)}`, 'success');
         }
         
         this.vaultLoadFiles();

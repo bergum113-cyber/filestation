@@ -5756,7 +5756,16 @@ try {
                 // 공유 정보 추가
                 $shares = $db->load('shares');
                 $sharedPaths = [];
+                // ★ (2026-08-15) 만료·다운로드 초과 공유는 '공유됨'으로 보지 않는다.
+                //   기존에는 is_active만 봐서, 만료된 공유도 목록에서 shared=true로 내려가
+                //   파일에 🔗 배지가 계속 붙었다(새로고침해도 유지). 실제 삭제는
+                //   ShareManager::cleanupExpiredShares()가 getShares() 호출 시에만 돌기 때문에
+                //   '내 공유 링크' 모달을 열기 전까지는 유령 배지가 남는 구조였다.
+                //   판정 기준은 share_count(위 case)와 동일하게 맞춘다.
+                $_shNow = time();
                 foreach ($shares as $share) {
+                    if (!empty($share['expire_at']) && strtotime($share['expire_at']) < $_shNow) continue;
+                    if (!empty($share['max_downloads']) && ($share['download_count'] ?? 0) >= $share['max_downloads']) continue;
                     if (($share['storage_id'] ?? 0) == $storageId && ($share['is_active'] ?? 0)) {
                         $sharedPaths[$share['file_path']] = [
                             'token' => $share['token'],

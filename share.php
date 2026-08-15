@@ -442,7 +442,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             flex-shrink: 0;
         }
         .share-playlist-header .pl-icon { font-size: 22px; }
-        .share-playlist-header .pl-title { color: #fff; font-size: 15px; font-weight: 600; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        /* ★ 제목 아래에 트랙 개수 (2026-08-15 펜닐님 요청 — 일반의 .fs-vp-header-main과 동일 구조) */
+        .share-playlist-header .pl-header-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+        .share-playlist-header .pl-title { color: #fff; font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .share-playlist-header .pl-count { color: #888; font-size: 12px; flex-shrink: 0; }
         .share-playlist-header .pl-close {
             background: none;
@@ -455,10 +457,22 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             flex-shrink: 0;
         }
         .share-playlist-header .pl-close:hover { color: #fff; }
-        /* ★ 자동 다음 재생 토글 스위치 (v5.8.1g) — 유튜브 스타일 + ON/OFF 텍스트 */
+        /* ★ 자동 다음 재생 토글 (2026-08-15) — 일반(app.js .fs-vp-autonext)과 동일하게
+           ON/OFF 대신 '수동/자동' 표기. 폭 44→52, 폰트 8→9, 노브 이동 28→36으로 규격도 맞춤 */
+        .share-playlist-header .pl-autonext-wrap {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            flex-shrink: 0;
+        }
+        .share-playlist-header .pl-toggle-label {
+            color: #999;
+            font-size: 11px;
+            white-space: nowrap;
+        }
         .share-playlist-header .pl-autonext {
             position: relative;
-            width: 44px;
+            width: 52px;
             height: 18px;
             background: #555;
             border: none;
@@ -483,12 +497,12 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             z-index: 2;
         }
         .share-playlist-header .pl-autonext::after {
-            content: 'OFF';
+            content: '수동';
             position: absolute;
             top: 50%;
-            right: 4px;
+            right: 6px;
             transform: translateY(-50%);
-            font-size: 8px;
+            font-size: 9px;
             font-weight: 700;
             color: #ddd;
             letter-spacing: 0.3px;
@@ -500,13 +514,13 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             background: #ffc107;
         }
         .share-playlist-header .pl-autonext.on::before {
-            left: 28px;
+            left: 36px;
             background: #fff;
         }
         .share-playlist-header .pl-autonext.on::after {
-            content: 'ON';
+            content: '자동';
             right: auto;
-            left: 5px;
+            left: 7px;
             color: #1a1a1a;
         }
         .share-playlist-header .pl-autonext:hover {
@@ -755,6 +769,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         .player-controls .ctrl-btn:hover { background: #e0e0f0; border-color: #667eea; color: #667eea; }
         .player-controls .ctrl-btn.active { background: #667eea; color: #fff; border-color: #667eea; }
         .ctrl-sep { width: 1px; height: 20px; background: #ddd; margin: 0 2px; }
+        /* ★ 구간 반복(A-B) 시간 표시 — 동영상은 진행바가 브라우저 기본 컨트롤이라
+           시크바에 눈금을 못 그리므로 컨트롤 줄에 텍스트로 구간을 보여준다 */
+        .ctrl-ab-range { font-size: 11px; font-weight: 700; color: #d98c00; font-family: monospace; white-space: nowrap; align-self: center; padding: 0 2px; }
         .subtitle-overlay { position: absolute; bottom: 8%; left: 5%; right: 5%; text-align: center; color: #fff; font-size: 1.1em; font-weight: 500; text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 0 6px rgba(0,0,0,0.9); pointer-events: none; z-index: 10; line-height: 1.5; word-wrap: break-word; overflow-wrap: break-word; }
         .sub-file-label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
         .sub-file-label input { display: none; }
@@ -1466,7 +1483,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 // (하나의 단일 streamUrl 변수 대신 트랙별로 동적 생성)
                 $folderStreamBaseUrl = "share.php?t=" . urlencode($token) . "&download=1&stream=1";
             ?>
-            <link rel="stylesheet" href="assets/css/fs-audio-player.css?v=<?= APP_VERSION ?>">
+            <link rel="stylesheet" href="assets/css/fs-audio-player.css?v=<?= substr(md5_file(__DIR__ . '/assets/css/fs-audio-player.css'), 0, 10) ?>">
             <div class="player-wrap audio-wrap">
                 <div id="fs-audio-player"></div>
                 <audio id="stream-player" preload="metadata" style="display:none;"></audio>
@@ -1558,6 +1575,13 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 <button class="ctrl-btn" data-speed="1.5">1.5x</button>
                 <button class="ctrl-btn" data-speed="2">2x</button>
                 <div class="ctrl-sep"></div>
+                <button class="ctrl-btn" id="btn-video-loop" title="<?= __('video_loop', '반복 재생') ?>">🔁</button>
+                <?php /* 구간 반복(A-B): 실시간 변환·HLS는 되감기가 불안정해 그 모드에선 아예 렌더하지 않음 */ ?>
+                <?php if (empty($needsTranscode)): ?>
+                <button class="ctrl-btn" id="btn-video-ab" title="<?= __('video_ab_set_a', '구간 반복: 눌러서 A 지정') ?>">A-B</button>
+                <span class="ctrl-ab-range" id="video-ab-range" style="display:none;"></span>
+                <?php endif; ?>
+                <div class="ctrl-sep"></div>
                 <button class="ctrl-btn" id="btn-sub-down" title="<?= __('sub_size_down', '자막 축소') ?>">A-</button>
                 <button class="ctrl-btn" id="btn-sub-up" title="<?= __('sub_size_up', '자막 확대') ?>">A+</button>
                 <button class="ctrl-btn" id="btn-sub-pos-up" title="<?= __('sub_pos_up', '자막 위로') ?>">▲</button>
@@ -1584,7 +1608,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 //   cover=1 호출 시 accessShare가 세션 플래그로 인증 통과 (메인의 audio_cover 패턴과 동일)
                 $coverUrl = "share.php?t=" . urlencode($token) . "&cover=1";
             ?>
-            <link rel="stylesheet" href="assets/css/fs-audio-player.css?v=<?= APP_VERSION ?>">
+            <link rel="stylesheet" href="assets/css/fs-audio-player.css?v=<?= substr(md5_file(__DIR__ . '/assets/css/fs-audio-player.css'), 0, 10) ?>">
             <div class="player-wrap audio-wrap">
                 <div id="fs-audio-player"></div>
                 <!-- 메인과 호환을 위한 player 변수 — JS의 player 참조 안전 -->
@@ -1642,9 +1666,14 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         <aside class="share-playlist-panel" id="share-playlist-panel" aria-hidden="true">
             <div class="share-playlist-header">
                 <span class="pl-icon">🎬</span>
-                <span class="pl-title"><?= __('share_video_folder', '동영상 폴더') ?></span>
-                <span class="pl-count"><?= count($folderTracks) ?><?= __('tracks_unit', '개 트랙') ?></span>
-                <button type="button" class="pl-autonext" id="share-pl-autonext" title="<?= __('autonext_toggle', '자동 다음 재생') ?>" aria-label="<?= __('autonext_toggle', '자동 다음 재생') ?>"></button>
+                <div class="pl-header-main">
+                    <span class="pl-title"><?= __('share_video_folder', '동영상 폴더') ?></span>
+                    <span class="pl-count"><?= count($folderTracks) ?><?= __('tracks_unit', '개 트랙') ?></span>
+                </div>
+                <span class="pl-autonext-wrap">
+                    <span class="pl-toggle-label"><?= __('autonext_label', '다음재생') ?></span>
+                    <button type="button" class="pl-autonext" id="share-pl-autonext" title="<?= __('autonext_toggle', '자동 다음 재생') ?>" aria-label="<?= __('autonext_toggle', '자동 다음 재생') ?>"></button>
+                </span>
                 <button type="button" class="pl-close" id="share-pl-close" title="<?= __('close', '닫기') ?>">✕</button>
             </div>
             <div class="share-playlist-body" id="share-pl-body">
@@ -1793,7 +1822,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
     <?php if (!empty($isAudio) || !empty($isFolderAudioPlaylist)): ?>
     <!-- FSAudioPlayer (메인 미리보기와 동일 클래스, 별도 파일로 분리됨) -->
     <!-- 단일 audio 파일 OR 폴더 stream(다중 트랙) 모두 필요 -->
-    <script src="assets/js/fs-audio-player.js?v=<?= APP_VERSION ?>"></script>
+    <script src="assets/js/fs-audio-player.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-audio-player.js'), 0, 10) ?>"></script>
     <?php endif; ?>
     <script nonce="<?= $cspNonce ?>">
     (function() {
@@ -1883,6 +1912,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             if (playerWrap) playerWrap.classList.remove('has-initial-overlay');
             if (status) status.classList.add('active');
             if (controls) controls.style.display = '';
+            // ★ 실시간 변환·HLS로 넘어가면 되감기가 불안정하므로 구간 반복을 끄고 숨긴다 (v5.8.3d)
+            try { if (typeof window._shareAbHide === 'function') window._shareAbHide(); } catch (e) {}
             
             // info 요청 (HLS/MMS 시작 후 — _shareHlsSession이 설정된 후 실행)
             setTimeout(() => _fetchShareInfo(), 2000);
@@ -3195,6 +3226,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             const _triggerTranscodeFallback = () => {
                 if (_nativeFallbackDone) return;
                 _nativeFallbackDone = true;
+                // ★ 이 경로는 startTranscode()를 타지 않는다. 네이티브로 시작해 A-B 버튼이
+                //   렌더된 상태이므로 여기서도 꺼줘야 변환·HLS에서 구간 반복이 남지 않는다.
+                try { if (typeof window._shareAbHide === 'function') window._shareAbHide(); } catch (e) {}
                 const hlsUrl = player.dataset.hlsUrl;
                 const transcodeUrl = player.dataset.transcodeUrl;
                 if (!hlsUrl && !transcodeUrl) return;
@@ -3402,6 +3436,98 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 btn.classList.add('active');
             });
         });
+
+        // === 반복 재생 (v5.8.3d) ===
+        //   player.loop 사용 — loop=true면 명세상 ended가 발생하지 않아 폴더 '자동 다음 재생'이 자연히 멈춘다
+        //   (펜닐님 결정: 반복 ON이면 다음 영상으로 안 넘어가고, OFF면 기존대로 넘어감).
+        //   브라우저 편차 대비로 폴더 ended 핸들러에도 동일 가드를 둔다.
+        //   sessionStorage 'share_video_loop' (자동 다음 재생 토글과 같은 저장 범위), 기본 OFF.
+        const _loopBtn = document.getElementById('btn-video-loop');
+        if (_loopBtn) {
+            let _loopOn = false;
+            try { _loopOn = sessionStorage.getItem('share_video_loop') === '1'; } catch (e) {}
+            const _applyLoop = () => {
+                player.loop = _loopOn;
+                _loopBtn.classList.toggle('active', _loopOn);
+                _loopBtn.title = _loopOn ? <?= json_encode(__('video_loop_on', '반복 재생: 켬 (끝나면 처음부터)')) ?>
+                                         : <?= json_encode(__('video_loop_off', '반복 재생: 끔')) ?>;
+            };
+            _applyLoop();
+            _loopBtn.addEventListener('click', () => {
+                _loopOn = !_loopOn;
+                try { sessionStorage.setItem('share_video_loop', _loopOn ? '1' : '0'); } catch (e) {}
+                _applyLoop();
+            });
+        }
+
+        // === 구간 반복 A-B (v5.8.3d) ===
+        //   음악 플레이어와 동일한 버튼 1개 3단계 순환(A 지정 → B 지정 → 해제).
+        //   동영상은 진행바가 브라우저 기본 컨트롤이라 눈금 대신 시간 텍스트로 구간을 표시한다.
+        //   실시간 변환·HLS는 되감기가 불안정해 비활성(초기엔 PHP가 아예 렌더 안 하고,
+        //   재생 중 변환으로 넘어가면 startTranscode에서 숨긴다).
+        const _abBtn = document.getElementById('btn-video-ab');
+        const _abRange = document.getElementById('video-ab-range');
+        if (_abBtn) {
+            let _abA = null, _abB = null;
+            const _abFmt = (sec) => {
+                const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = Math.floor(sec % 60);
+                return h > 0 ? h + ':' + String(m).padStart(2,'0') + ':' + String(x).padStart(2,'0')
+                             : m + ':' + String(x).padStart(2,'0');
+            };
+            // ★ 한 번 변환/HLS로 넘어가면 되돌아오지 않으므로 비활성도 고정한다.
+            //   (플래그가 없으면, 숨긴 뒤에 HLS가 유한한 duration을 보고하는 순간
+            //    durationchange → _abUpdate에서 버튼이 다시 나타난다)
+            let _abDisabled = false;
+            const _abSeekable = () => !_abDisabled && isFinite(player.duration) && player.duration > 0;
+            // 일시적 숨김: 아직 duration이 확정되지 않은 상태(preload="none"인 단일 영상은
+            // 재생을 시작해야 길이가 잡힌다). 나중에 길이가 확정되면 다시 표시된다.
+            const _abHideOnly = () => {
+                _abA = null; _abB = null;
+                _abBtn.style.display = 'none';
+                if (_abRange) _abRange.style.display = 'none';
+            };
+            // 영구 비활성: 변환·HLS로 넘어간 경우. 되돌아오지 않으므로 다시 표시하지 않는다.
+            window._shareAbHide = () => { _abDisabled = true; _abHideOnly(); };
+            // 폴더 '자동 다음 재생' 핸들러가 구간 반복 중인지 확인하는 용도 (아래 ended 가드)
+            window._shareAbActive = () => _abA !== null && _abB !== null;
+            const _abUpdate = () => {
+                if (!_abSeekable()) { _abHideOnly(); return; }
+                _abBtn.style.display = '';
+                const hasA = _abA !== null, hasB = _abB !== null;
+                _abBtn.textContent = (hasA && !hasB) ? 'A' : 'A-B';
+                _abBtn.classList.toggle('active', hasA);
+                _abBtn.title = hasB ? <?= json_encode(__('video_ab', '구간 반복') . ' · ' . __('video_ab_clear', '눌러서 해제')) ?>
+                             : hasA ? <?= json_encode(__('video_ab_set_b', '눌러서 B 지정')) ?>
+                                    : <?= json_encode(__('video_ab_set_a', '구간 반복: 눌러서 A 지정')) ?>;
+                if (_abRange) {
+                    if (hasA && hasB) { _abRange.textContent = _abFmt(_abA) + ' ~ ' + _abFmt(_abB); _abRange.style.display = ''; }
+                    else _abRange.style.display = 'none';
+                }
+            };
+            _abBtn.addEventListener('click', () => {
+                if (!_abSeekable()) return;
+                const cur = player.currentTime || 0;
+                if (_abA === null) _abA = cur;
+                else if (_abB === null) {
+                    // A보다 앞이거나 같은 자리를 누르면 잘못된 구간이 생기지 않게 A를 그 자리로 다시 찍는다
+                    if (cur <= _abA + 0.3) _abA = cur; else _abB = cur;
+                } else { _abA = null; _abB = null; }
+                _abUpdate();
+            });
+            player.addEventListener('timeupdate', () => {
+                if (_abB !== null && _abA !== null && player.currentTime >= _abB) player.currentTime = _abA;
+            });
+            // 구간이 영상 끝에 붙어 있으면 되돌림보다 ended가 먼저 올 수 있다
+            player.addEventListener('ended', () => {
+                if (_abB !== null && _abA !== null) {
+                    player.currentTime = _abA;
+                    player.play().catch(() => {});
+                }
+            });
+            player.addEventListener('loadedmetadata', _abUpdate);
+            player.addEventListener('durationchange', _abUpdate);
+            _abUpdate();
+        }
         
         // === 비디오 키보드 단축키 (메인 modal-preview 패턴 동일) ===
         // Space: 재생/일시정지, ←/→: 5초 이동 + 시킹 오버레이 시각 피드백
@@ -3411,6 +3537,12 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             <?php if ($pageSubFile !== null && $folderTrackNext !== null): ?>
             const _folderNextUrl = <?= json_encode($folderTrackNext) ?>;
             player.addEventListener('ended', () => {
+                // ★ 반복 재생이 켜져 있으면 다음 영상으로 넘어가지 않는다 (v5.8.3d 펜닐님 결정).
+                //   loop=true면 원래 ended가 안 오지만 브라우저 편차 대비 명시 가드.
+                if (player.loop) return;
+                // ★ 구간 반복 중이면 다음 영상으로 넘어가지 않는다 (B가 영상 끝에 붙어 있으면
+                //   되돌림보다 ended가 먼저 와서, 되감기와 다음 페이지 이동이 동시에 일어난다)
+                try { if (typeof window._shareAbActive === 'function' && window._shareAbActive()) return; } catch (e) {}
                 // ★ 자동 다음 재생 토글 체크 (v5.8.1g) — OFF면 다음 페이지로 안 넘어감
                 //   기본 ON (펜닐님 룰), sessionStorage 세션 한정
                 try {
