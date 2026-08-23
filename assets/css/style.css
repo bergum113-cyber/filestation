@@ -7906,6 +7906,11 @@ body.is-mobile #main-screen {
     -webkit-overflow-scrolling: touch;
     height: 100vh;
     height: 100dvh;
+    /* (제거됨 2026-08-18) height: var(--app-vh, 100dvh)
+       JS가 visualViewport를 재서 --app-vh에 넣는 보정을 시도했으나, 측정 결과
+       컨테이너 높이는 **원래부터 정확했고**(containerH 745 = realH 745) 증상과 무관했다.
+       JS 쪽 보정 코드를 제거하면서 이 참조도 함께 정리한다(변수가 없으면 위 100dvh 폴백이므로
+       남겨두어도 동작은 같지만, 쓰이지 않는 변수를 참조하는 죽은 코드가 된다). */
 }
 
 body.is-mobile .main-content {
@@ -8122,6 +8127,14 @@ body.is-mobile .status-bar .status-right {
 
 body.is-mobile .status-bar {
     justify-content: flex-start !important;
+    /* (2026-08-18) position: sticky 시도 → **원복**.
+       fixed 대신 sticky 로 바꾸면 크롬의 fixed 렌더 버그를 피할 수 있을 거라 봤으나,
+       ㉠원래 증상(복귀 시 푸터가 커 보임)은 그대로였고
+       ㉡새 문제가 생겼다 — sticky 는 문서 흐름 안에 있어 내용이 화면보다 길면
+         **평소에 푸터가 안 보이고 스크롤 끝에서만 나타나며**, margin-top:auto 때문에
+         스크롤 끝에서 늘었다 줄어드는 현상까지 발생(펜닐님 확인).
+       #main-screen 이 flex 컨테이너가 아니고 내용이 화면보다 길어서
+       sticky 가 하단 고정을 대체할 수 있는 조건이 아니었다. → fixed 로 되돌린다. */
     position: fixed;
     bottom: 0;
     left: 0;
@@ -8135,7 +8148,8 @@ body.is-mobile .file-list {
     min-height: calc(100dvh - 200px);
 }
 
-/* status-bar에 파일 목록 마지막이 가려지지 않도록 여백 */
+/* status-bar에 파일 목록 마지막이 가려지지 않도록 여백
+   (2026-08-18) sticky 전환 때 8px로 줄였다가 fixed 원복과 함께 36px로 되돌림 */
 body.is-mobile .file-area {
     padding-bottom: 36px;
 }
@@ -9358,6 +9372,7 @@ body.is-mobile #board-detail-search {
         overflow-x: hidden;
         height: 100vh;
         height: 100dvh;
+        /* (제거됨 2026-08-18) height: var(--app-vh, 100dvh) — 위 규칙과 같은 이유 */
     }
     
     .main-content {

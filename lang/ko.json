@@ -125,6 +125,8 @@
     "share_bulk_copy_all": "전체 링크 복사",
     "err_share_bulk_limit": "한 번에 공유할 수 있는 최대 개수를 넘었습니다",
     "err_share_remote_unsupported": "외부 스토리지는 공유 링크를 만들 수 없습니다",
+    "err_request_timeout": "서버 응답이 없어 요청을 중단했습니다. 다시 시도해 주세요.",
+    "err_init_failed": "초기화에 실패했습니다.",
     "share_video_folder": "동영상 폴더",
     "tracks_unit": "개 트랙",
     "share_no_playable_track": "재생 가능한 트랙이 없습니다",

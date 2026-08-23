@@ -22,6 +22,37 @@ if ($storageId && !$storage->checkPermission($storageId, 'can_read')) {
     http_response_code(403); exit('No permission');
 }
 
+// ★ (2026-08-20) HWP 로딩 단계별 계측 수신 — data/hwp_timing.log 파일이 있을 때만 기록.
+//   [왜] "문서 로딩이 매번 느리다"의 원인을 어림짐작하지 않고 실측으로 가르기 위한 관측 전용
+//   엔드포인트다. 클라이언트가 단계별 소요(파일 수신 / WASM 준비 / 고정 대기 / 주입 / 렌더 완료)를
+//   모아 한 번만 POST 한다. 로그 파일이 없으면 아무것도 하지 않으므로 평소에는 완전히 꺼진 상태다.
+//   권한 검사(위 can_read)를 이미 통과한 뒤이며, 저장 내용은 파일명·소요시간·UA 앞 120자뿐이다.
+if (isset($_GET['action']) && $_GET['action'] === 'timing_log') {
+    $__tl = __DIR__ . '/data/hwp_timing.log';
+    if (is_file($__tl)) {
+        $raw = file_get_contents('php://input');
+        if ($raw !== false && strlen($raw) < 20000) {
+            $d = json_decode($raw, true);
+            if (is_array($d)) {
+                $line = date('Y-m-d H:i:s') . ' | ' . basename((string)($d['file'] ?? '?'))
+                      . ' | result=' . (string)($d['result'] ?? '?')
+                      . ' | total=' . (int)($d['total_ms'] ?? 0) . 'ms';
+                foreach (($d['marks'] ?? []) as $m) {
+                    if (!is_array($m)) continue;
+                    $line .= "\n    " . str_pad((string)($m['label'] ?? '?'), 20)
+                           . ' +' . (int)($m['delta_ms'] ?? 0) . 'ms'
+                           . '  (누적 ' . (int)($m['total_ms'] ?? 0) . 'ms)'
+                           . (isset($m['extra']) && $m['extra'] !== null ? '  ' . json_encode($m['extra'], JSON_UNESCAPED_UNICODE) : '');
+                }
+                $line .= "\n    UA: " . preg_replace('/[\r\n]/', ' ', (string)($d['ua'] ?? '')) . "\n";
+                @file_put_contents($__tl, $line, FILE_APPEND | LOCK_EX);
+            }
+        }
+    }
+    http_response_code(204);
+    exit;
+}
+
 // 파일 스트리밍
 if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     // 폴더별 권한 체크
@@ -839,98 +870,149 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     </div>
 
     <!-- 서식 도구 모음 (style bar) -->
+    <!-- ★ (2026-08-20) rhwp 0.8.4 studio 의 style-bar 마크업으로 교체.
+         [문제] 상단 서식 도구 모음이 2줄로 밀리고 그룹 라벨(글꼴 및 간격·글자 모양·색·문단)이
+         사라져 보였다. 원인은 자산이 아니라 **마크업 불일치**였다 —
+         0.8.4 studio 는 툴바를 rhwp-studio/index.html 에 하드코딩해 두는데,
+         FileStation 은 그 파일을 쓰지 않고 이 PHP 가 자체 마크업을 만들어
+         studio 의 JS·CSS 만 로드한다. 그래서 CSS 는 0.8.4 의 리본 구조
+         (sb-ribbon-group / sb-field-grid / sb-command-band / sb-ribbon-label)를 전제하는데
+         이 PHP 의 마크업은 옛 구조 그대로여서 스타일이 걸리지 않았다.
+         [확인] 코어 자산은 정상 — rhwp.js·rhwp_bg.wasm 이 npm @rhwp/core@0.8.4 원본과 md5 일치.
+         [안전성] 교체 전후 **요소 id 32개가 완전히 동일**(사라짐 0·신규 0)해 JS 바인딩 영향 없음.
+         출처: github.com/edwardkim/rhwp v0.8.4 태그의 rhwp-studio/index.html -->
     <div id="style-bar">
-      <!-- 스타일 -->
-      <select id="style-name" class="sb-combo" title="스타일">
-      </select>
-      <!-- 글꼴 언어 카테고리 -->
-      <select id="font-lang" class="sb-combo sb-font-lang" title="글꼴 적용 언어">
-        <option value="all">대표</option>
-        <option value="0">한글</option>
-        <option value="1">영문</option>
-        <option value="2">한자</option>
-        <option value="3">일어</option>
-        <option value="4">외국어</option>
-        <option value="5">기호</option>
-        <option value="6">사용자</option>
-      </select>
-      <!-- 글꼴 -->
-      <select id="font-name" class="sb-combo sb-font" title="글꼴">
-        <option value="함초롬바탕">함초롬바탕</option>
-        <option value="함초롬돋움">함초롬돋움</option>
-        <option value="맑은 고딕">맑은 고딕</option>
-        <option value="나눔고딕">나눔고딕</option>
-        <option value="바탕">바탕</option>
-        <option value="돋움">돋움</option>
-        <option value="궁서">궁서</option>
-      </select>
-      <!-- 글자 크기 -->
-      <span class="sb-size-group">
-        <input id="font-size" type="text" class="sb-size" title="글자 크기 (pt)" value="10.0" />
-        <span class="sb-size-unit">pt</span>
-        <span class="sb-size-arrows">
-          <button id="btn-size-up" class="sb-arrow" title="크기 크게">▲</button>
-          <button id="btn-size-down" class="sb-arrow" title="크기 작게">▼</button>
-        </span>
-      </span>
-      <span class="sb-sep"></span>
-      <!-- 글자 서식: 가 -->
-      <button id="btn-bold" class="sb-btn" title="굵게 (Ctrl+B)"><span class="sb-ga sb-bold">가</span></button>
-      <button id="btn-italic" class="sb-btn" title="기울임 (Ctrl+I)"><span class="sb-ga sb-italic">가</span></button>
-      <button id="btn-underline" class="sb-btn" title="밑줄 (Ctrl+U)"><span class="sb-ga sb-underline">간</span></button>
-      <button id="btn-strike" class="sb-btn sb-has-arrow" title="취소선"><span class="sb-ga sb-strike">가</span><span class="sb-dd">▾</span></button>
-      <div class="sb-dropdown" id="charfx-dropdown">
-        <button class="sb-btn sb-has-arrow" id="btn-charfx" title="글자 효과">
-          <span class="sb-ga" id="charfx-icon">가</span><span class="sb-dd">▾</span>
-        </button>
-        <div class="sb-dropdown-menu" id="charfx-menu">
-          <button class="sb-dropdown-item" data-format="emboss"><span class="sb-ga sb-emboss">가</span>양각</button>
-          <button class="sb-dropdown-item" data-format="engrave"><span class="sb-ga sb-engrave">가</span>음각</button>
-          <button class="sb-dropdown-item" data-format="outline"><span class="sb-ga sb-outline">가</span>외곽선</button>
-          <button class="sb-dropdown-item" data-format="superscript"><span class="sb-ga sb-sup">가</span>위 첨자</button>
-          <button class="sb-dropdown-item" data-format="subscript"><span class="sb-ga sb-sub">가</span>아래 첨자</button>
+          <div class="sb-ribbon-group sb-field-ribbon-group">
+            <div class="sb-field-grid">
+              <!-- 스타일 -->
+              <span class="sb-field">
+                <label class="sb-field-label" for="style-name">스타일</label>
+                <select id="style-name" class="sb-combo" title="스타일">
+                  <option value="0">바탕글</option>
+                </select>
+              </span>
+              <!-- 글꼴 언어 카테고리 -->
+              <span class="sb-field">
+                <label class="sb-field-label" for="font-lang">언어</label>
+                <select id="font-lang" class="sb-combo sb-font-lang" title="글꼴 적용 언어">
+                  <option value="all">대표</option>
+                  <option value="0">한글</option>
+                  <option value="1">영문</option>
+                  <option value="2">한자</option>
+                  <option value="3">일어</option>
+                  <option value="4">외국어</option>
+                  <option value="5">기호</option>
+                  <option value="6">사용자</option>
+                </select>
+              </span>
+              <!-- 글꼴 -->
+              <span class="sb-field">
+                <label class="sb-field-label" for="font-name">글꼴</label>
+                <select id="font-name" class="sb-combo sb-font" title="글꼴">
+                  <option value="함초롬바탕">함초롬바탕</option>
+                  <option value="함초롬돋움">함초롬돋움</option>
+                  <option value="맑은 고딕">맑은 고딕</option>
+                  <option value="나눔고딕">나눔고딕</option>
+                  <option value="바탕">바탕</option>
+                  <option value="돋움">돋움</option>
+                  <option value="궁서">궁서</option>
+                </select>
+              </span>
+              <!-- 글자 크기 -->
+              <span class="sb-field">
+                <label class="sb-field-label" for="font-size">크기</label>
+                <span class="sb-size-group">
+                  <input id="font-size" type="text" class="sb-size" title="글자 크기 (pt)" value="10.0" />
+                  <span class="sb-size-unit">pt</span>
+                  <span class="sb-size-arrows">
+                    <button id="btn-size-up" class="sb-arrow" title="크기 크게">▲</button>
+                    <button id="btn-size-down" class="sb-arrow" title="크기 작게">▼</button>
+                  </span>
+                </span>
+              </span>
+              <!-- 줄 간격 -->
+              <span class="sb-field">
+                <label class="sb-field-label" for="linespacing-select">줄 간격</label>
+                <span class="sb-ls-group" id="linespacing-group">
+                  <select id="linespacing-select" class="sb-ls-select" title="줄 간격">
+                    <option value="100">100 %</option>
+                    <option value="130">130 %</option>
+                    <option value="160" selected>160 %</option>
+                    <option value="180">180 %</option>
+                    <option value="200">200 %</option>
+                    <option value="300">300 %</option>
+                  </select>
+                  <span class="sb-ls-arrows">
+                    <button id="btn-ls-up" class="sb-arrow" title="줄 간격 증가 (+5%)">▲</button>
+                    <button id="btn-ls-down" class="sb-arrow" title="줄 간격 감소 (-5%)">▼</button>
+                  </span>
+                </span>
+              </span>
+            </div>
+            <span class="sb-ribbon-label">글꼴 및 간격</span>
+          </div>
+
+          <div class="sb-command-band sb-character-band">
+            <div class="sb-ribbon-group sb-character-ribbon-group">
+              <div class="sb-command-group sb-character-group">
+                <!-- 글자 서식 -->
+                <button id="btn-bold" class="sb-btn" title="굵게 (Ctrl+B)"><span class="sb-ga sb-bold">가</span></button>
+                <button id="btn-italic" class="sb-btn" title="기울임 (Ctrl+I)"><span class="sb-ga sb-italic">가</span></button>
+                <button id="btn-underline" class="sb-btn" title="밑줄 (Ctrl+U)"><span class="sb-ga sb-underline">간</span></button>
+                <button id="btn-strike" class="sb-btn" title="취소선"><span class="sb-ga sb-strike">가</span></button>
+                <div class="sb-dropdown" id="charfx-dropdown">
+                  <button class="sb-btn sb-has-arrow" id="btn-charfx" title="글자 효과">
+                    <span class="sb-ga sb-effect-icon" id="charfx-icon">가</span><span class="sb-dd">▾</span>
+                  </button>
+                  <div class="sb-dropdown-menu" id="charfx-menu">
+                    <button class="sb-dropdown-item" data-format="emboss"><span class="sb-ga sb-emboss">가</span>양각</button>
+                    <button class="sb-dropdown-item" data-format="engrave"><span class="sb-ga sb-engrave">가</span>음각</button>
+                    <button class="sb-dropdown-item" data-format="outline"><span class="sb-ga sb-outline">가</span>외곽선</button>
+                    <button class="sb-dropdown-item" data-format="superscript"><span class="sb-ga sb-sup">가</span>위 첨자</button>
+                    <button class="sb-dropdown-item" data-format="subscript"><span class="sb-ga sb-sub">가</span>아래 첨자</button>
+                  </div>
+                </div>
+              </div>
+              <span class="sb-ribbon-label">글자 모양</span>
+            </div>
+            <div class="sb-ribbon-group sb-color-ribbon-group">
+              <div class="sb-command-group sb-color-group">
+                <!-- 글자색 -->
+                <span class="sb-color-wrap">
+                  <button id="btn-text-color" class="sb-btn sb-has-arrow" title="글자 색">
+                    <span class="sb-color-visual"><span class="sb-ga">가</span><span id="color-bar"></span></span>
+                    <span class="sb-dd">▾</span>
+                  </button>
+                  <input id="text-color-picker" type="color" value="#000000" aria-label="글자 색 선택" />
+                </span>
+                <!-- 형광펜 -->
+                <span id="highlight-dropdown" class="sb-dropdown">
+                  <button id="btn-highlight" class="sb-btn sb-has-arrow" title="형광펜">
+                    <span class="sb-highlight-visual"><span class="sb-highlight-icon">✏</span><span id="highlight-bar"></span></span>
+                    <span class="sb-dd">▾</span>
+                  </button>
+                  <div id="highlight-palette" class="sb-hl-palette"></div>
+                </span>
+              </div>
+              <span class="sb-ribbon-label">색</span>
+            </div>
+          </div>
+
+          <div class="sb-command-band sb-paragraph-band">
+            <div class="sb-ribbon-group sb-paragraph-ribbon-group">
+              <div class="sb-command-group sb-align-group">
+                <!-- 문단 정렬 -->
+                <button id="btn-align-left" class="sb-btn" title="왼쪽 정렬"><span class="sb-align sb-al-left"></span></button>
+                <button id="btn-align-center" class="sb-btn" title="가운데 정렬"><span class="sb-align sb-al-center"></span></button>
+                <button id="btn-align-right" class="sb-btn" title="오른쪽 정렬"><span class="sb-align sb-al-right"></span></button>
+                <button id="btn-align-justify" class="sb-btn" title="양쪽 정렬"><span class="sb-align sb-al-justify"></span></button>
+                <button id="btn-align-distribute" class="sb-btn" title="배분 정렬"><span class="sb-align sb-al-distribute"></span></button>
+                <button id="btn-align-split" class="sb-btn" title="나눔 정렬"><span class="sb-align sb-al-split"></span></button>
+              </div>
+              <span class="sb-ribbon-label">문단</span>
+            </div>
+          </div>
         </div>
-      </div>
-      <!-- 글자색 -->
-      <span class="sb-color-wrap">
-        <button id="btn-text-color" class="sb-btn sb-has-arrow" title="글자 색">
-          <span class="sb-ga">간</span><span id="color-bar"></span><span class="sb-dd">▾</span>
-        </button>
-        <input id="text-color-picker" type="color" value="#000000" />
-      </span>
-      <span class="sb-sep"></span>
-      <!-- 형광펜 -->
-      <span id="highlight-dropdown" class="sb-dropdown">
-        <button id="btn-highlight" class="sb-btn sb-has-arrow" title="형광펜">
-          <span class="sb-highlight-icon">✏</span><span id="highlight-bar"></span><span class="sb-dd">▾</span>
-        </button>
-        <div id="highlight-palette" class="sb-hl-palette"></div>
-      </span>
-      <span class="sb-sep"></span>
-      <!-- 문단 정렬 -->
-      <button id="btn-align-left" class="sb-btn" title="왼쪽 정렬"><span class="sb-align sb-al-left"></span></button>
-      <button id="btn-align-center" class="sb-btn" title="가운데 정렬"><span class="sb-align sb-al-center"></span></button>
-      <button id="btn-align-right" class="sb-btn" title="오른쪽 정렬"><span class="sb-align sb-al-right"></span></button>
-      <button id="btn-align-justify" class="sb-btn" title="양쪽 정렬"><span class="sb-align sb-al-justify"></span></button>
-      <button id="btn-align-distribute" class="sb-btn" title="배분 정렬"><span class="sb-align sb-al-distribute"></span></button>
-      <button id="btn-align-split" class="sb-btn" title="나눔 정렬"><span class="sb-align sb-al-split"></span></button>
-      <span class="sb-sep"></span>
-      <!-- 줄 간격 -->
-      <span class="sb-ls-group" id="linespacing-group">
-        <select id="linespacing-select" class="sb-ls-select" title="줄 간격">
-          <option value="100">100 %</option>
-          <option value="130">130 %</option>
-          <option value="160" selected>160 %</option>
-          <option value="180">180 %</option>
-          <option value="200">200 %</option>
-          <option value="300">300 %</option>
-        </select>
-        <span class="sb-ls-arrows">
-          <button id="btn-ls-up" class="sb-arrow" title="줄 간격 증가 (+5%)">▲</button>
-          <button id="btn-ls-down" class="sb-arrow" title="줄 간격 감소 (-5%)">▼</button>
-        </span>
-      </span>
-    </div>
 
     <!-- 에디터 영역 (눈금자 포함) -->
     <div id="editor-area">
@@ -969,6 +1051,52 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     const FILE_NAME = <?php echo json_encode($fileName); ?>;
     
     if (!FILE_NAME) return; // 파일 경로 없으면 빈 에디터
+    const TIMING_URL = '<?php echo rtrim(dirname($_SERVER["SCRIPT_NAME"]), "/"); ?>/rhwp_editor.php?action=timing_log';
+
+    // ★ (2026-08-20) HWP 문서 로딩 단계별 계측 — 순수 관측, 동작 변경 없음.
+    //   [배경] "파일을 열면 매번 느리다"는 제보. 에디터 UI(자산)가 아니라 **문서 로딩**이 느리고,
+    //   미리보기(뷰어)는 빠르다. 뷰어는 rhwp.js + rhwp_bg.wasm 만 쓰는 반면 에디터는 studio
+    //   번들과 **CanvasKit(6.8MB)** 까지 거치므로 경로 자체가 다르다. 또 이 주입 절차에는
+    //   문서 크기와 무관한 **고정 지연**(WASM 후 500ms 대기, 완료 감지 100ms 폴링)이 있어
+    //   어디서 시간이 드는지 실측 없이는 알 수 없다.
+    //   [기록] 브라우저 콘솔 + 서버 data/hwp_timing.log (그 파일이 있을 때만 서버 기록).
+    const _t0 = performance.now();
+    const _marks = [];
+    function _mark(label, extra) {
+        const t = performance.now();
+        const prev = _marks.length ? _marks[_marks.length - 1].t : _t0;
+        const row = { label: label, t: t, delta: Math.round(t - prev), total: Math.round(t - _t0) };
+        if (extra) row.extra = extra;
+        _marks.push(row);
+        try { console.log('[hwp_timing] ' + label + '  +' + row.delta + 'ms  (누적 ' + row.total + 'ms)' + (extra ? '  ' + JSON.stringify(extra) : '')); } catch (e) {}
+    }
+    function _flushMarks(result) {
+        try {
+            const body = {
+                file: FILE_NAME,
+                result: result,
+                total_ms: Math.round(performance.now() - _t0),
+                marks: _marks.map(function (m) { return { label: m.label, delta_ms: m.delta, total_ms: m.total, extra: m.extra || null }; }),
+                ua: navigator.userAgent.slice(0, 120)
+            };
+            // 서버 기록은 실패해도 무시 — 관측용이라 로딩에 영향을 주지 않는다.
+            // ★ 상대경로는 새 탭의 주소 형태에 따라 어긋날 수 있어 STREAM_URL 과 동일하게
+            //   서버가 계산한 스크립트 경로를 쓴다(그쪽은 정상 동작이 확인된 방식).
+            fetch(TIMING_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+                keepalive: true
+            }).then(function (r) {
+                // ★ 전송 결과를 콘솔에 남긴다 — 서버 로그가 안 생길 때 원인을 바로 알 수 있게.
+                //   204 = 정상 수신. 그 외면 URL·권한·로그파일 존재 여부를 확인할 것.
+                console.log('[hwp_timing] 서버 전송 status=' + r.status
+                    + (r.status === 204 ? ' (정상)' : ' ★ data/hwp_timing.log 파일이 있는지 확인'));
+            }).catch(function (e) {
+                console.log('[hwp_timing] 서버 전송 실패:', e && e.message);
+            });
+        } catch (e) {}
+    }
     
     function waitForInput() {
         return new Promise(resolve => {
@@ -982,10 +1110,28 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     }
     
     // WASM 초기화 완료 대기: 콘솔 로그 감지 플래그 사용
+    // ★ (2026-08-20) 대기 상한 30초 → 2초. **문서 로딩이 매번 30초 걸리던 원인.**
+    //   [계측으로 확인된 사실] hwp_timing.log 실측 —
+    //     wasm_ready +30751ms {"ok":false}  ← 30초를 꽉 채우고 타임아웃
+    //     그 뒤 파일 주입 → doc_rendered +502ms {"loaded":true}
+    //   즉 **WASM·렌더는 0.5초면 끝나는데 대기에서만 30초를 버렸다**. 파일 크기(956KB)나
+    //   렌더 성능과는 무관하며, 총 31.9초 중 96%가 이 헛기다림이었다.
+    //   [원인] 이 대기는 studio 가 찍는 `[WasmBridge] WASM 초기화 완료` 콘솔 로그를 감지해
+    //   플래그를 세우는 방식인데(상단 console.log 후킹), 0.8.x studio 의 해당 코드는
+    //     async initialize(){ if(this.initialized) return; ... console.log('[WasmBridge] WASM 초기화 완료') }
+    //   처럼 **문서를 열 때 비로소 호출되는 지연 초기화(lazy init)** 다.
+    //   → 우리는 "초기화 로그"를 기다리고 studio 는 "파일 주입"을 기다리는 **교착**이라
+    //     플래그가 영원히 서지 않고 상한까지 간다(예전 버전에서는 즉시 열리던 이유가 이것).
+    //   [수정 방침] 대기 자체를 없애지 않고 **상한만 줄인다** — 파일 입력 요소나 studio 앱이
+    //   아직 준비되지 않은 환경에서 곧바로 주입하면 실패할 수 있으므로 짧은 여유는 남긴다.
+    //   그리고 실패하더라도 **기존 재시도 4회(1.0s·1.5s·2.0s 간격)가 그대로 받쳐준다** —
+    //   즉 최악의 경우에도 종전과 동일하게 동작하며, 정상 경로에서는 28초가 사라진다.
+    //   ※ 플래그가 실제로 서는 환경(다른 rhwp 버전 등)에서는 종전처럼 즉시 통과한다 —
+    //     판정 조건·재시도·주입 절차는 하나도 바꾸지 않았고 상한 값만 조정했다.
     function waitForWasmReady() {
         return new Promise(resolve => {
             let attempts = 0;
-            const maxAttempts = 300; // 최대 30초
+            const maxAttempts = 20; // 최대 2초 (종전 300 = 30초)
             const check = () => {
                 attempts++;
                 // 1순위: 콘솔 로그에서 감지한 플래그 (가장 정확)
@@ -1012,9 +1158,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     // 파일 주입 함수 (재시도 가능)
     async function injectFile(fileInput, retryCount) {
         // console.log(`[rhwp_editor] 파일 로드 시작 (시도 ${retryCount + 1}):`, FILE_NAME);
+        const _fs = performance.now();
         const resp = await fetch(STREAM_URL);
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         const blob = await resp.blob();
+        // ★ 서버에서 파일을 받아오는 데 걸린 시간과 크기 — 파싱/렌더와 구분하기 위한 계측.
+        _mark('file_fetched', { bytes: blob.size, fetch_ms: Math.round(performance.now() - _fs) });
         const ext = FILE_NAME.split('.').pop().toLowerCase();
         const mime = ext === 'hwpx' ? 'application/hwp+zip' : 'application/x-hwp';
         const file = new File([blob], FILE_NAME, { type: mime });
@@ -1068,18 +1217,25 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         const maxRetries = 4;
         
         try {
+            _mark('start');
             const fileInput = await waitForInput();
+            _mark('input_ready');
             
             const wasmOk = await waitForWasmReady();
+            _mark('wasm_ready', { ok: wasmOk });
             if (!wasmOk) {
                 // WASM 타임아웃이어도 시도는 함
             }
             // WASM 초기화 후 내부 이벤트 바인딩 안정화 대기
             await new Promise(r => setTimeout(r, 500));
+            _mark('fixed_wait_500ms');
             
             // 1차 시도
             await injectFile(fileInput, 0);
+            _mark('inject_done');
             let loaded = await checkFileLoaded();
+            _mark('doc_rendered', { loaded: loaded, retry: 0 });
+            if (loaded) _flushMarks('ok_first_try');
             
             if (!loaded) {
                 // 로딩 오버레이 표시
@@ -1096,14 +1252,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
                     await new Promise(r => setTimeout(r, 1000 + retry * 500));
                     try {
                         await injectFile(fileInput, retry);
+                        _mark('inject_done', { retry: retry });
                         loaded = await checkFileLoaded();
-                        if (loaded) break;
+                        _mark('doc_rendered', { loaded: loaded, retry: retry });
+                        if (loaded) { _flushMarks('ok_retry_' + retry); break; }
                     } catch (e) {
                         // 재시도 실패
                     }
                 }
                 
                 loadingDiv.remove();
+                if (!loaded) _flushMarks('failed_all_retries');
             }
         } catch (e) {
             // 파일 로드 실패

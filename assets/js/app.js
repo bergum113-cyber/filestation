@@ -63,7 +63,9 @@
     window.fetch = function(input, init) {
         const url = typeof input === 'string' ? input : (input && input.url) || '?';
         // client_state 자기 자신은 추적 제외 (무한 루프 방지)
-        if (url.indexOf('action=client_state') !== -1) {
+        // ★ (2026-08-17) debug_log도 제외 — 진단을 켠 상태에서 서버가 느리면 계측 요청들이
+        //   pending에 쌓여 stuck_many(10초+ 5개)를 스스로 유발해 원인 판별에 노이즈가 된다.
+        if (url.indexOf('action=client_state') !== -1 || url.indexOf('action=debug_log') !== -1) {
             return origFetch(input, init);
         }
         const id = ++STATE.nextId;
@@ -688,7 +690,6 @@ class FSAudioPlayer {
         this._artworkMaintenanceTimer = null;
         this._lastArtworkCheck = 0;
         this._currentMetadata = null;  // 마지막 설정 metadata (복구용)
-        this._lastForceRefreshAt = 0;  // 마지막 강제 갱신 시각(벽시계, 1초 주기 추적)
 
         this._render();
         this._bind();
@@ -1481,6 +1482,9 @@ class FSAudioPlayer {
             this._msLog(wasSelf ? 'pause' : 'pause_external');
             if (!wasSelf && !this._destroyed) {
                 const t = this.playlist[this.currentIndex];
+                // ★ (2026-08-20) 외부(다른 탭/앱)가 세션을 가져간 흔적을 표시해 둔다.
+                //   이 경우에만 '강한 재획득'(간격 + 캐시버스팅)이 필요하다.
+                this._needsHardReacq = true;
                 if (t) this._reacquireMediaSession(t, 'pause_external');
             }
         });
@@ -1619,6 +1623,21 @@ class FSAudioPlayer {
                 //   복귀 후 첫 재생에서 다시 세션을 잡도록 '트랙당 1회' 가드를 푼다.
                 //   (가드가 없으면 같은 곡을 이어 재생할 때 재획득이 건너뛰어졌음 — 로그로 확인)
                 if (document.hidden) this._reacqDoneFor = null;
+                // ★ (2026-08-20) 페이지로 '돌아온' 시점에 강한 재획득을 예약한다.
+                //   재현 절차(잠금화면에서 정지 → 다른 사이트 동영상 → 복귀 → 재생)에서는
+                //   정지가 **자체 정지**로 판정돼 pause_external 이 뜨지 않는다.
+                //   따라서 복귀(visible)를 기준으로 표시해야 그 다음 재생에서 간격+캐시버스팅이 적용된다.
+                //   잠금화면에서 곡만 자동으로 넘어가는 동안에는 페이지가 계속 hidden 이라
+                //   이 플래그가 서지 않아 **곡 전환 시 빈 썸네일이 생기지 않는다**.
+                if (!document.hidden) this._needsHardReacq = true;
+                // ★ (2026-08-20) 미복원 세션 즉시 복구
+                //   _reacquireMediaSession 은 metadata=null 로 놓은 뒤 다음 틱에 되돌리는데,
+                //   그 사이 화면이 잠기거나 백그라운드로 가면 타이머가 스로틀되어
+                //   **복원이 실행되지 않은 채 남을 수 있다**(로그: release 74 vs done 73).
+                //   그러면 잠금화면 메타데이터가 빈 상태다 → 복귀하는 즉시 되살린다.
+                if (!document.hidden && this._reacqRestore) {
+                    try { this._reacqRestore('visible'); } catch (e) {}
+                }
                 if (!document.hidden) this._resumeAudioCtx('visible');
                 if (!document.hidden) {
                     // 복귀: 500ms 지연 후 재설정 (iOS Safari가 처리할 시간 확보)
@@ -1676,6 +1695,21 @@ class FSAudioPlayer {
     // ── Track loading ──
     _loadTrack(idx, autoplay) {
         if (idx < 0 || idx >= this.playlist.length) return;
+        // ★ (2026-08-17) 연속 스킵 계측 — 잠금화면에서 빠르게 곡을 넘길 때 썸네일이 안 뜨는
+        //   증상(펜닐님 보고)의 재현 조건을 남긴다. 직전 전환과의 간격·연속 횟수를 기록해
+        //   "얼마나 빨리 넘겼을 때 깨지는가"를 로그만으로 판별할 수 있게 한다.
+        //   전환이 잦으므로 '빠른 연속'일 때만 남긴다(1.2초 이내 & 2회 이상) — 평상시 로그 오염 방지.
+        try {
+            const _now = Date.now();
+            const _gap = this._lastTrackChangeAt ? (_now - this._lastTrackChangeAt) : null;
+            this._skipRun = (_gap !== null && _gap < 1200) ? ((this._skipRun || 1) + 1) : 1;
+            this._lastTrackChangeAt = _now;
+            if (this._skipRun >= 2) {
+                this._msLog('track_skip_fast', {
+                    from: this.currentIndex, to: idx, gapMs: _gap, run: this._skipRun, autoplay: !!autoplay
+                });
+            }
+        } catch (e) {}
         this.currentIndex = idx;
         this._clearAb();  // ★ 구간 반복은 곡 단위 — 곡이 바뀌면 해제
         this._markShufflePlayed(idx);  // ★ 셔플 진행 추적 (전곡 소진 시 자동 재셔플)
@@ -1685,8 +1719,6 @@ class FSAudioPlayer {
         //   metadata가 잠깐 비는 구간이 생긴다(앞서 제거한 해로운 패턴). 우리 의도임을 표시한다.
         this._selfPause = true;
         this.audio.src = track.url;
-        // ★ v5.8.1j: 트랙 변경 시 force refresh 분 경계 리셋 (이전 트랙 값 제거)
-        this._lastForceRefreshAt = Date.now();
         // 재생 중이면 마퀴, 아니면 일반 텍스트
         if (!this.audio.paused || autoplay) {
             this._setMarqueeTitle(track.name);
@@ -2187,6 +2219,24 @@ class FSAudioPlayer {
     //   5. fetch 실패 시 원본 URL 그대로 반환 (fallback)
     //
     // 호출자: applyCover()와 가상 스크롤 li 렌더 시
+    // ★ 커버 fetch 타임아웃용 AbortSignal (2026-08-17)
+    //   커버 요청이 응답하지 않으면 _getCachedCoverUrl의 Promise가 끝나지 않고,
+    //   그러면 applyCover가 호출되지 않아 잠금화면 아트워크가 기본 음표 아이콘으로 굳는다
+    //   (1초마다 도는 _forceRefreshArtwork가 그 상태를 계속 다시 찍기 때문에 스스로 회복되지 않는다).
+    //   AbortSignal.timeout이 없는 환경에서는 AbortController+setTimeout으로 대체하고,
+    //   둘 다 없으면 undefined를 반환해 기존 동작(무한 대기)으로 안전하게 되돌아간다.
+    _coverTimeoutSignal(ms) {
+        try {
+            if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) return AbortSignal.timeout(ms);
+            if (typeof AbortController !== 'undefined') {
+                const c = new AbortController();
+                setTimeout(() => { try { c.abort(); } catch (e) {} }, ms);
+                return c.signal;
+            }
+        } catch (e) {}
+        return undefined;
+    }
+    
     async _getCachedCoverUrl(originalUrl) {
         if (!originalUrl) return null;
         if (this._destroyed) return originalUrl;
@@ -2216,7 +2266,7 @@ class FSAudioPlayer {
                 
                 if (!blob) {
                     // 3-B. IDB miss → 서버에서 fetch
-                    const res = await fetch(originalUrl, { credentials: 'same-origin' });
+                    const res = await fetch(originalUrl, { credentials: 'same-origin', signal: this._coverTimeoutSignal(10000) });
                     if (!res.ok) {
                         // 404/204 등 — 원본 URL 그대로 반환 (브라우저가 onerror 처리하도록)
                         return originalUrl;
@@ -2310,6 +2360,8 @@ class FSAudioPlayer {
             if (this._coverTestImg) {
                 this._coverTestImg.onload = null;
                 this._coverTestImg.onerror = null;
+                // ★ (2026-08-17) 이전 로드의 타임아웃 타이머도 함께 해제 (빠른 전환 시 누적 방지)
+                if (this._coverTestImg._timeoutClear) { try { this._coverTestImg._timeoutClear(); } catch (e) {} }
                 this._coverTestImg.src = '';  // 로드 중단
                 this._coverTestImg = null;
             }
@@ -2324,12 +2376,33 @@ class FSAudioPlayer {
                 // 이미지 로드 가능 여부 확인 (404/204면 폴더 이미지로 fallback)
                 const testImg = new Image();
                 this._coverTestImg = testImg;
+                // ★ (2026-08-17) 커버 로드 타임아웃 — 잠금화면 썸네일이 영구히 기본 아이콘으로
+                //   남던 경로를 막는다. onload/onerror가 **둘 다 오지 않으면**(네트워크 정체,
+                //   죽은 연결 등) applyCover가 영영 호출되지 않는다. 그러면 미디어세션 메타데이터는
+                //   커버 없이 확정된 채로 남고, 1초마다 도는 _forceRefreshArtwork는 그 저장본
+                //   (_currentMetadata)을 그대로 다시 찍으므로 **기본 음표 아이콘이 계속 유지**된다.
+                //   → 8초 안에 응답이 없으면 폴더 이미지로 넘어가 최소한 커버가 뜨게 한다.
+                let _coverTimer = setTimeout(() => {
+                    _coverTimer = null;
+                    if (this._destroyed || token !== this._coverLoadToken) return;
+                    if (this._coverTestImg !== testImg) return;   // 이미 처리됨
+                    testImg.onload = null;
+                    testImg.onerror = null;
+                    try { testImg.src = ''; } catch (e) {}
+                    this._coverTestImg = null;
+                    this._msLog && this._msLog('cover_load_timeout', { hasFolderCover: !!this.cover });
+                    applyCoverCached(this.cover || null);
+                }, 8000);
+                const _clearCoverTimer = () => { if (_coverTimer) { clearTimeout(_coverTimer); _coverTimer = null; } };
+                testImg._timeoutClear = _clearCoverTimer;
                 testImg.onload = () => {
+                    _clearCoverTimer();
                     if (this._destroyed || token !== this._coverLoadToken) return;
                     applyCover(cachedUrl);
                     if (this._coverTestImg === testImg) this._coverTestImg = null;
                 };
                 testImg.onerror = () => {
+                    _clearCoverTimer();
                     if (this._destroyed || token !== this._coverLoadToken) return;
                     // ID3 커버 없음 또는 404 → 폴더 이미지로 fallback (캐시 활용)
                     applyCoverCached(this.cover || null);
@@ -4271,7 +4344,16 @@ class FSAudioPlayer {
             if (meta && meta.artwork && meta.artwork.length) {
                 artCount = meta.artwork.length;
                 const src = String(meta.artwork[0].src || '');
-                art0 = (src.indexOf('blob:') === 0) ? 'blob:' : src.slice(0, 70);
+                // ★ (2026-08-20) 앞 70자만 남기면 긴 커버 API URL에서 **끝에 붙는 파라미터가 잘려**
+                //   캐시버스팅(_ms=) 적용 여부를 로그로 확인할 수 없었다(실제로 판별 불가였음).
+                //   앞부분은 늘 같으므로 **뒤쪽 60자**를 함께 남겨 끝을 볼 수 있게 한다.
+                if (src.indexOf('blob:') === 0) {
+                    art0 = 'blob:';
+                } else if (src.length <= 130) {
+                    art0 = src;
+                } else {
+                    art0 = src.slice(0, 70) + '…' + src.slice(-60);
+                }
             }
             App._debugLog('ms_' + event, Object.assign({
                 vis: document.visibilityState,
@@ -4330,19 +4412,92 @@ class FSAudioPlayer {
             const ms = navigator.mediaSession;
             const beforeMeta = !!ms.metadata;
             const beforeState = ms.playbackState;
-            // 1) 세션 놓기
-            ms.metadata = null;
-            ms.playbackState = 'none';
-            this._msLog('reacquire_release', { reason: reason || '', beforeMeta: beforeMeta, beforeState: beforeState });
+            // ★ (2026-08-20) '강한 재획득' 판정을 세션을 놓기 **전에** 한다.
+            //   간격을 0으로 줄여도 metadata=null 자체는 실행되고, 복원은 setTimeout(…,0)이라
+            //   빨라야 다음 틱이다. 그 한 프레임 동안 잠금화면 카드가 비어
+            //   **곡 전환마다 순간적인 깜빡임**이 남았다(펜닐 확인: "창 크기가 순식간에 보인다").
+            //   → 평범한 곡 전환에서는 **세션을 놓지 않고 메타데이터만 덮어쓴다**.
+            //     iOS가 같은 세션의 연속 갱신으로 보더라도, 곡 전환은 어차피 제목·커버가
+            //     모두 바뀌므로 갱신이 그대로 반영된다(놓았다 잡을 이유가 없다).
+            //     세션을 놓는 것은 **외부에 뺏긴 뒤 되찾아야 하는 경우**에만 필요하다.
+            const _hard = !!this._needsHardReacq;
+            this._needsHardReacq = false;
+            if (_hard) {
+                // 1) 세션 놓기 (강한 재획득에서만)
+                ms.metadata = null;
+                ms.playbackState = 'none';
+            }
+            this._msLog('reacquire_release', { reason: reason || '', hard: _hard, beforeMeta: beforeMeta, beforeState: beforeState });
             // 2) 다시 잡기 — 같은 틱에 되돌리면 브라우저가 동일 세션으로 볼 수 있어 다음 틱에 설정
-            setTimeout(() => {
+            //
+            // ★ (2026-08-20) 복원 보장 장치
+            //   [로그로 확인된 결함] release 74건 vs done 73건 — **복원이 한 번 실행되지 않았다**.
+            //   metadata=null 로 놓은 직후 화면이 잠기거나 탭이 백그라운드로 가면
+            //   setTimeout 이 스로틀되어 돌지 않을 수 있고, 그러면 잠금화면 메타데이터가
+            //   **빈 채로 남는다** — 다른 사이트 동영상 보고 와서 재생을 눌렀을 때
+            //   썸네일이 안 나오던 증상과 정확히 맞물린다(다음 곡으로 넘기면 나오는 것도
+            //   그때 _loadTrack 이 메타데이터를 새로 설정하기 때문).
+            //   → ㉠복원을 함수로 빼서 한 번만 실행되게 하고(_reacqRestored 가드)
+            //     ㉡setTimeout 과 함께 **다음 화면 프레임(rAF)** 에서도 시도하며
+            //     ㉢복귀(visibilitychange) 시에도 미복원 상태면 즉시 복원한다.
+            //   어느 경로로 먼저 도달하든 결과는 같고, 중복 실행은 가드가 막는다.
+            // ★ (2026-08-20 버그 수정) 초기화 없이 ++this._reacqSeq 를 쓰면
+            //   undefined + 1 = NaN 이 되고, 아래 가드의 NaN !== NaN 이 **항상 true**라
+            //   restore() 가 매번 조기 종료됐다 → 복원이 아예 실행되지 않고
+            //   reacquire_done 로그도 0건이었다(펜닐 "소스는 있는데 로그가 안 찍힌다"의 정체).
+            // ★ (2026-08-20 회귀 수정) '강한 재획득'은 **외부에 세션을 뺏긴 뒤**에만 한다.
+            //   [원인] 재획득은 _reacqDoneFor !== currentIndex 조건이라 **곡이 바뀔 때마다** 돈다.
+            //   여기서 metadata=null 로 놓고 250ms 뒤 복원하므로, 곡 전환마다 잠금화면이
+            //   그 250ms 동안 비어 **빈 썸네일이 깜빡이는 회귀**가 생겼다(펜닐 제보, 매 곡 발생).
+            //   원래 250ms 간격·캐시버스팅이 필요한 상황은 '다른 사이트 동영상 보고 복귀' 뿐이므로
+            //   그때(_needsHardReacq)만 적용하고, 평범한 곡 전환은 **예전처럼 즉시 복원**한다.
+            const _reacqToken = (this._reacqSeq = (this._reacqSeq || 0) + 1);
+            // 강한 재획득일 때만 커버 URL을 새 값으로 만들어 iOS가 새 이미지로 인식하게 한다
+            if (_hard) this._msArtBust = Date.now();
+            const restore = (via) => {
                 if (this._destroyed) return;
+                if (this._reacqSeq !== _reacqToken) return;   // 더 새로운 reacquire 가 시작됨
+                if (this._reacqRestored === _reacqToken) return;  // 이미 복원됨
+                this._reacqRestored = _reacqToken;
                 this._updateMediaSession(track);
+                // ★ (2026-08-20 회귀 수정) 캐시버스팅은 **이 복원 1회에만** 적용하고 즉시 해제한다.
+                //   해제하지 않으면 이후 모든 메타데이터 갱신(특히 **곡 전환**)에도 _ms 가 붙어
+                //   커버 URL이 매번 달라지고, iOS가 이미지를 다시 받는 동안
+                //   잠금화면에 **빈 썸네일이 잠깐 떴다가 채워지는** 증상이 생긴다(펜닐 제보).
+                //   앞선 감사에서 "값이 그대로라 캐시된다"고 봤으나, 곡이 바뀌면 커버 URL 자체가
+                //   달라지므로 매 곡마다 새로 받게 되는 것을 놓쳤다.
+                this._msArtBust = null;
                 try {
                     ms.playbackState = (this.audio && !this.audio.paused) ? 'playing' : 'paused';
                 } catch(e) {}
-                this._msLog('reacquire_done', { reason: reason || '' });
-            }, 0);
+                this._msLog('reacquire_done', { reason: reason || '', via: via });
+            };
+            this._reacqRestore = restore;   // 복귀 시 재시도용
+            // ★ (2026-08-20) 복원을 **다음 틱이 아니라 실제 시간차를 두고** 한다.
+            //   [근거] 로그상 release → done 이 같은 초에 끝나는데도 잠금화면 썸네일이 안 나온다
+            //   (hasMeta:true · artCount:6 로 메타데이터는 정상). iOS가 너무 빠른 해제·재설정을
+            //   **동일 세션의 연속 갱신**으로 보고 아트워크를 다시 읽지 않는 것으로 의심된다.
+            //   → 250ms 간격을 둬 별개 세션으로 인식될 여지를 준다. 아래 rAF·복귀 경로는
+            //     그대로 남아 이 지연 중 화면이 잠겨도 복원이 보장된다(가드가 중복을 막는다).
+            //   ※ rAF는 다음 프레임(약 16ms)에 실행되므로 그대로 두면 250ms 간격보다 먼저
+            //     복원해 버려 위 의도가 무효가 된다. 그래서 rAF는 **간격이 찰 때까지 스스로
+            //     다음 프레임으로 미루고**, 250ms가 지난 뒤에만 복원한다.
+            //     (타이머가 스로틀돼도 화면이 그려지는 한 rAF가 이어받는 안전망은 유지된다)
+            const _reacqStart = Date.now();
+            const REACQ_GAP = _hard ? 250 : 0;   // 평범한 곡 전환은 지연 없음(빈 썸네일 방지)
+            setTimeout(() => restore('timeout'), REACQ_GAP);
+            try {
+                if (typeof requestAnimationFrame === 'function') {
+                    const rafTry = () => {
+                        if (this._destroyed) return;
+                        if (this._reacqSeq !== _reacqToken) return;
+                        if (this._reacqRestored === _reacqToken) return;
+                        if (Date.now() - _reacqStart < REACQ_GAP) { requestAnimationFrame(rafTry); return; }
+                        restore('raf');
+                    };
+                    requestAnimationFrame(rafTry);
+                }
+            } catch (e) {}
         } catch(e) {}
     }
 
@@ -4363,6 +4518,24 @@ class FSAudioPlayer {
             let resolved = (typeof this._activeCoverUrl !== 'undefined')
                 ? this._activeCoverUrl
                 : (this.cover || null);
+            // ★ (2026-08-20) 커버 확정 전에는 **직전에 성공한 커버**를 재사용한다.
+            //   [로그로 확인된 증상] 다른 사이트에서 동영상을 재생했다가 웹하드로 돌아와
+            //   다시 재생하면 잠금화면 썸네일이 안 나온다. 로그를 보면 항상 같은 형태다:
+            //       ms_set { art:"default", activeCover:null }   ← 커버 없이 먼저 확정
+            //       ms_art_blob_lookup { found:true }            ← 곧바로 커버 준비됨
+            //       ms_set { art:"url", activeCover:"blob" }     ← 올바른 값으로 다시 설정
+            //   코드상으로는 회복되는데 **iOS가 두 번째 설정을 반영하지 않는다**
+            //   (다음 곡으로 넘기면 나오는 것도 그때 커버가 처음부터 확정되기 때문).
+            //   → 애초에 '커버 없음' 상태를 한 번도 내보내지 않는 것이 해법이다.
+            //   폴더 이미지(this.cover)조차 없는 폴더에서 이 구간이 생기므로,
+            //   마지막으로 성공한 artwork를 기억해 두었다가 그 자리를 메운다.
+            //   완전히 처음(기억된 것도 없음)일 때만 기본 아이콘으로 간다.
+            //   ※ 폴백은 **'아직 확정 전'(undefined)일 때만** 적용한다.
+            //     _activeCoverUrl 이 명시적으로 null 이면 "이 곡은 커버가 없다"고 확정된 것이므로
+            //     그때까지 이전 곡 커버를 보여주면 엉뚱한 그림이 뜬다(부작용 방지).
+            if (!resolved && typeof this._activeCoverUrl === 'undefined' && this._lastGoodArtworkUrl) {
+                resolved = this._lastGoodArtworkUrl;
+            }
             // ★ 잠금화면 artwork에는 blob: URL을 쓸 수 없다.
             //   커버 캐시(_getCachedCoverUrl)는 데이터 절감을 위해 blob: URL을 돌려주는데,
             //   페이지 안 <img>는 이를 정상 표시하지만 잠금화면·알림 카드의 커버는
@@ -4381,11 +4554,22 @@ class FSAudioPlayer {
                         }
                     }
                 } catch(e) {}
+                // ★ (2026-08-17) 역조회 성공/실패 기록 — 빠르게 곡을 넘길 때 캐시에 아직
+                //   등록되지 않은 blob이 넘어오면 여기서 null이 되어 잠금화면이 기본 아이콘이 된다.
+                //   펜닐님 증상(스크롤로 연속 스킵 중 썸네일 안 나옴)의 유력 지점이라 남긴다.
+                this._msLog('art_blob_lookup', {
+                    found: !!origUrl,
+                    cacheSize: (this._coverBlobCache && this._coverBlobCache.size) || 0
+                });
                 // 원본을 못 찾으면 깨진 blob을 넘기지 말고 기본 음표 아이콘으로 넘어가게 한다
                 resolved = origUrl || null;
             }
             
             if (resolved) {
+                // ★ (2026-08-20) 성공한 artwork를 기억해 둔다 — 위 폴백에서 '커버 없음' 구간을
+                //   메우는 데 쓴다. blob: 는 잠금화면이 해석 못 하므로 저장하지 않는다
+                //   (여기 도달한 resolved 는 이미 역조회로 원본 http(s) URL 로 바뀐 상태).
+                if (String(resolved).indexOf('blob:') !== 0) this._lastGoodArtworkUrl = resolved;
                 // 이미지 MIME 자동 감지 (z_music/simple_mp3_player 참조)
                 // FileStation은 주로 API URL이라 확장자 못 보지만, fallback으로 jpeg
                 let imgType = 'image/jpeg';
@@ -4394,6 +4578,22 @@ class FSAudioPlayer {
                 else if (lower.indexOf('.webp') !== -1) imgType = 'image/webp';
                 else if (lower.indexOf('.gif') !== -1) imgType = 'image/gif';
                 
+                // ★ (2026-08-20) 커버 URL에 재획득 시각을 파라미터로 붙여
+                //   iOS가 '이미 받아둔 이미지'로 보고 갱신을 건너뛰는 상황을 피한다.
+                //   [적용 범위] _msArtBust 는 **세션 재획득 복원 1회에만** 유효하고 그 직후 해제된다.
+                //     따라서 평상시 갱신(곡 전환·커버 확정·복귀 재동기화)은 **원본 URL 그대로**라
+                //     브라우저 캐시가 그대로 적중하고 재다운로드가 없다.
+                //   왜 1회로 좁혔나: 해제하지 않으면 곡이 바뀔 때마다 커버 URL이 달라져
+                //     iOS가 이미지를 새로 받는 동안 **빈 썸네일이 잠깐 뜨는 회귀**가 생긴다(실제 발생).
+                //   비용: 재획득 그 1회는 HTTP 캐시를 우회해 커버를 다시 받는다
+                //     (커버 API는 Cache-Control: public, max-age=300/3600, ETag/304 없음).
+                //     재획득은 재생 시작·외부 정지 때만이라 빈번하지 않고,
+                //     이 파라미터가 잠금화면 썸네일 미표시를 고친 유력 요인이므로 유지한다.
+                //   ※ _coverBlobCache(화면 표시용)와 _lastGoodArtworkUrl 은 **원본 URL**을 키/값으로 쓰므로
+                //     여기서 붙이는 _ms 의 영향을 받지 않는다(누적 없음 — 검증 완료).
+                if (this._msArtBust) {
+                    resolved = resolved + (resolved.indexOf('?') === -1 ? '?' : '&') + '_ms=' + this._msArtBust;
+                }
                 // 여러 사이즈 제공 (z_music 방식 — iOS Safari가 적절한 걸 선택)
                 artwork.push({ src: resolved, sizes: '96x96', type: imgType });
                 artwork.push({ src: resolved, sizes: '128x128', type: imgType });
@@ -4422,13 +4622,42 @@ class FSAudioPlayer {
                 album: '',
                 artwork: artwork
             };
-            navigator.mediaSession.metadata = new MediaMetadata(metadataObj);
+            // ★ (2026-08-20) 값이 이전과 완전히 같으면 다시 설정하지 않는다.
+            //   [이유] _updateMediaSession 은 호출될 때마다 **새 MediaMetadata 객체**를 만들고,
+            //   iOS는 그때마다 잠금화면 카드를 다시 그린다(아트워크를 잠깐 비우면서).
+            //   곡 전환 한 번에 이 함수는 여러 번 불린다 — _loadTrack 직후(아직 이전 커버),
+            //   커버 확정 콜백, 재획득 복원. 값이 안 바뀐 호출까지 카드를 다시 그리게 하면
+            //   **불필요한 깜빡임**이 생긴다(펜닐: 곡 전환 시 순간 깜빡).
+            //   제목·아트워크가 실제로 달라졌을 때만 설정한다.
+            //   ※ 세션을 놓았다 잡는 '강한 재획득'에서는 metadata 가 null 이 되어
+            //     아래 비교가 자동으로 불일치가 되므로 복원이 건너뛰어질 일은 없다.
+            const _prev = this._currentMetadata;
+            const _sameMeta = !!_prev
+                && _prev.title === metadataObj.title
+                && _prev.artist === metadataObj.artist
+                && (_prev.artwork && _prev.artwork[0] ? _prev.artwork[0].src : null)
+                   === (artwork[0] ? artwork[0].src : null)
+                && !!navigator.mediaSession.metadata;   // 세션이 비어 있으면 반드시 다시 설정
+            if (!_sameMeta) {
+                navigator.mediaSession.metadata = new MediaMetadata(metadataObj);
+            }
             // ★ v5.8.1j: 마지막 metadata 저장 (z_music 패턴 — maintenance 복구용)
             this._currentMetadata = metadataObj;
             // ★ v5.8.1j: artwork 유지 타이머 시작 (iOS 잠금화면 사라짐 방지)
             //   재생 중일 때만 30초마다 체크하여 손실 시 복구 + 2분마다 강제 갱신
             this._startArtworkMaintenance();
-            this._msLog('set', { art: resolved ? ((String(resolved).indexOf('blob:') === 0) ? 'blob' : 'url') : 'default' });
+            this._msLog('set', {
+                art: resolved ? ((String(resolved).indexOf('blob:') === 0) ? 'blob' : 'url') : 'default',
+                // ★ (2026-08-20) 직전 커버 폴백이 쓰였는지 — 수정이 실제로 동작했는지 판별용
+                usedLastGood: !!(this._lastGoodArtworkUrl && resolved === this._lastGoodArtworkUrl
+                                 && typeof this._activeCoverUrl === 'undefined'),
+                // ★ (2026-08-17) 왜 기본 아이콘이 됐는지 판별용
+                //   activeCover: 화면 표시용으로 확정된 커버가 있었는가
+                //   trackHasCover: 트랙 자체에 커버 정보가 있는가
+                activeCover: this._activeCoverUrl ? (String(this._activeCoverUrl).indexOf('blob:') === 0 ? 'blob' : 'url') : null,
+                trackHasCover: !!(track && (track.cover || track.coverUrl || track.hasCover)),
+                name: String((track && track.name) || '').slice(0, 40)
+            });
         } catch(e) {}
     }
 
@@ -4475,17 +4704,16 @@ class FSAudioPlayer {
         }
         // ★ 실제로 '유실이 감지된' 경우만 기록 (1초 주기 강제갱신은 제외, 5초 간격 제한)
         if (needsRestore) this._msLog('artwork_lost', null, 5000);
-        // 주기적 강제 갱신 (iOS 시스템 레벨 유실 대응 — z_music 패턴 개선)
-        //   v5.8.1j는 재생 시간 2분 경계 → 4분 이내 곡 복구 공백(실사용 보고) → 벽시계 30초로 1차 개선 →
-        //   1초 갱신으로 최종 결정(펜닐님 2026-06-10): 빈 썸네일 노출이 최대 1초라 사용자가 사실상 인지 불가.
-        //   갱신은 메모리 재설정뿐(네트워크 없음). 같은 artwork URL이라 iOS가 보통 다시 그리지 않음.
-        if (!needsRestore && this.audio && !this.audio.paused) {
-            const nowTs = Date.now();
-            if (nowTs - this._lastForceRefreshAt >= 1000) {
-                this._lastForceRefreshAt = nowTs;
-                needsRestore = true;
-            }
-        }
+        // (제거됨 2026-08-20) 재생 중 1초마다의 **무조건** 강제 갱신
+        //   원래 의도: iOS가 시스템 레벨에서 artwork를 지우는 경우 최대 1초 안에 복구.
+        //   전제였던 *"같은 artwork URL이라 iOS가 보통 다시 그리지 않음"* 이 **실기기에서 틀렸다** —
+        //   매초 새 MediaMetadata를 설정하니 잠금화면 카드가 그때마다 다시 그려지며
+        //   **곡 전환 때 순간 깜빡임**으로 드러났다(펜닐 확인).
+        //   위 코드의 주석에도 *"실기기 확인 포인트: 1초 재설정 시 제어센터 깜빡임 여부(미검증)
+        //   — 거슬리면 주기 상향"* 이라고 남아 있던 미검증 항목이 이번에 확인된 것이다.
+        //   → 무조건 갱신은 없애고, **실제 유실이 감지된 경우(needsRestore)에만** 복구한다.
+        //     유실 감지는 위에서 매초 계속 수행하므로 복구 지연은 종전과 같다(최대 1초).
+        //     불필요한 재설정만 사라져 깜빡임이 없어진다.
         if (needsRestore) {
             this._forceRefreshArtwork();
         }
@@ -5058,6 +5286,38 @@ const App = {
         //   이 변수를 참조하지 않아 실제 레이아웃에 아무 영향이 없는 죽은 코드였다.
         //   (전 파일 검색 결과 설정 1곳 / 사용 0곳)
         
+        // ─────────────────────────────────────────────────────────────────────
+        // (조사 종료·제거 2026-08-18) 모바일 "브라우저 껐다 켜서 복귀하면 하단 상태바가
+        //   커 보이는" 증상 조사용 코드 일체 — 뷰포트 높이 보정(--app-vh), 복귀 재레이아웃,
+        //   restore_measure / tap_before·tap_after / tap_change 계측, 강제 리페인트.
+        //
+        // [결론] **크롬 렌더링 버그로 확정. 페이지 코드로는 우회 불가.**
+        //   근거: 증상이 보이는 상태에서 잰 값이 전부 정상이었고
+        //         (footer h=32 · bottom=745 · pos=fixed · just=flex-start,
+        //          containerH 745 = realH 745 = innerH 745, isMobile=true),
+        //         화면을 탭해 **정상으로 돌아오는 순간의 값도 완전히 동일**했다
+        //         (tap_before == tap_after, 새 방식의 tap_change 는 '값이 달라졌을 때만'
+        //          기록하는데 0건). 즉 크롬은 올바른 값을 이미 갖고 있으면서
+        //         그것을 화면에 반영하지 않는다 → JS가 고칠 대상 자체가 없다.
+        //
+        // [실패한 시도 3가지 — 다시 반복하지 말 것]
+        //   1) --app-vh 로 컨테이너 높이 보정 → 높이는 원래부터 정확했음(diff=0)
+        //   2) 강제 리페인트(transform: translateZ(0) · height 1px 넛지, 2단계)
+        //      → repaint_attempt 로그로 두 단계 모두 실행 확인됐으나 증상 유지
+        //   3) position: fixed → sticky 전환
+        //      → 원래 증상은 그대로면서, 내용이 화면보다 길면 푸터가 평소에 안 보이고
+        //        스크롤 끝에서만 나타나는 **새 문제**까지 발생 → 원복함
+        //
+        // [남은 선택지] 크롬 업데이트 대기(현재 선택) / 복귀 시 자동 새로고침
+        //   (확실하지만 매 복귀마다 전체 재로딩·스크롤 초기화·업로드 중단 위험이 있어 보류)
+        // [현상 자체는 무해] 화면을 한 번 탭하거나 새로고침하면 즉시 정상화된다.
+        // ─────────────────────────────────────────────────────────────────────
+        
+        // (의도적 미구독) visualViewport 의 resize 는 **키보드가 뜰 때도** 발생한다.
+        //   원래 목적은 '브라우저 닫았다 복귀 시 어긋남' 보정이고 그건 아래 세 시점으로 충분하다.
+        //   resize 까지 구독하면 입력할 때마다 레이아웃이 흔들리는 새 문제가 생기므로 구독하지 않는다.
+        //   (위 키보드 가드는 pageshow/visibilitychange 가 키보드 떠 있는 상태에서 불릴 경우의 이중 안전장치)
+        
         let _resizeTimer;
         window.addEventListener('resize', () => {
             clearTimeout(_resizeTimer);
@@ -5202,7 +5462,24 @@ const App = {
         this.initTheme();
         this.loadServerConfig();  // 서버 설정 로드
         this.loadOnlyOfficeConfig();  // OnlyOffice 설정 로드
-        await this.checkAuth();  // await 추가
+        // ★ (2026-08-17) 인증 단계 실패가 초기화 전체를 죽이지 않게 감싼다.
+        //   여기서 예외가 나면 이후 SSO 처리·postMessage 수신·단축키 바인딩 등이
+        //   모두 실행되지 않고, 화면은 PHP가 렌더한 "로딩 중..." 상태로 굳었다.
+        //   실패 시에는 목록 자리에 재시도 버튼을 띄워 사용자가 빠져나올 수 있게 한다.
+        try {
+            await this.checkAuth();  // await 추가
+        } catch (e) {
+            this._debugLog && this._debugLog('init_checkAuth_error', String(e && e.message || e));
+            const _fl = document.getElementById('file-list');
+            if (_fl && /로딩 중|Loading/.test(_fl.textContent || '')) {
+                _fl.innerHTML =
+                    `<div class="empty-msg" style="padding:40px;text-align:center;opacity:0.8;">` +
+                    `<div style="font-size:32px;margin-bottom:12px;">⚠️</div>` +
+                    `<div style="margin-bottom:14px;">${t('err_init_failed', '초기화에 실패했습니다.')}</div>` +
+                    `<button class="btn" onclick="location.reload()">${t('retry', '다시 시도')}</button>` +
+                    `</div>`;
+            }
+        }
         
         // SSO 콜백 처리
         const urlParams = new URLSearchParams(window.location.search);
@@ -5310,16 +5587,52 @@ const App = {
     sessionExpired: false,
     
     // CSRF 토큰 갱신
-    async refreshCsrfToken() {
+    // ★ 타임아웃 전용 AbortSignal (2026-08-17)
+    //   api()를 거치지 않는 생 fetch에 타임아웃을 주기 위한 헬퍼.
+    //   AbortSignal.timeout이 없는 환경에서는 setTimeout+AbortController로 대체하고,
+    //   AbortController조차 없으면 undefined를 반환해 기존 동작(무한 대기)으로 되돌아간다.
+    _timeoutSignal(ms) {
         try {
-            const res = await fetch('api.php?action=csrf_token');
+            if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) return AbortSignal.timeout(ms);
+            if (typeof AbortController !== 'undefined') {
+                const c = new AbortController();
+                // 타이머는 clear하지 않는다: abort 이벤트는 '취소' 시에만 발생하고 '정상 완료' 시에는
+                // 발생하지 않으므로 여기서 해제할 방법이 없다. 요청이 먼저 끝나면 타이머는 ms 뒤에
+                // 이미 끝난 요청을 abort하려 하고 이는 무동작이다(페이지당 최대 2개, 영향 없음).
+                // 굳이 해제하려면 호출부가 완료 시점을 알려줘야 해 인터페이스가 복잡해지므로 두었다.
+                setTimeout(() => { try { c.abort(); } catch (e) {} }, ms);
+                return c.signal;
+            }
+        } catch (e) {}
+        return undefined;
+    },
+    
+    async refreshCsrfToken() {
+        // ★ (2026-08-17) 이 함수는 checkAuth가 showMain() 직전에 await하므로
+        //   여기서 멈추면 화면이 "로딩 중..."으로 굳는다. 시작/끝을 반드시 남긴다.
+        const _csrfT0 = Date.now();
+        this._debugLog && this._debugLog('csrf_start', {});
+        try {
+            // ★ (2026-08-17) 15초 타임아웃 — 이 함수는 checkAuth가 showMain() '전에' await한다.
+            //   api()를 거치지 않는 생 fetch였기 때문에 me에 넣은 타임아웃이 여기엔 적용되지 않고,
+            //   응답이 오지 않으면 화면이 "로딩 중..." 상태로 굳는 경로가 그대로 남아 있었다.
+            //   실패하면 아래 catch로 빠져 false를 반환하고, 호출부는 반환값을 무시하고
+            //   showMain()을 계속 진행하므로 화면은 정상적으로 뜬다.
+            const res = await fetch('api.php?action=csrf_token', { signal: this._timeoutSignal(15000) });
             const json = await res.json();
             if (json.success && json.token) {
                 this.csrfToken = json.token;
                 window.CSRF_TOKEN = json.token;
+                this._debugLog && this._debugLog('csrf_ok', { elapsedMs: Date.now() - _csrfT0 });
                 return true;
             }
+            this._debugLog && this._debugLog('csrf_bad_response', { elapsedMs: Date.now() - _csrfT0 });
         } catch (e) {
+            this._debugLog && this._debugLog('csrf_failed', {
+                elapsedMs: Date.now() - _csrfT0,
+                name: (e && e.name) || null,
+                aborted: !!(e && (e.name === 'AbortError' || e.name === 'TimeoutError'))
+            });
         }
         return false;
     },
@@ -5350,7 +5663,13 @@ const App = {
         } catch (e) { /* 계측 실패는 무시 */ }
     },
 
-    async api(action, data = {}, method = 'POST', signal = null, _retryCount = 0) {
+    // ★ timeoutMs (2026-08-17): 0이면 기존과 동일하게 무한 대기.
+    //   탭을 오래 두었다가 복귀하면 죽은 keep-alive 소켓 재사용 등으로 fetch가
+    //   수 분간 응답하지 않는 경우가 있는데, 그러면 시작 경로(me → storages → files)가
+    //   그 자리에서 멈춰 화면이 "로딩 중..." 상태로 굳었다(새로고침하면 새 연결로 복구).
+    //   전 호출에 일괄 적용하면 move·copy·delete·index_rebuild_storage·index_sync·bulk_search 같이
+    //   정상적으로 수 분 걸리는 작업이 끊기므로, **호출부가 명시할 때만** 적용한다.
+    async api(action, data = {}, method = 'POST', signal = null, _retryCount = 0, timeoutMs = 0) {
         // 세션 만료 상태면 요청 차단 (인증 불필요 액션 제외)
         const noAuthActions = ['login', 'csrf_token', 'signup', 'signup_status', 'settings', 'server_config', 'terms', '2fa_verify', 'password_reset_request', 'find_username', 'share_access', 'share_download'];
         if (this.sessionExpired && !noAuthActions.includes(action)) {
@@ -5372,7 +5691,20 @@ const App = {
             credentials: 'same-origin'
         };
         
-        if (signal) {
+        // ★ 타임아웃이 지정되면 자체 컨트롤러로 감싸고, 외부 signal도 함께 전달한다.
+        //   타임아웃 사유는 TimeoutError로 구분해 '취소(AbortError→null)'와 다르게 처리한다.
+        let _timeoutId = null;
+        if (timeoutMs > 0) {
+            const _ctl = new AbortController();
+            options.signal = _ctl.signal;
+            _timeoutId = setTimeout(() => {
+                try { _ctl.abort(new DOMException('Timeout', 'TimeoutError')); } catch (e) { _ctl.abort(); }
+            }, timeoutMs);
+            if (signal) {
+                if (signal.aborted) _ctl.abort();
+                else signal.addEventListener('abort', () => _ctl.abort(), { once: true });
+            }
+        } else if (signal) {
             options.signal = signal;
         }
         
@@ -5403,7 +5735,7 @@ const App = {
                 const refreshed = await this.refreshCsrfToken();
                 // 재시도 (FormData가 아닌 경우만, 갱신 성공 시에만)
                 if (refreshed && !(data instanceof FormData)) {
-                    return this.api(action, data, method, signal, _retryCount + 1);
+                    return this.api(action, data, method, signal, _retryCount + 1, timeoutMs);
                 }
                 return json;
             }
@@ -5414,7 +5746,9 @@ const App = {
                 try {
                     const meRes = await fetch('api.php?action=me', { 
                         method: 'GET', 
-                        credentials: 'same-origin' 
+                        credentials: 'same-origin',
+                        // ★ (2026-08-17) 이 fetch는 api()의 timeoutMs 컨트롤러 밖이라 별도 타임아웃이 필요하다
+                        signal: this._timeoutSignal(15000)
                     });
                     const meJson = await meRes.json();
                     
@@ -5439,11 +5773,23 @@ const App = {
             
             return json;
         } catch (e) {
+            // ★ 타임아웃은 '취소'와 달리 호출부가 사용자에게 알려야 하므로 에러 객체로 반환
+            if (e && e.name === 'TimeoutError') {
+                // ★ (2026-08-17) 어느 요청이 몇 초에서 끊겼는지 기록.
+                //   data/debug_logs/ 폴더가 없으면 서버가 disabled를 돌려주고 이후 호출도 없으므로
+                //   평상시 부하는 0이다(_debugLog 자체가 그 구조).
+                this._debugLog && this._debugLog('api_timeout', { action: action, timeoutMs: timeoutMs, retryCount: _retryCount });
+                return { error: t('err_request_timeout', '서버 응답이 없어 요청을 중단했습니다. 다시 시도해 주세요.'), timeout: true };
+            }
             // AbortError는 무시 (요청 취소)
             if (e.name === 'AbortError') {
                 return null;
             }
+            this._debugLog && this._debugLog('api_error', { action: action, name: (e && e.name) || null, msg: String((e && e.message) || e).substring(0, 120) });
             return { error: t('err_server_connection', '서버 연결 실패') };
+        } finally {
+            // ★ 타임아웃 타이머 정리 (성공/실패/재귀 재시도 모두 통과)
+            if (_timeoutId) clearTimeout(_timeoutId);
         }
     },
     
@@ -8352,7 +8698,36 @@ const App = {
     
     // 인증 확인
     async checkAuth() {
-        const res = await this.api('me', {}, 'GET');
+        // ★ (2026-08-17) 시작 경로 보강
+        //   - 20초 타임아웃: 응답이 없으면 여기서 영원히 멈춰 뒤 단계(showMain→loadStorages→loadFiles)가
+        //     아예 실행되지 않아 화면이 "로딩 중..."으로 굳었다.
+        //   - null 가드: api()는 요청이 취소되면 null을 반환하는데 기존 코드는 res.success를 바로 읽어
+        //     TypeError가 나고 init() 전체가 중단됐다.
+        //   - 타임아웃/연결 실패는 1회 재시도 (죽은 소켓 재사용이면 새 연결로 대개 복구된다).
+        this._debugLog && this._debugLog('checkAuth_start', { visibility: document.visibilityState });
+        let res = await this.api('me', {}, 'GET', null, 0, 20000);
+        this._debugLog && this._debugLog('checkAuth_me_result', {
+            isNull: res === null, success: !!(res && res.success),
+            timeout: !!(res && res.timeout), sessionExpired: !!(res && res.session_expired)
+        });
+        // ★ (2026-08-17 재검토) 재시도는 '서버가 답을 주지 못한 경우'로만 좁힌다.
+        //   api()의 반환 모양으로 구분된다:
+        //     · 서버가 정상 응답(로그인 안 됨 등) → {success:false, error:'...'}  → success 키가 있다
+        //     · 타임아웃                        → {error, timeout:true}
+        //     · 연결 실패                       → {error:'서버 연결 실패'}        → success·timeout 둘 다 없다
+        //   기존 조건(res.error)은 서버가 정상적으로 '로그인 필요'를 답한 경우까지 재시도해,
+        //   **비로그인 방문자가 me를 매번 2회 호출**하고 로그인 화면 표시가 그만큼 늦어졌다.
+        if (res && !res.success && !res.session_expired && (res.timeout || res.success === undefined)) {
+            res = await this.api('me', {}, 'GET', null, 0, 20000);
+            this._debugLog && this._debugLog('checkAuth_me_retry_result', {
+                isNull: res === null, success: !!(res && res.success), timeout: !!(res && res.timeout)
+            });
+        }
+        if (!res) {
+            // 취소된 경우 — 화면 상태를 바꾸지 않고 조용히 종료(다음 트리거에서 재시도)
+            this._debugLog && this._debugLog('checkAuth_aborted', {});
+            return;
+        }
         if (res.success) {
             this.user = res.user;
             // CSRF 토큰 갱신 (브라우저 재시작 후 stale 토큰 방지)
@@ -9035,6 +9410,7 @@ const App = {
     },
     
     showMain() {
+        this._debugLog && this._debugLog('showMain', { hasUser: !!this.user });
         // 클래스 기반 화면 전환
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('login-screen').classList.remove('active');
@@ -9735,7 +10111,8 @@ const App = {
             return false;
         };
 
-        const res = await this.api('storages', {}, 'GET');
+        // ★ (2026-08-17) 30초 타임아웃 — 응답이 없으면 아래 _retryLoad 재시도 경로로 넘어간다
+        const res = await this.api('storages', {}, 'GET', null, 0, 30000);
         const _elapsedMs = Math.round(performance.now() - _startTime);
 
         // ★ 요청이 취소(abort)되면 api()는 null을 반환한다 (loadFiles의 !res 가드와 동일 계열).
@@ -10355,7 +10732,7 @@ const App = {
             path: this.currentPath,
             sort: this.sortBy,
             order: this.sortOrder
-        }, 'GET', this.loadFilesController.signal);
+        }, 'GET', this.loadFilesController.signal, 0, 60000);
         _perfLog('after files API');
         
         // 취소된 요청이면 무시
@@ -10819,6 +11196,8 @@ const App = {
     
     // 홈으로 (루트)
     goHome() {
+        // ★ 탭 제목을 사이트명으로 되돌린다 (2026-08-15)
+        this._restoreDocTitle();
         // 검색 모드 완전 종료
         this.isSearchMode = false;
         this.searchQuery = '';
@@ -22421,6 +22800,8 @@ const App = {
 
     // 게시판 뷰에서 나가기 (파일 영역 복원)
     exitBoardView(addHistory = true) {
+        // ★ 탭 제목 복원 (2026-08-17)
+        this._restoreDocTitle();
         this.boardInlineMode = false;
         this.currentBoardId = null;
         
@@ -22504,6 +22885,10 @@ const App = {
         this.currentBoardData = res.board;
         const board = res.board;
         const isAdmin = (this.user?.role === 'admin' || this.user?.role === 'sub_admin');
+        
+        // ★ 탭 제목 = 게시판 이름 (2026-08-17)
+        //   게시판은 모달이 아니라 인라인 화면이라 미리보기 제목 로직이 걸리지 않는다.
+        this._setDocTitle(board.name || '');
         
         // 브레드크럼 업데이트
         document.getElementById('board-inline-breadcrumb').innerHTML = `<span style="font-weight:600;cursor:pointer;" onclick="App._boardSearchQuery='';App.currentBoardPage=1;App.loadBoardPosts();">${this.escapeHtml(board.icon || '📋')} ${this.escapeHtml(board.name)}</span>`;
@@ -22662,6 +23047,8 @@ const App = {
         }
         
         const p = res.post;
+        // ★ 탭 제목 = 글 제목 (2026-08-17). 목록으로 돌아가면 loadBoardPosts가 게시판 이름으로 덮는다.
+        this._setDocTitle(p.title || '');
         const board = res.board || this.currentBoardData || {};
         const isAdmin = (this.user?.role === 'admin' || this.user?.role === 'sub_admin');
         const isMine = p.author_id == this.user?.id;
@@ -31047,6 +31434,7 @@ const App = {
                 }
             }
             document.title = siteName;
+            this._baseDocTitle = siteName;   // ★ 기준 제목 갱신 (파일명 접미사에 옛 이름이 남지 않게)
             
             // 경로가 변경되었으면 알림
             if (pathRes.message) {
@@ -32198,6 +32586,9 @@ const App = {
             const _overlay = document.getElementById('modal-overlay');
             if (_overlay) _overlay.style.background = '';
         }
+        
+        // ★ 탭 제목 복원 — keepOpen(트랙 전환 중)일 때는 유지해야 다음 곡 제목이 바로 덮인다
+        if (id === 'modal-preview' && !_keepOpen) this._restoreDocTitle();
         
         // 미리보기 모달이면 미디어 정지 및 정리
         if (id === 'modal-preview') {
@@ -33492,6 +33883,31 @@ const App = {
         container.innerHTML = `<div style="background:#eee;border-radius:2px;height:4px;"><div class="strength-bar" style="width:${level.width};background:${level.color};"></div></div><div class="strength-text" style="color:${level.color};">${level.label}</div>`;
     },
     
+    // ★ 브라우저 탭 제목 (2026-08-15 펜닐님 요청)
+    //   기존에는 시스템 설정 저장 시에만 document.title을 사이트명으로 넣었고,
+    //   모달로 파일을 열어도 탭에는 사이트명만 떴다(새 탭으로 열면 파일명이 보이던 것과 대비).
+    //   미리보기 모달이 파일을 열면 "파일명 - 사이트명"으로 바꾸고, 닫으면 되돌린다.
+    // (제거됨 2026-08-18) 재생 중 탭 제목 흐르기(마퀴)
+    //   document.title 을 350ms마다 갈아끼워 오른쪽→왼쪽으로 흐르게 했으나
+    //   **실기기에서 버벅여 읽기 더 불편했다**(펜닐 확인). 백그라운드 탭 대응으로
+    //   Web Worker 타이머까지 썼지만 개선되지 않았다 — 브라우저가 탭 제목 텍스트를
+    //   갱신하는 비용 자체가 부드러운 애니메이션에 맞지 않는다.
+    //   → 흐르기는 제거하고 **정적 표시("파일명 - 사이트명")만 유지**한다.
+    //   재도전한다면 제목 갱신 주기를 늘리는(1초 이상) 방향이어야 하는데
+    //   그건 '흐른다'기보다 '끊겨 보인다'에 가까워 실익이 없다.
+    
+    _setDocTitle(name) {
+        if (!this._baseDocTitle) this._baseDocTitle = document.title;
+        if (!name) { this._restoreDocTitle(); return; }
+        document.title = `${name} - ${this._baseDocTitle}`;
+    },
+    _restoreDocTitle() {
+        if (this._baseDocTitle) document.title = this._baseDocTitle;
+    },
+    // (제거됨 2026-08-18) _bindVideoTitleMarquee / _setTitlePlaying —
+    //   흐르기 제거로 재생 상태를 알 필요가 없어졌다. 탭 제목은 파일을 열 때
+    //   _setDocTitle 로 한 번 정하고 닫을 때 _restoreDocTitle 로 되돌리면 충분하다.
+    
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
@@ -34589,6 +35005,8 @@ const App = {
         this._checkMediaInfo = false;
         // ★ 현재 미리보기 item 저장 (대용량 동영상 '네이티브로 전환' 버튼이 재생 재시작에 사용)
         this._currentPreviewItem = item;
+        // ★ 탭 제목에 파일명 표시 (사이드 패널 트랙 전환도 이 함수를 다시 타므로 자동 갱신됨)
+        this._setDocTitle(item && item.name);
         // ★ 재생방식 셀렉트 표시 플래그: mp4가 아닌 영상으로 넘어갈 때만 false로 정리
         //   (mp4는 메인 분기가 정확히 판정 — 무조건 false로 하면 화질 변경 재시작 시
         //    media_info 미재호출로 메인 분기가 안 타서 셀렉트가 사라지는 버그 발생)
@@ -35311,6 +35729,10 @@ const App = {
                                 if (titleEl && fsAudioList[idx]) {
                                     titleEl.textContent = fsAudioList[idx].name;
                                 }
+                                // ★ 탭 제목도 현재 곡으로 (2026-08-15)
+                                //   음악은 플레이어 자체 목록에서 곡을 바꿔 showPreview를 다시 타지 않으므로
+                                //   여기서 갱신해야 곡을 넘겨도 탭 제목이 따라온다.
+                                if (fsAudioList[idx]) this._setDocTitle(fsAudioList[idx].name);
                                 // 현재 재생 트랙의 경로로 currentPreviewPath 업데이트
                                 // → 미리보기 모달 하단의 "다운로드" 버튼이 재생 중인 파일을 받도록
                                 if (fsAudioList[idx] && fsAudioList[idx].path) {
@@ -40936,6 +41358,9 @@ const App = {
     showGalleryImage() {
         const img = this.galleryImages[this.galleryIndex];
         if (!img) return;
+        // ★ 탭 제목 갱신 (2026-08-15) — 이미지/압축파일 내부 이미지의 이전·다음 이동은
+        //   showPreview를 다시 타지 않고 이 함수만 거치므로 여기서 갱신해야 한다.
+        this._setDocTitle(img.name || (img.path || '').split('/').pop());
         
         // vault 이미지면 복호화 경로
         if (img._vault) {
@@ -44151,6 +44576,10 @@ const App = {
         
         // 복호화 진행률 — 작은 모달로 표시
         $('#preview-title').text('🔐 ' + item.name).attr('title', item.name);
+        // ★ 탭 제목도 함께 (2026-08-15) — vault는 showPreview를 거치지 않고 여기서 직접 모달을 여는
+        //   경로가 있어(복호화 진행 → 자체 렌더) _showPreviewImpl의 제목 설정이 걸리지 않는다.
+        //   복호화 후 showPreview로 넘어가는 경로에서는 그쪽이 다시 덮어쓰므로 충돌 없음.
+        this._setDocTitle('🔐 ' + item.name);
         const _zoomBar = document.getElementById('preview-image-zoom-bar');
         if (_zoomBar) _zoomBar.style.display = 'none';
         const _previewModal = document.getElementById('modal-preview');
@@ -47184,6 +47613,15 @@ function closeModal() {
         const mbody = currentModal.querySelector('.modal-body');
         if (mbody) mbody.style.height = '';
         currentModal.style.display = 'none';
+        // ★ 탭 제목 복원 (2026-08-15 추가, 2026-08-17 범위 축소)
+        //   closeModal()은 App.hideModal()을 거치지 않고 모달을 직접 숨기므로,
+        //   hideModal에 넣어둔 복원이 이 경로에서는 걸리지 않았다(닫아도 파일명이 남던 원인).
+        //   단 **미리보기 모달일 때만** 복원한다 — 모달 종류를 안 가리면,
+        //   게시판을 보는 중에 설정·공유관리 같은 다른 모달을 닫는 것만으로
+        //   게시판 제목이 사이트명으로 되돌아간다(hideModal도 같은 기준을 쓴다).
+        if (currentModal.id === 'modal-preview' && typeof App !== 'undefined' && App._restoreDocTitle) {
+            App._restoreDocTitle();
+        }
     }
     
     // 스택에서 이전 모달 복원

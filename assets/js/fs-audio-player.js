@@ -1815,17 +1815,35 @@ class FSAudioPlayer {
     _coverFetchQueued(url) {
         // PC (Infinity 제한): 큐 거치지 않고 즉시 fetch
         if (this._COVER_FETCH_LIMIT === Infinity) {
-            return fetch(url, { credentials: 'same-origin' });
+            return fetch(url, { credentials: 'same-origin', signal: this._coverTimeoutSignal(10000) });
         }
         // iOS: 큐에 추가하고 처리 시작
         return new Promise((resolve, reject) => {
             this._coverFetchQueue.push({
-                run: () => fetch(url, { credentials: 'same-origin' }),
+                run: () => fetch(url, { credentials: 'same-origin', signal: this._coverTimeoutSignal(10000) }),
                 resolve,
                 reject
             });
             this._coverFetchProcess();
         });
+    }
+    
+    // ★ 커버 fetch 타임아웃용 AbortSignal (2026-08-17)
+    //   커버 요청이 응답하지 않으면 _getCachedCoverUrl의 Promise가 끝나지 않고,
+    //   그러면 applyCover가 호출되지 않아 잠금화면 아트워크가 기본 음표 아이콘으로 굳는다
+    //   (1초마다 도는 _forceRefreshArtwork가 그 상태를 계속 다시 찍기 때문에 스스로 회복되지 않는다).
+    //   AbortSignal.timeout이 없는 환경에서는 AbortController+setTimeout으로 대체하고,
+    //   둘 다 없으면 undefined를 반환해 기존 동작(무한 대기)으로 안전하게 되돌아간다.
+    _coverTimeoutSignal(ms) {
+        try {
+            if (typeof AbortSignal !== 'undefined' && AbortSignal.timeout) return AbortSignal.timeout(ms);
+            if (typeof AbortController !== 'undefined') {
+                const c = new AbortController();
+                setTimeout(() => { try { c.abort(); } catch (e) {} }, ms);
+                return c.signal;
+            }
+        } catch (e) {}
+        return undefined;
     }
     
     async _getCachedCoverUrl(originalUrl) {
@@ -1944,6 +1962,8 @@ class FSAudioPlayer {
             if (this._coverTestImg) {
                 this._coverTestImg.onload = null;
                 this._coverTestImg.onerror = null;
+                // ★ (2026-08-17) 이전 로드의 타임아웃 타이머도 해제 (app.js와 동일)
+                if (this._coverTestImg._timeoutClear) { try { this._coverTestImg._timeoutClear(); } catch (e) {} }
                 this._coverTestImg.src = '';  // 로드 중단
                 this._coverTestImg = null;
             }
@@ -1958,12 +1978,29 @@ class FSAudioPlayer {
                 // 이미지 로드 가능 여부 확인 (404/204면 폴더 이미지로 fallback)
                 const testImg = new Image();
                 this._coverTestImg = testImg;
+                // ★ (2026-08-17) 커버 로드 타임아웃 — app.js와 동일(룰4).
+                //   onload/onerror가 둘 다 오지 않으면 applyCover가 영영 호출되지 않아
+                //   잠금화면 아트워크가 기본 아이콘으로 굳는다. 8초 뒤 폴더 이미지로 넘어간다.
+                let _coverTimer = setTimeout(() => {
+                    _coverTimer = null;
+                    if (this._destroyed || token !== this._coverLoadToken) return;
+                    if (this._coverTestImg !== testImg) return;
+                    testImg.onload = null;
+                    testImg.onerror = null;
+                    try { testImg.src = ''; } catch (e) {}
+                    this._coverTestImg = null;
+                    applyCoverCached(this.cover || null);
+                }, 8000);
+                const _clearCoverTimer = () => { if (_coverTimer) { clearTimeout(_coverTimer); _coverTimer = null; } };
+                testImg._timeoutClear = _clearCoverTimer;
                 testImg.onload = () => {
+                    _clearCoverTimer();
                     if (this._destroyed || token !== this._coverLoadToken) return;
                     applyCover(cachedUrl);
                     if (this._coverTestImg === testImg) this._coverTestImg = null;
                 };
                 testImg.onerror = () => {
+                    _clearCoverTimer();
                     if (this._destroyed || token !== this._coverLoadToken) return;
                     // ID3 커버 없음 또는 404 → 폴더 이미지로 fallback (캐시 활용)
                     applyCoverCached(this.cover || null);
@@ -3867,6 +3904,24 @@ class FSAudioPlayer {
             let resolved = (typeof this._activeCoverUrl !== 'undefined')
                 ? this._activeCoverUrl
                 : (this.cover || null);
+            // ★ (2026-08-20) 커버 확정 전에는 **직전에 성공한 커버**를 재사용한다.
+            //   [로그로 확인된 증상] 다른 사이트에서 동영상을 재생했다가 웹하드로 돌아와
+            //   다시 재생하면 잠금화면 썸네일이 안 나온다. 로그를 보면 항상 같은 형태다:
+            //       ms_set { art:"default", activeCover:null }   ← 커버 없이 먼저 확정
+            //       ms_art_blob_lookup { found:true }            ← 곧바로 커버 준비됨
+            //       ms_set { art:"url", activeCover:"blob" }     ← 올바른 값으로 다시 설정
+            //   코드상으로는 회복되는데 **iOS가 두 번째 설정을 반영하지 않는다**
+            //   (다음 곡으로 넘기면 나오는 것도 그때 커버가 처음부터 확정되기 때문).
+            //   → 애초에 '커버 없음' 상태를 한 번도 내보내지 않는 것이 해법이다.
+            //   폴더 이미지(this.cover)조차 없는 폴더에서 이 구간이 생기므로,
+            //   마지막으로 성공한 artwork를 기억해 두었다가 그 자리를 메운다.
+            //   완전히 처음(기억된 것도 없음)일 때만 기본 아이콘으로 간다.
+            //   ※ 폴백은 **'아직 확정 전'(undefined)일 때만** 적용한다.
+            //     _activeCoverUrl 이 명시적으로 null 이면 "이 곡은 커버가 없다"고 확정된 것이므로
+            //     그때까지 이전 곡 커버를 보여주면 엉뚱한 그림이 뜬다(부작용 방지).
+            if (!resolved && typeof this._activeCoverUrl === 'undefined' && this._lastGoodArtworkUrl) {
+                resolved = this._lastGoodArtworkUrl;
+            }
             // ★ 잠금화면 artwork에는 blob: URL을 쓸 수 없다.
             //   커버 캐시(_getCachedCoverUrl)는 데이터 절감을 위해 blob: URL을 돌려주는데,
             //   페이지 안 <img>는 이를 정상 표시하지만 잠금화면·알림 카드의 커버는
@@ -3890,6 +3945,10 @@ class FSAudioPlayer {
             }
             
             if (resolved) {
+                // ★ (2026-08-20) 성공한 artwork를 기억해 둔다 — 위 폴백에서 '커버 없음' 구간을
+                //   메우는 데 쓴다. blob: 는 잠금화면이 해석 못 하므로 저장하지 않는다
+                //   (여기 도달한 resolved 는 이미 역조회로 원본 http(s) URL 로 바뀐 상태).
+                if (String(resolved).indexOf('blob:') !== 0) this._lastGoodArtworkUrl = resolved;
                 // 이미지 MIME 자동 감지 (z_music/simple_mp3_player 참조)
                 // FileStation은 주로 API URL이라 확장자 못 보지만, fallback으로 jpeg
                 let imgType = 'image/jpeg';

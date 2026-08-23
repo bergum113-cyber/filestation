@@ -1104,6 +1104,14 @@ $GLOBALS['_SESSION_DEBUG_SID'] = '';
 (function() {
     $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
     $logFile = $dataDir . '/session_debug.log';
+    // ★ (2026-08-17) debug_logs 폴더가 있으면 이 로그도 함께 켠다.
+    //   기존에는 스위치가 두 개(클라이언트 이벤트는 data/debug_logs/ 폴더, 서버 단계·pending 요청은
+    //   data/session_debug.log 파일)여서, 폴더만 만들면 pending 요청 추적(client_state)이 켜지지 않았다.
+    //   폴더가 있을 때 로그 파일이 없으면 만들어 준다(진단 켠 의도가 명확한 상황이므로).
+    //   폴더가 없으면 아래 조건은 기존과 완전히 동일하게 파일 존재 여부만 본다 → 평상시 동작 불변.
+    if (!is_file($logFile) && is_dir($dataDir . '/debug_logs') && is_writable($dataDir)) {
+        @file_put_contents($logFile, "# session debug enabled by debug_logs/ presence\n", FILE_APPEND);
+    }
     if (is_file($logFile) && is_writable($logFile)) {
         $GLOBALS['_SESSION_DEBUG_ENABLED'] = true;
         $GLOBALS['_SESSION_DEBUG_FILE'] = $logFile;

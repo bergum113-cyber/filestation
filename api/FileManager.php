@@ -3830,10 +3830,43 @@ class FileManager {
                 //   quality 일치 — 다른 화질은 새 세션 (v5.8.1c)
                 //   seek 일치 — 다른 시점은 새 세션 (v5.8.1c, quality 변경 시 사용자 위치부터 시작)
                 $existAudioIdx = isset($existMetaData['audio']) ? (int)$existMetaData['audio'] : null;
-                $existIsSw = !empty($existMetaData['current_encoder']) && strpos($existMetaData['current_encoder'], 'libx264') !== false ? '1' : '0';
+                // ★ (2026-08-20) 재사용 판정은 **요청 의도(force_sw)** 끼리 비교한다.
+                //   종전에는 current_encoder 에 'libx264'가 있는지로 판정했는데, 그것은
+                //   "실제로 무엇을 쓰는가"이지 "SW를 강제한 요청인가"가 아니다.
+                //   HW 감지 실패로 모든 세션이 libx264 로 시작하면 그 값이 항상 '1'이 되어
+                //   force_sw 없는 요청('0')과 영원히 어긋나 매번 새 세션이 생겼다.
+                //   [하위호환] 이 필드가 없는 **기존 meta.json**(구버전에서 생성)은 종전 방식으로
+                //   판정한다 — 배포 직후 살아 있는 세션이 갑자기 재사용 불가가 되지 않도록.
+                $existIsSw = isset($existMetaData['force_sw'])
+                    ? (string)$existMetaData['force_sw']
+                    : (!empty($existMetaData['current_encoder']) && strpos($existMetaData['current_encoder'], 'libx264') !== false ? '1' : '0');
                 $existClientSession = $existMetaData['client_session'] ?? '';
                 $existQuality = $existMetaData['quality'] ?? 'original';
                 $existSeek = (float)($existMetaData['seek'] ?? 0);
+                // ★ (2026-08-20) reuse 판정 근거 기록 — 임시폴더/ffmpeg 가 2개 생기는 원인 추적용.
+                //   [왜 필요한가] 지금까지는 "새 세션을 만들었다"는 결과만 남고 **어느 조건이 어긋나
+                //   재사용을 못 했는지**가 기록되지 않아, 폴더가 둘 생겨도 원인을 알 수 없었다.
+                //   특히 current_encoder 가 SW 폴백으로 libx264 가 되면 $existIsSw 가 '1'로 바뀌어
+                //   force_sw 없는 다음 요청과 어긋나 **새 세션이 생기는 경로**가 있다 — 그 확인용.
+                //   기존 게이트(hls_timing.log 파일이 있을 때만 기록)를 그대로 따른다.
+                $_mismatch = [];
+                if (($existMetaData['storage_id'] ?? -1) != $storageId) $_mismatch[] = 'storage_id';
+                if (($existMetaData['path'] ?? '') !== $path)           $_mismatch[] = 'path';
+                if ($existAudioIdx !== $reqAudioIdx)                    $_mismatch[] = 'audio(' . var_export($existAudioIdx, true) . ' vs ' . var_export($reqAudioIdx, true) . ')';
+                if ($existIsSw !== $reqForceSw)                         $_mismatch[] = "force_sw($existIsSw vs $reqForceSw)";
+                if ($existClientSession !== $reqClientSession)          $_mismatch[] = 'client_session';
+                if ($existQuality !== $reqQuality)                      $_mismatch[] = "quality($existQuality vs $reqQuality)";
+                if (abs($existSeek - $reqSeek) >= 0.5)                  $_mismatch[] = "seek($existSeek vs $reqSeek)";
+                if ($_mismatch) {
+                    $_tl = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/hls_timing.log';
+                    if (is_file($_tl)) {
+                        @file_put_contents($_tl,
+                            date('H:i:s.') . sprintf('%03d', (int)((microtime(true) - floor(microtime(true))) * 1000))
+                            . ' [' . basename($existDir) . '] REUSE_SKIP mismatch=' . implode(',', $_mismatch)
+                            . ' existEncoder=' . ($existMetaData['current_encoder'] ?? '?') . "\n",
+                            FILE_APPEND);
+                    }
+                }
                 if (($existMetaData['storage_id'] ?? -1) == $storageId 
                     && ($existMetaData['path'] ?? '') === $path
                     && $existAudioIdx === $reqAudioIdx
@@ -3881,6 +3914,10 @@ class FileManager {
                             'sw_cmd' => $existMetaData['sw_cmd'] ?? null,
                             'stderr_log' => $existMetaData['stderr_log'] ?? null,
                             'current_encoder' => $existMetaData['current_encoder'] ?? null,
+                            // ★ (2026-08-20) force_sw 보존 — 재사용할 때마다 meta 를 다시 쓰는데
+                            //   이 값이 빠지면 다음 판정이 current_encoder 기반으로 되돌아가
+                            //   같은 버그(폴더·ffmpeg 중복)가 재발한다.
+                            'force_sw' => $existIsSw,
                             'quality' => $existQuality,
                             'seek' => $existSeek,
                         ]));
@@ -4021,7 +4058,16 @@ class FileManager {
             @file_put_contents($hlsDebugLog,
                 date('H:i:s.') . sprintf('%03d', (int)((microtime(true) - floor(microtime(true))) * 1000)) .
                 " [$sessionId] START file=" . basename($path) . " encoder=" . ($usingHwEncoder ? 'HW' : 'SW') .
-                " codec_args=" . $videoCodecArgs . " has_sw_backup=" . ($cmdSwBackup ? 'YES' : 'NO') . "\n",
+                " codec_args=" . $videoCodecArgs . " has_sw_backup=" . ($cmdSwBackup ? 'YES' : 'NO') .
+                // ★ (2026-08-20) 새 세션이 만들어진 요청의 조건을 함께 남긴다.
+                //   위 REUSE_SKIP 기록과 짝을 이뤄 "왜 재사용 못 하고 새로 만들었는지"가 완성된다.
+                //   폴더가 2개 생길 때 두 START 줄의 이 값들을 비교하면 무엇이 달랐는지 바로 보인다.
+                " | req force_sw=" . (isset($_GET['force_sw']) ? '1' : '0') .
+                " audio=" . (isset($_GET['audio']) ? (int)$_GET['audio'] : 'null') .
+                " quality=" . (isset($_GET['quality']) ? trim($_GET['quality']) : 'original') .
+                " seek=" . (isset($_GET['seek']) ? (float)$_GET['seek'] : 0) .
+                " client_session=" . (session_id() ? substr(hash('sha256', session_id()), 0, 16) : '-') .
+                " existing_dirs=" . count(glob($hlsDir . '/*', GLOB_ONLYDIR) ?: []) . "\n",
                 FILE_APPEND);
         }
         
@@ -4047,6 +4093,14 @@ class FileManager {
             'sw_cmd' => $cmdSwBackup,
             'stderr_log' => $stderrLog,
             'current_encoder' => $currentEncoder,
+            // ★ (2026-08-20) 이 세션이 **force_sw 요청으로 만들어졌는지**를 그대로 저장한다.
+            //   [왜] 재사용 판정에서 지금까지 current_encoder 에 'libx264'가 들어있는지로
+            //   "SW 세션인가"를 추정했는데, 그것은 **실제 사용 인코더**이지 요청 의도가 아니다.
+            //   HW 감지가 실패해 모든 세션이 처음부터 libx264 로 시작하면 그 값이 항상 '1'이 되고,
+            //   force_sw 없는 다음 요청('0')과 어긋나 **재사용에 실패, 새 세션이 만들어진다**
+            //   → 영상 1개에 임시폴더·ffmpeg 가 2개 생기는 원인(로그 REUSE_SKIP 으로 확인).
+            //   요청 의도를 그대로 저장해 같은 것끼리 비교하면 이 오판이 사라진다.
+            'force_sw' => (isset($_GET['force_sw']) ? '1' : '0'),
             'quality' => $hlsQuality,
             'seek' => $seekSec,
         ]));
@@ -4589,32 +4643,102 @@ class FileManager {
         
         $result = '-c:v libx264 -preset ultrafast -crf 23 -tune zerolatency -profile:v high -level 4.1 -pix_fmt yuv420p';
         $detectedName = 'libx264 (CPU)';
-        
+
+        // ★ (2026-08-20) HW 감지 과정을 기록한다 — data/hw_detect.log
+        //   [왜 필요한가] 지금까지 감지는 **결과만** 캐시에 남기고 과정을 전혀 기록하지 않아,
+        //   "왜 CPU로 떨어졌는지"를 서버에서 확인할 방법이 없었다(캐시를 지워도 같은 값만 다시 생김).
+        //   원격 접속(RDP) 세션에서 명령을 직접 돌리면 물리 GPU 대신 Microsoft Basic Render Driver가
+        //   잡혀 결과가 달라지므로, **웹서버 프로세스가 스스로 남긴 기록**이라야 신뢰할 수 있다.
+        //   감지는 24시간에 한 번만 도므로 부하는 무시 가능하고, 파일은 매번 덮어써 커지지 않는다.
+        $hwLogPath = $dataDir . DIRECTORY_SEPARATOR . 'hw_detect.log';
+        $hwLog = [];
+        $hwLog[] = '=== HW 인코더 감지 ' . date('Y-m-d H:i:s') . ' ===';
+        $hwLog[] = 'ffmpeg: ' . $ffmpeg;
+        $hwLog[] = 'php_sapi: ' . PHP_SAPI . ' | os: ' . PHP_OS_FAMILY
+                 . ' | exec_available: ' . (function_exists('exec') ? 'YES' : 'NO');
+        // 인코더 목록 조회가 성공했는지부터 남긴다(빈 문자열이면 ffmpeg 실행 자체가 실패한 것)
+        $hwLog[] = 'encoder_list_len: ' . strlen($encoderList);
+        foreach (array_keys($hwEncoders) as $_e) {
+            $hwLog[] = '  build_has_' . $_e . ': ' . (strpos($encoderList, $_e) !== false ? 'YES' : 'NO');
+        }
+
         foreach ($hwEncoders as $encoder => $args) {
-            if (strpos($encoderList, $encoder) === false) continue;
+            if (strpos($encoderList, $encoder) === false) {
+                $hwLog[] = "[$encoder] SKIP — 이 ffmpeg 빌드에 인코더가 없음";
+                continue;
+            }
             
             // 실제 인코딩 테스트 (짧은 테스트로 동작 여부 확인)
+            // ★ (2026-08-20) ffmpeg 버전 무관하게 동작하도록 테스트 방식 교체.
+            //   [문제] 기존에는 '-f mp4 NUL'로 테스트했는데, **mp4 muxer는 seek 가능한 출력이 필요**하고
+            //   NUL은 seek이 안 된다. 구버전 ffmpeg는 경고로 넘어갔지만 최신(8.x)은 이를 에러로 처리해
+            //   출력에 'Error'가 섞이고, 아래 키워드 검사가 그것을 잡아 **HW가 멀쩡해도 전부 실패 판정**이
+            //   나면서 항상 libx264(CPU)로 굳었다(펜닐 서버 ffmpeg 8.1.1, hw_encoder_cache.json이
+            //   지워도 계속 'libx264 (CPU)'로 재생성됨).
+            //   [수정] 출력 muxer를 **null**로 바꾼다 — seek이 필요 없어 모든 버전에서 동일하게 동작하고,
+            //   인코더는 그대로 돌므로 HW 동작 여부 검증이라는 목적은 유지된다.
+            //   -frames:v 1 로 1프레임만, -hide_banner 로 configuration 문자열이 키워드 검사에
+            //   섞이는 오탐도 없앤다. -nostdin 은 서버 환경에서 입력 대기로 멈추는 것을 방지.
             $testCmd = escapeshellarg($ffmpeg)
-                . ' -f lavfi -i nullsrc=s=64x64:d=0.1 ' . $args
-                . ' -f mp4 ' . $devNull . ' 2>&1';
-            $testOutput = shell_exec($testCmd);
-            
-            // 에러가 없으면 사용 가능
-            $errorPatterns = ['Error', 'error', 'unsupported', 'failed', 'Cannot', 'No such', 'not found'];
-            $hasError = false;
-            if ($testOutput === null) { $hasError = true; }
-            else {
-                foreach ($errorPatterns as $pat) {
-                    if (strpos($testOutput, $pat) !== false) { $hasError = true; break; }
+                . ' -hide_banner -nostdin -f lavfi -i nullsrc=s=64x64:d=0.1 ' . $args
+                . ' -frames:v 1 -f null - 2>&1';
+
+            // ★ 판정 기준도 바꾼다: **종료 코드**가 가장 정확하다(0 = 성공).
+            //   기존의 광범위한 키워드('error', 'Cannot' 등)는 무관한 줄에도 걸려 오탐이 잦았다.
+            $testOutput = null;
+            $hasError = true;
+            if (function_exists('exec')) {
+                $outLines = [];
+                $rc = 1;
+                @exec($testCmd, $outLines, $rc);
+                $testOutput = implode("\n", $outLines);
+                $hasError = ($rc !== 0);
+            } else {
+                // exec 이 막힌 환경 대비 — shell_exec + **인코더 고유 실패 문구만** 검사.
+                //   일반적인 'error'/'Cannot' 같은 단어는 정상 로그에도 나오므로 쓰지 않는다.
+                $testOutput = shell_exec($testCmd);
+                if ($testOutput === null) {
+                    $hasError = true;
+                } else {
+                    $hasError = false;
+                    $errorPatterns = [
+                        'Error while opening encoder',
+                        'Unknown encoder',
+                        'No capable devices found',
+                        'not supported by the QSV runtime',
+                        'MFX session',
+                        'Cannot load nvcuda',
+                        'Cannot open encoder',
+                        'InitializeEncoder failed',
+                        'Encoder not found',
+                    ];
+                    foreach ($errorPatterns as $pat) {
+                        if (stripos($testOutput, $pat) !== false) { $hasError = true; break; }
+                    }
                 }
             }
+            // ★ 각 후보의 판정 근거를 남긴다 — 성공/실패와 **실패 시 ffmpeg 원문 마지막 부분**.
+            //   ffmpeg 메시지가 그대로 남아야 'MFX session: -9'(장치 못 잡음),
+            //   'Failed to find d3d11va adapter'(어댑터 열거 실패) 같은 실제 원인이 보인다.
+            if ($hasError) {
+                $tail = trim((string)$testOutput);
+                if (strlen($tail) > 1200) $tail = '...' . substr($tail, -1200);
+                $hwLog[] = "[$encoder] FAIL";
+                $hwLog[] = '  ffmpeg_output: ' . str_replace(["\r\n", "\n"], ' | ', $tail);
+            } else {
+                $hwLog[] = "[$encoder] OK — 사용 가능";
+            }
+
             if (!$hasError) {
                 $result = $args;
                 $detectedName = $encoder;
                 break;
             }
         }
-        
+
+        $hwLog[] = 'RESULT: ' . $detectedName;
+        @file_put_contents($hwLogPath, implode("\n", $hwLog) . "\n");
+
         // 캐시 저장
         @file_put_contents($cacheFile, json_encode([
             'args' => $result,
@@ -12446,7 +12570,13 @@ class FileManager {
                 if (!file_exists($metaFile)) continue;
                 $meta = @json_decode(file_get_contents($metaFile), true);
                 $existAudioIdxShare = isset($meta['audio']) ? (int)$meta['audio'] : null;
-                $existIsSwShare = !empty($meta['current_encoder']) && strpos($meta['current_encoder'], 'libx264') !== false ? '1' : '0';
+                // ★ (2026-08-20) 메인 경로와 동일 수정 — 요청 의도(force_sw)끼리 비교.
+                //   current_encoder 기반 판정은 HW 감지 실패 시 항상 '1'이 되어
+                //   force_sw 없는 요청과 어긋나 매번 새 세션을 만든다(폴더·ffmpeg 중복).
+                //   필드가 없는 기존 meta.json 은 종전 방식으로 판정(하위호환).
+                $existIsSwShare = isset($meta['force_sw'])
+                    ? (string)$meta['force_sw']
+                    : (!empty($meta['current_encoder']) && strpos($meta['current_encoder'], 'libx264') !== false ? '1' : '0');
                 $existClientSessionShare = $meta['client_session'] ?? '';
                 $existQualityShare = $meta['quality'] ?? 'original';
                 if (($meta['share_path'] ?? '') === $fullPath
@@ -12477,6 +12607,9 @@ class FileManager {
                             'sw_cmd' => $meta['sw_cmd'] ?? null,
                             'stderr_log' => $meta['stderr_log'] ?? null,
                             'current_encoder' => $meta['current_encoder'] ?? null,
+                            // ★ (2026-08-20) force_sw 보존 — 재사용 시 이 값이 빠지면
+                            //   다음 재사용 판정이 다시 current_encoder 기반으로 떨어져 같은 버그가 재발한다.
+                            'force_sw' => $existIsSwShare,
                             'sw_fallback_applied' => $meta['sw_fallback_applied'] ?? false,
                             'quality' => $existQualityShare,
                             'seek' => (float)($meta['seek'] ?? 0),
@@ -12594,6 +12727,9 @@ class FileManager {
             'sw_cmd' => $cmdSwBackup,
             'stderr_log' => $stderrLog,
             'current_encoder' => $this->extractEncoderFromArgs($videoCodecArgs),
+            // ★ (2026-08-20) 메인 경로와 동일 — 요청 의도를 저장해 재사용 판정이
+            //   current_encoder(실제 인코더)에 좌우되지 않게 한다.
+            'force_sw' => (isset($_GET['force_sw']) ? '1' : '0'),
             'quality' => $shareQuality,
             'seek' => $seekSecShare,
         ]));
