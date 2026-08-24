@@ -11845,6 +11845,11 @@ const App = {
             html += '<div style="margin:2px 0; color:' + color + ';">' + mark + ' <b>' + this.escapeHtml(it.encoder) + '</b>';
             if (!it.ok && it.reason) html += ' — ' + this.escapeHtml(it.reason);
             html += '</div>';
+            // 리눅스에서 렌더 노드 접근이 막혀 있으면, QSV/NVENC 실패도 권한 때문일 수 있다.
+            if (!it.ok && it.perm_hint) {
+                html += '<div style="color:#ff9800; font-size:11px; margin:0 0 2px 18px;">'
+                     + t('hw_maybe_perm', '렌더 노드 권한이 없어 실패했을 수 있습니다.') + '</div>';
+            }
             if (!it.ok && it.detail) {
                 html += '<div style="color:#aaa; font-size:11px; margin:0 0 4px 18px; word-break:break-all;">'
                      + this.escapeHtml(it.detail) + '</div>';
@@ -11858,14 +11863,75 @@ const App = {
         }
         // 권한 문제가 하나라도 있으면 조치 방법을 함께 안내
         if ((res.render_nodes || []).some(n => !n.usable)) {
-            html += '<div style="color:#ff9800; margin-top:4px;">'
-                 + t('hw_perm_hint', '렌더 노드 권한이 없으면 웹서버 계정을 해당 그룹에 추가한 뒤 웹서버를 재시작하세요 (예: usermod -aG videodriver http).')
+            html += '<div style="color:#ff9800; margin-top:6px;">'
+                 + t('hw_perm_fix_title', '조치 방법 — 웹서버 계정에 렌더 노드 접근 권한 주기') + '</div>';
+            if (res.web_user || res.node_group) {
+                html += '<div style="color:#888; font-size:11px; margin-top:2px;">'
+                     + t('hw_web_user', '웹서버 계정') + ': <code>' + this.escapeHtml(res.web_user || '?') + '</code> · '
+                     + t('hw_node_group', '렌더 노드 그룹') + ': <code>' + this.escapeHtml(res.node_group || '?') + '</code></div>';
+            }
+            if (res.fix_cmd) {
+                // 실제 계정·그룹으로 채운 명령 — 그대로 복사해 쓸 수 있다.
+                html += '<div style="margin-top:4px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
+                     + '<code id="hw-fix-cmd" style="background:#f5f5f5; padding:4px 8px; border-radius:4px; user-select:all;">'
+                     + this.escapeHtml(res.fix_cmd) + '</code>'
+                     + '<button type="button" class="btn btn-sm" onclick="App.copyHwFixCmd()">'
+                     + t('copy', '복사') + '</button></div>';
+            } else {
+                // 계정·그룹을 알아내지 못한 경우 일반 안내로 대체
+                html += '<div style="color:#888; font-size:11px; margin-top:2px;">'
+                     + t('hw_perm_generic', '웹서버 계정을 렌더 노드 그룹에 추가하세요 (예: usermod -aG video www-data).') + '</div>';
+            }
+            // ★ (2026-08-24) 환경별 실행 절차 — 서버가 판정한 is_synology 로 안내를 나눈다.
+            //   [왜] 종전에는 "SSH 에서 실행 후 웹서버 재시작" 이라고만 적어, **SSH 를 켜는 법**과
+            //   **웹서버를 재시작하는 법**이 빠져 있었다. 시놀로지는 SSH 가 기본 꺼짐이고
+            //   재시작 위치도 일반 리눅스와 달라, 사용자가 여기서 막힌다.
+            html += '<ol style="color:#888; font-size:11px; margin:6px 0 0 18px; padding:0; line-height:1.7;">';
+            if (res.is_synology) {
+                html += '<li>' + t('hw_step_ssh_syno', 'SSH가 꺼져 있으면: 제어판 → 터미널 및 SNMP → SSH 서비스 활성화') + '</li>';
+                html += '<li>' + t('hw_step_run', 'SSH로 접속해 위 명령을 실행 (sudo 권한이 있는 계정)') + '</li>';
+                html += '<li>' + t('hw_step_restart_syno', '웹서버 재시작: 패키지 센터 → Web Station → 중지 후 시작 (확실하게 하려면 NAS 재부팅)') + '</li>';
+            } else {
+                html += '<li>' + t('hw_step_run', 'SSH로 접속해 위 명령을 실행 (sudo 권한이 있는 계정)') + '</li>';
+                html += '<li>' + t('hw_step_restart_linux', '웹서버 재시작: systemctl restart apache2 (또는 nginx·php-fpm 등 사용 중인 서비스)') + '</li>';
+            }
+            html += '<li>' + t('hw_step_recheck', '[테스트]를 다시 눌러 "접근 가능"으로 바뀌었는지 확인') + '</li>';
+            html += '<li>' + t('hw_step_cache', 'data/hw_encoder_cache.json 을 삭제한 뒤 동영상을 재생 (지우지 않으면 24시간 동안 이전 결과를 사용)') + '</li>';
+            html += '</ol>';
+        }
+        // ★ 권한 안내 절차 안에 이미 캐시 삭제 단계가 있으므로 그때는 생략(중복 방지).
+        const hasPermSteps = (res.render_nodes || []).some(n => !n.usable);
+        if (!hasPermSteps) {
+            html += '<div style="color:#888; margin-top:6px;">'
+                 + t('hw_apply_hint', '설정을 바꾼 뒤에는 data/hw_encoder_cache.json 을 삭제해야 다시 감지합니다.')
                  + '</div>';
         }
-        html += '<div style="color:#888; margin-top:6px;">'
-             + t('hw_apply_hint', '설정을 바꾼 뒤에는 data/hw_encoder_cache.json 을 삭제해야 다시 감지합니다.')
-             + '</div>';
         $box.html(html);
+    },
+
+    // ★ (2026-08-24) 조치 명령 복사 — SSH 로 옮겨 붙이기 쉽게.
+    copyHwFixCmd() {
+        const el = document.getElementById('hw-fix-cmd');
+        if (!el) return;
+        const text = el.textContent || '';
+        // navigator.clipboard 는 HTTPS/사용자 제스처가 필요해 실패할 수 있어 폴백을 둔다.
+        // ★ 이 프로젝트의 알림 함수는 this.toast() 다(showToast 는 존재하지 않음 — 감사에서 확인).
+        const done = () => this.toast(t('copied', '복사되었습니다.'), 'success');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(done).catch(() => {
+                try {
+                    const r = document.createRange(); r.selectNodeContents(el);
+                    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+                    document.execCommand('copy'); done();
+                } catch (e) {}
+            });
+        } else {
+            try {
+                const r = document.createRange(); r.selectNodeContents(el);
+                const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+                document.execCommand('copy'); done();
+            } catch (e) {}
+        }
     },
 
     async testPdfTool() {

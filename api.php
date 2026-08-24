@@ -11089,6 +11089,39 @@ try {
             $manualDev = trim($siteSettings['vaapi_device'] ?? '');
             if ($manualDev !== '' && @file_exists($manualDev)) $renderUsable = $manualDev;
 
+            // ★ (2026-08-24) 권한 문제일 때 **그대로 복사해 쓸 수 있는 명령**을 만들어 준다.
+            //   [배경] 종전 안내는 `usermod -aG videodriver http` 라는 **예시값**이라, 실제 웹서버
+            //   계정명·그룹명이 다르면 사용자가 직접 알아내야 했다(배포 사용자 사례에서 확인).
+            //   서버는 이 값들을 알 수 있으므로 실제 값으로 채운 명령을 내려준다.
+            //   [주의] posix_* 는 확장이 없을 수 있어 전부 function_exists 로 감싸고,
+            //   알아내지 못하면 해당 부분을 빈 값으로 두어 **안내 자체가 깨지지 않게** 한다.
+            $webUser = '';
+            if (function_exists('posix_geteuid') && function_exists('posix_getpwuid')) {
+                $pw = @posix_getpwuid(@posix_geteuid());
+                if (is_array($pw) && !empty($pw['name'])) $webUser = (string)$pw['name'];
+            }
+            if ($webUser === '' && function_exists('get_current_user')) {
+                $webUser = (string)@get_current_user();
+            }
+            // 렌더 노드의 그룹명 — 여기에 웹서버 계정을 넣어야 접근이 열린다.
+            $nodeGroup = '';
+            $probeNode = $renderUsable !== '' ? $renderUsable : (!empty($renderNodes) ? $renderNodes[0]['path'] : '');
+            if ($probeNode !== '' && function_exists('filegroup') && function_exists('posix_getgrgid')) {
+                $gid = @filegroup($probeNode);
+                if ($gid !== false) {
+                    $gr = @posix_getgrgid($gid);
+                    if (is_array($gr) && !empty($gr['name'])) $nodeGroup = (string)$gr['name'];
+                }
+            }
+            // 시놀로지는 usermod 대신 synogroup 을 쓰는 것이 안전하다.
+            $isSyno = @is_file('/etc/synoinfo.conf') || @is_dir('/var/packages');
+            $fixCmd = '';
+            if ($webUser !== '' && $nodeGroup !== '') {
+                $fixCmd = $isSyno
+                    ? ('sudo synogroup --member ' . $nodeGroup . ' ' . $webUser)
+                    : ('sudo usermod -aG ' . $nodeGroup . ' ' . $webUser);
+            }
+
             // 후보별로 ①빌드 포함 여부 ②실제 1프레임 인코딩을 확인한다.
             $candidates = [
                 'h264_nvenc' => '-c:v h264_nvenc -preset p1 -tune ll -qp 23 -profile:v high -level 4.1 -pix_fmt yuv420p',
@@ -11135,6 +11168,15 @@ try {
                     if (strlen($tail) > 400) $tail = '...' . substr($tail, -400);
                     $row['reason'] = __('api_hw_encode_failed', '인코딩 테스트 실패');
                     $row['detail'] = $tail;
+                    // ★ (2026-08-24) 리눅스의 QSV/NVENC 도 내부적으로 **/dev/dri 렌더 노드**를 통해
+                    //   GPU 에 접근한다. 그래서 권한이 없으면 VA-API 뿐 아니라 이들도 실패하는데,
+                    //   ffmpeg 메시지가 'Invalid argument' 처럼 모호해 권한 문제인지 알기 어렵다.
+                    //   렌더 노드가 있는데 접근이 안 되는 상황이면 그 가능성을 함께 알린다.
+                    //   ※ 단정하지 않고 '가능성'으로 표시한다 — 세대 미달·런타임 미설치 등
+                    //     다른 원인일 수도 있어 오진단을 피하기 위함이다.
+                    if (PHP_OS_FAMILY !== 'Windows' && $renderUsable === '' && !empty($renderNodes)) {
+                        $row['perm_hint'] = true;
+                    }
                 }
                 $items[] = $row;
             }
@@ -11146,6 +11188,11 @@ try {
                 'render_nodes' => $renderNodes,
                 'items' => $items,
                 'mode' => trim($siteSettings['hw_accel_mode'] ?? ''),
+                // 조치 안내용 — 값을 못 구하면 빈 문자열이며, 화면은 일반 안내로 대체한다.
+                'web_user' => $webUser,
+                'node_group' => $nodeGroup,
+                'fix_cmd' => $fixCmd,
+                'is_synology' => $isSyno,
             ];
             break;
 
