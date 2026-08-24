@@ -11870,13 +11870,50 @@ const App = {
                      + t('hw_web_user', '웹서버 계정') + ': <code>' + this.escapeHtml(res.web_user || '?') + '</code> · '
                      + t('hw_node_group', '렌더 노드 그룹') + ': <code>' + this.escapeHtml(res.node_group || '?') + '</code></div>';
             }
+            // 이미 그룹에 속해 있는데 접근이 안 되면, 남은 건 웹서버 재시작뿐이다.
+            if (res.already_member) {
+                html += '<div style="color:#ff9800; font-size:11px; margin-top:2px;">'
+                     + t('hw_already_member', '이미 그룹에 속해 있습니다. 웹서버를 재시작하면 적용됩니다.') + '</div>';
+            }
             if (res.fix_cmd) {
+                // ★ (2026-08-24) 시놀로지의 synogroup --member 는 **덮어쓰기**라, 서버가 읽은
+                //   기존 멤버를 모두 나열한 뒤 웹서버 계정을 덧붙인 명령을 그대로 보여준다.
+                // ★ (2026-08-24) 시놀로지는 --memberadd(추가 방식)를 기본으로 안내한다.
+                //   구버전 DSM 에 --memberadd 가 없을 수 있어, 기존 멤버를 읽었으면
+                //   --member 완성 명령을 **대안**으로 함께 보여준다.
+                if (res.is_synology) {
+                    html += '<div style="color:#888; font-size:11px; margin-top:2px;">'
+                         + t('hw_syno_memberadd', '아래 명령은 기존 멤버를 유지한 채 계정만 추가합니다.') + '</div>';
+                }
                 // 실제 계정·그룹으로 채운 명령 — 그대로 복사해 쓸 수 있다.
                 html += '<div style="margin-top:4px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
-                     + '<code id="hw-fix-cmd" style="background:#f5f5f5; padding:4px 8px; border-radius:4px; user-select:all;">'
+                     + '<code id="hw-fix-cmd" style="background:#f5f5f5; padding:4px 8px; border-radius:4px; user-select:all; word-break:break-all;">'
                      + this.escapeHtml(res.fix_cmd) + '</code>'
                      + '<button type="button" class="btn btn-sm" onclick="App.copyHwFixCmd()">'
                      + t('copy', '복사') + '</button></div>';
+                if (res.alt_cmd) {
+                    html += '<div style="color:#888; font-size:11px; margin-top:6px;">'
+                         + t('hw_syno_alt', '위 명령이 "unknown option" 등으로 실패하면(구버전 DSM) 아래를 사용하세요. 기존 멤버가 모두 포함되어 있으니 그대로 실행해야 합니다 — 일부를 빼면 그 계정이 그룹에서 제거됩니다.')
+                         + '</div>';
+                    html += '<div style="margin-top:2px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
+                         + '<code id="hw-alt-cmd" style="background:#f5f5f5; padding:4px 8px; border-radius:4px; user-select:all; word-break:break-all;">'
+                         + this.escapeHtml(res.alt_cmd) + '</code>'
+                         + '<button type="button" class="btn btn-sm" onclick="App.copyHwFixCmd(\'hw-alt-cmd\')">'
+                         + t('copy', '복사') + '</button></div>';
+                } else if (res.get_cmd) {
+                    // ★ (2026-08-24) 기존 멤버를 읽지 못한 경우 — --memberadd 가 실패하면 쓸
+                    //   대안(--member)을 만들 수 없으므로, **조회 명령**을 안내한다.
+                    //   (fix_cmd 가 항상 채워지도록 바뀌면서 아래 조회 분기가 도달 불가가 됐던 것을
+                    //    감사에서 발견해 여기로 옮김.)
+                    html += '<div style="color:#888; font-size:11px; margin-top:6px;">'
+                         + t('hw_syno_alt_unknown', '위 명령이 실패하면(구버전 DSM) 먼저 기존 멤버를 확인한 뒤, synogroup --member 로 그 목록 뒤에 계정을 덧붙여 실행하세요.')
+                         + '</div>';
+                    html += '<div style="margin-top:2px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
+                         + '<code id="hw-alt-cmd" style="background:#f5f5f5; padding:4px 8px; border-radius:4px; user-select:all;">'
+                         + this.escapeHtml(res.get_cmd) + '</code>'
+                         + '<button type="button" class="btn btn-sm" onclick="App.copyHwFixCmd(\'hw-alt-cmd\')">'
+                         + t('copy', '복사') + '</button></div>';
+                }
             } else {
                 // 계정·그룹을 알아내지 못한 경우 일반 안내로 대체
                 html += '<div style="color:#888; font-size:11px; margin-top:2px;">'
@@ -11910,8 +11947,8 @@ const App = {
     },
 
     // ★ (2026-08-24) 조치 명령 복사 — SSH 로 옮겨 붙이기 쉽게.
-    copyHwFixCmd() {
-        const el = document.getElementById('hw-fix-cmd');
+    copyHwFixCmd(elId) {
+        const el = document.getElementById(elId || 'hw-fix-cmd');
         if (!el) return;
         const text = el.textContent || '';
         // navigator.clipboard 는 HTTPS/사용자 제스처가 필요해 실패할 수 있어 폴백을 둔다.

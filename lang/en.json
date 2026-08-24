@@ -2942,18 +2942,20 @@
     "hw_accessible": "accessible",
     "hw_no_permission": "no permission",
     "hw_none_available": "No hardware encoder is available. Playback will use software (libx264).",
-    "hw_perm_hint": "If the render node is not accessible, add the web server account to that group and restart the web server (e.g. usermod -aG videodriver http).",
     "hw_apply_hint": "After changing this setting, delete data/hw_encoder_cache.json to re-detect.",
     "hw_maybe_perm": "This may have failed due to missing render node permission.",
     "hw_perm_fix_title": "How to fix — grant the web server account access to the render node",
     "hw_web_user": "Web server account",
     "hw_node_group": "Render node group",
     "hw_perm_generic": "Add the web server account to the render node group (e.g. usermod -aG video www-data).",
-    "hw_perm_restart": "Run the command above over SSH, then restart the web server to apply.",
     "hw_step_ssh_syno": "If SSH is off: Control Panel → Terminal & SNMP → Enable SSH service",
     "hw_step_run": "Connect over SSH and run the command above (with a sudo-capable account)",
     "hw_step_restart_syno": "Restart the web server: Package Center → Web Station → Stop, then Start (or reboot the NAS to be sure)",
     "hw_step_restart_linux": "Restart the web server: systemctl restart apache2 (or nginx / php-fpm as applicable)",
     "hw_step_recheck": "Press [Test] again and check that it now shows \"accessible\"",
-    "hw_step_cache": "Delete data/hw_encoder_cache.json, then play a video (otherwise the previous result is reused for 24 hours)"
+    "hw_step_cache": "Delete data/hw_encoder_cache.json, then play a video (otherwise the previous result is reused for 24 hours)",
+    "hw_already_member": "The account is already in the group. Restart the web server to apply.",
+    "hw_syno_memberadd": "The command below adds the account while keeping existing members.",
+    "hw_syno_alt": "If the command above fails (e.g. \"unknown option\" on older DSM), use the one below. It already includes every existing member — run it as is, since omitting any account removes it from the group.",
+    "hw_syno_alt_unknown": "If the command above fails (older DSM), first check the existing members, then run synogroup --member with that list plus the account appended."
 }

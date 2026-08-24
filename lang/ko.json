@@ -2937,18 +2937,20 @@
     "hw_accessible": "접근 가능",
     "hw_no_permission": "권한 없음",
     "hw_none_available": "사용 가능한 하드웨어 인코더가 없습니다. 소프트웨어(libx264)로 재생됩니다.",
-    "hw_perm_hint": "렌더 노드 권한이 없으면 웹서버 계정을 해당 그룹에 추가한 뒤 웹서버를 재시작하세요 (예: usermod -aG videodriver http).",
     "hw_apply_hint": "설정을 바꾼 뒤에는 data/hw_encoder_cache.json 을 삭제해야 다시 감지합니다.",
     "hw_maybe_perm": "렌더 노드 권한이 없어 실패했을 수 있습니다.",
     "hw_perm_fix_title": "조치 방법 — 웹서버 계정에 렌더 노드 접근 권한 주기",
     "hw_web_user": "웹서버 계정",
     "hw_node_group": "렌더 노드 그룹",
     "hw_perm_generic": "웹서버 계정을 렌더 노드 그룹에 추가하세요 (예: usermod -aG video www-data).",
-    "hw_perm_restart": "SSH에서 위 명령을 실행한 뒤 웹서버를 재시작해야 반영됩니다.",
     "hw_step_ssh_syno": "SSH가 꺼져 있으면: 제어판 → 터미널 및 SNMP → SSH 서비스 활성화",
     "hw_step_run": "SSH로 접속해 위 명령을 실행 (sudo 권한이 있는 계정)",
     "hw_step_restart_syno": "웹서버 재시작: 패키지 센터 → Web Station → 중지 후 시작 (확실하게 하려면 NAS 재부팅)",
     "hw_step_restart_linux": "웹서버 재시작: systemctl restart apache2 (또는 nginx·php-fpm 등 사용 중인 서비스)",
     "hw_step_recheck": "[테스트]를 다시 눌러 \"접근 가능\"으로 바뀌었는지 확인",
-    "hw_step_cache": "data/hw_encoder_cache.json 을 삭제한 뒤 동영상을 재생 (지우지 않으면 24시간 동안 이전 결과를 사용)"
+    "hw_step_cache": "data/hw_encoder_cache.json 을 삭제한 뒤 동영상을 재생 (지우지 않으면 24시간 동안 이전 결과를 사용)",
+    "hw_already_member": "이미 그룹에 속해 있습니다. 웹서버를 재시작하면 적용됩니다.",
+    "hw_syno_memberadd": "아래 명령은 기존 멤버를 유지한 채 계정만 추가합니다.",
+    "hw_syno_alt": "위 명령이 \"unknown option\" 등으로 실패하면(구버전 DSM) 아래를 사용하세요. 기존 멤버가 모두 포함되어 있으니 그대로 실행해야 합니다 — 일부를 빼면 그 계정이 그룹에서 제거됩니다.",
+    "hw_syno_alt_unknown": "위 명령이 실패하면(구버전 DSM) 먼저 기존 멤버를 확인한 뒤, synogroup --member 로 그 목록 뒤에 계정을 덧붙여 실행하세요."
 }

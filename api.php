@@ -11105,21 +11105,66 @@ try {
             }
             // 렌더 노드의 그룹명 — 여기에 웹서버 계정을 넣어야 접근이 열린다.
             $nodeGroup = '';
+            $groupMembers = [];      // 기존 그룹 멤버 — synogroup 명령을 안전하게 만들기 위해 필요
+            $membersKnown = false;   // 멤버 목록을 실제로 읽었는지(빈 그룹과 '못 읽음'을 구분)
             $probeNode = $renderUsable !== '' ? $renderUsable : (!empty($renderNodes) ? $renderNodes[0]['path'] : '');
             if ($probeNode !== '' && function_exists('filegroup') && function_exists('posix_getgrgid')) {
                 $gid = @filegroup($probeNode);
                 if ($gid !== false) {
                     $gr = @posix_getgrgid($gid);
-                    if (is_array($gr) && !empty($gr['name'])) $nodeGroup = (string)$gr['name'];
+                    if (is_array($gr) && !empty($gr['name'])) {
+                        $nodeGroup = (string)$gr['name'];
+                        if (isset($gr['members']) && is_array($gr['members'])) {
+                            $membersKnown = true;
+                            foreach ($gr['members'] as $mname) {
+                                // 표시용 명령에 들어가므로 계정명으로 쓰이는 문자만 통과시킨다.
+                                $mname = (string)$mname;
+                                if ($mname !== '' && preg_match('/^[A-Za-z0-9._-]+$/', $mname)) {
+                                    $groupMembers[] = $mname;
+                                } else {
+                                    // ★ (2026-08-24) 필터에 걸린 멤버가 하나라도 있으면 **완성 명령을 만들지 않는다.**
+                                    //   synogroup 은 덮어쓰기라, 걸러진 계정이 명령에서 빠지면
+                                    //   **그 계정이 그룹에서 제거된다** — 보안 필터가 오히려 손실을 만드는 셈이다.
+                                    //   이 경우 아래에서 $membersKnown 을 false 로 되돌려 '조회 먼저' 경로를 타게 한다.
+                                    $membersKnown = false;
+                                }
+                            }
+                        }
+                    }
                 }
             }
             // 시놀로지는 usermod 대신 synogroup 을 쓰는 것이 안전하다.
             $isSyno = @is_file('/etc/synoinfo.conf') || @is_dir('/var/packages');
             $fixCmd = '';
+            $altCmd = '';          // --memberadd 가 없는 구버전 DSM 을 위한 대안(--member 완성 명령)
+            $getCmd = '';          // 시놀로지에서 멤버를 모를 때 먼저 실행할 조회 명령
+            $alreadyMember = ($webUser !== '' && in_array($webUser, $groupMembers, true));
+
             if ($webUser !== '' && $nodeGroup !== '') {
-                $fixCmd = $isSyno
-                    ? ('sudo synogroup --member ' . $nodeGroup . ' ' . $webUser)
-                    : ('sudo usermod -aG ' . $nodeGroup . ' ' . $webUser);
+                if (!$isSyno) {
+                    // ★ usermod -aG 는 **추가(append)** 방식이라 기존 멤버에 영향이 없다.
+                    $fixCmd = 'sudo usermod -aG ' . $nodeGroup . ' ' . $webUser;
+                } else {
+                    // ★ (2026-08-24) 시놀로지는 **--memberadd 를 1순위**로 안내한다.
+                    //   [배경] `synogroup --member` 는 **덮어쓰기**다 — 나열한 계정만 남고 나머지는
+                    //   그룹에서 제거된다(시놀로지 문서·커뮤니티 다수 확인). 실제로 배포 사용자 NAS 의
+                    //   videodriver 그룹에는 sc-ffmpeg5·sc-ffmpeg7·sc-ffmpeg8 등이 들어 있어,
+                    //   웹서버 계정만 지정했다면 **그 패키지들이 그룹에서 빠졌을 것**이다
+                    //   (사용자가 스스로 --get 으로 먼저 확인해 회피한 사례).
+                    //   [개선] 최신 DSM 에는 **`--memberadd`** 가 있고 이는 **추가(append)** 방식이라
+                    //   기존 멤버를 나열할 필요가 없어 실수 여지가 없다 → 이것을 기본으로 제시한다.
+                    //   다만 구버전 DSM 에는 없을 수 있으므로, 기존 멤버를 읽을 수 있으면
+                    //   **--member 완성 명령을 대안으로 함께** 내려보낸다(멤버 전부 나열 + 웹서버 계정).
+                    //   둘 다 만들 수 없으면(멤버 미확보) 파괴적 명령 대신 --get 조회부터 안내한다.
+                    $fixCmd = 'sudo synogroup --memberadd ' . $nodeGroup . ' ' . $webUser;
+                    if ($membersKnown) {
+                        $list = $groupMembers;
+                        if (!$alreadyMember) $list[] = $webUser;
+                        $altCmd = 'sudo synogroup --member ' . $nodeGroup . ' ' . implode(' ', $list);
+                    } else {
+                        $getCmd = 'sudo synogroup --get ' . $nodeGroup;
+                    }
+                }
             }
 
             // 후보별로 ①빌드 포함 여부 ②실제 1프레임 인코딩을 확인한다.
@@ -11192,6 +11237,10 @@ try {
                 'web_user' => $webUser,
                 'node_group' => $nodeGroup,
                 'fix_cmd' => $fixCmd,
+                'alt_cmd' => $altCmd,                  // --memberadd 미지원 시 대안
+                'get_cmd' => $getCmd,                  // 멤버를 못 읽었을 때 먼저 실행할 조회 명령
+                'group_members' => $groupMembers,      // 참고 표시용
+                'already_member' => $alreadyMember,    // 이미 속해 있으면 재시작만 하면 된다
                 'is_synology' => $isSyno,
             ];
             break;
