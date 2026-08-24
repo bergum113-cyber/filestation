@@ -2926,5 +2926,17 @@
     "hls_failed_fallback": "HLS 실패, 기존 방식으로 전환",
     "buffering": "버퍼링...",
     "convert_no_delete_perm": "삭제 권한이 없어 원본은 보존됨",
-    "no_delete_permission": "삭제 권한이 없습니다"
+    "no_delete_permission": "삭제 권한이 없습니다",
+    "api_err_imagick_missing": "Imagick PHP 확장이 설치되지 않았습니다.",
+    "api_err_imagick_no_pdf": "Imagick 은 설치돼 있으나 PDF 를 지원하지 않습니다. Ghostscript 설치가 필요합니다.",
+    "api_err_ffmpeg_not_found": "ffmpeg 을 찾을 수 없습니다. 위에서 경로를 지정해주세요.",
+    "api_hw_not_in_build": "ffmpeg 빌드에 이 인코더가 없음",
+    "api_hw_no_render_node": "/dev/dri 렌더 노드가 없음 (내장 그래픽 비활성 가능)",
+    "api_hw_render_no_perm": "렌더 노드에 웹서버 계정 권한이 없음",
+    "api_hw_encode_failed": "인코딩 테스트 실패",
+    "hw_accessible": "접근 가능",
+    "hw_no_permission": "권한 없음",
+    "hw_none_available": "사용 가능한 하드웨어 인코더가 없습니다. 소프트웨어(libx264)로 재생됩니다.",
+    "hw_perm_hint": "렌더 노드 권한이 없으면 웹서버 계정을 해당 그룹에 추가한 뒤 웹서버를 재시작하세요 (예: usermod -aG videodriver http).",
+    "hw_apply_hint": "설정을 바꾼 뒤에는 data/hw_encoder_cache.json 을 삭제해야 다시 감지합니다."
 }

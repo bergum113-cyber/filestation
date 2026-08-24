@@ -2931,5 +2931,17 @@
     "hls_failed_fallback": "HLS failed, falling back",
     "buffering": "Buffering...",
     "convert_no_delete_perm": "Original kept (no delete permission)",
-    "no_delete_permission": "No delete permission"
+    "no_delete_permission": "No delete permission",
+    "api_err_imagick_missing": "The Imagick PHP extension is not installed.",
+    "api_err_imagick_no_pdf": "Imagick is installed but does not support PDF. Ghostscript is required.",
+    "api_err_ffmpeg_not_found": "ffmpeg not found. Set the path above.",
+    "api_hw_not_in_build": "This encoder is not included in the ffmpeg build",
+    "api_hw_no_render_node": "No /dev/dri render node (integrated graphics may be disabled)",
+    "api_hw_render_no_perm": "The web server account has no permission on the render node",
+    "api_hw_encode_failed": "Encoding test failed",
+    "hw_accessible": "accessible",
+    "hw_no_permission": "no permission",
+    "hw_none_available": "No hardware encoder is available. Playback will use software (libx264).",
+    "hw_perm_hint": "If the render node is not accessible, add the web server account to that group and restart the web server (e.g. usermod -aG videodriver http).",
+    "hw_apply_hint": "After changing this setting, delete data/hw_encoder_cache.json to re-detect."
 }

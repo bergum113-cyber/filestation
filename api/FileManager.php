@@ -3174,6 +3174,9 @@ class FileManager {
         }
         
         $buildCmd = function($vCodec, $gop, $fps) use ($ffmpeg, $seekArg, $reFlag, $inputPath, $audioMap, $pipeSid, $scaleFilter, $mmsQualityVf) {
+            // ★ (2026-08-24) VA-API 지원 — 설정으로 켠 경우에만 값이 채워지고, 아니면 전부 빈 문자열이라
+            //   **종전과 완전히 동일한 명령**이 만들어진다(vaapiVf 는 VA-API 가 아니면 입력을 그대로 반환).
+            $vaDev = $this->vaapiDeviceArg($vCodec);
             // ★ scaleFilter (iOS 1080p) + mmsQualityVf (사용자 quality scale) 합치기
             //   둘 다 -vf로 시작하지 않고 필터 표현식만 들어있음
             //   scaleFilter 형식: ' -vf "scale=1920:-2"' (이미 -vf 포함)
@@ -3181,13 +3184,24 @@ class FileManager {
             $vfArg = '';
             if ($mmsQualityVf !== '') {
                 // quality vf 단독 사용 (iOS scaleFilter는 위에서 ''로 클리어됨)
-                $vfArg = ' -vf "' . $mmsQualityVf . '"';
+                $vfArg = ' -vf "' . $this->vaapiVf($mmsQualityVf, $vCodec) . '"';
             } else {
                 // 기존 iOS scaleFilter 사용
-                $vfArg = $scaleFilter;
+                // ★ scaleFilter 는 ' -vf "..."' 형태(옵션 포함)라 표현식만 뽑아 재조립한다.
+                //   VA-API 가 아니면 아래 분기에서 원본을 그대로 쓰므로 문자열이 바뀌지 않는다.
+                if ($this->isVaapiArgs($vCodec)) {
+                    $expr = '';
+                    if ($scaleFilter !== '' && preg_match('/-vf\s+"(.*)"\s*$/', $scaleFilter, $mm)) {
+                        $expr = $mm[1];
+                    }
+                    $vfArg = ' -vf "' . $this->vaapiVf($expr, $vCodec) . '"';
+                } else {
+                    $vfArg = $scaleFilter;
+                }
             }
             return escapeshellarg($ffmpeg)
                 . $seekArg
+                . $vaDev
                 . ' -analyzeduration 2000000 -probesize 2000000'
                 . ' -fflags +genpts+igndts+fastseek'
                 . $reFlag
@@ -4023,9 +4037,14 @@ class FileManager {
         //   - first_pts=0: 첫 샘플을 0초부터 시작 (지연 무시)
         // ★ v5.8.1c: $hlsQualityVf 가 있으면 -vf 로 scale 필터 prepend
         $buildFfmpegCmd = function($codecArgs) use ($ffmpeg, $seekArg, $inputPath, $audioMap, $gopArgs, $segPattern, $outputM3u8, $hlsQualityVf) {
-            $vfArg = $hlsQualityVf !== '' ? ' -vf "' . $hlsQualityVf . '"' : '';
+            // ★ (2026-08-24) VA-API 지원 — 켜지 않았으면 $vaDev 는 빈 문자열이고
+            //   vaapiVf() 도 입력을 그대로 돌려주므로 **종전과 동일한 명령**이 된다.
+            $vaDev = $this->vaapiDeviceArg($codecArgs);
+            $vfExpr = $this->vaapiVf($hlsQualityVf, $codecArgs);
+            $vfArg = $vfExpr !== '' ? ' -vf "' . $vfExpr . '"' : '';
             return escapeshellarg($ffmpeg)
                 . $seekArg
+                . $vaDev
                 . ' -readrate 3'
                 . ' -analyzeduration 2000000 -probesize 2000000'
                 . ' -fflags +genpts+igndts+fastseek'
@@ -4614,6 +4633,86 @@ class FileManager {
         return ''; // 타임아웃(hang) → 폴백 트리거
     }
 
+    /* ─────────────────────────────────────────────────────────────────────
+     * ★ (2026-08-24) VA-API 하드웨어 인코딩 지원 — 아래 4개 메서드가 한 묶음.
+     *
+     * [배경] 배포 사용자 환경(시놀로지 네이티브, i3-4150 + Intel HD Graphics 4400)에서
+     *   SW 인코딩만 된다는 제보. 하드웨어는 Quick Sync 를 갖췄지만, 인텔의 **리눅스용 QSV
+     *   런타임(MediaSDK/oneVPL)이 Broadwell(5세대) 이상만 지원**해 h264_qsv 를 쓸 수 없다.
+     *   HD 4400 은 Haswell(4세대). 반면 **VA-API 는 구세대 인텔 GPU 도 지원**하므로
+     *   h264_vaapi 로는 하드웨어 인코딩이 가능하다.
+     *   ※ 윈도우는 DXVA/D3D11 경로라 세대 제한이 없다 → 이 경로는 **리눅스 전용**이며,
+     *     vaapiDevicePath() 가 윈도우에서 빈 값을 돌려주어 후보에 아예 들어가지 않는다.
+     *
+     * [QSV 와의 차이 — 왜 명령 조립을 건드려야 하나]
+     *   QSV/NVENC/AMF 는 `-c:v` 만 바꾸면 되지만, VA-API 는
+     *     ① 입력 **앞**에 `-vaapi_device <렌더노드>`
+     *     ② 필터 체인 **맨 끝**에 `format=nv12,hwupload` (프레임을 GPU 메모리로 올림)
+     *   가 추가로 필요하다. 그래서 명령 조립 함수 4곳(메인 파이프·메인 HLS·공유 파이프·공유 HLS)이
+     *   아래 vaapiDeviceArg()/vaapiVf() 를 호출한다. **VA-API 가 아니면 두 함수 모두
+     *   빈 문자열 또는 입력 원본을 돌려주므로 기존 명령이 한 글자도 바뀌지 않는다.**
+     *
+     * [실패 시] 감지 단계에서 걸러지고, 실사용 중 실패해도 기존 SW 폴백이 받쳐준다.
+     * ───────────────────────────────────────────────────────────────────── */
+
+    /**
+     * VA-API 렌더 노드 경로를 찾는다. 설정에 직접 지정한 값이 있으면 그것을 최우선으로 쓴다.
+     * 지정이 없으면 /dev/dri/renderD* 중 **읽고 쓸 수 있는 첫 번째**를 고른다
+     * (여러 GPU 가 있으면 renderD128 이 보통 내장 그래픽이라 정렬 순서상 먼저 잡힌다).
+     */
+    private function vaapiDevicePath(): string {
+        static $cached = null;
+        if ($cached !== null) return $cached;
+        $cached = '';
+        if (PHP_OS_FAMILY === 'Windows') return $cached;
+        $settings = $this->loadSiteSettingsOnce();
+        $manual = trim($settings['vaapi_device'] ?? '');
+        if ($manual !== '' && @file_exists($manual)) { $cached = $manual; return $cached; }
+        $nodes = @glob('/dev/dri/renderD*');
+        if (is_array($nodes)) {
+            sort($nodes);
+            foreach ($nodes as $n) {
+                if (@is_readable($n) && @is_writable($n)) { $cached = $n; break; }
+            }
+        }
+        return $cached;
+    }
+
+    /**
+     * 코덱 인자가 VA-API 인코더인지 판정한다. 명령 조립부는 이 값만 보고 분기하므로
+     * 감지 결과(문자열)만으로 판단이 끝나 별도 상태를 들고 다닐 필요가 없다.
+     */
+    private function isVaapiArgs(string $codecArgs): bool {
+        return strpos($codecArgs, 'h264_vaapi') !== false;
+    }
+
+    /**
+     * VA-API 일 때 입력 앞에 붙일 장치 인자를 돌려준다(아니면 빈 문자열).
+     */
+    private function vaapiDeviceArg(string $codecArgs): string {
+        if (!$this->isVaapiArgs($codecArgs)) return '';
+        $dev = $this->vaapiDevicePath();
+        return $dev === '' ? '' : ' -vaapi_device ' . escapeshellarg($dev);
+    }
+
+    /**
+     * 기존 -vf 필터 표현식에 VA-API 업로드 필터를 **이어붙인다**.
+     *
+     * VA-API 인코더는 프레임이 GPU 메모리에 올라가 있어야 하므로 필터 체인 **맨 끝**에
+     * `format=nv12,hwupload` 가 와야 한다. 기존 스케일 필터(iOS 1080p 제한, 사용자 화질 조절)가
+     * 있으면 그 뒤에 콤마로 연결하고, 없으면 단독으로 쓴다.
+     * VA-API 가 아니면 **입력을 그대로 돌려주므로 기존 동작에 영향이 없다.**
+     *
+     * @param string $vfExpr 기존 필터 표현식(-vf 없이 표현식만). 없으면 빈 문자열.
+     * @param string $codecArgs 감지된 코덱 인자
+     * @return string 최종 필터 표현식(-vf 없이 표현식만)
+     */
+    private function vaapiVf(string $vfExpr, string $codecArgs): string {
+        if (!$this->isVaapiArgs($codecArgs)) return $vfExpr;
+        $up = 'format=nv12,hwupload';
+        return $vfExpr === '' ? $up : ($vfExpr . ',' . $up);
+    }
+
     private function detectHwEncoder(string $ffmpeg): string {
         // 캐시 파일로 매번 감지하지 않음
         $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
@@ -4640,6 +4739,30 @@ class FileManager {
             'h264_qsv'    => '-c:v h264_qsv -preset veryfast -global_quality 23 -profile:v high -pix_fmt yuv420p',
             'h264_amf'    => '-c:v h264_amf -quality speed -qp_i 23 -qp_p 23 -profile:v high -pix_fmt yuv420p',
         ];
+
+        // ★ (2026-08-24) VA-API 를 후보에 추가한다 — **리눅스에서 렌더 노드가 있을 때만**.
+        //   [왜 필요한가] 구세대 인텔(Haswell 등)은 인텔의 **리눅스용 QSV 런타임이
+        //   Broadwell(5세대) 이상만 지원**해 h264_qsv 가 실패한다. 반면 VA-API 는 구세대 GPU 도
+        //   지원하므로 이 조합에서 유일한 하드웨어 경로다(윈도우는 DXVA/D3D11 이라 세대 제한 없음
+        //   → vaapiDevicePath() 가 윈도우에서 빈 값을 돌려주므로 후보에 들어가지 않는다).
+        //   우선순위는 **가장 뒤**: NVENC·QSV·AMF 가 되는 환경은 그쪽을 그대로 쓰고,
+        //   전부 실패하는 구세대 리눅스에서만 VA-API 가 선택된다.
+        //   pix_fmt 를 지정하지 않는 이유: 업로드 필터(format=nv12,hwupload)가 포맷을 정하므로
+        //   여기서 또 지정하면 충돌한다.
+        if ($this->vaapiDevicePath() !== '') {
+            $hwEncoders['h264_vaapi'] = '-c:v h264_vaapi -qp 23 -profile:v high -level 41';
+        }
+
+        // ★ (2026-08-24) 설정의 '하드웨어 가속' 값으로 **후보를 좁힌다**.
+        //   [비움 = 자동] 위 순서대로 전부 시도해 되는 것을 채택(종전 동작 + VA-API 추가).
+        //   [특정 인코더 지정] 그 하나만 시도하고, 실패하면 SW(libx264)로 떨어진다.
+        //     → 환경을 아는 관리자가 감지 절차를 줄이고 의도를 명시할 수 있다.
+        //   허용값이 아니거나 해당 후보가 없으면(예: 윈도우에서 vaapi 지정) **자동으로 되돌린다** —
+        //   잘못된 설정 하나로 하드웨어 가속이 통째로 막히는 일이 없도록 하기 위함이다.
+        $hwMode = trim($this->loadSiteSettingsOnce()['hw_accel_mode'] ?? '');
+        if ($hwMode !== '' && isset($hwEncoders[$hwMode])) {
+            $hwEncoders = [$hwMode => $hwEncoders[$hwMode]];
+        }
         
         $result = '-c:v libx264 -preset ultrafast -crf 23 -tune zerolatency -profile:v high -level 4.1 -pix_fmt yuv420p';
         $detectedName = 'libx264 (CPU)';
@@ -4679,9 +4802,25 @@ class FileManager {
             //   인코더는 그대로 돌므로 HW 동작 여부 검증이라는 목적은 유지된다.
             //   -frames:v 1 로 1프레임만, -hide_banner 로 configuration 문자열이 키워드 검사에
             //   섞이는 오탐도 없앤다. -nostdin 은 서버 환경에서 입력 대기로 멈추는 것을 방지.
-            $testCmd = escapeshellarg($ffmpeg)
-                . ' -hide_banner -nostdin -f lavfi -i nullsrc=s=64x64:d=0.1 ' . $args
-                . ' -frames:v 1 -f null - 2>&1';
+            // ★ (2026-08-24) VA-API 는 실제 사용과 **같은 형태**로 테스트해야 의미가 있다.
+            //   장치 인자는 입력 앞에, 업로드 필터는 인코더 앞에 와야 하므로 명령을 따로 만든다.
+            //   (일반 인코더는 종전 그대로 — 이 분기는 vaapi 후보일 때만 탄다.)
+            if ($encoder === 'h264_vaapi') {
+                $dev = $this->vaapiDevicePath();
+                if ($dev === '') {
+                    $hwLog[] = "[$encoder] SKIP — /dev/dri 렌더 노드를 찾지 못함(권한 포함)";
+                    continue;
+                }
+                $testCmd = escapeshellarg($ffmpeg)
+                    . ' -hide_banner -nostdin -vaapi_device ' . escapeshellarg($dev)
+                    . ' -f lavfi -i nullsrc=s=64x64:d=0.1'
+                    . ' -vf format=nv12,hwupload ' . $args
+                    . ' -frames:v 1 -f null - 2>&1';
+            } else {
+                $testCmd = escapeshellarg($ffmpeg)
+                    . ' -hide_banner -nostdin -f lavfi -i nullsrc=s=64x64:d=0.1 ' . $args
+                    . ' -frames:v 1 -f null - 2>&1';
+            }
 
             // ★ 판정 기준도 바꾼다: **종료 코드**가 가장 정확하다(0 = 성공).
             //   기존의 광범위한 키워드('error', 'Cannot' 등)는 무관한 줄에도 걸려 오탐이 잦았다.
@@ -9486,13 +9625,22 @@ class FileManager {
         // 변환 명령 빌더 (vArgs만 다르게)
         $buildConvCmd = function($vArgs, $aArgsOverride = null) use ($ffmpeg, $fullPath, $aArgs, $progressFile, $tmpOut, $cvArg, $convSid) {
             $aUse = ($aArgsOverride !== null) ? $aArgsOverride : $aArgs; // copy 폴백 시 오디오도 재인코딩(-c:a aac)
+            // ★ (2026-08-24) VA-API 지원 — 이 변환 경로도 detectHwEncoder() 결과를 그대로 쓰므로
+            //   VA-API 가 선택되면 여기서도 **장치 인자와 업로드 필터**가 필요하다.
+            //   (트랜스코딩 4개 조립부에만 적용했다가 이 경로를 놓쳐 뒤늦게 발견 — 감사에서 확인.)
+            //   VA-API 가 아니면 두 값 모두 빈 문자열이라 **기존 명령이 한 글자도 바뀌지 않는다.**
+            //   이 빌더에는 기존 -vf 가 없으므로 업로드 필터를 단독으로 넣는다.
+            $vaDev = $this->vaapiDeviceArg($vArgs);
+            $vaVf  = $this->isVaapiArgs($vArgs) ? ' -vf "' . $this->vaapiVf('', $vArgs) . '"' : '';
             return $cvArg($ffmpeg)
                 . ' -y'
+                . $vaDev
                 . ' -analyzeduration 2000000 -probesize 2000000'  // 트랜스코딩과 동일 — 복잡/손상 .ts 스트림 분석 견딤
                 . ' -fflags +genpts+igndts+fastseek+discardcorrupt'  // discardcorrupt: 손상 패킷 버림(copy 모드에서 MP4 muxer Invalid data 회피)
                 . ' -i ' . $cvArg($fullPath)
                 . ' -map 0:v:0 -map 0:a? -sn '                     // -sn: 자막/데이터 스트림 무시(손상 stream 회피) — 트랜스코딩 일관
-                . $vArgs . ' ' . $aUse
+                . $vaVf
+                . ' ' . $vArgs . ' ' . $aUse
                 . ' -metadata comment=convsid_' . $convSid        // 취소/새로고침 시 wmic로 이 ffmpeg 찾아 kill
                 . ' -movflags +faststart'
                 . ' -f mp4'                                        // 출력 포맷 명시 — 임시 확장자(.converting)라 ffmpeg가 확장자로 포맷 추론 못 하므로 필수
@@ -12217,12 +12365,17 @@ class FileManager {
         $stderrLog = $dataDir . '/ffmpeg_share_stderr.log';
         
         $buildCmd = function($vCodec, $gop, $fps) use ($ffmpeg, $inputPath, $audioMap) {
+            // ★ (2026-08-24) VA-API 지원 — 미사용 시 빈 문자열이라 종전과 동일.
+            $vaDev = $this->vaapiDeviceArg($vCodec);
+            $vaVf = $this->isVaapiArgs($vCodec) ? ' -vf "' . $this->vaapiVf('', $vCodec) . '"' : '';
             return escapeshellarg($ffmpeg)
+                . $vaDev
                 . ' -analyzeduration 2000000 -probesize 2000000'
                 . ' -fflags +genpts+igndts+fastseek'
                 . ' -i ' . $inputPath
                 . $audioMap
                 . ' -sn'
+                . $vaVf
                 . ' ' . $vCodec
                 . $gop
                 . $fps
@@ -12738,9 +12891,13 @@ class FileManager {
         
         // ffmpeg 명령 빌더 (같은 옵션으로 HW/SW 둘 다 만들 수 있도록 함수화)
         $buildShareFfmpegCmd = function($codecArgs) use ($ffmpeg, $inputPath, $audioMap, $gopArgs, $segPattern, $outputM3u8, $shareQualityVf, $seekArgShare) {
-            $vfArg = $shareQualityVf !== '' ? ' -vf "' . $shareQualityVf . '"' : '';
+            // ★ (2026-08-24) VA-API 지원 — 켜지 않았으면 빈 문자열/원본 반환이라 종전과 동일.
+            $vaDev = $this->vaapiDeviceArg($codecArgs);
+            $vfExpr = $this->vaapiVf($shareQualityVf, $codecArgs);
+            $vfArg = $vfExpr !== '' ? ' -vf "' . $vfExpr . '"' : '';
             return escapeshellarg($ffmpeg)
                 . $seekArgShare
+                . $vaDev
                 . ' -readrate 3'
                 . ' -analyzeduration 2000000 -probesize 2000000'
                 . ' -fflags +genpts+igndts+fastseek'

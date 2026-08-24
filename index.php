@@ -2564,8 +2564,26 @@ password=mypass</pre>
                             </div>
                             <span id="ffprobe-test-result" style="font-size:12px; margin-top:4px; display:block;"></span>
                             <p class="setting-desc"><?php echo $currentLang === 'en' 
-                                ? 'ffmpeg: Used for video streaming (transcoding) and thumbnail generation. ffprobe: Reads video duration, codec and other info (included with ffmpeg).<br>If videos do not play or thumbnails are missing, enter the full path and press Test.<br>· Windows: full path to ffmpeg.exe / ffprobe.exe<br>· Synology: usually <code>/var/packages/ffmpegN/target/bin/</code> (N = version, e.g. ffmpeg5)' 
-                                : 'ffmpeg: 동영상 스트리밍 재생(변환)과 썸네일 생성에 쓰입니다. ffprobe: 동영상 길이·코덱 등 정보를 읽습니다(ffmpeg에 함께 포함).<br>동영상이 재생되지 않거나 썸네일이 안 보이면 전체 경로를 입력하고 [테스트]를 눌러 확인하세요.<br>· 윈도우: ffmpeg.exe / ffprobe.exe 의 전체 경로<br>· 시놀로지: 보통 <code>/var/packages/ffmpegN/target/bin/</code> (N은 버전, 예: ffmpeg5)'; ?> <a href="https://www.gyan.dev/ffmpeg/builds/" target="_blank" style="font-size:12px;"><?php echo $currentLang === 'en' ? 'Download ffmpeg' : 'ffmpeg 다운로드'; ?> ↗</a></p>
+                                ? 'ffmpeg: Used for video streaming (transcoding) and thumbnail generation. ffprobe: Reads video duration, codec and other info (included with ffmpeg).<br>If videos do not play or thumbnails are missing, enter the full path and press Test.<br>· Windows: full path to ffmpeg.exe / ffprobe.exe<br>· Linux: usually <code>/usr/bin/ffmpeg</code> (check with <code>which ffmpeg</code>)<br>· Synology: usually <code>/var/packages/ffmpegN/target/bin/</code> (N = version, e.g. ffmpeg5)' 
+                                : 'ffmpeg: 동영상 스트리밍 재생(변환)과 썸네일 생성에 쓰입니다. ffprobe: 동영상 길이·코덱 등 정보를 읽습니다(ffmpeg에 함께 포함).<br>동영상이 재생되지 않거나 썸네일이 안 보이면 전체 경로를 입력하고 [테스트]를 눌러 확인하세요.<br>· 윈도우: ffmpeg.exe / ffprobe.exe 의 전체 경로<br>· 리눅스: 보통 <code>/usr/bin/ffmpeg</code> (<code>which ffmpeg</code> 로 확인)<br>· 시놀로지: 보통 <code>/var/packages/ffmpegN/target/bin/</code> (N은 버전, 예: ffmpeg5)'; ?> <a href="https://www.gyan.dev/ffmpeg/builds/" target="_blank" style="font-size:12px;"><?php echo $currentLang === 'en' ? 'Download ffmpeg' : 'ffmpeg 다운로드'; ?> ↗</a></p>
+                        </div>
+                        <div class="setting-item">
+                            <label><?php echo $currentLang === 'en' ? 'Hardware Acceleration' : '하드웨어 가속'; ?></label>
+                            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                                <select id="setting-hw-accel-mode" class="form-control" style="width:auto; min-width:210px;">
+                                    <option value=""><?php echo $currentLang === 'en' ? 'Auto (recommended)' : '자동 (권장)'; ?></option>
+                                    <option value="h264_nvenc"><?php echo $currentLang === 'en' ? 'NVENC (NVIDIA)' : 'NVENC (NVIDIA)'; ?></option>
+                                    <option value="h264_qsv"><?php echo $currentLang === 'en' ? 'QSV (Intel, 5th gen+)' : 'QSV (인텔, 5세대 이상)'; ?></option>
+                                    <option value="h264_amf"><?php echo $currentLang === 'en' ? 'AMF (AMD)' : 'AMF (AMD)'; ?></option>
+                                    <option value="h264_vaapi"><?php echo $currentLang === 'en' ? 'VA-API (Intel on Linux, incl. older gens)' : 'VA-API (리눅스 인텔, 구세대 포함)'; ?></option>
+                                </select>
+                                <input type="text" id="setting-vaapi-device" class="form-control" placeholder="<?php echo $currentLang === 'en' ? 'Render node (optional, e.g. /dev/dri/renderD128)' : '렌더 노드 (선택, 예: /dev/dri/renderD128)'; ?>" style="flex:1; min-width:210px;">
+                                <button type="button" class="btn btn-sm" onclick="App.testHwAccel()"><?php echo $currentLang === 'en' ? 'Test' : '테스트'; ?></button>
+                            </div>
+                            <div id="hwaccel-test-result" style="font-size:12px; margin-top:6px;"></div>
+                            <p class="setting-desc"><?php echo $currentLang === 'en'
+                                ? '<b>Auto</b> tries NVENC → QSV → AMF → VA-API and uses whichever works. Picking a specific encoder skips the others — useful when you already know your hardware. If the chosen one fails, software encoding is used automatically.<br>VA-API is offered on <b>Linux only</b> and is the option for older Intel CPUs (4th gen or earlier, e.g. HD Graphics 4400): Intel\'s Linux QSV runtime supports 5th gen (Broadwell) and newer only, while VA-API also covers older GPUs. Windows uses QSV regardless of generation.<br>Detection runs once a day and is cached, so the number of candidates barely affects playback speed.<br>Render node: leave blank to auto-detect /dev/dri/renderD*.'
+                                : '<b>자동</b>은 NVENC → QSV → AMF → VA-API 순으로 시도해 되는 것을 씁니다. 특정 인코더를 고르면 나머지는 건너뜁니다 — 하드웨어를 이미 아는 경우에 유용합니다. 고른 것이 실패하면 자동으로 소프트웨어 인코딩을 사용합니다.<br>VA-API는 <b>리눅스에서만</b> 제공되며, 구세대 인텔 CPU(4세대 이하, 예: HD Graphics 4400)를 위한 선택지입니다: 인텔의 리눅스 QSV 런타임은 5세대(Broadwell) 이상만 지원하지만 VA-API는 구세대 GPU도 지원합니다. 윈도우는 세대와 무관하게 QSV를 사용합니다.<br>감지는 하루 한 번만 실행되고 캐시되므로 후보 개수는 재생 속도에 거의 영향이 없습니다.<br>렌더 노드: 비워 두면 /dev/dri/renderD* 를 자동으로 찾습니다.'; ?></p>
                         </div>
                         <div class="setting-item">
                             <label><?php echo $currentLang === 'en' ? 'PDF Tool Path' : 'PDF 도구 경로'; ?></label>

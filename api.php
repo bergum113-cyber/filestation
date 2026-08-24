@@ -942,6 +942,27 @@ function sanitizeCssStyle(string $style, array $allowedProperties): string {
  * @param string $bin 'ffmpeg' 또는 'ffprobe'
  * @return string[] 실행 가능한 절대경로 목록(최신 버전 우선)
  */
+/**
+ * ★ (2026-08-24) 셸(exec) 출력의 인코딩을 UTF-8 로 맞춘다.
+ *
+ * [배경] 경로 테스트 버튼의 실패 메시지가 화면에서 깨져 보였다(펜닐 제보) —
+ *   `실행 실패: "'imagick'"�(��) ���� ...` 처럼 판독 불가.
+ * [원인] 한국어 윈도우의 명령 프롬프트는 오류 문구를 **CP949** 로 출력하는데,
+ *   그 바이트를 변환 없이 JSON(UTF-8)으로 내보내면 그대로 깨진다.
+ * [처리] 이 프로젝트에 이미 있는 7-zip 출력 처리와 **같은 방식**을 쓴다 —
+ *   UTF-8 로 해석되지 않을 때만 CP949 로 보고 변환(정상 UTF-8 은 건드리지 않음).
+ *   변환이 실패하면 원문을 그대로 둔다(적어도 정보가 사라지지는 않게).
+ */
+function shellOutToUtf8(string $text): string {
+    if ($text === '') return $text;
+    // 이 함수는 **오류 메시지를 만드는 경로**에서 호출된다. mbstring 이 없는 환경에서
+    // 여기서 치명적 오류가 나면 정작 보여줘야 할 원래 실패 사유가 가려지므로 가드를 둔다.
+    if (!function_exists('mb_check_encoding') || !function_exists('mb_convert_encoding')) return $text;
+    if (mb_check_encoding($text, 'UTF-8')) return $text;
+    $converted = @mb_convert_encoding($text, 'UTF-8', 'CP949');
+    return (is_string($converted) && $converted !== '') ? $converted : $text;
+}
+
 function findVersionedMediaBins(string $bin): array {
     if (PHP_OS_FAMILY === 'Windows') return [];
     if ($bin !== 'ffmpeg' && $bin !== 'ffprobe') return [];   // 경로 조작 방지
@@ -10676,6 +10697,20 @@ try {
             if (array_key_exists('ffprobe_path', $input)) {
                 $siteSettings['ffprobe_path'] = trim($input['ffprobe_path']);
             }
+            // ★ (2026-08-24) HW 가속 방식 — 기본값 '' (자동: NVENC/QSV/AMF, 종전과 동일).
+            //   'vaapi' 로 두면 **리눅스에서만** VA-API 후보가 추가된다(옵트인).
+            //   구세대 인텔(Haswell 등)은 리눅스 QSV 런타임 미지원이라 h264_qsv 가 실패하는데
+            //   VA-API 로는 하드웨어 인코딩이 가능하다. 허용값만 받아 그 외는 자동으로 되돌린다.
+            if (array_key_exists('hw_accel_mode', $input)) {
+                $m = trim((string)$input['hw_accel_mode']);
+                //   허용값: '' (자동) 또는 감지 후보 키(h264_nvenc/h264_qsv/h264_amf/h264_vaapi).
+                //   그 외 값은 자동으로 되돌려, 잘못된 설정 하나로 가속이 막히지 않게 한다.
+                $siteSettings['hw_accel_mode'] = in_array($m, ['', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_vaapi'], true) ? $m : '';
+            }
+            if (array_key_exists('vaapi_device', $input)) {
+                // 렌더 노드 경로(예: /dev/dri/renderD128). 비우면 자동 탐색.
+                $siteSettings['vaapi_device'] = trim((string)$input['vaapi_device']);
+            }
             if (array_key_exists('pdf_tool', $input)) {
                 $siteSettings['pdf_tool'] = trim($input['pdf_tool']);
             }
@@ -10980,7 +11015,7 @@ try {
                 }
                 $result = ['success' => true, 'version' => $ver, 'output' => $firstLine];
             } else {
-                $result = ['success' => false, 'error' => __('api_err_exec_failed', '실행 실패: ') . ($out[0] ?? __('api_err_file_not_found', '파일을 찾을 수 없습니다.'))];
+                $result = ['success' => false, 'error' => __('api_err_exec_failed', '실행 실패: ') . shellOutToUtf8((string)($out[0] ?? __('api_err_file_not_found', '파일을 찾을 수 없습니다.')))];
             }
             break;
         
@@ -11001,10 +11036,119 @@ try {
                 }
                 $result = ['success' => true, 'version' => $ver, 'output' => $firstLine];
             } else {
-                $result = ['success' => false, 'error' => __('api_err_exec_failed', '실행 실패: ') . ($out[0] ?? __('api_err_file_not_found', '파일을 찾을 수 없습니다.'))];
+                $result = ['success' => false, 'error' => __('api_err_exec_failed', '실행 실패: ') . shellOutToUtf8((string)($out[0] ?? __('api_err_file_not_found', '파일을 찾을 수 없습니다.')))];
             }
             break;
         
+        // ★ (2026-08-24) 하드웨어 가속 진단 — 어느 단계에서 막혔는지까지 알려준다.
+        //   [왜] 지금까지는 재생을 해봐야 HW 여부를 알 수 있었고, 실패해도 원인(빌드에 인코더가
+        //   없는지 / 렌더 노드 권한인지 / 드라이버인지)을 구분할 수 없었다. 관리자가 버튼 한 번으로
+        //   확인하고 조치까지 알 수 있게 한다.
+        //   실제 인코딩을 1프레임 돌려보므로 "지원한다고 표시되는데 막상 안 되는" 경우도 걸러진다.
+        case 'test_hwaccel':
+            $auth->requireRealAdmin();
+
+            $siteSettings = loadSiteSettings();
+            $ffmpegPath = trim($siteSettings['ffmpeg_path'] ?? '');
+            $ffmpegPaths = $ffmpegPath ? [$ffmpegPath] : [];
+            if (PHP_OS_FAMILY === 'Windows') {
+                array_push($ffmpegPaths, 'ffmpeg', 'C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe');
+            } else {
+                $ffmpegPaths = array_merge($ffmpegPaths, findVersionedMediaBins('ffmpeg'));
+                array_push($ffmpegPaths, 'ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg');
+            }
+            $ffmpegBin = '';
+            foreach ($ffmpegPaths as $fp) {
+                $o = []; $r = 1;
+                @exec(escapeshellarg($fp) . ' -version 2>&1', $o, $r);
+                if ($r === 0) { $ffmpegBin = $fp; break; }
+            }
+            if ($ffmpegBin === '') {
+                $result = ['success' => false, 'error' => __('api_err_ffmpeg_not_found', 'ffmpeg 을 찾을 수 없습니다. 위에서 경로를 지정해주세요.')];
+                break;
+            }
+
+            $devNull = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+            $encoderList = @shell_exec(escapeshellarg($ffmpegBin) . ' -encoders 2>' . $devNull) ?? '';
+
+            // 렌더 노드 상태 — VA-API 판정과 "왜 안 되는지" 안내에 쓰인다.
+            $renderNodes = [];
+            $renderUsable = '';
+            if (PHP_OS_FAMILY !== 'Windows') {
+                $nodes = @glob('/dev/dri/renderD*');
+                if (is_array($nodes)) {
+                    sort($nodes);
+                    foreach ($nodes as $n) {
+                        $ok = (@is_readable($n) && @is_writable($n));
+                        $renderNodes[] = ['path' => $n, 'usable' => $ok];
+                        if ($ok && $renderUsable === '') $renderUsable = $n;
+                    }
+                }
+            }
+
+            $manualDev = trim($siteSettings['vaapi_device'] ?? '');
+            if ($manualDev !== '' && @file_exists($manualDev)) $renderUsable = $manualDev;
+
+            // 후보별로 ①빌드 포함 여부 ②실제 1프레임 인코딩을 확인한다.
+            $candidates = [
+                'h264_nvenc' => '-c:v h264_nvenc -preset p1 -tune ll -qp 23 -profile:v high -level 4.1 -pix_fmt yuv420p',
+                'h264_qsv'   => '-c:v h264_qsv -preset veryfast -global_quality 23 -profile:v high -pix_fmt yuv420p',
+                'h264_amf'   => '-c:v h264_amf -quality speed -qp_i 23 -qp_p 23 -profile:v high -pix_fmt yuv420p',
+            ];
+            if (PHP_OS_FAMILY !== 'Windows') {
+                $candidates['h264_vaapi'] = '-c:v h264_vaapi -qp 23 -profile:v high -level 41';
+            }
+
+            $items = [];
+            foreach ($candidates as $enc => $args) {
+                $row = ['encoder' => $enc, 'in_build' => false, 'ok' => false, 'reason' => '', 'detail' => ''];
+                if (strpos($encoderList, $enc) === false) {
+                    $row['reason'] = __('api_hw_not_in_build', 'ffmpeg 빌드에 이 인코더가 없음');
+                    $items[] = $row; continue;
+                }
+                $row['in_build'] = true;
+
+                if ($enc === 'h264_vaapi') {
+                    if ($renderUsable === '') {
+                        $row['reason'] = empty($renderNodes)
+                            ? __('api_hw_no_render_node', '/dev/dri 렌더 노드가 없음 (내장 그래픽 비활성 가능)')
+                            : __('api_hw_render_no_perm', '렌더 노드에 웹서버 계정 권한이 없음');
+                        $items[] = $row; continue;
+                    }
+                    $cmd = escapeshellarg($ffmpegBin)
+                        . ' -hide_banner -nostdin -vaapi_device ' . escapeshellarg($renderUsable)
+                        . ' -f lavfi -i nullsrc=s=64x64:d=0.1'
+                        . ' -vf format=nv12,hwupload ' . $args
+                        . ' -frames:v 1 -f null - 2>&1';
+                } else {
+                    $cmd = escapeshellarg($ffmpegBin)
+                        . ' -hide_banner -nostdin -f lavfi -i nullsrc=s=64x64:d=0.1 ' . $args
+                        . ' -frames:v 1 -f null - 2>&1';
+                }
+
+                $o = []; $r = 1;
+                @exec($cmd, $o, $r);
+                if ($r === 0) {
+                    $row['ok'] = true;
+                } else {
+                    $tail = shellOutToUtf8(trim(implode(' | ', array_slice($o, -6))));
+                    if (strlen($tail) > 400) $tail = '...' . substr($tail, -400);
+                    $row['reason'] = __('api_hw_encode_failed', '인코딩 테스트 실패');
+                    $row['detail'] = $tail;
+                }
+                $items[] = $row;
+            }
+
+            $result = [
+                'success' => true,
+                'os' => PHP_OS_FAMILY,
+                'ffmpeg' => $ffmpegBin,
+                'render_nodes' => $renderNodes,
+                'items' => $items,
+                'mode' => trim($siteSettings['hw_accel_mode'] ?? ''),
+            ];
+            break;
+
         case 'test_pdftool':
             $auth->requireRealAdmin();
             $tool = trim($input['tool'] ?? '');
@@ -11017,7 +11161,40 @@ try {
             
             $execPath = $testPath ?: $tool;
             $out = [];
-            
+
+            // ★ (2026-08-24) Imagick 은 **CLI 명령이 아니라 PHP 확장**이므로 exec 로 테스트할 수 없다.
+            //   [증상] 드롭다운에서 Imagick 을 고르고 [테스트]를 누르면
+            //     실행 실패: "'imagick'은(는) 내부 또는 외부 명령…" (윈도우 셸 메시지)
+            //   이 오류는 도구가 없는 것이 아니라 **애초에 실행할 수 없는 대상**을 exec 한 결과다.
+            //   → 확장 로드 여부와 PDF 지원(디코더 목록)을 직접 확인해 결과를 돌려준다.
+            //   경로를 함께 입력했다면 사용자가 CLI 도구를 의도한 것으로 보고 아래 일반 분기로 넘긴다.
+            if ($tool === 'imagick' && $testPath === '') {
+                if (!extension_loaded('imagick')) {
+                    $result = ['success' => false, 'error' => __('api_err_imagick_missing', 'Imagick PHP 확장이 설치되지 않았습니다.')];
+                    break;
+                }
+                $fmts = [];
+                try {
+                    $fmts = @\Imagick::queryFormats('PDF');
+                } catch (\Throwable $e) {
+                    $fmts = [];
+                }
+                if (empty($fmts)) {
+                    // 확장은 있으나 PDF 델리게이트(Ghostscript)가 없는 상태
+                    $result = ['success' => false, 'error' => __('api_err_imagick_no_pdf', 'Imagick 은 설치돼 있으나 PDF 를 지원하지 않습니다. Ghostscript 설치가 필요합니다.')];
+                    break;
+                }
+                $ver = '';
+                try {
+                    $v = @\Imagick::getVersion();
+                    $ver = is_array($v) ? (string)($v['versionString'] ?? '') : '';
+                } catch (\Throwable $e) {
+                    $ver = '';
+                }
+                $result = ['success' => true, 'version' => $ver !== '' ? $ver : 'Imagick', 'output' => 'PDF: ' . implode(', ', $fmts)];
+                break;
+            }
+
             // 도구별로 버전 확인 명령이 다름
             if (strpos($execPath, 'pdftoppm') !== false) {
                 @exec(escapeshellarg($execPath) . ' -v 2>&1', $out, $ret);
@@ -11032,7 +11209,7 @@ try {
                 $firstLine = trim($out[0] ?? '');
                 $result = ['success' => true, 'version' => $firstLine, 'output' => implode("\n", array_slice($out, 0, 3))];
             } else {
-                $result = ['success' => false, 'error' => __('api_err_exec_failed', '실행 실패: ') . trim($out[0] ?? __('api_err_file_not_found', '파일을 찾을 수 없습니다.'))];
+                $result = ['success' => false, 'error' => __('api_err_exec_failed', '실행 실패: ') . shellOutToUtf8(trim((string)($out[0] ?? __('api_err_file_not_found', '파일을 찾을 수 없습니다.'))))];
             }
             break;
         

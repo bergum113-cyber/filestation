@@ -11812,6 +11812,62 @@ const App = {
     },
     
     // PDF 도구 테스트
+    // ★ (2026-08-24) 하드웨어 가속 진단 — 후보별로 ①빌드 포함 ②실제 1프레임 인코딩을 확인해
+    //   어느 단계에서 막혔는지와 조치 방법까지 보여준다.
+    async testHwAccel() {
+        const $box = $('#hwaccel-test-result');
+        $box.html('<span style="color:#888;">' + t('testing', '테스트 중...') + '</span>');
+        const res = await this.api('test_hwaccel', {}, 'POST');
+        if (!res.success) {
+            $box.html('<span style="color:#f44336;">✖ ' + this.escapeHtml(res.error || t('test_failed', '테스트 실패')) + '</span>');
+            return;
+        }
+        let html = '<div style="color:#666; margin-bottom:4px;">'
+            + this.escapeHtml(res.os) + ' · ffmpeg: <code>' + this.escapeHtml(res.ffmpeg) + '</code></div>';
+
+        // 렌더 노드 상태 (리눅스에서만 의미 있음)
+        if (Array.isArray(res.render_nodes) && res.render_nodes.length) {
+            html += '<div style="color:#666; margin-bottom:4px;">/dev/dri: ';
+            html += res.render_nodes.map(n =>
+                '<code>' + this.escapeHtml(n.path) + '</code> '
+                + (n.usable
+                    ? '<span style="color:#4CAF50;">' + t('hw_accessible', '접근 가능') + '</span>'
+                    : '<span style="color:#f44336;">' + t('hw_no_permission', '권한 없음') + '</span>')
+            ).join(', ');
+            html += '</div>';
+        }
+
+        let anyOk = false;
+        (res.items || []).forEach(it => {
+            if (it.ok) anyOk = true;
+            const mark = it.ok ? '✅' : '❌';
+            const color = it.ok ? '#4CAF50' : '#999';
+            html += '<div style="margin:2px 0; color:' + color + ';">' + mark + ' <b>' + this.escapeHtml(it.encoder) + '</b>';
+            if (!it.ok && it.reason) html += ' — ' + this.escapeHtml(it.reason);
+            html += '</div>';
+            if (!it.ok && it.detail) {
+                html += '<div style="color:#aaa; font-size:11px; margin:0 0 4px 18px; word-break:break-all;">'
+                     + this.escapeHtml(it.detail) + '</div>';
+            }
+        });
+
+        if (!anyOk) {
+            html += '<div style="color:#ff9800; margin-top:6px;">'
+                 + t('hw_none_available', '사용 가능한 하드웨어 인코더가 없습니다. 소프트웨어(libx264)로 재생됩니다.')
+                 + '</div>';
+        }
+        // 권한 문제가 하나라도 있으면 조치 방법을 함께 안내
+        if ((res.render_nodes || []).some(n => !n.usable)) {
+            html += '<div style="color:#ff9800; margin-top:4px;">'
+                 + t('hw_perm_hint', '렌더 노드 권한이 없으면 웹서버 계정을 해당 그룹에 추가한 뒤 웹서버를 재시작하세요 (예: usermod -aG videodriver http).')
+                 + '</div>';
+        }
+        html += '<div style="color:#888; margin-top:6px;">'
+             + t('hw_apply_hint', '설정을 바꾼 뒤에는 data/hw_encoder_cache.json 을 삭제해야 다시 감지합니다.')
+             + '</div>';
+        $box.html(html);
+    },
+
     async testPdfTool() {
         const tool = $('#setting-pdf-tool').val();
         const path = $('#setting-pdf-tool-path').val().trim();
@@ -31257,6 +31313,9 @@ const App = {
             $('#setting-thumbnail-size').val(settings.thumbnail_size || '200');
             $('#setting-ffmpeg-path').val(settings.ffmpeg_path || '');
             $('#setting-ffprobe-path').val(settings.ffprobe_path || '');
+            // ★ (2026-08-24) 하드웨어 가속 방식 — 기본값 ''(자동)이라 미설정 환경은 종전과 동일
+            $('#setting-hw-accel-mode').val(settings.hw_accel_mode || '');
+            $('#setting-vaapi-device').val(settings.vaapi_device || '');
             $('#setting-pdf-tool').val(settings.pdf_tool || '');
             $('#setting-pdf-tool-path').val(settings.pdf_tool_path || '');
             
@@ -31395,6 +31454,8 @@ const App = {
             thumbnail_size: parseInt($('#setting-thumbnail-size').val()) || 200,
             ffmpeg_path: $('#setting-ffmpeg-path').val().trim(),
             ffprobe_path: $('#setting-ffprobe-path').val().trim(),
+            hw_accel_mode: $('#setting-hw-accel-mode').val(),
+            vaapi_device: $('#setting-vaapi-device').val().trim(),
             pdf_tool: $('#setting-pdf-tool').val(),
             pdf_tool_path: $('#setting-pdf-tool-path').val().trim()
         });
