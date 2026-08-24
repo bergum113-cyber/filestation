@@ -11882,17 +11882,17 @@ const App = {
         // ffmpeg
         if (res.ffmpeg.available) {
             const ver = res.ffmpeg.version ? ` v${this.escapeHtml(res.ffmpeg.version)}` : '';
-            html += row('🎬', `ffmpeg${ver}`, true, `${t('ffmpeg_desc','동영상 썸네일 생성')} (${this.escapeHtml(res.ffmpeg.path)})`);
+            html += row('🎬', `ffmpeg${ver}`, true, `${t('ffmpeg_desc','동영상 스트리밍 변환 · 썸네일 생성')} (${this.escapeHtml(res.ffmpeg.path)})`);
         } else {
-            html += row('🎬', t('ffmpeg_not_installed', 'ffmpeg 미설치'), false, t('ffmpeg_missing_desc', '동영상 썸네일 생성 불가. ffmpeg 경로를 지정해주세요'));
+            html += row('🎬', t('ffmpeg_not_installed', 'ffmpeg 미설치'), false, t('ffmpeg_missing_desc', '동영상 스트리밍 재생과 썸네일 생성 불가. ffmpeg 경로를 지정해주세요'));
         }
         
         // ffprobe
         if (res.ffprobe && res.ffprobe.available) {
             const ver = res.ffprobe.version ? ` v${this.escapeHtml(res.ffprobe.version)}` : '';
-            html += row('🔍', `ffprobe${ver}`, true, `${t('ffprobe_desc','동영상 메타데이터 읽기')} (${this.escapeHtml(res.ffprobe.path)})`);
+            html += row('🔍', `ffprobe${ver}`, true, `${t('ffprobe_desc','동영상 길이 · 코덱 정보 읽기')} (${this.escapeHtml(res.ffprobe.path)})`);
         } else {
-            html += row('🔍', t('ffprobe_not_installed', 'ffprobe 미설치'), false, t('ffprobe_missing_desc', '동영상 메타데이터 읽기 불가. ffmpeg과 함께 제공됩니다'));
+            html += row('🔍', t('ffprobe_not_installed', 'ffprobe 미설치'), false, t('ffprobe_missing_desc', '동영상 길이 · 코덱 정보 읽기 불가. ffmpeg과 함께 제공됩니다'));
         }
         
         // proc_open 체크 (동영상 스트리밍 필수)
