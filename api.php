@@ -922,6 +922,61 @@ function sanitizeCssStyle(string $style, array $allowedProperties): string {
 /**
  * 사이트 설정 파일 로드
  */
+/**
+ * ★ (2026-08-24) 시놀로지 등에서 **버전이 이름에 붙은 패키지 경로**를 찾아 반환한다.
+ *
+ * [배경] 배포 사용자 제보 — ffmpeg 를 5.x/7.x/8.x 로 재설치했는데 서버환경 화면에 계속
+ *   **v4.1.9** 로 표시되고 ffprobe 는 "미설치"로 나오며, mkv·mpg 재생이 실패했다
+ *   (브라우저 SRC_NOT_SUPPORT). 예전 화면에는 ffmpeg v5.1.6-6 · ffprobe v7.1.3-6 으로
+ *   정상 표시됐다(`-6` 은 시놀로지 패키지 빌드 번호).
+ * [원인] 시놀로지 패키지센터의 ffmpeg 는 `/var/packages/ffmpeg7/target/bin/ffmpeg` 처럼
+ *   **버전이 이름에 붙어** 설치되는데, 탐색 목록에는 버전 없는 `ffmpeg` 만 있었다.
+ *   그래서 어느 경로도 맞지 않고 **1순위인 PATH 의 `ffmpeg`(= DSM 내장 4.1.9)** 로 떨어졌다.
+ *   DSM 내장에는 ffprobe 가 없어 "미설치"로 뜨고, 축소 빌드라 트랜스코딩도 실패한다.
+ * [동작] glob 으로 후보를 모아 이름 속 숫자 **내림차순**(ffmpeg7 > ffmpeg6 > ffmpeg)으로
+ *   정렬해 최신 패키지를 먼저 시도하게 한다. 실행 가능 여부까지 확인해 잡음을 줄인다.
+ * [안전성] 해당 경로가 없는 환경(윈도우·일반 리눅스)에서는 glob 이 빈 배열을 돌려주므로
+ *   기존 동작에 아무 영향이 없다. 사용자가 설정에 직접 넣은 경로는 호출부에서 이 목록보다
+ *   **먼저** 넣으므로 우선순위가 유지된다.
+ *
+ * @param string $bin 'ffmpeg' 또는 'ffprobe'
+ * @return string[] 실행 가능한 절대경로 목록(최신 버전 우선)
+ */
+function findVersionedMediaBins(string $bin): array {
+    if (PHP_OS_FAMILY === 'Windows') return [];
+    if ($bin !== 'ffmpeg' && $bin !== 'ffprobe') return [];   // 경로 조작 방지
+    $found = [];
+    foreach (['/var/packages/*/target/bin/' . $bin, '/volume*/@appstore/*/bin/' . $bin] as $pattern) {
+        $hits = @glob($pattern);
+        if (is_array($hits)) {
+            foreach ($hits as $h) {
+                if (@is_executable($h)) $found[] = $h;
+            }
+        }
+    }
+    $found = array_values(array_unique($found));
+    // 패키지 폴더명의 숫자로 내림차순 정렬한다.
+    //   경로 형태가 두 가지라 **폴더 깊이가 다르다** — 고정 횟수 dirname 은 쓰지 않는다.
+    //     /var/packages/ffmpeg7/target/bin/ffmpeg   → 패키지명은 4단계 위
+    //     /volume1/@appstore/ffmpeg7/bin/ffmpeg     → 패키지명은 3단계 위
+    //   (초기 구현에서 dirname 2회로 잘라 둘 다 'target'/'bin' 이 나와 **정렬이 무력화**됐다.
+    //    가짜 트리 검증에서 ffmpeg7/6/무번호가 모두 'target' 으로 나와 발견.)
+    //   → 경로 전체에서 `<이름><숫자>` 형태의 마지막 조각을 찾아 숫자를 뽑는다.
+    $pkgNum = function (string $path): int {
+        $best = 0;
+        foreach (explode('/', $path) as $seg) {
+            if (preg_match('/^(?:ffmpeg|ffprobe)[-_]?(\d+)$/i', $seg, $m)) {
+                $best = max($best, (int)$m[1]);
+            }
+        }
+        return $best;
+    };
+    usort($found, function ($a, $b) use ($pkgNum) {
+        return $pkgNum($b) <=> $pkgNum($a);
+    });
+    return $found;
+}
+
 function loadSiteSettings(): array {
     $settingsFile = __DIR__ . '/data/site_settings.json';
     return file_exists($settingsFile) 
@@ -10468,6 +10523,9 @@ try {
             if (PHP_OS_FAMILY === 'Windows') {
                 array_push($ffmpegPaths, 'ffmpeg', 'C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe');
             } else {
+                // ★ (2026-08-24) 버전이 붙은 패키지 경로(예: /var/packages/ffmpeg7/target/bin/ffmpeg)를
+                //   PATH 보다 **먼저** 시도한다 — 자세한 배경은 findVersionedMediaBins() 주석 참조.
+                $ffmpegPaths = array_merge($ffmpegPaths, findVersionedMediaBins('ffmpeg'));
                 array_push($ffmpegPaths, 'ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/local/ffmpeg/bin/ffmpeg', '/volume1/@appstore/ffmpeg/bin/ffmpeg', '/volume1/@appstore/MediaServer/bin/ffmpeg', '/var/packages/ffmpeg/target/bin/ffmpeg', '/var/packages/MediaServer/target/bin/ffmpeg');
             }
             foreach ($ffmpegPaths as $fp) {
@@ -10768,6 +10826,9 @@ try {
             if (PHP_OS_FAMILY === 'Windows') {
                 array_push($ffmpegPaths, 'ffmpeg', 'C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe');
             } else {
+                // ★ (2026-08-24) 버전이 붙은 패키지 경로(예: /var/packages/ffmpeg7/target/bin/ffmpeg)를
+                //   PATH 보다 **먼저** 시도한다 — 자세한 배경은 findVersionedMediaBins() 주석 참조.
+                $ffmpegPaths = array_merge($ffmpegPaths, findVersionedMediaBins('ffmpeg'));
                 array_push($ffmpegPaths, 'ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/local/ffmpeg/bin/ffmpeg', '/volume1/@appstore/ffmpeg/bin/ffmpeg', '/volume1/@appstore/MediaServer/bin/ffmpeg', '/var/packages/ffmpeg/target/bin/ffmpeg', '/var/packages/MediaServer/target/bin/ffmpeg');
             }
             foreach ($ffmpegPaths as $fp) {
@@ -10800,6 +10861,9 @@ try {
             if (PHP_OS_FAMILY === 'Windows') {
                 array_push($ffprobePaths, 'ffprobe', 'C:\\ffmpeg\\bin\\ffprobe.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffprobe.exe');
             } else {
+                // ★ (2026-08-24) 버전이 붙은 패키지 경로(예: /var/packages/ffprobe7/target/bin/ffprobe)를
+                //   PATH 보다 **먼저** 시도한다 — 자세한 배경은 findVersionedMediaBins() 주석 참조.
+                $ffprobePaths = array_merge($ffprobePaths, findVersionedMediaBins('ffprobe'));
                 array_push($ffprobePaths, 'ffprobe', '/usr/bin/ffprobe', '/usr/local/bin/ffprobe',
                     '/usr/local/ffmpeg/bin/ffprobe', '/volume1/@appstore/ffmpeg/bin/ffprobe',
                     '/volume1/@appstore/MediaServer/bin/ffprobe', '/var/packages/ffmpeg/target/bin/ffprobe',

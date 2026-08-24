@@ -2564,8 +2564,8 @@ password=mypass</pre>
                             </div>
                             <span id="ffprobe-test-result" style="font-size:12px; margin-top:4px; display:block;"></span>
                             <p class="setting-desc"><?php echo $currentLang === 'en' 
-                                ? 'ffmpeg: Extracts video frame for thumbnail. ffprobe: Reads video duration/metadata. Both are included when you download ffmpeg.' 
-                                : 'ffmpeg: 동영상에서 프레임을 추출하여 썸네일을 생성합니다. ffprobe: 동영상 길이/메타데이터를 읽습니다. ffmpeg 다운로드 시 함께 포함되어 있습니다.'; ?> <a href="https://www.gyan.dev/ffmpeg/builds/" target="_blank" style="font-size:12px;"><?php echo $currentLang === 'en' ? 'Download ffmpeg' : 'ffmpeg 다운로드'; ?> ↗</a></p>
+                                ? 'ffmpeg: Extracts video frame for thumbnail. ffprobe: Reads video duration/metadata. Both are included when you download ffmpeg. These are normally detected automatically, so you can leave them blank. If video streaming, thumbnail extraction or any other ffmpeg-based feature stops working, enter the full path here and press Test. On Synology, packages are usually installed under /var/packages/ffmpegN/target/bin/ (N is the version, e.g. ffmpeg5, ffmpeg7).' 
+                                : 'ffmpeg: 동영상에서 프레임을 추출하여 썸네일을 생성합니다. ffprobe: 동영상 길이/메타데이터를 읽습니다. ffmpeg 다운로드 시 함께 포함되어 있습니다. 평소에는 자동으로 감지하므로 비워 두어도 됩니다. 동영상 스트리밍 재생·썸네일 추출 등 ffmpeg를 사용하는 기능이 동작하지 않으면, 이곳에 전체 경로를 직접 입력하고 [테스트] 버튼을 눌러 확인해 주세요. 시놀로지는 보통 /var/packages/ffmpegN/target/bin/ 아래에 설치됩니다(N은 버전, 예: ffmpeg5, ffmpeg7).'; ?> <a href="https://www.gyan.dev/ffmpeg/builds/" target="_blank" style="font-size:12px;"><?php echo $currentLang === 'en' ? 'Download ffmpeg' : 'ffmpeg 다운로드'; ?> ↗</a></p>
                         </div>
                         <div class="setting-item">
                             <label><?php echo $currentLang === 'en' ? 'PDF Tool Path' : 'PDF 도구 경로'; ?></label>

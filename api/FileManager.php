@@ -3830,7 +3830,7 @@ class FileManager {
                 //   quality 일치 — 다른 화질은 새 세션 (v5.8.1c)
                 //   seek 일치 — 다른 시점은 새 세션 (v5.8.1c, quality 변경 시 사용자 위치부터 시작)
                 $existAudioIdx = isset($existMetaData['audio']) ? (int)$existMetaData['audio'] : null;
-                // ★ (2026-08-20) 재사용 판정은 **요청 의도(force_sw)** 끼리 비교한다.
+                // ★ (2026-08-24) 재사용 판정은 **요청 의도(force_sw)** 끼리 비교한다.
                 //   종전에는 current_encoder 에 'libx264'가 있는지로 판정했는데, 그것은
                 //   "실제로 무엇을 쓰는가"이지 "SW를 강제한 요청인가"가 아니다.
                 //   HW 감지 실패로 모든 세션이 libx264 로 시작하면 그 값이 항상 '1'이 되어
@@ -3843,7 +3843,7 @@ class FileManager {
                 $existClientSession = $existMetaData['client_session'] ?? '';
                 $existQuality = $existMetaData['quality'] ?? 'original';
                 $existSeek = (float)($existMetaData['seek'] ?? 0);
-                // ★ (2026-08-20) reuse 판정 근거 기록 — 임시폴더/ffmpeg 가 2개 생기는 원인 추적용.
+                // ★ (2026-08-24) reuse 판정 근거 기록 — 임시폴더/ffmpeg 가 2개 생기는 원인 추적용.
                 //   [왜 필요한가] 지금까지는 "새 세션을 만들었다"는 결과만 남고 **어느 조건이 어긋나
                 //   재사용을 못 했는지**가 기록되지 않아, 폴더가 둘 생겨도 원인을 알 수 없었다.
                 //   특히 current_encoder 가 SW 폴백으로 libx264 가 되면 $existIsSw 가 '1'로 바뀌어
@@ -3914,7 +3914,7 @@ class FileManager {
                             'sw_cmd' => $existMetaData['sw_cmd'] ?? null,
                             'stderr_log' => $existMetaData['stderr_log'] ?? null,
                             'current_encoder' => $existMetaData['current_encoder'] ?? null,
-                            // ★ (2026-08-20) force_sw 보존 — 재사용할 때마다 meta 를 다시 쓰는데
+                            // ★ (2026-08-24) force_sw 보존 — 재사용할 때마다 meta 를 다시 쓰는데
                             //   이 값이 빠지면 다음 판정이 current_encoder 기반으로 되돌아가
                             //   같은 버그(폴더·ffmpeg 중복)가 재발한다.
                             'force_sw' => $existIsSw,
@@ -4059,7 +4059,7 @@ class FileManager {
                 date('H:i:s.') . sprintf('%03d', (int)((microtime(true) - floor(microtime(true))) * 1000)) .
                 " [$sessionId] START file=" . basename($path) . " encoder=" . ($usingHwEncoder ? 'HW' : 'SW') .
                 " codec_args=" . $videoCodecArgs . " has_sw_backup=" . ($cmdSwBackup ? 'YES' : 'NO') .
-                // ★ (2026-08-20) 새 세션이 만들어진 요청의 조건을 함께 남긴다.
+                // ★ (2026-08-24) 새 세션이 만들어진 요청의 조건을 함께 남긴다.
                 //   위 REUSE_SKIP 기록과 짝을 이뤄 "왜 재사용 못 하고 새로 만들었는지"가 완성된다.
                 //   폴더가 2개 생길 때 두 START 줄의 이 값들을 비교하면 무엇이 달랐는지 바로 보인다.
                 " | req force_sw=" . (isset($_GET['force_sw']) ? '1' : '0') .
@@ -4093,7 +4093,7 @@ class FileManager {
             'sw_cmd' => $cmdSwBackup,
             'stderr_log' => $stderrLog,
             'current_encoder' => $currentEncoder,
-            // ★ (2026-08-20) 이 세션이 **force_sw 요청으로 만들어졌는지**를 그대로 저장한다.
+            // ★ (2026-08-24) 이 세션이 **force_sw 요청으로 만들어졌는지**를 그대로 저장한다.
             //   [왜] 재사용 판정에서 지금까지 current_encoder 에 'libx264'가 들어있는지로
             //   "SW 세션인가"를 추정했는데, 그것은 **실제 사용 인코더**이지 요청 의도가 아니다.
             //   HW 감지가 실패해 모든 세션이 처음부터 libx264 로 시작하면 그 값이 항상 '1'이 되고,
@@ -4644,7 +4644,7 @@ class FileManager {
         $result = '-c:v libx264 -preset ultrafast -crf 23 -tune zerolatency -profile:v high -level 4.1 -pix_fmt yuv420p';
         $detectedName = 'libx264 (CPU)';
 
-        // ★ (2026-08-20) HW 감지 과정을 기록한다 — data/hw_detect.log
+        // ★ (2026-08-24) HW 감지 과정을 기록한다 — data/hw_detect.log
         //   [왜 필요한가] 지금까지 감지는 **결과만** 캐시에 남기고 과정을 전혀 기록하지 않아,
         //   "왜 CPU로 떨어졌는지"를 서버에서 확인할 방법이 없었다(캐시를 지워도 같은 값만 다시 생김).
         //   원격 접속(RDP) 세션에서 명령을 직접 돌리면 물리 GPU 대신 Microsoft Basic Render Driver가
@@ -4669,7 +4669,7 @@ class FileManager {
             }
             
             // 실제 인코딩 테스트 (짧은 테스트로 동작 여부 확인)
-            // ★ (2026-08-20) ffmpeg 버전 무관하게 동작하도록 테스트 방식 교체.
+            // ★ (2026-08-24) ffmpeg 버전 무관하게 동작하도록 테스트 방식 교체.
             //   [문제] 기존에는 '-f mp4 NUL'로 테스트했는데, **mp4 muxer는 seek 가능한 출력이 필요**하고
             //   NUL은 seek이 안 된다. 구버전 ffmpeg는 경고로 넘어갔지만 최신(8.x)은 이를 에러로 처리해
             //   출력에 'Error'가 섞이고, 아래 키워드 검사가 그것을 잡아 **HW가 멀쩡해도 전부 실패 판정**이
@@ -4772,6 +4772,58 @@ class FileManager {
     }
     
     // ffmpeg 경로 확인 (설정 우선, 자동 감지 폴백)
+    /**
+     * ★ (2026-08-24) 버전이 이름에 붙은 미디어 바이너리 경로를 찾는다(시놀로지 등).
+     *
+     * [배경] 배포 사용자 제보 — 시놀로지에서 ffmpeg 를 재설치했는데 mkv·mpg 재생이 실패했다
+     *   (브라우저 SRC_NOT_SUPPORT). hls_timing.log 에 남은 실제 실패 원인은
+     *     Unrecognized option 'readrate'. / Error splitting the argument list: Option not found
+     *     libavcodec 58.35.100   ← ffmpeg 4.x 계열
+     *   즉 `-readrate`(ffmpeg 5.0 신설 옵션)를 모르는 **DSM 내장 4.1.9** 가 쓰이고 있었다.
+     * [원인] 시놀로지 패키지센터의 ffmpeg 는 `/var/packages/ffmpeg5/target/bin/ffmpeg` 처럼
+     *   **버전이 이름에 붙어** 설치되는데, 아래 탐색 목록에는 버전 없는 `ffmpeg` 만 있었다.
+     *   그래서 어느 경로도 맞지 않고 **1순위인 PATH 의 `ffmpeg`(= DSM 내장 4.1.9)** 로 떨어졌다.
+     *   (사용자가 설정에 절대경로를 직접 넣자 바로 정상 재생됐고, 설치 위치가
+     *    `/var/packages/ffmpeg5/target/bin/` 임이 확인됐다.)
+     * [주의] api.php 에도 같은 이름의 전역 함수가 있으나, 이 클래스는 **단독 require 될 때를
+     *   대비해 의존하지 않는다**(파일 상단 주석의 기존 방침과 동일). 그래서 자체 메서드로 둔다.
+     * [안전성] 해당 경로가 없는 환경에서는 glob 이 빈 배열이라 기존 동작에 영향이 없다.
+     *   설정에 넣은 경로는 호출부에서 **먼저** 검사하므로 우선순위가 유지된다.
+     *
+     * @param string $bin 'ffmpeg' 또는 'ffprobe'
+     * @return string[] 실행 가능한 절대경로 목록(버전 높은 순)
+     */
+    private function findVersionedBins(string $bin): array {
+        if (PHP_OS_FAMILY === 'Windows') return [];
+        if ($bin !== 'ffmpeg' && $bin !== 'ffprobe') return [];   // 경로 조작 방지
+        $found = [];
+        foreach (['/var/packages/*/target/bin/' . $bin, '/volume*/@appstore/*/bin/' . $bin] as $pattern) {
+            $hits = @glob($pattern);
+            if (is_array($hits)) {
+                foreach ($hits as $h) {
+                    if (@is_executable($h)) $found[] = $h;
+                }
+            }
+        }
+        $found = array_values(array_unique($found));
+        // 패키지 폴더명의 숫자로 내림차순. 경로 형태마다 폴더 깊이가 달라
+        //   (/var/packages/X/target/bin/ 은 4단계, /volume1/@appstore/X/bin/ 은 3단계)
+        //   고정 횟수 dirname 은 쓰지 않고 경로 조각에서 `<이름><숫자>` 를 찾는다.
+        $pkgNum = function (string $path): int {
+            $best = 0;
+            foreach (explode('/', $path) as $seg) {
+                if (preg_match('/^(?:ffmpeg|ffprobe)[-_]?(\d+)$/i', $seg, $m)) {
+                    $best = max($best, (int)$m[1]);
+                }
+            }
+            return $best;
+        };
+        usort($found, function ($a, $b) use ($pkgNum) {
+            return $pkgNum($b) <=> $pkgNum($a);
+        });
+        return $found;
+    }
+
     private function findFfmpeg(): ?string {
         // exec 함수 사용 가능 여부 체크
         $disabledArr = array_map('trim', explode(',', @ini_get('disable_functions') ?: ''));
@@ -4790,7 +4842,10 @@ class FileManager {
         if (PHP_OS_FAMILY === 'Windows') {
             $paths = ['ffmpeg', 'C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe'];
         } else {
-            $paths = [
+            // ★ (2026-08-24) 버전이 붙은 패키지(예: /var/packages/ffmpeg5/target/bin/ffmpeg)를
+            //   **PATH 보다 먼저** 시도한다 — 배경은 findVersionedBins() 주석 참조.
+            //   이게 없으면 DSM 내장 4.1.9 가 잡혀 `-readrate` 미지원으로 트랜스코딩이 죽는다.
+            $paths = array_merge($this->findVersionedBins('ffmpeg'), [
                 'ffmpeg',
                 '/usr/bin/ffmpeg',
                 '/usr/local/bin/ffmpeg',
@@ -4800,7 +4855,7 @@ class FileManager {
                 '/volume1/@appstore/MediaServer/bin/ffmpeg',
                 '/var/packages/ffmpeg/target/bin/ffmpeg',
                 '/var/packages/MediaServer/target/bin/ffmpeg',
-            ];
+            ]);
         }
         foreach ($paths as $path) {
             $out = [];
@@ -10821,6 +10876,14 @@ class FileManager {
         if ($ffprobePath && @is_executable($ffprobePath)) return $ffprobePath;
         if ($ffmpegPath && @is_executable($ffmpegPath)) return $ffmpegPath;
         
+        // ★ (2026-08-24) 버전이 붙은 패키지를 PATH 보다 먼저 시도 — findVersionedBins() 참조.
+        //   ffprobe 가 없으면 동영상 메타데이터를 못 읽어 트랜스코딩 판단 자체가 어긋난다.
+        foreach (['ffprobe', 'ffmpeg'] as $bin) {
+            foreach ($this->findVersionedBins($bin) as $cand) {
+                $out = @shell_exec(escapeshellarg($cand) . ' -version 2>&1');
+                if ($out && strpos($out, 'version') !== false) return $cand;
+            }
+        }
         foreach (['ffprobe', 'ffmpeg'] as $bin) {
             $out = @shell_exec("$bin -version 2>&1");
             if ($out && strpos($out, 'version') !== false) return $bin;
@@ -12570,7 +12633,7 @@ class FileManager {
                 if (!file_exists($metaFile)) continue;
                 $meta = @json_decode(file_get_contents($metaFile), true);
                 $existAudioIdxShare = isset($meta['audio']) ? (int)$meta['audio'] : null;
-                // ★ (2026-08-20) 메인 경로와 동일 수정 — 요청 의도(force_sw)끼리 비교.
+                // ★ (2026-08-24) 메인 경로와 동일 수정 — 요청 의도(force_sw)끼리 비교.
                 //   current_encoder 기반 판정은 HW 감지 실패 시 항상 '1'이 되어
                 //   force_sw 없는 요청과 어긋나 매번 새 세션을 만든다(폴더·ffmpeg 중복).
                 //   필드가 없는 기존 meta.json 은 종전 방식으로 판정(하위호환).
@@ -12607,7 +12670,7 @@ class FileManager {
                             'sw_cmd' => $meta['sw_cmd'] ?? null,
                             'stderr_log' => $meta['stderr_log'] ?? null,
                             'current_encoder' => $meta['current_encoder'] ?? null,
-                            // ★ (2026-08-20) force_sw 보존 — 재사용 시 이 값이 빠지면
+                            // ★ (2026-08-24) force_sw 보존 — 재사용 시 이 값이 빠지면
                             //   다음 재사용 판정이 다시 current_encoder 기반으로 떨어져 같은 버그가 재발한다.
                             'force_sw' => $existIsSwShare,
                             'sw_fallback_applied' => $meta['sw_fallback_applied'] ?? false,
@@ -12727,7 +12790,7 @@ class FileManager {
             'sw_cmd' => $cmdSwBackup,
             'stderr_log' => $stderrLog,
             'current_encoder' => $this->extractEncoderFromArgs($videoCodecArgs),
-            // ★ (2026-08-20) 메인 경로와 동일 — 요청 의도를 저장해 재사용 판정이
+            // ★ (2026-08-24) 메인 경로와 동일 — 요청 의도를 저장해 재사용 판정이
             //   current_encoder(실제 인코더)에 좌우되지 않게 한다.
             'force_sw' => (isset($_GET['force_sw']) ? '1' : '0'),
             'quality' => $shareQuality,

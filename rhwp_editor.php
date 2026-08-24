@@ -22,7 +22,7 @@ if ($storageId && !$storage->checkPermission($storageId, 'can_read')) {
     http_response_code(403); exit('No permission');
 }
 
-// ★ (2026-08-20) HWP 로딩 단계별 계측 수신 — data/hwp_timing.log 파일이 있을 때만 기록.
+// ★ (2026-08-24) HWP 로딩 단계별 계측 수신 — data/hwp_timing.log 파일이 있을 때만 기록.
 //   [왜] "문서 로딩이 매번 느리다"의 원인을 어림짐작하지 않고 실측으로 가르기 위한 관측 전용
 //   엔드포인트다. 클라이언트가 단계별 소요(파일 수신 / WASM 준비 / 고정 대기 / 주입 / 렌더 완료)를
 //   모아 한 번만 POST 한다. 로그 파일이 없으면 아무것도 하지 않으므로 평소에는 완전히 꺼진 상태다.
@@ -870,7 +870,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     </div>
 
     <!-- 서식 도구 모음 (style bar) -->
-    <!-- ★ (2026-08-20) rhwp 0.8.4 studio 의 style-bar 마크업으로 교체.
+    <!-- ★ (2026-08-24) rhwp 0.8.4 studio 의 style-bar 마크업으로 교체.
          [문제] 상단 서식 도구 모음이 2줄로 밀리고 그룹 라벨(글꼴 및 간격·글자 모양·색·문단)이
          사라져 보였다. 원인은 자산이 아니라 **마크업 불일치**였다 —
          0.8.4 studio 는 툴바를 rhwp-studio/index.html 에 하드코딩해 두는데,
@@ -1053,7 +1053,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     if (!FILE_NAME) return; // 파일 경로 없으면 빈 에디터
     const TIMING_URL = '<?php echo rtrim(dirname($_SERVER["SCRIPT_NAME"]), "/"); ?>/rhwp_editor.php?action=timing_log';
 
-    // ★ (2026-08-20) HWP 문서 로딩 단계별 계측 — 순수 관측, 동작 변경 없음.
+    // ★ (2026-08-24) HWP 문서 로딩 단계별 계측 — 순수 관측, 동작 변경 없음.
     //   [배경] "파일을 열면 매번 느리다"는 제보. 에디터 UI(자산)가 아니라 **문서 로딩**이 느리고,
     //   미리보기(뷰어)는 빠르다. 뷰어는 rhwp.js + rhwp_bg.wasm 만 쓰는 반면 에디터는 studio
     //   번들과 **CanvasKit(6.8MB)** 까지 거치므로 경로 자체가 다르다. 또 이 주입 절차에는
@@ -1110,7 +1110,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     }
     
     // WASM 초기화 완료 대기: 콘솔 로그 감지 플래그 사용
-    // ★ (2026-08-20) 대기 상한 30초 → 2초. **문서 로딩이 매번 30초 걸리던 원인.**
+    // ★ (2026-08-24) 대기 상한 30초 → 2초. **문서 로딩이 매번 30초 걸리던 원인.**
     //   [계측으로 확인된 사실] hwp_timing.log 실측 —
     //     wasm_ready +30751ms {"ok":false}  ← 30초를 꽉 채우고 타임아웃
     //     그 뒤 파일 주입 → doc_rendered +502ms {"loaded":true}
