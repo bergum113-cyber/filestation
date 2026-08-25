@@ -2529,7 +2529,11 @@ password=mypass</pre>
                             <p class="setting-desc"><?php echo $currentLang === 'en' ? 'Select filter to apply to background image.' : '배경 이미지에 적용할 필터를 선택하세요.'; ?></p>
                         </div>
                         
-                        <h3><?php echo $currentLang === 'en' ? '🖼️ Thumbnail Settings' : '🖼️ 썸네일 설정'; ?></h3>
+                        <!-- ★ (2026-08-25) 제목 변경 — 이 섹션에는 썸네일 크기 외에
+                             ffmpeg/ffprobe 경로 · 하드웨어 가속 · PDF 도구 경로 · 서버 환경이 함께 있어
+                             '썸네일 설정' 만으로는 범위를 잘못 알리게 된다(펜닐 지적).
+                             동영상 트랜스코딩(HLS 스트리밍)도 여기 설정을 사용한다. -->
+                        <h3><?php echo $currentLang === 'en' ? '🎬 Media & Thumbnails' : '🎬 미디어 · 썸네일 설정'; ?></h3>
                         <div class="setting-item">
                             <label class="setting-label">
                                 <input type="checkbox" id="setting-thumbnail-enabled" checked>

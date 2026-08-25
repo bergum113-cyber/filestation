@@ -2957,5 +2957,12 @@
     "hw_already_member": "The account is already in the group. Restart the web server to apply.",
     "hw_syno_memberadd": "The command below adds the account while keeping existing members.",
     "hw_syno_alt": "If the command above fails (e.g. \"unknown option\" on older DSM), use the one below. It already includes every existing member — run it as is, since omitting any account removes it from the group.",
-    "hw_syno_alt_unknown": "If the command above fails (older DSM), first check the existing members, then run synogroup --member with that list plus the account appended."
+    "hw_syno_alt_unknown": "If the command above fails (older DSM), first check the existing members, then run synogroup --member with that list plus the account appended.",
+    "pkg_syno_ffmpeg": "Install the FFmpeg package from Package Center (SynoCommunity repository required).",
+    "pkg_linux_ffmpeg": "Replace ffmpeg with a build that includes this encoder.",
+    "pkg_win_ffmpeg": "Replace ffmpeg with a build that includes this encoder (full build).",
+    "pkg_syno_qsv": "Install SynoCli Video Drivers and SynoCli Video Driver Tools from Package Center.",
+    "pkg_linux_qsv": "Intel QSV runtime is required — Debian/Ubuntu: intel-media-va-driver-non-free, libmfx-gen1.2 (or libmfx1).",
+    "pkg_syno_vaapi": "Install SynoCli Video Drivers and SynoCli Video Driver Tools from Package Center.",
+    "pkg_linux_vaapi": "A VA-API driver is required — Debian/Ubuntu: intel-media-va-driver (i965-va-driver for older GPUs). Check with: vainfo"
 }

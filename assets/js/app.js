@@ -11824,6 +11824,14 @@ const App = {
         }
         let html = '<div style="color:#666; margin-bottom:4px;">'
             + this.escapeHtml(res.os) + ' · ffmpeg: <code>' + this.escapeHtml(res.ffmpeg) + '</code></div>';
+        // ★ (2026-08-25) CPU·GPU 모델명 — 세대 판별은 하지 않고 모델명만 보여준다(판단은 사용자 몫).
+        if (res.cpu) {
+            html += '<div style="color:#666; margin-bottom:2px;">CPU: ' + this.escapeHtml(res.cpu) + '</div>';
+        }
+        if (Array.isArray(res.gpus) && res.gpus.length) {
+            html += '<div style="color:#666; margin-bottom:4px;">GPU: '
+                 + res.gpus.map(g => this.escapeHtml(g)).join(', ') + '</div>';
+        }
 
         // 렌더 노드 상태 (리눅스에서만 의미 있음)
         if (Array.isArray(res.render_nodes) && res.render_nodes.length) {
@@ -11849,6 +11857,22 @@ const App = {
             if (!it.ok && it.perm_hint) {
                 html += '<div style="color:#ff9800; font-size:11px; margin:0 0 2px 18px;">'
                      + t('hw_maybe_perm', '렌더 노드 권한이 없어 실패했을 수 있습니다.') + '</div>';
+            }
+            // ★ (2026-08-25) 설치가 필요한 패키지 안내 — 실패 종류·환경별로 다르다.
+            if (!it.ok && it.pkg_hint) {
+                const hints = {
+                    pkg_syno_ffmpeg: t('pkg_syno_ffmpeg', '패키지 센터에서 FFmpeg 패키지를 설치하세요 (SynoCommunity 저장소 필요).'),
+                    pkg_linux_ffmpeg: t('pkg_linux_ffmpeg', '해당 인코더를 포함한 ffmpeg 빌드로 교체하세요.'),
+                    pkg_win_ffmpeg: t('pkg_win_ffmpeg', '해당 인코더를 포함한 ffmpeg 빌드(full 버전)로 교체하세요.'),
+                    pkg_syno_qsv: t('pkg_syno_qsv', '패키지 센터에서 SynoCli Video Drivers · SynoCli Video Driver Tools 를 설치하세요.'),
+                    pkg_linux_qsv: t('pkg_linux_qsv', 'Intel QSV 런타임이 필요합니다 — Debian/Ubuntu: intel-media-va-driver-non-free, libmfx-gen1.2 (또는 libmfx1).'),
+                    pkg_syno_vaapi: t('pkg_syno_vaapi', '패키지 센터에서 SynoCli Video Drivers · SynoCli Video Driver Tools 를 설치하세요.'),
+                    pkg_linux_vaapi: t('pkg_linux_vaapi', 'VA-API 드라이버가 필요합니다 — Debian/Ubuntu: intel-media-va-driver (구세대는 i965-va-driver). 확인: vainfo')
+                };
+                const msg = hints[it.pkg_hint];
+                if (msg) {
+                    html += '<div style="color:#2196F3; font-size:11px; margin:0 0 2px 18px;">↳ ' + msg + '</div>';
+                }
             }
             if (!it.ok && it.detail) {
                 html += '<div style="color:#aaa; font-size:11px; margin:0 0 4px 18px; word-break:break-all;">'

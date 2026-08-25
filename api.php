@@ -11167,6 +11167,116 @@ try {
                 }
             }
 
+            // ★ (2026-08-25) CPU·GPU 모델명 수집 — 사용자가 자기 하드웨어를 확인하고
+            //   검색·문의할 수 있게 한다. 세대 판별표를 코드에 넣지 않는 이유는 표가 계속 낡고
+            //   오판 시 잘못된 안내를 하게 되기 때문이다. **모델명만 보여주고 판단은 사용자에게** 맡긴다.
+            $cpuModel = '';
+            if (PHP_OS_FAMILY !== 'Windows') {
+                if (@is_readable('/proc/cpuinfo')) {
+                    $lines = @file('/proc/cpuinfo');
+                    if (is_array($lines)) {
+                        foreach ($lines as $l) {
+                            if (stripos($l, 'model name') === 0) {
+                                $parts = explode(':', $l, 2);
+                                $cpuModel = trim($parts[1] ?? '');
+                                break;
+                            }
+                        }
+                    }
+                }
+            } else {
+                // 윈도우는 wmic 로 조회(없으면 빈 값 — 표시를 생략한다)
+                $o = []; $r = 1;
+                @exec('wmic cpu get name /value 2>NUL', $o, $r);
+                foreach ($o as $l) {
+                    if (stripos($l, 'Name=') === 0) { $cpuModel = trim(substr($l, 5)); break; }
+                }
+            }
+
+            // GPU — 리눅스는 DRM 노드에서 벤더/디바이스 ID 를 읽는다(lspci 가 없는 환경 대비).
+            //   ID 를 이름으로 바꾸는 표는 두지 않고, 벤더만 판별해 표시한다.
+            $gpuList = [];
+            if (PHP_OS_FAMILY !== 'Windows') {
+                // ★ (2026-08-25) PCI ID 만 보여주면 사용자가 무슨 GPU 인지 알 수 없다(펜닐 지적).
+                //   모델명을 얻는 경로를 순서대로 시도한다 — 환경마다 있는 것이 달라서다.
+                //     ① lspci  ② pci.ids 데이터베이스 조회  ③ 실패하면 벤더 + ID 만 표시(종전)
+                //   어느 것도 없으면 최소한 벤더는 알 수 있으므로 진단 가치는 남는다.
+                $lspciOut = '';
+                if (trim((string)@shell_exec('command -v lspci 2>/dev/null')) !== '') {
+                    $lspciOut = (string)@shell_exec('lspci -nn 2>/dev/null');
+                }
+                // pci.ids 는 배포판마다 위치가 다르다.
+                $pciIdsFile = '';
+                foreach (['/usr/share/hwdata/pci.ids', '/usr/share/misc/pci.ids', '/usr/share/pci.ids'] as $cand) {
+                    if (@is_readable($cand)) { $pciIdsFile = $cand; break; }
+                }
+
+                foreach ((@glob('/sys/class/drm/card*/device/vendor') ?: []) as $vf) {
+                    $vid = strtolower(trim((string)@file_get_contents($vf)));
+                    $df  = dirname($vf) . '/device';
+                    $did = strtolower(trim((string)@file_get_contents($df)));
+                    $vendor = ($vid === '0x8086') ? 'Intel' : (($vid === '0x10de') ? 'NVIDIA' : (($vid === '0x1002') ? 'AMD' : $vid));
+                    $vidShort = ltrim(str_replace('0x', '', $vid), '0') !== '' ? substr($vid, 2) : '';
+                    $didShort = strlen($did) > 2 ? substr($did, 2) : '';
+                    $model = '';
+
+                    // ① lspci 출력에서 [vendor:device] 로 찾기 — 가장 정확하다.
+                    if ($lspciOut !== '' && $vidShort !== '' && $didShort !== '') {
+                        foreach (explode("\n", $lspciOut) as $ln) {
+                            if (stripos($ln, '[' . $vidShort . ':' . $didShort . ']') !== false) {
+                                // "00:02.0 VGA compatible controller: Intel Corporation HD Graphics [8086:0412] (rev 06)"
+                                $pos = strpos($ln, ': ');
+                                if ($pos !== false) {
+                                    $model = trim(substr($ln, $pos + 2));
+                                    $model = trim(preg_replace('/\s*\[[0-9a-f]{4}:[0-9a-f]{4}\].*$/i', '', $model));
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    // ② pci.ids 조회 — 벤더 블록(들여쓰기 없음) 안의 디바이스 줄(탭 1개)을 찾는다.
+                    if ($model === '' && $pciIdsFile !== '' && $vidShort !== '' && $didShort !== '') {
+                        $fh = @fopen($pciIdsFile, 'r');
+                        if ($fh) {
+                            $inVendor = false;
+                            while (($ln = fgets($fh)) !== false) {
+                                if ($ln === '' || $ln[0] === '#') continue;
+                                if ($ln[0] !== "\t") {
+                                    if ($inVendor) break;                       // 다음 벤더로 넘어감
+                                    $inVendor = (stripos($ln, $vidShort . ' ') === 0);
+                                    continue;
+                                }
+                                if ($inVendor && $ln[0] === "\t" && (!isset($ln[1]) || $ln[1] !== "\t")) {
+                                    $t = ltrim($ln, "\t");
+                                    if (stripos($t, $didShort . ' ') === 0) {
+                                        $model = trim(substr($t, strlen($didShort)));
+                                        break;
+                                    }
+                                }
+                            }
+                            @fclose($fh);
+                        }
+                    }
+
+                    // ③ 표시 — 모델명을 찾았으면 "벤더 모델명 (ID)", 아니면 종전처럼 "벤더 (ID)"
+                    $idPart = ($vidShort !== '' && $didShort !== '') ? ' [' . $vidShort . ':' . $didShort . ']' : '';
+                    $gpuList[] = $model !== '' ? ($model . $idPart) : ($vendor . $idPart);
+                }
+            } else {
+                $o = []; $r = 1;
+                @exec('wmic path win32_VideoController get name /value 2>NUL', $o, $r);
+                foreach ($o as $l) {
+                    if (stripos($l, 'Name=') === 0) {
+                        $nm = trim(substr($l, 5));
+                        if ($nm !== '') $gpuList[] = $nm;
+                    }
+                }
+            }
+            $gpuList = array_values(array_unique($gpuList));
+
+            // 시놀로지 판정 — 아래 후보 루프의 패키지 안내에서 쓰므로 여기서 먼저 구한다.
+            $isSynoEnv = @is_file('/etc/synoinfo.conf') || @is_dir('/var/packages');
+
             // 후보별로 ①빌드 포함 여부 ②실제 1프레임 인코딩을 확인한다.
             $candidates = [
                 'h264_nvenc' => '-c:v h264_nvenc -preset p1 -tune ll -qp 23 -profile:v high -level 4.1 -pix_fmt yuv420p',
@@ -11182,6 +11292,10 @@ try {
                 $row = ['encoder' => $enc, 'in_build' => false, 'ok' => false, 'reason' => '', 'detail' => ''];
                 if (strpos($encoderList, $enc) === false) {
                     $row['reason'] = __('api_hw_not_in_build', 'ffmpeg 빌드에 이 인코더가 없음');
+                    // ★ (2026-08-25) 빌드에 없으면 ffmpeg 교체가 답이다 — 환경별로 방법이 다르다.
+                    $row['pkg_hint'] = $isSynoEnv
+                        ? 'pkg_syno_ffmpeg'
+                        : (PHP_OS_FAMILY === 'Windows' ? 'pkg_win_ffmpeg' : 'pkg_linux_ffmpeg');
                     $items[] = $row; continue;
                 }
                 $row['in_build'] = true;
@@ -11222,6 +11336,17 @@ try {
                     if (PHP_OS_FAMILY !== 'Windows' && $renderUsable === '' && !empty($renderNodes)) {
                         $row['perm_hint'] = true;
                     }
+                    // ★ (2026-08-25) 빌드에는 있는데 실행이 실패하면 **런타임·드라이버**가 없을 가능성이 크다.
+                    //   인코더별·환경별로 필요한 것이 달라 구분해 안내한다.
+                    //   (배포 사용자 시놀로지 사례: 패키지센터에서 FFmpeg · SynoCli Video Drivers ·
+                    //    SynoCli Video Driver Tools 를 설치해 해결)
+                    if (PHP_OS_FAMILY !== 'Windows') {
+                        if ($enc === 'h264_qsv') {
+                            $row['pkg_hint'] = $isSynoEnv ? 'pkg_syno_qsv' : 'pkg_linux_qsv';
+                        } elseif ($enc === 'h264_vaapi') {
+                            $row['pkg_hint'] = $isSynoEnv ? 'pkg_syno_vaapi' : 'pkg_linux_vaapi';
+                        }
+                    }
                 }
                 $items[] = $row;
             }
@@ -11229,6 +11354,8 @@ try {
             $result = [
                 'success' => true,
                 'os' => PHP_OS_FAMILY,
+                'cpu' => $cpuModel,
+                'gpus' => $gpuList,
                 'ffmpeg' => $ffmpegBin,
                 'render_nodes' => $renderNodes,
                 'items' => $items,
