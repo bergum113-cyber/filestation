@@ -9355,6 +9355,226 @@ class FileManager {
     /**
      * 동영상 코덱/해상도 정보 조회 (네이티브 재생 가능 여부 판단)
      */
+    /**
+     * ★ (2026-08-25) 이미지 EXIF 메타데이터 조회 — 미리보기 모달의 [EXIF] 버튼용.
+     *
+     * [범위] 전체 EXIF 태그를 그대로 반환한다(펜닐 선택). 섹션(IFD0/EXIF/GPS 등) 구조를 유지해
+     *   화면에서 그룹별로 보여줄 수 있게 한다.
+     * [주의] exif_read_data 는 **로컬 파일 경로**가 필요하다. 원격 스토리지(FTP/SFTP/WebDAV/S3)는
+     *   경로가 없으므로 어댑터로 **앞부분만 임시 파일로 받아** 읽는다 — EXIF 는 파일 앞쪽에 있어
+     *   전체를 받을 필요가 없다(대용량 이미지에서 낭비를 막는다).
+     * [보안] 스토리지 읽기 권한과 폴더 권한은 호출부(api.php)에서 이미 확인하지만,
+     *   여기서도 한 번 더 확인한다(다른 경로에서 직접 호출될 가능성 대비).
+     */
+    public function getImageExif(int $storageId, string $relativePath): array {
+        if ($relativePath === '') {
+            return ['success' => false, 'error' => 'Path required'];
+        }
+        if (!$this->storage->checkPermission($storageId, 'can_read')) {
+            return ['success' => false, 'error' => 'Permission denied'];
+        }
+        if (!function_exists('exif_read_data')) {
+            return ['success' => false, 'error' => __('api_err_exif_ext', 'PHP exif 확장이 설치되어 있지 않습니다.')];
+        }
+
+        // EXIF 를 가질 수 있는 형식만 시도한다(PNG/GIF/WebP 등은 대상이 아니다).
+        $ext = strtolower(pathinfo($relativePath, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'jpe', 'tif', 'tiff'], true)) {
+            return ['success' => true, 'supported' => false, 'sections' => []];
+        }
+
+        // 경로 해석은 **getMediaInfo() 와 동일한 방식**을 따른다(검증된 패턴).
+        //   진짜 원격 스토리지(FTP/SFTP/WebDAV/S3)는 로컬 경로가 없어 exif_read_data 를 쓸 수 없다.
+        //   SMB 는 OS 에 마운트되어 경로 접근이 가능하므로 진행한다.
+        $stInfo = $this->storage->getStorageById($storageId);
+        $stType = $stInfo['storage_type'] ?? 'local';
+        if (in_array($stType, self::REMOTE_TYPES) && $stType !== 'smb') {
+            return ['success' => true, 'supported' => false, 'sections' => [], 'note' => 'remote storage'];
+        }
+
+        $basePath = $this->storage->getRealPath($storageId);
+        if (!$basePath) {
+            return ['success' => false, 'error' => 'Storage not found'];
+        }
+        $localPath = $this->buildPath($basePath, $relativePath);
+        if (!$this->isPathSafe($basePath, $localPath) || !is_file($localPath)) {
+            return ['success' => false, 'error' => 'File not found'];
+        }
+
+        $sections = [];
+        try {
+            // 3번째 인자 true = 섹션별로 나눠서 반환, 4번째 true = 썸네일 바이너리도 읽되 아래에서 제외
+            $data = @exif_read_data($localPath, null, true, false);
+            if (is_array($data)) {
+                // ★ (2026-08-25) 전체 태그에서 **볼 이유가 없는 항목**을 걸러낸다(펜닐 지적).
+                //   [기준] ①내부 오프셋·포인터 ②바이너리 덩어리 ③썸네일 부속 정보
+                //          ④다른 항목으로 이미 표현되는 코드값 — 사람이 판단에 쓸 수 없는 것들.
+                //   반대로 **이름만 없을 뿐 의미 있는 UndefinedTag 는 이름을 붙여 남긴다**
+                //   (0xA434=렌즈명, 0x9010~0x9012=촬영 시각의 시간대 등).
+                $dropSections = ['THUMBNAIL'];                  // 내장 썸네일의 압축·오프셋 정보
+                $dropKeys = [
+                    'FileType',                                  // 코드값 — MimeType 이 이미 있다
+                    'html',                                      // <img> 태그 조각
+                    'ByteOrderMotorola',                         // 바이트 순서(내부용)
+                    'Thumbnail.FileType', 'Thumbnail.MimeType',  // 썸네일 부속
+                    'Exif_IFD_Pointer', 'GPS_IFD_Pointer',       // 내부 오프셋
+                    'InteroperabilityOffset',
+                    'MakerNote',                                 // 제조사 전용 바이너리
+                    'ComponentsConfiguration', 'SceneType',      // 표시 불가한 바이너리 값
+                    'FlashPixVersion', 'ExifVersion',            // 규격 버전 — 사용자에게 의미 없음
+                ];
+                // 이름 없는 태그 중 **의미가 알려진 것**만 이름을 붙여 유지한다.
+                $knownUndefined = [
+                    'UndefinedTag:0x9010' => 'OffsetTime',
+                    'UndefinedTag:0x9011' => 'OffsetTimeOriginal',
+                    'UndefinedTag:0x9012' => 'OffsetTimeDigitized',
+                    'UndefinedTag:0xA433' => 'LensMake',
+                    'UndefinedTag:0xA434' => 'LensModel',
+                    'UndefinedTag:0xA435' => 'LensSerialNumber',
+                    'UndefinedTag:0x8830' => 'SensitivityType',
+                    'UndefinedTag:0x9400' => 'AmbientTemperature',
+                ];
+
+                foreach ($data as $sec => $vals) {
+                    if (!is_array($vals)) continue;
+                    if (in_array((string)$sec, $dropSections, true)) continue;
+                    $out = [];
+                    foreach ($vals as $k => $v) {
+                        $k = (string)$k;
+                        if (in_array($k, $dropKeys, true)) continue;
+                        // 이름 없는 태그: 알려진 것은 이름으로 바꾸고, 나머지는 버린다.
+                        if (strpos($k, 'UndefinedTag:') === 0) {
+                            if (!isset($knownUndefined[$k])) continue;
+                            $k = $knownUndefined[$k];
+                        }
+                        // 썸네일 바이너리 등 표시 불가 값은 제외한다(응답 비대화 방지).
+                        if (is_array($v)) {
+                            $v = implode(', ', array_map(function ($x) { return is_scalar($x) ? (string)$x : '?'; }, $v));
+                        } elseif (!is_scalar($v)) {
+                            continue;
+                        } else {
+                            $v = (string)$v;
+                        }
+                        if ($v === '' || !mb_check_encoding($v, 'UTF-8')) {
+                            // 제조사 문자열이 CP949 등일 수 있어 변환을 시도한다.
+                            $conv = function_exists('mb_convert_encoding') ? @mb_convert_encoding($v, 'UTF-8', 'CP949') : false;
+                            $v = (is_string($conv) && $conv !== '') ? $conv : '';
+                        }
+                        if ($v === '') continue;
+                        if (strlen($v) > 300) $v = substr($v, 0, 300) . '…';
+                        $out[$k] = $v;
+                    }
+                    if ($out) $sections[(string)$sec] = $out;
+                }
+            }
+        } catch (\Throwable $e) {
+            $sections = [];
+        }
+
+        // ★ (2026-08-25) 사람이 읽을 수 있는 **요약**을 함께 만든다.
+        //   [왜] 전체 태그는 `FNumber 8/5`, `FocalLength 6249513/1048576`,
+        //   `UndefinedTag:0xA432` 처럼 사람이 해석할 수 없는 값이 많다(펜닐 지적).
+        //   자주 보는 항목만 변환해 위에 요약으로 두고, 전체는 화면에서 토글로 펼치게 한다.
+        $summary = $this->buildExifSummary($sections);
+
+        return ['success' => true, 'supported' => true, 'summary' => $summary, 'sections' => $sections];
+    }
+
+    /**
+     * ★ (2026-08-25) EXIF 원시 태그 → 사람이 읽을 수 있는 요약.
+     *
+     * EXIF 수치는 대부분 **유리수 문자열**("8/5", "1/120")이거나 코드값(ExposureProgram=2)이라
+     * 그대로 보여주면 의미를 알 수 없다. 자주 확인하는 항목만 변환한다.
+     * 값이 없거나 해석할 수 없으면 **그 줄을 넣지 않는다**(빈 항목으로 지저분해지지 않게).
+     */
+    private function buildExifSummary(array $sec): array {
+        $ifd0 = $sec['IFD0'] ?? [];
+        $exif = $sec['EXIF'] ?? [];
+        $comp = $sec['COMPUTED'] ?? [];
+        $gps  = $sec['GPS'] ?? [];
+        $out  = [];
+
+        // 유리수("228932/168811")를 실수로. 0 나눗셈과 비정상 값을 걸러낸다.
+        $rat = function ($v) {
+            if (!is_string($v)) return null;
+            if (strpos($v, '/') === false) return is_numeric($v) ? (float)$v : null;
+            [$n, $d] = array_pad(explode('/', $v, 2), 2, '1');
+            if (!is_numeric($n) || !is_numeric($d) || (float)$d == 0.0) return null;
+            return (float)$n / (float)$d;
+        };
+
+        $make  = trim((string)($ifd0['Make'] ?? ''));
+        $model = trim((string)($ifd0['Model'] ?? ''));
+        $cam = trim($make . ' ' . $model);
+        if ($cam !== '') $out[__('exif_s_camera', '카메라')] = $cam;
+
+        // 렌즈명은 표준 태그가 아니라 UndefinedTag 로 들어오는 경우가 많다(0xA434 = LensModel).
+        // ★ (2026-08-25) 필터 단계에서 UndefinedTag:0xA434 → LensModel 로 **이름이 바뀐 뒤**
+        //   이 함수가 호출되므로 LensModel 을 먼저 본다. 원본 키도 폴백으로 남겨
+        //   필터를 거치지 않는 경로에서 호출되더라도 동작하게 한다.
+        $lens = trim((string)($exif['LensModel'] ?? $exif['UndefinedTag:0xA434'] ?? ''));
+        if ($lens !== '') $out[__('exif_s_lens', '렌즈')] = $lens;
+
+        $dt = trim((string)($exif['DateTimeOriginal'] ?? $ifd0['DateTime'] ?? ''));
+        if ($dt !== '') {
+            // "2026:08:24 15:13:50" → "2026-08-24 15:13:50"
+            $out[__('exif_s_datetime', '촬영일시')] = preg_replace('/^(\d{4}):(\d{2}):(\d{2})/', '$1-$2-$3', $dt);
+        }
+
+        $w = $exif['ExifImageWidth'] ?? $comp['Width'] ?? '';
+        $h = $exif['ExifImageLength'] ?? $comp['Height'] ?? '';
+        if ($w !== '' && $h !== '') $out[__('exif_s_size', '해상도')] = $w . ' × ' . $h;
+
+        // 조리개 — COMPUTED 에 이미 "f/1.6" 형태가 있으면 그것을 쓴다.
+        $ap = trim((string)($comp['ApertureFNumber'] ?? ''));
+        if ($ap === '') {
+            $fn = $rat($exif['FNumber'] ?? '');
+            if ($fn !== null && $fn > 0) $ap = 'f/' . rtrim(rtrim(number_format($fn, 1, '.', ''), '0'), '.');
+        }
+        if ($ap !== '') $out[__('exif_s_aperture', '조리개')] = $ap;
+
+        // 셔터속도 — 1초 미만이면 분수로 보여주는 것이 관례다.
+        $et = trim((string)($exif['ExposureTime'] ?? ''));
+        if ($et !== '') {
+            $etv = $rat($et);
+            if ($etv !== null && $etv > 0) {
+                $out[__('exif_s_shutter', '셔터')] = $etv < 1
+                    ? ('1/' . (int)round(1 / $etv) . __('exif_s_sec', '초'))
+                    : (rtrim(rtrim(number_format($etv, 1, '.', ''), '0'), '.') . __('exif_s_sec', '초'));
+            }
+        }
+
+        $iso = trim((string)($exif['ISOSpeedRatings'] ?? ''));
+        if ($iso !== '') $out['ISO'] = $iso;
+
+        $fl = $rat($exif['FocalLength'] ?? '');
+        if ($fl !== null && $fl > 0) {
+            $flTxt = rtrim(rtrim(number_format($fl, 1, '.', ''), '0'), '.') . 'mm';
+            $fl35 = trim((string)($exif['FocalLengthIn35mmFilm'] ?? ''));
+            if ($fl35 !== '') $flTxt .= ' (' . __('exif_s_eq35', '35mm 환산') . ' ' . $fl35 . 'mm)';
+            $out[__('exif_s_focal', '초점거리')] = $flTxt;
+        }
+
+        // GPS — "37/1, 23/1, 5372/100"(도,분,초) 를 십진수로 바꿔야 지도에 쓸 수 있다.
+        $dms = function ($v) use ($rat) {
+            if (!is_string($v) || $v === '') return null;
+            $parts = array_map('trim', explode(',', $v));
+            if (count($parts) < 3) return null;
+            $d = $rat($parts[0]); $m = $rat($parts[1]); $s2 = $rat($parts[2]);
+            if ($d === null || $m === null || $s2 === null) return null;
+            return $d + ($m / 60) + ($s2 / 3600);
+        };
+        $lat = $dms($gps['GPSLatitude'] ?? '');
+        $lon = $dms($gps['GPSLongitude'] ?? '');
+        if ($lat !== null && $lon !== null) {
+            if (strtoupper(trim((string)($gps['GPSLatitudeRef'] ?? 'N'))) === 'S')  $lat = -$lat;
+            if (strtoupper(trim((string)($gps['GPSLongitudeRef'] ?? 'E'))) === 'W') $lon = -$lon;
+            $out['GPS'] = number_format($lat, 6, '.', '') . ', ' . number_format($lon, 6, '.', '');
+        }
+
+        return $out;
+    }
+
     public function getMediaInfo(int $storageId, string $relativePath): array {
         if (empty($relativePath)) {
             return ['success' => false, 'error' => 'Path required'];

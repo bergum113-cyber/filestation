@@ -6036,6 +6036,21 @@ try {
             $fileManager->convertToH264Mp4($storageId, $path, $cvDelete);
             break;
         
+        // ★ (2026-08-25) 이미지 EXIF 조회 — 미리보기 모달의 [EXIF] 버튼용.
+        //   권한 검사는 media_info 와 동일한 패턴(로그인 + 폴더 권한)을 따른다.
+        case 'image_exif':
+            $auth->requireLogin();
+            $storageId = (int)($_GET['storage_id'] ?? 0);
+            $path = $_GET['path'] ?? '';
+            $exDir = dirname($path);
+            if ($exDir === '.') $exDir = '';
+            if (!$storage->checkFolderPermission($storageId, $exDir ?: $path)) {
+                $result = ['success' => false, 'error' => 'No permission'];
+                break;
+            }
+            $result = $fileManager->getImageExif($storageId, $path);
+            break;
+
         case 'media_info':
             // 동영상 코덱 정보 조회 (네이티브 재생 가능 여부 판단용)
             $auth->requireLogin();

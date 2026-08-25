@@ -5312,6 +5312,9 @@ desktop.ini"></textarea>
                     <span style="color:rgba(255,255,255,0.25);padding:0 3px;">│</span>
                     <button data-action="rotate"     title="회전" style="background:none;border:none;color:#fff;cursor:pointer;padding:2px 6px;line-height:0;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6"/><path d="M21.34 15.57a10 10 0 1 1-.57-8.38L21.5 8"/></svg></button>
                     <button data-action="fullscreen" title="전체화면" style="background:none;border:none;color:#fff;cursor:pointer;padding:2px 6px;line-height:0;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg></button>
+                    <!-- ★ (2026-08-25) EXIF 보기 — 촬영 정보가 있는 이미지에서만 의미가 있으나,
+                         버튼은 항상 두고 결과가 없으면 "정보 없음" 으로 안내한다. -->
+                    <button data-action="exif" title="EXIF 정보" style="background:none;border:none;color:#fff;cursor:pointer;padding:2px 6px;line-height:1;font-size:12px;">ⓘ</button>
                 </div>
                 <div class="modal-footer preview-footer">
                     <button class="btn" id="btn-preview-edit" style="display:none;"><?php echo $currentLang === 'en' ? '✏️ Edit' : '✏️ 편집'; ?></button>

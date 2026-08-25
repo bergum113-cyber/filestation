@@ -8075,6 +8075,9 @@ const App = {
                 if (_escConsumedByEditor) { _escConsumedByEditor = false; _escDownForPreview = false; return; }
                 if (_escDownForPreview) {
                     _escDownForPreview = false;
+                    // ★ (2026-08-25) 직전 keydown 에서 confirm 모달이 이 ESC 를 소비했으면
+                    //   미리보기는 그대로 둔다(모달 하나씩 닫히도록). 플래그는 1회용이다.
+                    if (App._escConsumedByConfirm) { App._escConsumedByConfirm = false; return; }
                     const previewModal = document.getElementById('modal-preview');
                     if (previewModal && previewModal.style.display !== 'none') {
                         const confirmOverlay = document.getElementById('confirm-modal-overlay');
@@ -12592,6 +12595,77 @@ const App = {
     _hideFsInfo() {
         const info = document.getElementById('_fs-info');
         if (info) info.style.display = 'none';
+    },
+
+    // ★ (2026-08-25) 이미지 EXIF 보기 — 줌 바의 ⓘ 버튼.
+    //   전체 EXIF 태그를 섹션(IFD0/EXIF/GPS 등)별로 보여준다(펜닐 선택).
+    //   파일 참조는 미리보기 다운로드와 **같은 값**을 쓴다(currentPreviewPath / currentPreviewStorageId) —
+    //   모달이 열린 채 다른 스토리지를 눌러도 안전한, 이미 검증된 방식이다.
+    async _imgShowExif() {
+        if (!this.currentPreviewPath) return;
+        const sid = this.currentPreviewStorageId || this.currentStorage;
+        let res;
+        try {
+            res = await this.api('image_exif', { storage_id: sid, path: this.currentPreviewPath }, 'GET');
+        } catch (e) {
+            this.toast(t('exif_failed', 'EXIF 정보를 읽지 못했습니다.'), 'error');
+            return;
+        }
+        if (!res || !res.success) {
+            this.toast(this.escapeHtml((res && res.error) || t('exif_failed', 'EXIF 정보를 읽지 못했습니다.')), 'error');
+            return;
+        }
+        const sections = res.sections || {};
+        const keys = Object.keys(sections);
+        if (!res.supported || keys.length === 0) {
+            this.alert(t('exif_none', '이 이미지에는 EXIF 정보가 없습니다. (JPEG/TIFF 만 지원)'), t('exif_title', 'EXIF 정보'));
+            return;
+        }
+        // ★ (2026-08-25) 요약을 위에, 전체 태그는 접어서 아래에 둔다.
+        //   전체 태그에는 유리수·코드값·UndefinedTag 등 사람이 못 읽는 값이 많아
+        //   기본 화면을 요약으로 채우고, 필요할 때만 펼치게 한다(펜닐 지적).
+        const summary = res.summary || {};
+        const sKeys = Object.keys(summary);
+        let html = '<div style="max-height:60vh;overflow:auto;font-size:12px;">';
+
+        if (sKeys.length) {
+            html += '<table style="width:100%;border-collapse:collapse;margin-bottom:10px;">';
+            sKeys.forEach(k => {
+                let v = this.escapeHtml(summary[k]);
+                // GPS 는 좌표만 보여주면 쓸모가 적어 지도 링크를 붙인다.
+                if (k === 'GPS') {
+                    const q = encodeURIComponent(summary[k]);
+                    v = v + ' <a href="https://www.google.com/maps?q=' + q + '" target="_blank" rel="noopener">'
+                      + t('exif_map', '지도') + ' ↗</a>';
+                }
+                html += '<tr>'
+                     + '<td style="padding:3px 10px 3px 0;color:#666;white-space:nowrap;vertical-align:top;">'
+                     + this.escapeHtml(k) + '</td>'
+                     + '<td style="padding:3px 0;word-break:break-all;">' + v + '</td></tr>';
+            });
+            html += '</table>';
+        }
+
+        html += '<details style="margin-top:4px;">'
+             + '<summary style="cursor:pointer;color:#2196F3;">' + t('exif_all', '전체 태그 보기') + '</summary>'
+             + '<div style="margin-top:6px;">';
+        keys.forEach(sec => {
+            html += '<div style="margin-bottom:10px;">'
+                 + '<div style="font-weight:600;margin-bottom:4px;color:#888;">' + this.escapeHtml(sec) + '</div>'
+                 + '<table style="width:100%;border-collapse:collapse;">';
+            Object.keys(sections[sec]).forEach(k => {
+                html += '<tr>'
+                     + '<td style="padding:2px 8px 2px 0;color:#666;white-space:nowrap;vertical-align:top;">'
+                     + this.escapeHtml(k) + '</td>'
+                     + '<td style="padding:2px 0;word-break:break-all;">'
+                     + this.escapeHtml(sections[sec][k]) + '</td></tr>';
+            });
+            html += '</table></div>';
+        });
+        html += '</div></details></div>';
+        // ★ alert(message, title) — **인자는 2개**다(3번째 인자는 존재하지 않음, 감사에서 확인).
+        //   내부에서 message 를 그대로 HTML 로 삽입하므로 위에서 만든 표가 그대로 렌더된다.
+        this.alert(html, t('exif_title', 'EXIF 정보'));
     },
 
     _imgFullscreen() {
@@ -33303,6 +33377,14 @@ const App = {
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation();
+                    // ★ (2026-08-25) 이 ESC 는 confirm 모달이 소비했음을 전역에 알린다.
+                    //   [문제] 미리보기 모달은 **keyup** 에서 닫히는데(브라우저 비디오 컨트롤이
+                    //   keydown 을 삼키기 때문), confirm 은 여기 **keydown** 에서 닫힌다.
+                    //   그래서 keyup 시점에는 confirm 오버레이가 이미 사라져 있어
+                    //   "confirm 이 떠 있으면 미리보기를 닫지 않는다"는 방어가 무력화되고
+                    //   **ESC 한 번에 두 모달이 함께 닫혔다**(EXIF 창에서 재현, 펜닐 제보).
+                    //   → 플래그를 남겨 바로 뒤따르는 keyup 이 미리보기를 닫지 않게 한다.
+                    App._escConsumedByConfirm = true;
                     this.confirmModalCancel();
                 }
             };
@@ -48172,6 +48254,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 case 'zoom-1to1':   App._imgZoomReset();     break;
                 case 'rotate':      App._imgRotate();        break;
                 case 'fullscreen':  App._imgFullscreen();    break;
+                // ★ (2026-08-25) EXIF 는 뷰어(줌) 인스턴스와 무관하므로 이 분기에만 둔다.
+                //   (위쪽 '뷰어 재초기화 후 실행' 분기는 줌 관련 동작을 위한 것이다.)
+                case 'exif':        App._imgShowExif();      break;
             }
         });
     }

@@ -2959,5 +2959,20 @@
     "pkg_syno_qsv": "패키지 센터에서 SynoCli Video Drivers · SynoCli Video Driver Tools 를 설치하세요.",
     "pkg_linux_qsv": "Intel QSV 런타임이 필요합니다 — Debian/Ubuntu: intel-media-va-driver-non-free, libmfx-gen1.2 (또는 libmfx1).",
     "pkg_syno_vaapi": "패키지 센터에서 SynoCli Video Drivers · SynoCli Video Driver Tools 를 설치하세요.",
-    "pkg_linux_vaapi": "VA-API 드라이버가 필요합니다 — Debian/Ubuntu: intel-media-va-driver (구세대는 i965-va-driver). 확인: vainfo"
+    "pkg_linux_vaapi": "VA-API 드라이버가 필요합니다 — Debian/Ubuntu: intel-media-va-driver (구세대는 i965-va-driver). 확인: vainfo",
+    "exif_title": "EXIF 정보",
+    "exif_none": "이 이미지에는 EXIF 정보가 없습니다. (JPEG/TIFF 만 지원)",
+    "exif_failed": "EXIF 정보를 읽지 못했습니다.",
+    "api_err_exif_ext": "PHP exif 확장이 설치되어 있지 않습니다.",
+    "exif_all": "전체 태그 보기",
+    "exif_map": "지도",
+    "exif_s_camera": "카메라",
+    "exif_s_lens": "렌즈",
+    "exif_s_datetime": "촬영일시",
+    "exif_s_size": "해상도",
+    "exif_s_aperture": "조리개",
+    "exif_s_shutter": "셔터",
+    "exif_s_sec": "초",
+    "exif_s_focal": "초점거리",
+    "exif_s_eq35": "35mm 환산"
 }

@@ -2964,5 +2964,20 @@
     "pkg_syno_qsv": "Install SynoCli Video Drivers and SynoCli Video Driver Tools from Package Center.",
     "pkg_linux_qsv": "Intel QSV runtime is required — Debian/Ubuntu: intel-media-va-driver-non-free, libmfx-gen1.2 (or libmfx1).",
     "pkg_syno_vaapi": "Install SynoCli Video Drivers and SynoCli Video Driver Tools from Package Center.",
-    "pkg_linux_vaapi": "A VA-API driver is required — Debian/Ubuntu: intel-media-va-driver (i965-va-driver for older GPUs). Check with: vainfo"
+    "pkg_linux_vaapi": "A VA-API driver is required — Debian/Ubuntu: intel-media-va-driver (i965-va-driver for older GPUs). Check with: vainfo",
+    "exif_title": "EXIF Info",
+    "exif_none": "This image has no EXIF data. (JPEG/TIFF only)",
+    "exif_failed": "Failed to read EXIF data.",
+    "api_err_exif_ext": "The PHP exif extension is not installed.",
+    "exif_all": "Show all tags",
+    "exif_map": "Map",
+    "exif_s_camera": "Camera",
+    "exif_s_lens": "Lens",
+    "exif_s_datetime": "Taken",
+    "exif_s_size": "Dimensions",
+    "exif_s_aperture": "Aperture",
+    "exif_s_shutter": "Shutter",
+    "exif_s_sec": "s",
+    "exif_s_focal": "Focal length",
+    "exif_s_eq35": "35mm equiv."
 }
