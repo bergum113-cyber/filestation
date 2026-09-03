@@ -5,13 +5,21 @@ require_once __DIR__ . '/php_version_check.php';
  * 
  * Rust + WebAssembly (rhwp) 기반 고품질 HWP/HWPX 렌더링
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.8.4
+ * @rhwp_version 0.8.6
  */
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/lang.php';
 
 $currentLang = getLang();
+// ★ (2026-09-02) HTML 캐시 방지 — index.php 와 동일 취지.
+//   이 페이지도 `?v=APP_VERSION` 으로 자산을 캐시버스팅하지만, **HTML 이 캐시되면
+//   옛 버전 문자열을 참조한 채 남아** 새 자산을 요청하지 않는다.
+//   HTML 만 매번 새로 받게 하고 자산 캐시는 그대로 둔다(트래픽 영향 없음).
+header('Cache-Control: no-cache, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
+
 $storage = new Storage();
 $auth = new Auth();
 

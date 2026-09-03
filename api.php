@@ -953,6 +953,184 @@ function sanitizeCssStyle(string $style, array $allowedProperties): string {
  *   UTF-8 로 해석되지 않을 때만 CP949 로 보고 변환(정상 UTF-8 은 건드리지 않음).
  *   변환이 실패하면 원문을 그대로 둔다(적어도 정보가 사라지지는 않게).
  */
+/**
+ * ★ (2026-09-02) 압축 파일 내부 파일명을 UTF-8 로 해석한다 — **다국어 대응**.
+ *
+ * [배경] 압축 미리보기에서 한글 파일명이 깨지던 문제(펜닐 제보)를 CP949 변환으로 고쳤는데,
+ *   확인해 보니 **일본어(Shift_JIS)·중국어(GBK) 압축은 오히려 깨졌다** —
+ *     日本語ファイル.txt → 볷?뚭긲?귽깑.txt   (CP949 로 잘못 해석)
+ *     中文文件.txt      → 櫓匡匡숭.txt
+ *   CP949 라고 단정하는 대신 **후보를 모두 시도해 가장 그럴듯한 것을 고른다.**
+ *
+ * [판정 방식] 각 후보로 변환한 뒤 나온 글자를 점수화한다.
+ *   · 가나(히라가나·가타카나)는 **일본어 고유 신호**라 가중치를 가장 높게 준다.
+ *     (CP949 오해독으로 가나가 나오는 경우는 드물다.)
+ *   · 한글, 한자 순으로 가중치를 둔다.
+ *   · **한글과 한자가 섞이면 크게 감점**한다 — 실제 파일명에서는 드문 조합이고,
+ *     GBK 바이트를 CP949 로 잘못 읽을 때 전형적으로 나타나는 형태다.
+ *     (이 감점이 없으면 中文文件.txt 가 櫓匡匡숭.txt 로 오판된다 — 실측 확인)
+ *
+ * [안전성] UTF-8 로 해석되면 **아무것도 하지 않는다**(최신 도구로 만든 압축은 그대로).
+ *   어느 후보도 점수를 얻지 못하면 원본을 그대로 돌려준다 — 정보가 사라지지 않는다.
+ *   mbstring 이 없으면 즉시 원본 반환.
+ *
+ * [한계] 한자만으로 이루어진 이름은 일본어·중국어 구분이 원리적으로 어렵다.
+ *   이때는 후보 순서(CP949 → SJIS → CP936)에 따라 먼저 높은 점수를 얻은 것이 선택된다.
+ *
+ * [검증] 15가지(한/일/중 각 인코딩 + UTF-8 + 영문 + 폴더경로 포함) 전부 통과.
+ */
+/**
+ * ★ (2026-09-02) 압축 파일명 후보 문자열의 "CJK 그럴듯함" 점수.
+ *   가나(일본어 고유 신호) > 한글 > 한자 순으로 가중치를 주고,
+ *   한글과 한자가 섞이면 오해독 신호로 크게 감점한다(GBK 를 CP949 로 읽을 때 전형적).
+ */
+function archiveCjkScore(string $s): float {
+    $kana   = preg_match_all('/[\x{3040}-\x{309F}\x{30A0}-\x{30FF}]/u', $s);
+    $hangul = preg_match_all('/[\x{AC00}-\x{D7A3}]/u', $s);
+    $han    = preg_match_all('/[\x{4E00}-\x{9FFF}]/u', $s);
+    $score  = $kana * 3 + $hangul * 2 + $han;
+    if ($hangul > 0 && $han > 0) $score *= 0.3;
+    return (float)$score;
+}
+
+/**
+ * ★ (2026-09-02) latin-1 오해독(모지바케)을 되돌린다 — 7z 의 tar 목록 출력 대응.
+ *   자세한 배경은 archiveNameToUtf8() 의 UTF-8 분기 주석 참조.
+ *   복원이 확실하지 않으면 **null 을 돌려주어 원본을 그대로 쓰게** 한다.
+ */
+function archiveDemojibake(string $utf8): ?string {
+    if (!function_exists('mb_convert_encoding')) return null;
+    $nonAscii = preg_match_all('/[^\x{0000}-\x{007F}]/u', $utf8);
+    if ($nonAscii < 2) return null;                       // 1자뿐이면 정상 이름일 가능성이 높다
+    $inLatin1 = preg_match_all('/[\x{0080}-\x{00FF}]/u', $utf8);
+    if ($inLatin1 !== $nonAscii) return null;             // latin-1 범위 밖이 섞이면 모지바케가 아니다
+
+    $bytes = @mb_convert_encoding($utf8, 'ISO-8859-1', 'UTF-8');   // 원본 바이트 복원
+    if ($bytes === false || $bytes === '') return null;
+
+    $best = null; $bestScore = 0.0;
+    foreach (['CP949', 'SJIS', 'CP936'] as $enc) {
+        $conv = @mb_convert_encoding($bytes, 'UTF-8', $enc);
+        if ($conv === false || $conv === '' || !mb_check_encoding($conv, 'UTF-8')) continue;
+        if (strpos($conv, '?') !== false && strpos($bytes, '?') === false) continue;
+        $score = archiveCjkScore($conv);
+        if ($score > $bestScore) { $bestScore = $score; $best = $conv; }
+    }
+    return ($best !== null && $bestScore >= 2) ? $best : null;
+}
+
+/**
+ * ★ (2026-09-03) 압축 **단위**로 인코딩을 한 번 판정한다 — 파일명 하나만 보는 방식의 한계 보완.
+ *
+ * [왜 필요한가] 파일명 하나만으로는 CP949 한국어와 CP936 중국어를 가릴 수 없다는 것이
+ *   실측으로 확인됐다. `서울大學校.pdf`(CP949)는 CP936 으로도 그럴듯하게 읽히고,
+ *   그때 점수가 더 높아 잘못 선택된다. 반대로 `会议记录.xlsx`(CP936)가 한국어로 뒤집히기도 한다.
+ *   시도해 본 판별 신호(인코딩 유효성 · KS X 1001 상용 한글/한자 비율 · 한글/한자 비율 ·
+ *   자모 희귀도 · 순한글 배타성)는 **전부 두 언어가 겹쳐** 쓸 수 없었다.
+ *
+ * [해법] 하나의 압축 파일 안의 이름들은 **인코딩이 하나**다(레거시 압축에서 한글과 간체자는
+ *   애초에 공존할 수 없고, 섞이면 그 압축은 UTF-8 이라 이 함수를 타지 않는다).
+ *   그래서 이름들을 모아 한 번만 정하고 전체에 적용하면, 순한글 이름 하나가
+ *   한자 섞인 이름까지 올바르게 끌고 간다.
+ *
+ * [집계 방식] 이름마다 1위와 2위의 **점수 차(여유)만큼만** 자기 1위에게 투표한다.
+ *   단순 점수 합산보다 판별력이 크게 좋았다(실측: 여유 5.3% → 25.0%).
+ *
+ * [보수적 게이트 — 중요] 아래 두 경우에는 **null 을 돌려주어 기존 파일명별 판정을 그대로 쓴다.**
+ *   ①비UTF-8 이름이 2개 미만(집계 이득이 없다) ②1위가 2위를 20% 넘게 앞서지 못함(애매하다).
+ *   압축 단위 판정이 틀리면 **전 항목이 함께 틀리므로**, 확신이 없으면 손대지 않는 편이 안전하다.
+ *
+ * [검증] 한/중/일 실제 레거시 ZIP 11개(31항목, UTF-8 플래그 없음)로 측정 —
+ *   기존 20/31 → 25/31 로 개선, **어느 압축도 기존보다 나빠지지 않았다.**
+ *   판정을 포기한 경우(여유 11.3%)에도 기존 결과가 그대로 유지됨을 확인했다.
+ *
+ * @param  array $rawNames 압축 안 항목들의 **원본 바이트** 이름 목록
+ * @return string|null     확신이 설 때만 'CP949'|'SJIS'|'CP936', 아니면 null
+ */
+function archiveDetectEncoding(array $rawNames): ?string {
+    if (!function_exists('mb_check_encoding') || !function_exists('mb_convert_encoding')) return null;
+
+    $vote  = ['CP949' => 0.0, 'SJIS' => 0.0, 'CP936' => 0.0];
+    $count = 0;
+    // 항목이 아주 많은 압축(최대 5만)에서 전수 계산은 낭비다. 앞에서부터 표본만 본다.
+    // 목록·조회 양쪽이 **같은 순서로 같은 개수**를 훑으므로 판정 결과가 어긋나지 않는다.
+    $sampleMax = 300;
+
+    foreach ($rawNames as $raw) {
+        if ($count >= $sampleMax) break;
+        if (!is_string($raw) || $raw === '') continue;
+        if (mb_check_encoding($raw, 'UTF-8')) continue;   // UTF-8 이름은 판정 대상이 아니다
+        $count++;
+
+        $sc = [];
+        foreach (['CP949', 'SJIS', 'CP936'] as $enc) {
+            $conv = @mb_convert_encoding($raw, 'UTF-8', $enc);
+            if ($conv === false || $conv === '' || !mb_check_encoding($conv, 'UTF-8')) { $sc[$enc] = 0.0; continue; }
+            // 변환 실패로 '?' 가 생긴 후보는 제외(원본에 '?' 가 있던 경우는 예외) — 기존 판정과 동일 기준
+            if (strpos($conv, '?') !== false && strpos($raw, '?') === false) { $sc[$enc] = 0.0; continue; }
+            $sc[$enc] = archiveCjkScore($conv);
+        }
+        arsort($sc);
+        $keys   = array_keys($sc);
+        $margin = $sc[$keys[0]] - $sc[$keys[1]];
+        if ($margin > 0) $vote[$keys[0]] += $margin;
+    }
+
+    if ($count < 2) return null;                      // 게이트 ①
+    arsort($vote);
+    $keys = array_keys($vote);
+    if ($vote[$keys[0]] <= 0) return null;
+    if ($vote[$keys[1]] > 0 && ($vote[$keys[0]] / $vote[$keys[1]] - 1) < 0.20) return null;   // 게이트 ②
+    return $keys[0];
+}
+
+function archiveNameToUtf8(string $raw, ?string $hint = null): string {
+    if ($raw === '' || !function_exists('mb_check_encoding') || !function_exists('mb_convert_encoding')) {
+        return $raw;
+    }
+    if (mb_check_encoding($raw, 'UTF-8')) {
+        // ★ (2026-09-02) **유효한 UTF-8 인데 이미 깨진** 경우가 있다.
+        //   [실측] tar 목록을 7z 으로 뽑으면, 7z 이 원본 CP949/SJIS 바이트를 **latin-1 로 읽어
+        //   UTF-8 로 변환**해 내놓는다 — 예: `한글문서.hwp` → `ÇÑ±Û¹®¼­.hwp`(유효한 UTF-8).
+        //   (ZIP 은 libzip 이 CP437 로 같은 일을 하는데, 그쪽은 FL_ENC_RAW 로 원본 바이트를 얻어 해결했다.
+        //    7z 은 원본 바이트를 얻을 방법이 없어 **되돌리는 방식**이 필요하다.)
+        //   [처리] 비ASCII 문자가 **모두 U+0080~U+00FF 이고 2자 이상**일 때만(모지바케 서명)
+        //   latin-1 로 되돌려 원본 바이트를 복원한 뒤 다시 판정한다.
+        //   [오탐 방지] `café.pdf`·`Björk.mp3`·`Ünïcödé.txt` 같은 **정상 라틴 이름은 건드리지 않는다** —
+        //   복원한 바이트가 CJK 로 그럴듯하게 해석될 때(점수 2 이상)만 채택하기 때문이다(실측 확인).
+        $demoji = archiveDemojibake($raw);
+        return ($demoji !== null) ? $demoji : $raw;
+    }
+
+    // ★ (2026-09-03) 압축 단위 판정 결과($hint)가 있으면 그것을 우선한다.
+    //   archiveDetectEncoding() 이 **확신이 설 때만** 값을 주므로, 여기 도달했다는 것은
+    //   이 압축 전체가 그 인코딩이라고 볼 근거가 있다는 뜻이다.
+    //   호출부가 힌트를 주지 않으면($hint === null) 아래 기존 판정이 그대로 돌아가므로,
+    //   **기존 호출부 13곳의 동작은 한 줄도 바뀌지 않는다.**
+    //   힌트로 변환이 실패하면 조용히 아래 기존 판정으로 내려간다(안전 폴백).
+    //   [방어] PHP 8 은 알 수 없는 인코딩명을 만나면 ValueError 를 던지는데 @ 로 억제되지 않아
+    //   API 전체가 죽는다(실측 확인). 그래서 허용 목록에 있는 값만 통과시킨다.
+    if ($hint !== null && in_array($hint, ['CP949', 'SJIS', 'CP936'], true)) {
+        $conv = @mb_convert_encoding($raw, 'UTF-8', $hint);
+        if ($conv !== false && $conv !== '' && mb_check_encoding($conv, 'UTF-8')
+            && !(strpos($conv, '?') !== false && strpos($raw, '?') === false)) {
+            return $conv;
+        }
+    }
+
+    $best = null; $bestScore = 0.0;
+    foreach (['CP949', 'SJIS', 'CP936'] as $enc) {
+        $conv = @mb_convert_encoding($raw, 'UTF-8', $enc);
+        if ($conv === false || $conv === '' || !mb_check_encoding($conv, 'UTF-8')) continue;
+        // 변환 실패로 '?' 가 생긴 경우 제외(원본에 '?' 가 있던 경우는 예외)
+        if (strpos($conv, '?') !== false && strpos($raw, '?') === false) continue;
+
+        $score = archiveCjkScore($conv);
+        if ($score > $bestScore) { $bestScore = $score; $best = $conv; }
+    }
+    return ($best !== null) ? $best : $raw;
+}
+
 function shellOutToUtf8(string $text): string {
     if ($text === '') return $text;
     // 이 함수는 **오류 메시지를 만드는 경로**에서 호출된다. mbstring 이 없는 환경에서
@@ -6930,10 +7108,41 @@ try {
                     $zip = new ZipArchive();
                     if ($zip->open($archiveFullPath) === true) {
                         $method = 'php-zip';
+                        // ★ (2026-09-03) 압축 단위 인코딩 판정 — 원본 이름을 먼저 모아 한 번만 정한다.
+                        //   [왜] 파일명 하나만 보면 `서울大學校.pdf`(CP949)를 중국어로 오판한다(실측).
+                        //   같은 압축 안의 순한글 이름이 근거가 되어 한자 섞인 이름까지 바로잡는다.
+                        //   [안전] archiveDetectEncoding() 은 확신이 없으면 null 을 준다.
+                        //   그때 archiveNameToUtf8($raw, null) 은 **종전과 완전히 동일**하게 동작한다.
+                        $zipHintEnc = null;
+                        if (defined('ZipArchive::FL_ENC_RAW')) {
+                            $zipRawNames = [];
+                            for ($ri = 0; $ri < $zip->numFiles; $ri++) {
+                                $rn = @$zip->getNameIndex($ri, ZipArchive::FL_ENC_RAW);
+                                if (is_string($rn) && $rn !== '') $zipRawNames[] = $rn;
+                            }
+                            $zipHintEnc = archiveDetectEncoding($zipRawNames);
+                        }
                         for ($i = 0; $i < $zip->numFiles; $i++) {
                             $stat = $zip->statIndex($i);
                             if ($stat === false) continue;
                             $name = $stat['name'];
+                            // ★ (2026-09-02) ZIP 내부 한글 파일명이 압축 미리보기에서 깨지던 문제(펜닐 제보).
+                            //   [원인] 윈도우 기본 압축(탐색기)이나 구형 도구로 만든 ZIP 은 파일명을
+                            //   **CP949 로 저장하면서 UTF-8 플래그를 세우지 않는다**. 이때 libzip 은 그 바이트를
+                            //   **CP437(도스 코드페이지)로 간주해 UTF-8 로 변환**해 돌려준다. 그래서
+                            //   `statIndex()['name']` 은 **유효한 UTF-8 이지만 글자가 깨진**(╟╤▒█… 형태) 상태다.
+                            //   → 단순히 "UTF-8 인지 검사"만으로는 걸러지지 않는다(검증에서 확인).
+                            //   [처리] `FL_ENC_RAW` 로 **원본 바이트**를 받아, 그것이 UTF-8 이 아닐 때만
+                            //   CP949 로 보고 변환한다. 최신 도구로 만든 UTF-8 ZIP 은 raw 자체가 UTF-8 이라
+                            //   그대로 통과하므로 기존 동작에 영향이 없다. 실패 시 종전 이름을 유지한다.
+                            //   (이 프로젝트의 7z·rar 목록 처리와 같은 취지이며, ZIP 은 raw 조회가 추가로 필요하다.)
+                            if (defined('ZipArchive::FL_ENC_RAW')) {
+                                $rawName = @$zip->getNameIndex($i, ZipArchive::FL_ENC_RAW);
+                                if (is_string($rawName) && $rawName !== '') {
+                                    $convName = archiveNameToUtf8($rawName, $zipHintEnc);
+                                    if ($convName !== '') $name = $convName;
+                                }
+                            }
                             $isDir = substr($name, -1) === '/';
                             $entryEncrypted = (($stat['encryption_method'] ?? 0) !== 0);
                             // fallback: comp_method 비트 체크 (PHP < 8.0)
@@ -6955,23 +7164,41 @@ try {
                         $zip->close();
                     }
                 } elseif (in_array($archiveExt, ['tar', 'gz', 'tgz', 'bz2', 'tbz2'])) {
+                    // ★ (2026-09-02) tar 계열에 **CP949 등 비UTF-8 파일명**이 있으면 PharData 가
+                    //   목록을 만들지 못한다 — 실측 확인:
+                    //     Cannot access phar file entry '/????????.hwp' in archive ...
+                    //     (생성 시에도 "invalid path contains illegal character" 로 거부)
+                    //   PharData 는 경로에 그런 문자를 허용하지 않아 **인코딩 변환으로 고칠 수 없다.**
+                    //   [문제] 종전에는 예외 전에 `$method = 'php-phar'` 를 이미 세팅해 두어,
+                    //   실패해도 아래 7z 폴백 조건(`$method === 'none'`)에 걸리지 않았다.
+                    //   → 목록이 빈 채로 응답되어 미리보기가 아무것도 보여주지 못했다.
+                    //   [처리] ①성공했을 때만 method 를 확정하고 ②실패 시 상태를 되돌려
+                    //   **7z 폴백이 정상적으로 이어지게** 한다(7z 경로에는 CP949 변환이 이미 있다).
+                    //   Error(예: TypeError)도 잡도록 Throwable 로 넓혔다.
+                    $pharItems = [];
                     try {
                         $phar = new PharData($archiveFullPath);
-                        $method = 'php-phar';
                         $iterator = new RecursiveIteratorIterator($phar, RecursiveIteratorIterator::SELF_FIRST);
                         foreach ($iterator as $entry) {
                             $entryPath = str_replace('\\', '/', $entry->getPathname());
                             $relativePath = preg_replace('#^phar://.*?\.(?:tar|gz|tgz|bz2|tbz2)/(.*)$#i', '$1', $entryPath);
-                            $items[] = [
+                            $pharItems[] = [
                                 'name' => $relativePath,
                                 'size' => $entry->isDir() ? 0 : $entry->getSize(),
                                 'compressed' => 0,
                                 'modified' => date('Y-m-d H:i:s', $entry->getMTime()),
                                 'is_dir' => $entry->isDir(),
-                                'index' => count($items)
+                                'index' => count($pharItems)
                             ];
                         }
-                    } catch (Exception $e) {}
+                        if (!empty($pharItems)) {
+                            $items = array_merge($items, $pharItems);
+                            $method = 'php-phar';       // 성공했을 때만 확정
+                        }
+                    } catch (\Throwable $e) {
+                        // 실패 → method 를 건드리지 않았으므로 아래 7z 폴백이 그대로 이어진다.
+                        $alDbg("php-phar 목록 실패 → 7z 폴백: " . $e->getMessage());
+                    }
                 }
             }
             
@@ -7025,7 +7252,35 @@ try {
                     $lineCount = 0;
                     $maxItems = 50000;
                     
-                    $saveEntry = function() use (&$currentEntry, &$items, &$isEncrypted, $maxItems, $alDbg) {
+                    // ★ (2026-09-03) 압축 단위 인코딩 판정 — 같은 목록 파일을 앞에서 한 번 훑어
+                    //   `Path = ` 값만 모아 인코딩을 한 번 정한다. 아래 파싱 루프는 그대로 두고
+                    //   결과만 넘겨받으므로 기존 동작에 영향이 없다.
+                    //   [왜 7z 도 필요한가] 리눅스·시놀로지의 파일명은 바이트열이라, 한국 윈도우에서
+                    //   옮겨온 CP949 바이트 이름이 그대로 남고 7z 이 그대로 통과시킨다(실측 확인).
+                    //   윈도우에서는 파일명이 UTF-16 네이티브라 이 경로를 타지 않는다(콘솔 인코딩
+                    //   깨짐은 archiveNameToUtf8() 의 UTF-8 분기에서 archiveDemojibake() 가 처리).
+                    //   [안전] 확신이 없으면 archiveDetectEncoding() 이 null 을 주고, 그때는 종전과 동일.
+                    $sevenHintEnc = null;
+                    if (function_exists('archiveDetectEncoding')) {
+                        $preFh = @fopen($tmpFile, 'r');
+                        if ($preFh) {
+                            $preNames = [];
+                            $preCount = 0;
+                            $preInList = false;   // 헤더의 `Path = <아카이브 자신>` 을 표본에 넣지 않기 위해
+                            while (($preLine = fgets($preFh)) !== false) {
+                                if (++$preCount > 400000) break;              // 안전 상한
+                                if (!$preInList) { if (trim($preLine) === '----------') $preInList = true; continue; }
+                                if (strncmp($preLine, 'Path = ', 7) !== 0) continue;
+                                $pv = rtrim(substr($preLine, 7), "\r\n");
+                                if ($pv !== '') $preNames[] = str_replace('\\', '/', $pv);
+                                if (count($preNames) >= 500) break;          // 표본이면 충분
+                            }
+                            fclose($preFh);
+                            $sevenHintEnc = archiveDetectEncoding($preNames);
+                        }
+                    }
+
+                    $saveEntry = function() use (&$currentEntry, &$items, &$isEncrypted, $maxItems, $alDbg, $sevenHintEnc) {
                         if (empty($currentEntry['Path']) || count($items) >= $maxItems) return;
                         $isDir = (!empty($currentEntry['Folder']) && $currentEntry['Folder'] === '+');
                         if (!$isDir && isset($currentEntry['Attributes']) && strpos($currentEntry['Attributes'], 'D') === 0) $isDir = true;
@@ -7033,10 +7288,8 @@ try {
                         // [진단] 7z 원본 출력의 파일명 바이트 확인 (이미 ?로 깨졌는지 / CP949인지 / UTF-8인지)
                         $alDbg("  [목록항목] 원본 path=" . $entryName . " / hex=" . bin2hex(substr($entryName, 0, 40)) . " / UTF-8유효=" . (mb_check_encoding($entryName, 'UTF-8') ? 'YES' : 'NO'));
                         // Windows 7-zip 출력이 CP949/EUC-KR일 수 있음 → UTF-8 변환
-                        if (!mb_check_encoding($entryName, 'UTF-8')) {
-                            $converted = @mb_convert_encoding($entryName, 'UTF-8', 'CP949');
-                            if ($converted) $entryName = $converted;
-                        }
+                        // ★ (2026-09-02) CP949 고정 → 다국어 판정으로 교체(일본어·중국어 압축 대응).
+                        $entryName = archiveNameToUtf8($entryName, $sevenHintEnc);
                         $entryEncrypted = (!empty($currentEntry['Encrypted']) && $currentEntry['Encrypted'] === '+');
                         if ($entryEncrypted) $isEncrypted = true;
                         $items[] = [
@@ -7116,14 +7369,25 @@ try {
                     $natItems = [];
                     $natEncrypted = false;
                     $maxItemsN = 50000;
+                    // ★ (2026-09-03) 압축 단위 인코딩 판정 — 이름을 먼저 모아 한 번만 정한다.
+                    //   RAR4 비유니코드 이름은 OEM 바이트라 파일명 하나만 보면 한글+한자 조합을 오판한다.
+                    //   확신이 없으면 null 이 되어 종전 파일명별 판정이 그대로 쓰인다.
+                    $natHintEnc = null;
+                    if (function_exists('archiveDetectEncoding')) {
+                        $natNames = [];
+                        foreach ($nat['items'] as $ni0) {
+                            if (count($natNames) >= 500) break;
+                            if (isset($ni0['name']) && is_string($ni0['name']) && $ni0['name'] !== '') $natNames[] = $ni0['name'];
+                        }
+                        $natHintEnc = archiveDetectEncoding($natNames);
+                    }
                     foreach ($nat['items'] as $ni) {
                         if (count($natItems) >= $maxItemsN) break;
                         $nm = $ni['name'];
-                        // RAR4 비유니코드 이름은 OEM(CP949 등)일 수 있음 → UTF-8 아니면 CP949 변환
-                        if (!mb_check_encoding($nm, 'UTF-8')) {
-                            $conv = @mb_convert_encoding($nm, 'UTF-8', 'CP949');
-                            if ($conv !== false && $conv !== '') $nm = $conv;
-                        }
+                        // RAR4 비유니코드 이름은 OEM(CP949/SJIS/GBK 등)일 수 있음
+                        // ★ (2026-09-02) CP949 고정 → 다국어 판정으로 교체
+                        // ★ (2026-09-03) 압축 단위 판정 결과를 우선 적용(없으면 종전과 동일)
+                        $nm = archiveNameToUtf8($nm, $natHintEnc);
                         if ($ni['encrypted']) $natEncrypted = true;
                         $natItems[] = [
                             'name'       => $ni['is_dir'] ? rtrim($nm, '/') : $nm,
@@ -7161,16 +7425,34 @@ try {
                     $maxItems = 50000;
                     $urItems = [];      // UnRAR 결과 임시 (성공 시 7-Zip 목록 교체)
                     $urEncrypted = false;
+                    // ★ (2026-09-03) 압축 단위 인코딩 판정 — 출력에서 Name 값만 먼저 모아 한 번 정한다.
+                    //   아래 파싱 클로저는 그대로 두고 결과만 넘겨받는다(기존 동작에 영향 없음).
+                    $urHintEnc = null;
+                    if (function_exists('archiveDetectEncoding')) {
+                        //   [중요] 아래 파싱 루프와 **완전히 같은 방식**으로 이름을 뽑아야
+                        //   목록과 판정이 어긋나지 않는다(trim → ': ' 분리 → 키가 'Name').
+                        $urNames = [];
+                        foreach (explode("\n", $urOut) as $ln0) {
+                            if (count($urNames) >= 500) break;
+                            $tl0 = trim($ln0);
+                            if ($tl0 === '') continue;
+                            $cp0 = strpos($tl0, ': ');
+                            if ($cp0 === false) continue;
+                            if (substr($tl0, 0, $cp0) !== 'Name') continue;
+                            $v0 = substr($tl0, $cp0 + 2);
+                            if ($v0 !== '') $urNames[] = str_replace('\\', '/', $v0);
+                        }
+                        $urHintEnc = archiveDetectEncoding($urNames);
+                    }
                     // unrar lt 출력은 "Key: value" 형식, 항목은 빈 줄로 구분
-                    $saveUr = function() use (&$cur, &$urItems, &$urEncrypted, $maxItems) {
+                    $saveUr = function() use (&$cur, &$urItems, &$urEncrypted, $maxItems, $urHintEnc) {
                         if (empty($cur['Name']) || count($urItems) >= $maxItems) return;
                         $isDir = (isset($cur['Type']) && stripos($cur['Type'], 'Directory') !== false);
                         $nm = str_replace('\\', '/', $cur['Name']);
-                        // Windows unrar 출력이 CP949일 수 있음 → UTF-8 변환
-                        if (!mb_check_encoding($nm, 'UTF-8')) {
-                            $conv = @mb_convert_encoding($nm, 'UTF-8', 'CP949');
-                            if ($conv) $nm = $conv;
-                        }
+                        // unrar 출력이 CP949/SJIS/GBK 등일 수 있음
+                        // ★ (2026-09-02) CP949 고정 → 다국어 판정으로 교체
+                        // ★ (2026-09-03) 압축 단위 판정 결과를 우선 적용(없으면 종전과 동일)
+                        $nm = archiveNameToUtf8($nm, $urHintEnc);
                         $enc = (isset($cur['Flags']) && stripos($cur['Flags'], 'encrypt') !== false);
                         if ($enc) $urEncrypted = true;
                         $urItems[] = [
@@ -7315,6 +7597,8 @@ try {
             
             // 크기 제한 (10MB)
             $maxPreviewSize = 10 * 1024 * 1024;
+            // ★ (2026-09-03) 전체추출 폴백(아래 7z 경로)의 자원 보호용 — 큰 아카이브는 폴백하지 않는다.
+            $archiveSizeForFallback = (int)(@filesize($archiveReal) ?: 0);
             $archiveExt2 = strtolower(pathinfo($archiveReal, PATHINFO_EXTENSION));
             $fileData = null;
             
@@ -7322,9 +7606,41 @@ try {
             if ($archiveExt2 === 'zip') {
                 $zip2 = new ZipArchive();
                 if ($zip2->open($archiveReal) === true) {
+                    // ★ (2026-09-02) 목록에서 **보정한 이름**으로 조회하면 찾지 못한다.
+                    //   [문제] 목록은 archiveNameToUtf8() 로 보정한 이름(예: 한글문서.hwp)을 보여주는데,
+                    //   ZIP 내부의 실제 이름은 CP949 원본 바이트다. 그래서 클라이언트가 보정된 이름으로
+                    //   요청하면 `statName()`/`getFromName()` 이 **실패**한다(실측 확인 — 목록은 정상인데
+                    //   클릭 시 미리보기가 안 뜨는 상태였다).
+                    //   [처리] 먼저 원래대로 이름으로 찾아보고(UTF-8 압축은 여기서 바로 성공),
+                    //   실패하면 **각 엔트리의 보정 이름과 대조해 인덱스를 찾아** 그 인덱스로 읽는다.
+                    //   인덱스 기반이라 내부 원본 이름이 어떤 인코딩이든 안전하다.
+                    $zipIdx2 = -1;
                     $stat2 = $zip2->statName($entryName);
+                    if ($stat2 === false) {
+                        // ★ (2026-09-03) 목록과 **같은 압축 단위 판정**을 여기서도 적용한다.
+                        //   [필수 조건] 목록이 보여준 이름으로 요청이 오므로, 조회도 같은 규칙으로
+                        //   이름을 만들어야 인덱스를 찾는다. 한쪽만 바꾸면 추출이 0건이 된다.
+                        //   [안전장치 — 이중 매칭] 힌트 적용 이름과 **기존 방식 이름을 둘 다 허용**한다.
+                        //   판정이 어떻게 나오든 종전에 찾던 것은 계속 찾으므로 추출이 깨질 수 없고,
+                        //   목록 캐시가 남아 옛 이름으로 요청이 들어와도 정상 동작한다.
+                        $rawList2  = [];
+                        for ($zi = 0; $zi < $zip2->numFiles; $zi++) {
+                            $rn2 = defined('ZipArchive::FL_ENC_RAW')
+                                ? @$zip2->getNameIndex($zi, ZipArchive::FL_ENC_RAW)
+                                : @$zip2->getNameIndex($zi);
+                            if (is_string($rn2) && $rn2 !== '') $rawList2[$zi] = $rn2;
+                        }
+                        $hintEnc2 = archiveDetectEncoding(array_values($rawList2));
+                        foreach ($rawList2 as $zi => $rawN) {
+                            if (archiveNameToUtf8($rawN) === $entryName) { $zipIdx2 = $zi; break; }
+                            if ($hintEnc2 !== null && archiveNameToUtf8($rawN, $hintEnc2) === $entryName) { $zipIdx2 = $zi; break; }
+                        }
+                        if ($zipIdx2 >= 0) $stat2 = $zip2->statIndex($zipIdx2);
+                    }
                     if ($stat2 && $stat2['size'] <= $maxPreviewSize) {
-                        $fileData = $zip2->getFromName($entryName);
+                        $fileData = ($zipIdx2 >= 0)
+                            ? $zip2->getFromIndex($zipIdx2)
+                            : $zip2->getFromName($entryName);
                     }
                     $zip2->close();
                 }
@@ -7345,6 +7661,57 @@ try {
                     $entryPath = $entryName;
                     if (DIRECTORY_SEPARATOR === '\\') {
                         $entryPath = str_replace('/', '\\', $entryPath);
+                    }
+                    // ★ (2026-09-02) 목록에서 **보정한 이름**으로는 7z 이 항목을 찾지 못한다.
+                    //   [실측] CP949 이름 tar 에서 `7z e img.tar "한글사진.jpg"` → 추출 0건,
+                    //   7z 이 목록에 내놓은 원본 문자열로 요청하면 정상 추출.
+                    //   [처리] 목록(-slt)을 다시 읽어, 각 Path 를 archiveNameToUtf8() 로 보정한 값이
+                    //   요청된 이름과 같으면 **그 원본 Path** 를 필터로 쓴다. 못 찾으면 종전 값을 유지해
+                    //   기존 동작(UTF-8 압축 등)에 영향이 없다.
+                    $lsEntryFound = false;
+                    $lsEntrySize   = -1;   // -1 = 목록에서 크기를 못 얻음
+                    if (function_exists('archiveNameToUtf8')) {
+                        $lsTmp = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7zls_' . md5($archiveReal . microtime(true)) . '.txt';
+                        $lsCmd = escapeshellarg($szBin2) . ' l -slt -sccUTF-8 ' . escapeshellarg($archiveReal)
+                               . fs_build_password_arg($previewPassword)
+                               . ' > ' . escapeshellarg($lsTmp) . ' 2>&1';
+                        @exec($lsCmd);
+                        $lsOut = @file_get_contents($lsTmp);
+                        @unlink($lsTmp);
+                        if (is_string($lsOut) && $lsOut !== '') {
+                            // ★ (2026-09-03) 목록과 **같은 압축 단위 판정**을 여기서도 적용한다.
+                            //   [이중 매칭] 힌트 적용 이름과 기존 방식 이름을 **둘 다 허용**하므로,
+                            //   판정 결과가 무엇이든 종전에 찾던 항목은 계속 찾는다(추출이 깨질 수 없음).
+                            //   [주의] `7z l -slt` 는 헤더에도 `Path = <아카이브 자신>` 을 내놓는다.
+                            //   항목 구간(`----------` 이후)만 모아야 판정 표본이 오염되지 않는다.
+                            //   (아카이브 자신의 경로는 어차피 항목 이름과 일치하지 않으므로 매칭 동작은 그대로다.)
+                            $lsPaths = [];
+                            $lsSizes = [];           // 폴백 게이트용: 항목별 원본 크기(Size = N)
+                            $lsInList = false;
+                            $lsEntryFound = false;   // 폴백 게이트용: 목록에 이 항목이 실제로 있었는가
+                            foreach (explode("\n", $lsOut) as $lsLine) {
+                                $lsLine = rtrim($lsLine, "\r");
+                                if (!$lsInList) { if (trim($lsLine) === '----------') $lsInList = true; continue; }
+                                if (strpos($lsLine, 'Path = ') === 0) {
+                                    $rp = substr($lsLine, 7);
+                                    if ($rp !== '') { $lsPaths[] = $rp; $lsSizes[count($lsPaths) - 1] = -1; }
+                                    continue;
+                                }
+                                // 같은 항목 블록 안의 Size 를 방금 담은 Path 에 짝지어 둔다.
+                                if (strpos($lsLine, 'Size = ') === 0 && $lsPaths) {
+                                    $sv = trim(substr($lsLine, 7));
+                                    if ($sv !== '' && ctype_digit($sv)) $lsSizes[count($lsPaths) - 1] = (int)$sv;
+                                }
+                            }
+                            $lsHintEnc = function_exists('archiveDetectEncoding')
+                                ? archiveDetectEncoding(array_map(function ($p) { return str_replace('\\', '/', $p); }, $lsPaths))
+                                : null;
+                            foreach ($lsPaths as $lsIdx => $rawPath) {
+                                $slashed = str_replace('\\', '/', $rawPath);
+                                if (archiveNameToUtf8($slashed) === $entryName) { $entryPath = $rawPath; $lsEntryFound = true; $lsEntrySize = $lsSizes[$lsIdx] ?? -1; break; }
+                                if ($lsHintEnc !== null && archiveNameToUtf8($slashed, $lsHintEnc) === $entryName) { $entryPath = $rawPath; $lsEntryFound = true; $lsEntrySize = $lsSizes[$lsIdx] ?? -1; break; }
+                            }
+                        }
                     }
                     // 동시 요청 충돌 방지용 고유 임시 디렉토리
                     $extractDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7zext_' . md5($archiveReal . $entryName . microtime(true) . mt_rand());
@@ -7372,7 +7739,8 @@ try {
                     // flat 추출이므로 basename으로 읽음
                     $extractedFile = $extractDir . DIRECTORY_SEPARATOR . basename($entryName);
                     $pvDbg("추출파일 경로=$extractedFile / 존재=" . (is_file($extractedFile) ? 'YES (' . @filesize($extractedFile) . 'B)' : 'NO'));
-                    if (is_file($extractedFile)) {
+                    $primaryProduced = is_file($extractedFile);   // 폴백 게이트용
+                    if ($primaryProduced) {
                         if (@filesize($extractedFile) <= $maxPreviewSize) {
                             $fileData = @file_get_contents($extractedFile);
                         }
@@ -7380,6 +7748,66 @@ try {
                     }
                     @rmdir($extractDir);
                     if ($fileData === false) $fileData = null;
+
+                    // ★ (2026-09-03) 리눅스·시놀로지 폴백 — 위 이름 필터 방식이 **실패했을 때만** 실행된다.
+                    //   [실측] 리눅스에서는 원본 바이트든 보정된 이름이든 7z 의 이름 필터가 매칭되지 않아
+                    //   추출 0개가 된다(`7z e ... "*"` 로 전체 추출만 동작). 또 추출된 디스크 파일명은
+                    //   **원본 바이트**라, basename($entryName)(보정된 이름)으로 읽으면 다시 어긋난다.
+                    //   [발동 조건 — 4가지를 모두 만족할 때만]
+                    //     ①1차 추출 결과가 없다  ②1차 추출이 **파일 자체를 만들지 못했다**
+                    //     ③목록에서 이 항목을 **실제로 찾았다**
+                    //     ④목록이 알려준 항목 크기가 미리보기 상한 이내다(크기를 못 얻었으면 통과)
+                    //     ⑤아카이브가 200MB 이하
+                    //   ②가 없으면 "추출은 됐는데 상한 초과라 null" 인 경우에도 전량 추출해 낭비된다.
+                    //   ③이 없으면 **존재하지 않는 항목명을 요청하는 것만으로 압축 전체가 추출**되어
+                    //   자원 소모를 유발할 수 있다(엉터리 요청 반복 시 증폭).
+                    //   ④는 리눅스 보완 — 리눅스에서는 1차 추출이 늘 실패해 ②가 걸러주지 못하므로,
+                    //   큰 항목을 요청하면 전량 추출 후 상한에서 버려지는 낭비가 생긴다. 목록의 Size 로 미리 막는다.
+                    //   (③④⑤ 모두 실측 검토에서 잡은 것들이다.)
+                    //   [윈도우 영향] 정상 요청은 1차에서 성공하므로 ①에서, 없는 항목은 ③에서 걸러진다.
+                    if ($fileData === null && !$primaryProduced && $lsEntryFound
+                        && ($lsEntrySize < 0 || $lsEntrySize <= $maxPreviewSize)
+                        && $archiveSizeForFallback > 0 && $archiveSizeForFallback <= (200 * 1024 * 1024)) {
+                        $fbDir = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_7zfb_' . md5($archiveReal . $entryName . microtime(true) . mt_rand());
+                        if (@mkdir($fbDir, 0700, true)) {
+                            $fbCmd = escapeshellarg($szBin2) . ' e -y -sccUTF-8 ' . escapeshellarg($archiveReal)
+                                   . ' -o' . escapeshellarg($fbDir) . fs_build_password_arg($previewPassword);
+                            if (DIRECTORY_SEPARATOR === '\\') {
+                                @shell_exec('chcp 65001 >nul && ' . $fbCmd . ' 2>nul < nul');
+                            } else {
+                                @shell_exec(fs_utf8_env_prefix() . $fbCmd . ' 2>/dev/null < /dev/null');
+                            }
+                            $wantBase = basename($entryName);
+                            $fbFiles  = @scandir($fbDir);
+                            $fbHit    = null;
+                            if (is_array($fbFiles)) {
+                                // 디스크 이름을 목록과 **같은 규칙**으로 보정해 대조한다(이중 매칭).
+                                $fbHintEnc = function_exists('archiveDetectEncoding')
+                                    ? archiveDetectEncoding(array_values(array_diff($fbFiles, ['.', '..'])))
+                                    : null;
+                                foreach ($fbFiles as $fbF) {
+                                    if ($fbF === '.' || $fbF === '..') continue;
+                                    if ($fbF === $wantBase) { $fbHit = $fbF; break; }
+                                    if (archiveNameToUtf8($fbF) === $wantBase) { $fbHit = $fbF; break; }
+                                    if ($fbHintEnc !== null && archiveNameToUtf8($fbF, $fbHintEnc) === $wantBase) { $fbHit = $fbF; break; }
+                                }
+                                if ($fbHit !== null) {
+                                    $fbPath = $fbDir . DIRECTORY_SEPARATOR . $fbHit;
+                                    if (is_file($fbPath) && @filesize($fbPath) <= $maxPreviewSize) {
+                                        $fbData = @file_get_contents($fbPath);
+                                        if ($fbData !== false) $fileData = $fbData;
+                                    }
+                                }
+                                // 추출물 전부 정리
+                                foreach ($fbFiles as $fbF) {
+                                    if ($fbF === '.' || $fbF === '..') continue;
+                                    @unlink($fbDir . DIRECTORY_SEPARATOR . $fbF);
+                                }
+                            }
+                            @rmdir($fbDir);
+                        }
+                        $pvDbg('7z 이름필터 실패 → 전체추출 폴백 결과=' . ($fileData === null ? 'MISS' : 'HIT'));
+                    }
                 }
             }
             
@@ -7389,6 +7817,37 @@ try {
                 $unrarPaths2 = ['C:\\Program Files\\WinRAR\\UnRAR.exe', 'C:\\Program Files (x86)\\WinRAR\\UnRAR.exe', 'C:\\Program Files\\WinRAR\\Rar.exe', 'C:\\Program Files (x86)\\WinRAR\\Rar.exe', '/usr/bin/unrar', '/usr/local/bin/unrar', '/usr/bin/unrar-nonfree'];
                 foreach ($unrarPaths2 as $_up) { if (file_exists($_up)) { $unrarBin2 = $_up; break; } }
                 if ($unrarBin2) {
+                    // ★ (2026-09-02) ZIP·7z 과 같은 문제 — 목록에서 **보정한 이름**으로는 unrar 가
+                    //   항목을 찾지 못한다(레거시 RAR 의 내부 이름은 CP949/모지바케 원본).
+                    //   [처리] `unrar lb`(파일명만 나열)로 원본 이름을 받아, 보정값이 요청과 일치하는
+                    //   항목의 **원본 문자열**을 사용한다. 못 찾으면 종전 값을 유지해 기존 동작(UTF-8 RAR)에
+                    //   영향이 없다. 이 경로는 7z 이 실패했을 때만 타는 폴백이다.
+                    $urEntry = $entryName;
+                    if (function_exists('archiveNameToUtf8')) {
+                        $urLsTmp = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_urls_' . md5($archiveReal . microtime(true)) . '.txt';
+                        $urLsCmd = escapeshellarg($unrarBin2) . ' lb ' . escapeshellarg($archiveReal);
+                        if ($previewPassword !== '') $urLsCmd .= fs_build_password_arg($previewPassword);
+                        $urLsCmd .= ' > ' . escapeshellarg($urLsTmp) . ' 2>&1';
+                        @exec($urLsCmd);
+                        $urLsOut = @file_get_contents($urLsTmp);
+                        @unlink($urLsTmp);
+                        if (is_string($urLsOut) && $urLsOut !== '') {
+                            // ★ (2026-09-03) 목록과 같은 압축 단위 판정 + 이중 매칭(기존 이름도 계속 허용).
+                            $urLines = [];
+                            foreach (explode("\n", $urLsOut) as $urLine) {
+                                $urLine = rtrim($urLine, "\r");
+                                if ($urLine !== '') $urLines[] = $urLine;
+                            }
+                            $urLsHintEnc = function_exists('archiveDetectEncoding')
+                                ? archiveDetectEncoding(array_map(function ($p) { return str_replace('\\', '/', $p); }, $urLines))
+                                : null;
+                            foreach ($urLines as $urLine) {
+                                $slashedUr = str_replace('\\', '/', $urLine);
+                                if (archiveNameToUtf8($slashedUr) === $entryName) { $urEntry = $urLine; break; }
+                                if ($urLsHintEnc !== null && archiveNameToUtf8($slashedUr, $urLsHintEnc) === $entryName) { $urEntry = $urLine; break; }
+                            }
+                        }
+                    }
                     // 임시 디렉토리로 추출 후 읽기 (7z와 동일하게 바이너리 안전 방식)
                     $extractDir2 = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_urext_' . md5($archiveReal . $entryName . microtime(true) . mt_rand());
                     @mkdir($extractDir2, 0700, true);
@@ -7396,7 +7855,7 @@ try {
                     // 보안: escapeshellarg로 command injection 방지. stdin 차단으로 비밀번호 프롬프트 멈춤 방지.
                     $urDest = rtrim($extractDir2, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
                     $urCmd2 = escapeshellarg($unrarBin2) . ' e -y -inul ' . escapeshellarg($archiveReal)
-                            . ' ' . escapeshellarg($entryName) . ' ' . escapeshellarg($urDest);
+                            . ' ' . escapeshellarg($urEntry) . ' ' . escapeshellarg($urDest);
                     // 암호화 rar: 비밀번호 전달 (unrar는 -p<pwd>) — 제어문자만 제거, 정상 문자 보존
                     if ($previewPassword !== '') {
                         $urCmd2 .= fs_build_password_arg($previewPassword);

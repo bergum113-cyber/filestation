@@ -9,6 +9,18 @@ if (isset($_GET['lang']) && in_array($_GET['lang'], ['ko', 'en'])) {
 }
 $currentLang = getLang();
 
+// ★ (2026-09-02) HTML 캐시 방지 — 배포한 새 자산이 반영되지 않던 문제(펜닐 제보).
+//   [원인] 이 페이지에는 캐시 헤더가 없어 브라우저(특히 iOS Safari)가 HTML 을 캐시했다.
+//   자산은 `app.js?v=<파일해시>` 로 캐시버스팅하지만, **HTML 이 옛 해시를 참조한 채 캐시되면
+//   새 파일을 아예 요청하지 않는다**. 실제로 아이폰에서 새 계측 로그가 전혀 남지 않았고
+//   (같은 함수 안 뒤쪽 로그는 남는데 앞쪽만 없는 모순), PC 는 정상이었다.
+//   [처리] HTML 만 매번 새로 받게 한다. 자산(js/css)은 파일 해시 URL 이라 **여전히 캐시된다** —
+//   즉 트래픽이 늘지 않고, 파일이 바뀐 경우에만 새로 내려받는다.
+//   이로써 **새로고침만으로 최신 버전이 적용**되며, 브라우저 데이터를 지울 필요가 없다(로그인 유지).
+header('Cache-Control: no-cache, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
+
 // 보안 헤더
 header('X-Content-Type-Options: nosniff');
 header('X-Frame-Options: SAMEORIGIN');

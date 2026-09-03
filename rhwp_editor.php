@@ -3,11 +3,19 @@ require_once __DIR__ . '/php_version_check.php';
 /**
  * rhwp-studio HWP 에디터 래퍼
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.8.4
+ * @rhwp_version 0.8.6
  */
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/lang.php';
+
+// ★ (2026-09-02) HTML 캐시 방지 — index.php 와 동일 취지.
+//   이 페이지도 `?v=APP_VERSION` 으로 자산을 캐시버스팅하지만, **HTML 이 캐시되면
+//   옛 버전 문자열을 참조한 채 남아** 새 자산을 요청하지 않는다.
+//   HTML 만 매번 새로 받게 하고 자산 캐시는 그대로 둔다(트래픽 영향 없음).
+header('Cache-Control: no-cache, must-revalidate');
+header('Pragma: no-cache');
+header('Expires: 0');
 
 $storage = new Storage();
 $auth = new Auth();
@@ -431,8 +439,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
   window.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   document.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   </script>
-  <script type="module" crossorigin src="index-BsGOrzbg.js?v=<?php echo APP_VERSION; ?>"></script>
-  <link rel="stylesheet" crossorigin href="index-RCGbZ9bS.css?v=<?php echo APP_VERSION; ?>">
+  <script type="module" crossorigin src="index-sZn36s00.js?v=<?php echo APP_VERSION; ?>"></script>
+  <link rel="stylesheet" crossorigin href="index-CTuzrDj-.css?v=<?php echo APP_VERSION; ?>">
 </head>
 <body>
   <div id="studio-root">
@@ -787,84 +795,112 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     </div>
 
     <!-- 아이콘 툴바 -->
-    <div id="icon-toolbar">
-      <div class="tb-group">
-        <button class="tb-btn" title="오려두기 (Ctrl+X)"><span class="tb-sprite icon-cut"></span><span class="tb-label">오려<br/>두기</span></button>
-        <button class="tb-btn" title="복사하기 (Ctrl+C)"><span class="tb-sprite icon-copy"></span><span class="tb-label">복사<br/>하기</span></button>
-        <button class="tb-btn tb-paste" title="붙이기 (Ctrl+V)">
-          <span class="tb-sprite icon-paste"></span><span class="tb-label">붙이기</span>
-        </button>
-        <button class="tb-btn" title="모양 복사"><span class="tb-sprite icon-format-copy"></span><span class="tb-label">모양<br/>복사</span></button>
-      </div>
-      <span class="tb-sep"></span>
-      <div class="tb-group">
-        <button class="tb-btn" data-cmd="view:ctrl-mark" title="조판 부호"><span class="tb-sprite icon-ctrl-mark"></span><span class="tb-label">조판<br/>부호</span></button>
-        <button class="tb-btn" data-cmd="view:para-mark" title="문단 부호"><span class="tb-sprite icon-para-mark"></span><span class="tb-label">문단<br/>부호</span></button>
-        <button class="tb-btn" title="격자 보기"><span class="tb-sprite icon-grid"></span><span class="tb-label">격자<br/>보기</span></button>
-      </div>
-      <span class="tb-sep"></span>
-      <div class="tb-group">
-        <button class="tb-btn" id="tb-char-format" data-cmd="format:char-shape" title="글자 모양"><span class="tb-sprite icon-char-shape"></span><span class="tb-label">글자<br/>모양</span></button>
-        <button class="tb-btn" data-cmd="format:para-shape" title="문단 모양"><span class="tb-sprite icon-para-shape"></span><span class="tb-label">문단<br/>모양</span></button>
-      </div>
-      <span class="tb-sep"></span>
-      <div class="tb-group">
-        <button class="tb-btn" id="tb-numbering" data-cmd="format:toggle-numbering" title="문단 번호"><span class="tb-icon-text">1.</span><span class="tb-label">문단<br/>번호</span></button>
-        <button class="tb-btn" id="tb-bullet" title="글머리표"><span class="tb-icon-text">●</span><span class="tb-label">글머리<br/>표</span></button>
-        <button class="tb-btn" id="tb-level-up" data-cmd="format:level-increase" title="한 수준 증가"><span class="tb-icon-text">⇤</span><span class="tb-label">수준▲</span></button>
-        <button class="tb-btn" id="tb-level-down" data-cmd="format:level-decrease" title="한 수준 감소"><span class="tb-icon-text">⇥</span><span class="tb-label">수준▼</span></button>
-      </div>
-      <span class="tb-sep"></span>
-      <div class="tb-group">
-        <button class="tb-btn" data-cmd="table:create" title="표"><span class="tb-sprite icon-table"></span><span class="tb-label">표 ▾</span></button>
-        <button class="tb-btn" id="tb-shape" data-cmd="insert:shape" title="도형"><span class="tb-sprite icon-shape"></span><span class="tb-label">도형 ▾</span></button>
-        <button class="tb-btn" data-cmd="insert:image" title="그림"><span class="tb-sprite icon-image"></span><span class="tb-label">그림</span></button>
-      </div>
-      <span class="tb-sep"></span>
-      <div class="tb-group">
-        <button class="tb-btn" title="개체 속성 (P)" data-cmd="format:object-properties"><span class="tb-sprite icon-obj-props"></span><span class="tb-label">개체<br/>속성</span></button>
-        <button class="tb-btn" title="문자표 (Alt+F10)" data-cmd="insert:symbols"><span class="tb-sprite icon-symbols"></span><span class="tb-label">문자표</span></button>
-        <button class="tb-btn" title="하이퍼링크"><span class="tb-sprite icon-hyperlink"></span><span class="tb-label">하이퍼<br/>링크</span></button>
-      </div>
-      <span class="tb-sep"></span>
-      <div class="tb-group tb-rotate-group" style="display:none">
-        <button class="tb-btn" data-cmd="insert:rotate-ccw" title="왼쪽 90° 회전"><span class="tb-icon-text">&#x21B6;</span><span class="tb-label">왼쪽<br/>회전</span></button>
-        <button class="tb-btn" data-cmd="insert:rotate-cw" title="오른쪽 90° 회전"><span class="tb-icon-text">&#x21B7;</span><span class="tb-label">오른쪽<br/>회전</span></button>
-        <button class="tb-btn" data-cmd="insert:flip-horz" title="좌우 대칭"><span class="tb-icon-text">&#x21C4;</span><span class="tb-label">좌우<br/>대칭</span></button>
-        <button class="tb-btn" data-cmd="insert:flip-vert" title="상하 대칭"><span class="tb-icon-text">&#x21C5;</span><span class="tb-label">상하<br/>대칭</span></button>
-      </div>
-      <span class="tb-sep"></span>
-      <div class="tb-group">
-        <button class="tb-btn" data-cmd="page:header-create" title="머리말"><span class="tb-sprite icon-header"></span><span class="tb-label">머리말</span></button>
-        <button class="tb-btn" data-cmd="page:footer-create" title="꼬리말"><span class="tb-sprite icon-footer"></span><span class="tb-label">꼬리말</span></button>
-        <button class="tb-btn" data-cmd="insert:footnote" title="각주"><span class="tb-sprite icon-footnote"></span><span class="tb-label">각주</span></button>
-        <button class="tb-btn" title="미주"><span class="tb-sprite icon-endnote"></span><span class="tb-label">미주</span></button>
-        <div class="tb-split">
-          <button class="tb-btn tb-split-main" title="찾기 (Ctrl+F)" data-cmd="edit:find"><span class="tb-sprite icon-find"></span><span class="tb-label">찾기</span></button>
-          <button class="tb-btn tb-split-arrow" title="찾기 메뉴"><span class="tb-arrow-icon">▾</span></button>
-          <div class="tb-split-menu">
-            <div class="tb-split-item" data-cmd="edit:find">찾기(F) <span class="tb-split-shortcut">Ctrl+F</span></div>
-            <div class="tb-split-item" data-cmd="edit:find-replace">찾아 바꾸기(E) <span class="tb-split-shortcut">Ctrl+F2</span></div>
-            <div class="tb-split-item" data-cmd="edit:find-again">다시 찾기(X) <span class="tb-split-shortcut">Ctrl+L</span></div>
-            <div class="tb-split-sep"></div>
-            <div class="tb-split-item" data-cmd="edit:goto">찾아가기(G) <span class="tb-split-shortcut">Alt+G</span></div>
+    <!-- 아이콘 툴바 -->
+    <!-- ★ (2026-09-03) rhwp 0.8.6 studio 의 스크롤 뷰포트 구조로 감쌈.
+         [왜 필수인가] 0.8.6 CSS 에서 #icon-toolbar 가
+         `flex-wrap:wrap; height:auto; overflow:visible` → **`nowrap; height:56px; overflow:hidden`**
+         으로 바뀌었다(전역 규칙, 되돌리는 오버라이드 없음). 0.8.6 studio 는
+         .tb-scroll-viewport / .tb-scroll-track 과 «/» 버튼으로 가로 스크롤을 제공하는데
+         이 마크업엔 그게 없어서, 한 줄에 약 1,700px(버튼 36개 min-width 44~56px + 구분자 10개)를
+         요구하는 우리 툴바가 **그보다 좁은 화면에서 잘리고 스크롤 수단도 없는** 상태가 된다.
+         0.8.4 까지는 wrap 이라 2줄로 접혀 문제가 없었다.
+         또 JS 가 머리말/꼬리말 모드에서 숨길 대상을
+         `#icon-toolbar .tb-scroll-track > .tb-group` 으로 고르므로 track 이 없으면 0개가 잡힌다.
+         [display:none → hidden] 0.8.6 JS 는 그룹 표시를 `el.hidden = ...` 으로 제어한다.
+         인라인 style 이 hidden 속성을 이기므로 style="display:none" 을 두면
+         회전 도구·머리말/꼬리말 도구가 켜져도 영영 나타나지 않는다.
+         [보존] 버튼 내용물은 한 줄도 바꾸지 않았다 — FileStation 이 일부러 뺀 data-cmd
+         (모양 복사·격자 보기·미주), 축소한 찾기 메뉴, file-input 의 .hwp/.hwpx 제한 그대로.
+         출처: github.com/edwardkim/rhwp v0.8.6 태그의 rhwp-studio/index.html -->
+    <div id="icon-toolbar" role="region" aria-label="기본 도구 상자">
+      <button type="button" id="icon-toolbar-prev" class="tb-scroll-nav" aria-controls="icon-toolbar-viewport" aria-label="이전 도구 그룹" title="이전 도구 그룹" hidden aria-disabled="true" aria-hidden="true" tabindex="-1">
+        <span class="tb-scroll-nav-icon" aria-hidden="true">«</span>
+      </button>
+      <div id="icon-toolbar-viewport" class="tb-scroll-viewport" role="group" aria-label="기본 도구 상자 명령" tabindex="0">
+        <div class="tb-scroll-track">
+          <div class="tb-group">
+            <button class="tb-btn" title="오려두기 (Ctrl+X)"><span class="tb-sprite icon-cut"></span><span class="tb-label">오려<br/>두기</span></button>
+            <button class="tb-btn" title="복사하기 (Ctrl+C)"><span class="tb-sprite icon-copy"></span><span class="tb-label">복사<br/>하기</span></button>
+            <button class="tb-btn tb-paste" title="붙이기 (Ctrl+V)">
+              <span class="tb-sprite icon-paste"></span><span class="tb-label">붙이기</span>
+            </button>
+            <button class="tb-btn" title="모양 복사"><span class="tb-sprite icon-format-copy"></span><span class="tb-label">모양<br/>복사</span></button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group">
+            <button class="tb-btn" data-cmd="view:ctrl-mark" title="조판 부호"><span class="tb-sprite icon-ctrl-mark"></span><span class="tb-label">조판<br/>부호</span></button>
+            <button class="tb-btn" data-cmd="view:para-mark" title="문단 부호"><span class="tb-sprite icon-para-mark"></span><span class="tb-label">문단<br/>부호</span></button>
+            <button class="tb-btn" title="격자 보기"><span class="tb-sprite icon-grid"></span><span class="tb-label">격자<br/>보기</span></button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group">
+            <button class="tb-btn" id="tb-char-format" data-cmd="format:char-shape" title="글자 모양"><span class="tb-sprite icon-char-shape"></span><span class="tb-label">글자<br/>모양</span></button>
+            <button class="tb-btn" data-cmd="format:para-shape" title="문단 모양"><span class="tb-sprite icon-para-shape"></span><span class="tb-label">문단<br/>모양</span></button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group">
+            <button class="tb-btn" id="tb-numbering" data-cmd="format:toggle-numbering" title="문단 번호"><span class="tb-icon-text">1.</span><span class="tb-label">문단<br/>번호</span></button>
+            <button class="tb-btn" id="tb-bullet" title="글머리표"><span class="tb-icon-text">●</span><span class="tb-label">글머리<br/>표</span></button>
+            <button class="tb-btn" id="tb-level-up" data-cmd="format:level-increase" title="한 수준 증가"><span class="tb-icon-text">⇤</span><span class="tb-label">수준▲</span></button>
+            <button class="tb-btn" id="tb-level-down" data-cmd="format:level-decrease" title="한 수준 감소"><span class="tb-icon-text">⇥</span><span class="tb-label">수준▼</span></button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group">
+            <button class="tb-btn" data-cmd="table:create" title="표"><span class="tb-sprite icon-table"></span><span class="tb-label">표 ▾</span></button>
+            <button class="tb-btn" id="tb-shape" data-cmd="insert:shape" title="도형"><span class="tb-sprite icon-shape"></span><span class="tb-label">도형 ▾</span></button>
+            <button class="tb-btn" data-cmd="insert:image" title="그림"><span class="tb-sprite icon-image"></span><span class="tb-label">그림</span></button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group">
+            <button class="tb-btn" title="개체 속성 (P)" data-cmd="format:object-properties"><span class="tb-sprite icon-obj-props"></span><span class="tb-label">개체<br/>속성</span></button>
+            <button class="tb-btn" title="문자표 (Alt+F10)" data-cmd="insert:symbols"><span class="tb-sprite icon-symbols"></span><span class="tb-label">문자표</span></button>
+            <button class="tb-btn" title="하이퍼링크"><span class="tb-sprite icon-hyperlink"></span><span class="tb-label">하이퍼<br/>링크</span></button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group tb-rotate-group" hidden>
+            <button class="tb-btn" data-cmd="insert:rotate-ccw" title="왼쪽 90° 회전"><span class="tb-icon-text">&#x21B6;</span><span class="tb-label">왼쪽<br/>회전</span></button>
+            <button class="tb-btn" data-cmd="insert:rotate-cw" title="오른쪽 90° 회전"><span class="tb-icon-text">&#x21B7;</span><span class="tb-label">오른쪽<br/>회전</span></button>
+            <button class="tb-btn" data-cmd="insert:flip-horz" title="좌우 대칭"><span class="tb-icon-text">&#x21C4;</span><span class="tb-label">좌우<br/>대칭</span></button>
+            <button class="tb-btn" data-cmd="insert:flip-vert" title="상하 대칭"><span class="tb-icon-text">&#x21C5;</span><span class="tb-label">상하<br/>대칭</span></button>
+          </div>
+          <span class="tb-sep"></span>
+          <div class="tb-group">
+            <button class="tb-btn" data-cmd="page:header-create" title="머리말"><span class="tb-sprite icon-header"></span><span class="tb-label">머리말</span></button>
+            <button class="tb-btn" data-cmd="page:footer-create" title="꼬리말"><span class="tb-sprite icon-footer"></span><span class="tb-label">꼬리말</span></button>
+            <button class="tb-btn" data-cmd="insert:footnote" title="각주"><span class="tb-sprite icon-footnote"></span><span class="tb-label">각주</span></button>
+            <button class="tb-btn" title="미주"><span class="tb-sprite icon-endnote"></span><span class="tb-label">미주</span></button>
+            <div class="tb-split">
+              <button class="tb-btn tb-split-main" title="찾기 (Ctrl+F)" data-cmd="edit:find"><span class="tb-sprite icon-find"></span><span class="tb-label">찾기</span></button>
+              <button class="tb-btn tb-split-arrow" title="찾기 메뉴"><span class="tb-arrow-icon">▾</span></button>
+              <div class="tb-split-menu">
+                <div class="tb-split-item" data-cmd="edit:find">찾기(F) <span class="tb-split-shortcut">Ctrl+F</span></div>
+                <div class="tb-split-item" data-cmd="edit:find-replace">찾아 바꾸기(E) <span class="tb-split-shortcut">Ctrl+F2</span></div>
+                <div class="tb-split-item" data-cmd="edit:find-again">다시 찾기(X) <span class="tb-split-shortcut">Ctrl+L</span></div>
+                <div class="tb-split-sep"></div>
+                <div class="tb-split-item" data-cmd="edit:goto">찾아가기(G) <span class="tb-split-shortcut">Alt+G</span></div>
+              </div>
+            </div>
+          </div>
+          <!-- 머리말/꼬리말 편집 모드 전용 도구상자 (숨김) -->
+          <div class="tb-group tb-headerfooter-group" hidden>
+            <span class="tb-hf-label">머리말</span>
+            <span id="hf-edit-status-live" class="visually-hidden" aria-live="polite"></span>
+            <span class="tb-sep"></span>
+            <button class="tb-btn" data-cmd="page:headerfooter-prev" title="이전"><span class="tb-icon-text">◀</span><span class="tb-label">이전</span></button>
+            <button class="tb-btn" data-cmd="page:headerfooter-next" title="다음"><span class="tb-icon-text">▶</span><span class="tb-label">다음</span></button>
+            <span class="tb-sep"></span>
+            <button class="tb-btn" data-cmd="page:headerfooter-close" title="닫기"><span class="tb-icon-text">✕</span><span class="tb-label">닫기</span></button>
+            <button class="tb-btn tb-hf-delete" data-cmd="page:headerfooter-delete" title="지우기"><span class="tb-icon-text">🗑</span><span class="tb-label">지우기</span></button>
+            <span class="tb-sep"></span>
+            <button class="tb-btn" data-cmd="page:insert-field-pagenum" title="쪽 번호 삽입"><span class="tb-icon-text">#</span><span class="tb-label">쪽번호</span></button>
+            <button class="tb-btn" data-cmd="page:insert-field-totalpage" title="총 쪽수 삽입"><span class="tb-icon-text">##</span><span class="tb-label">총쪽수</span></button>
+            <button class="tb-btn" data-cmd="page:insert-field-filename" title="파일 이름 삽입"><span class="tb-icon-text">F</span><span class="tb-label">파일명</span></button>
           </div>
         </div>
       </div>
-      <!-- 머리말/꼬리말 편집 모드 전용 도구상자 (숨김) -->
-      <div class="tb-group tb-headerfooter-group" style="display:none">
-        <span class="tb-hf-label">머리말</span>
-        <span class="tb-sep"></span>
-        <button class="tb-btn" data-cmd="page:headerfooter-prev" title="이전"><span class="tb-icon-text">◀</span><span class="tb-label">이전</span></button>
-        <button class="tb-btn" data-cmd="page:headerfooter-next" title="다음"><span class="tb-icon-text">▶</span><span class="tb-label">다음</span></button>
-        <span class="tb-sep"></span>
-        <button class="tb-btn" data-cmd="page:headerfooter-close" title="닫기"><span class="tb-icon-text">✕</span><span class="tb-label">닫기</span></button>
-        <button class="tb-btn tb-hf-delete" data-cmd="page:headerfooter-delete" title="지우기"><span class="tb-icon-text">🗑</span><span class="tb-label">지우기</span></button>
-        <span class="tb-sep"></span>
-        <button class="tb-btn" data-cmd="page:insert-field-pagenum" title="쪽 번호 삽입"><span class="tb-icon-text">#</span><span class="tb-label">쪽번호</span></button>
-        <button class="tb-btn" data-cmd="page:insert-field-totalpage" title="총 쪽수 삽입"><span class="tb-icon-text">##</span><span class="tb-label">총쪽수</span></button>
-        <button class="tb-btn" data-cmd="page:insert-field-filename" title="파일 이름 삽입"><span class="tb-icon-text">F</span><span class="tb-label">파일명</span></button>
-      </div>
+      <button type="button" id="icon-toolbar-next" class="tb-scroll-nav" aria-controls="icon-toolbar-viewport" aria-label="다음 도구 그룹" title="다음 도구 그룹" hidden aria-disabled="true" aria-hidden="true" tabindex="-1">
+        <span class="tb-scroll-nav-icon" aria-hidden="true">»</span>
+      </button>
       <!-- 파일 열기 (숨김) -->
       <input type="file" id="file-input" accept=".hwp,.hwpx" style="display:none" />
     </div>
@@ -880,7 +916,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
          이 PHP 의 마크업은 옛 구조 그대로여서 스타일이 걸리지 않았다.
          [확인] 코어 자산은 정상 — rhwp.js·rhwp_bg.wasm 이 npm @rhwp/core@0.8.4 원본과 md5 일치.
          [안전성] 교체 전후 **요소 id 32개가 완전히 동일**(사라짐 0·신규 0)해 JS 바인딩 영향 없음.
-         출처: github.com/edwardkim/rhwp v0.8.4 태그의 rhwp-studio/index.html -->
+         출처: github.com/edwardkim/rhwp v0.8.4 태그의 rhwp-studio/index.html
+         ★ (2026-09-03) 0.8.6 로 올리며 .sb-command-track 래퍼와
+         .sb-overflow-host > #btn-style-overflow + #style-overflow-panel 을 추가했다.
+         정렬 버튼 6개는 순서·id·title 그대로 패널 안으로 옮기기만 했다(삭제·수정 0).
+         CSS 상 이 호스트는 전역에서 display:contents 라 넓은 화면은 종전과 같은 평면 배치이고,
+         (width<=459px) 와 (808px~961px) 구간에서만 실제 드롭다운이 된다. -->
     <div id="style-bar">
           <div class="sb-ribbon-group sb-field-ribbon-group">
             <div class="sb-field-grid">
@@ -952,6 +993,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             <span class="sb-ribbon-label">글꼴 및 간격</span>
           </div>
 
+          <div class="sb-command-track">
           <div class="sb-command-band sb-character-band">
             <div class="sb-ribbon-group sb-character-ribbon-group">
               <div class="sb-command-group sb-character-group">
@@ -998,6 +1040,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             </div>
           </div>
 
+          <div class="sb-overflow-host">
+            <button type="button" id="btn-style-overflow" class="sb-btn sb-has-arrow" aria-controls="style-overflow-panel" aria-expanded="false" aria-label="문단 정렬 더보기" title="문단 정렬 더보기">
+              <span id="style-overflow-current-icon" class="sb-align sb-al-left sb-overflow-current-icon" aria-hidden="true"></span><span class="sb-dd" aria-hidden="true">▾</span>
+            </button>
+            <div id="style-overflow-panel" class="sb-overflow-panel" role="group" aria-label="문단 정렬">
           <div class="sb-command-band sb-paragraph-band">
             <div class="sb-ribbon-group sb-paragraph-ribbon-group">
               <div class="sb-command-group sb-align-group">
@@ -1012,6 +1059,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
               <span class="sb-ribbon-label">문단</span>
             </div>
           </div>
+            </div>
+          </div>
+          </div>
         </div>
 
     <!-- 에디터 영역 (눈금자 포함) -->
@@ -1025,22 +1075,41 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     </div>
 
     <!-- 하단 상태 바 -->
+    <!-- 하단 상태 바 -->
+    <!-- ★ (2026-09-03) rhwp 0.8.6 이 요구하는 최소 구조 추가 (#sb-cell-selection, 줌 클러스터).
+         [왜 필수인가] 0.8.6 번들의 상태바 초기화 함수는
+           r = getElementById('sb-zoom-range'); … r.addEventListener('input', …)
+           getElementById('sb-zoom-display').addEventListener('click', …)
+         를 **널가드 없이** 실행한다. 두 요소가 없으면 TypeError 로 **상태바 초기화가 통째로 중단**된다.
+         #sb-cell-selection 도 cell-selection-phase-changed 핸들러에서 무가드 참조된다(표 셀 선택 시).
+         [참고] 옛 .stb-zoom-val 클래스는 0.8.6 CSS 에서 규칙 자체가 삭제됐고,
+         대신 #sb-zoom-val **id 규칙**이 스타일을 제공하므로 표시에는 영향이 없다. -->
     <div id="status-bar">
       <span id="sb-page" class="stb-item">1 / 1 쪽</span>
       <span class="stb-divider"></span>
       <span id="sb-section" class="stb-item">구역: 1 / 1</span>
       <span class="stb-divider"></span>
       <span id="sb-mode" class="stb-item">삽입</span>
+      <span id="sb-cell-selection" class="stb-item stb-cell-selection" role="status" aria-live="polite" hidden></span>
       <span id="sb-field" class="stb-item" style="display:none"></span>
       <span id="sb-message" class="stb-message"></span>
       <span id="rhwp-editor-version" class="stb-item" style="font-size:10px;color:#888;"></span>
         <span class="stb-right">
         <button id="sb-zoom-fit-width" class="stb-icon-btn" title="폭 맞춤"><span class="tb-sprite icon-zoom-fit-width"></span></button>
         <button id="sb-zoom-fit" class="stb-icon-btn" title="쪽 맞춤"><span class="tb-sprite icon-zoom-fit"></span></button>
-        <span class="stb-divider"></span>
-        <span id="sb-zoom-val" class="stb-zoom-val">100%</span>
         <button id="sb-zoom-out" class="stb-icon-btn" title="축소"><span class="tb-sprite icon-zoom-out"></span></button>
+        <span class="stb-zoom-range-wrap">
+          <input id="sb-zoom-range" class="stb-zoom-range" type="range" min="0" max="1000" step="1" value="500" aria-label="화면 확대/축소 배율" aria-valuetext="100%">
+          <span class="stb-zoom-neutral-mark" aria-hidden="true"></span>
+        </span>
         <button id="sb-zoom-in" class="stb-icon-btn" title="확대"><span class="tb-sprite icon-zoom-in"></span></button>
+        <button id="sb-zoom-display" class="stb-zoom-display" type="button" title="화면 확대/축소 설정">
+          <svg class="stb-zoom-menu-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+            <circle cx="6.5" cy="6.5" r="4.5"></circle>
+            <path d="M9.75 9.75 15.25 15.25"></path>
+          </svg>
+          <span id="sb-zoom-val">100%</span>
+        </button>
       </span>
     </div>
   </div>

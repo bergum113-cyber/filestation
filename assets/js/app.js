@@ -1400,6 +1400,25 @@ class FSAudioPlayer {
             a.currentTime = Math.max(0, Math.min(a.duration, ratio * a.duration));
         });
         // Audio events
+        // ★ (2026-09-02) 오디오 로딩 단계별 도달 시각 — 어느 구간에서 막히는지 가른다.
+        //   loadstart(요청 시작) → loadedmetadata(길이 확보) → canplay(재생 가능) → playing(실제 소리)
+        //   iOS 에서 특정 구간만 길다면 그 구간이 원인이다.
+        ['loadstart', 'loadedmetadata', 'canplay', 'playing'].forEach((evName) => {
+            a.addEventListener(evName, () => {
+                if (!this._trkStartAt) return;
+                if (evName === 'canplay') {
+                    if (this._trkReadyLogged) return;
+                    this._trkReadyLogged = true;
+                }
+                this._msLog('trk_' + evName, {
+                    idx: this.currentIndex,
+                    ios: !!this._isIOS,
+                    shuffle: !!this.shuffle,
+                    ms: Date.now() - this._trkStartAt,
+                    buffered: (a.buffered && a.buffered.length) ? Math.round(a.buffered.end(a.buffered.length - 1) * 100) / 100 : 0
+                });
+            });
+        });
         a.addEventListener('timeupdate', () => {
             if (this._draggingSeek || !a.duration) return;
             // ★ 구간 반복: B를 넘으면 A로 되돌림 (timeupdate 주기가 약 250ms라 그만큼 오차 있음)
@@ -1717,6 +1736,25 @@ class FSAudioPlayer {
         // ★ 재생 중에 src를 바꾸면 HTML5 미디어 로드 알고리즘이 pause 이벤트를 발생시킨다.
         //   이를 '외부 요인 정지'로 오판하면 곡 전환 때마다 불필요한 세션 재획득이 돌아
         //   metadata가 잠깐 비는 구간이 생긴다(앞서 제거한 해로운 패턴). 우리 의도임을 표시한다.
+        // ★ (2026-09-02) 곡 전환 성능 계측 — **iOS 에서만** 다음 트랙 로딩이 느린 원인 추적용.
+        //   [배경] 회선이 빠른데도 아이폰만 느리고 PC 는 정상이라는 제보(펜닐). 회선 문제가 아니라
+        //   iOS 고유 요인일 가능성이 높다. 유력한 후보 —
+        //     · iOS 는 커버 IndexedDB 영구 캐시가 **꺼져 있다**(2026-04-30 결정, blob 손상 이슈)
+        //       → 곡마다 커버를 새로 받아 오디오 요청과 연결을 다툴 수 있다.
+        //     · iOS 는 오디오 요소 하나만 동시 재생 가능하고, src 교체 시 재초기화 비용이 있다.
+        //   추측으로 고치지 않기 위해 **수치부터** 남긴다. 기록 조건은 기존과 동일
+        //   (data/debug_logs 폴더가 있을 때만) — 평소 부하 0.
+        this._trkStartAt = Date.now();
+        this._trkReadyLogged = false;
+        this._msLog('trk_start', {
+            idx: idx,
+            shuffle: !!this.shuffle,
+            ios: !!this._isIOS,
+            coverCached: !!(track.coverApiUrl && this._coverBlobCache.has(track.coverApiUrl)),
+            hasCoverUrl: !!track.coverApiUrl,
+            netType: (navigator.connection && navigator.connection.effectiveType) || null,
+            downlink: (navigator.connection && navigator.connection.downlink) || null
+        });
         this._selfPause = true;
         this.audio.src = track.url;
         // 재생 중이면 마퀴, 아니면 일반 텍스트
@@ -2266,7 +2304,20 @@ class FSAudioPlayer {
                 
                 if (!blob) {
                     // 3-B. IDB miss → 서버에서 fetch
+                    // ★ (2026-09-02) 커버 요청 소요·시점 계측 — 곡 전환과 겹치는지 보기 위함.
+                    //   trk_start 로부터의 경과(sinceTrackMs)를 함께 남기면, 커버가 오디오 초기
+                    //   버퍼링 구간에 몰리는지 판단할 수 있다. iOS 는 IDB 캐시가 꺼져 있어
+                    //   곡마다 새로 받으므로 이 값이 특히 중요하다.
+                    const _cvAt = Date.now();
                     const res = await fetch(originalUrl, { credentials: 'same-origin', signal: this._coverTimeoutSignal(10000) });
+                    try {
+                        this._msLog('cover_fetch', {
+                            ms: Date.now() - _cvAt,
+                            ios: !!this._isIOS,
+                            sinceTrackMs: this._trkStartAt ? (Date.now() - this._trkStartAt) : null,
+                            ok: !!(res && res.ok)
+                        }, 0);
+                    } catch (e) {}
                     if (!res.ok) {
                         // 404/204 등 — 원본 URL 그대로 반환 (브라우저가 onerror 처리하도록)
                         return originalUrl;

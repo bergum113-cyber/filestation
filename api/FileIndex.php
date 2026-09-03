@@ -168,10 +168,21 @@ class FileIndex {
         $this->removeFile($storageId, $folderPath);
         
         // 하위 항목 삭제
-        $pattern = $folderPath . '/%';
-        $stmt = $this->db->prepare('DELETE FROM files WHERE storage_id = :storage_id AND filepath LIKE :pattern');
+        // ★ (2026-09-03) LIKE → 범위 조건으로 교체.
+        //   [문제] `LIKE '경로/%'` 는 ESCAPE 절이 없어 폴더 이름의 % · _ 가 와일드카드로 동작했다.
+        //   실측: `50%_off` 삭제 시 **디스크에 멀쩡히 존재하는 `50Xyoff` 의 하위 3행이 함께 삭제**됐다
+        //   (파일은 무사하고 검색에서만 사라지며 전체 재구축으로 복구되지만, 명백한 오작동이다).
+        //   또 SQLite 는 LIKE 가 기본적으로 대소문자를 무시해, 리눅스에서 `Folder` 와 `folder` 가
+        //   공존할 때 서로의 하위를 지웠다.
+        //   [수정] `filepath >= '경로/' AND filepath < '경로0'` — 와일드카드가 없어 이스케이프 문제가
+        //   원천적으로 없고, 대소문자도 정확히 구분한다. 상한은 '/'(0x2F) 를 '0'(0x30) 으로 바꾼 값이며
+        //   그 접두사로 시작하는 모든 바이트열이 반드시 이보다 작아 빠지는 항목이 없다.
+        //   덤으로 idx_storage_filepath 를 타서 대용량 인덱스에서 훨씬 빠르다.
+        $delPrefix = $folderPath . '/';
+        $stmt = $this->db->prepare('DELETE FROM files WHERE storage_id = :storage_id AND filepath >= :rlo AND filepath < :rhi');
         $stmt->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
-        $stmt->bindValue(':pattern', $pattern, SQLITE3_TEXT);
+        $stmt->bindValue(':rlo', $delPrefix, SQLITE3_TEXT);
+        $stmt->bindValue(':rhi', substr($delPrefix, 0, -1) . '0', SQLITE3_TEXT);
         return $stmt->execute() !== false;
     }
     
@@ -781,6 +792,12 @@ class FileIndex {
         $checkpointFile = $dataDir . DIRECTORY_SEPARATOR . 'index_sync_checkpoint_' . $storageId . '.json';
         $dirQueue = [$basePath];
         $resumed = false;
+        // ★ (2026-09-03) 이번 회차에 우리가 직접 추가/갱신한 디렉터리 목록.
+        //   부모 스캔이 자식 디렉터리의 modified 를 새 값으로 써 버리면, 정작 그 자식을 방문할 때
+        //   DB 와 mtime 이 일치해 스킵된다 → 그 안의 변경이 **영구 유실**된다(실측 확인).
+        //   그래서 "우리가 방금 쓴 값 때문에 일치한 것"은 스킵 근거로 삼지 않는다.
+        $forceScanDirs = [];
+        $forceScanMax  = 200000;   // 메모리 보호. 넘치면 초과분만 종전 동작으로 떨어진다.
         
         if (is_file($checkpointFile)) {
             $checkpointData = @json_decode(@file_get_contents($checkpointFile), true);
@@ -792,6 +809,13 @@ class FileIndex {
                 && !empty($checkpointData['queue'])) {
                 $dirQueue = $checkpointData['queue'];
                 $resumed = true;
+                // ★ (2026-09-03) 강제 스캔 표시 복원 — 중단 후 이어서 돌 때도 유지되어야
+                //   "부모가 방금 갱신해서 일치하는" 디렉터리가 다시 스킵되지 않는다.
+                if (isset($checkpointData['force']) && is_array($checkpointData['force'])) {
+                    foreach ($checkpointData['force'] as $fp) {
+                        if (is_string($fp) && $fp !== '') $forceScanDirs[$fp] = true;
+                    }
+                }
             } else {
                 // 체크포인트 손상 또는 base_path 변경 — 삭제하고 처음부터
                 @unlink($checkpointFile);
@@ -866,11 +890,28 @@ class FileIndex {
                 }
                 */
                 
+                // ★ (2026-09-03) 이번 회차에 우리가 갱신한 디렉터리는 스킵하지 않는다.
+                //   (DB 가 일치하는 이유가 "실제로 안 바뀜"이 아니라 "방금 우리가 씀"이기 때문)
+                if ($skipScan && isset($forceScanDirs[$currentDir])) {
+                    $skipScan = false;
+                }
+
                 if ($skipScan) {
                     // 변경 없음 — 하위 디렉토리만 큐에 추가 (인덱스에서 가져옴)
                     $prefix = $currentRelDir . '/';
-                    $stmt = $this->db->prepare("SELECT filepath FROM files WHERE storage_id = :sid AND filepath LIKE :prefix AND filepath NOT LIKE :deeper AND is_dir = 1");
+                    // ★ (2026-09-03) 범위 조건(:rlo/:rhi) 추가 — idx_storage_filepath 를 타게 하려는 것.
+                    //   LIKE 만 쓰면 SQLite 가 BINARY 인덱스를 못 써서(case_sensitive_like=OFF 기본값)
+                    //   디렉터리 하나당 스토리지 전체 행을 훑는다. 실측 23.64ms → 0.08ms (311배).
+                    //   [상한값] prefix 는 항상 '/'(0x2F) 로 끝나므로, 마지막 바이트를 '0'(0x30) 으로
+                    //   바꾼 값이 상한이다. prefix 로 시작하는 모든 바이트열은 이 값보다 반드시 작아
+                    //   빠지는 항목이 없다. (상한을 prefix 뒤에 0xFF 를 붙이는 방식으로 잡으면
+                    //   0xFF 로 시작하는 깨진 파일명이 누락된다 — 리눅스 파일명은 임의 바이트가
+                    //   가능하므로 실제 위험이다. 실측으로 확인해 이 방식으로 바꿨다.)
+                    //   기존 LIKE 조건은 그대로 두므로 결과가 넓어질 수도 없다.
+                    $stmt = $this->db->prepare("SELECT filepath FROM files WHERE storage_id = :sid AND filepath >= :rlo AND filepath < :rhi AND filepath LIKE :prefix AND filepath NOT LIKE :deeper AND is_dir = 1");
                     $stmt->bindValue(':sid', $storageId, SQLITE3_INTEGER);
+                    $stmt->bindValue(':rlo', $prefix, SQLITE3_TEXT);
+                    $stmt->bindValue(':rhi', substr($prefix, 0, -1) . '0', SQLITE3_TEXT);
                     $stmt->bindValue(':prefix', $prefix . '%', SQLITE3_TEXT);
                     $stmt->bindValue(':deeper', $prefix . '%/%', SQLITE3_TEXT);
                     $res = $stmt->execute();
@@ -915,7 +956,10 @@ class FileIndex {
                 } else {
                     // 하위 디렉토리: prefix/ 로 시작하고 그 아래에 추가 /가 없는 항목
                     $prefix = $currentRelDir . '/';
-                    $stmt = $this->db->prepare("SELECT filepath, modified, size, is_dir FROM files WHERE storage_id = :sid AND filepath LIKE :prefix AND filepath NOT LIKE :deeper");
+                    // ★ (2026-09-03) 위와 같은 이유로 범위 조건 추가 (인덱스 사용 유도).
+                    $stmt = $this->db->prepare("SELECT filepath, modified, size, is_dir FROM files WHERE storage_id = :sid AND filepath >= :rlo AND filepath < :rhi AND filepath LIKE :prefix AND filepath NOT LIKE :deeper");
+                    $stmt->bindValue(':rlo', $prefix, SQLITE3_TEXT);
+                    $stmt->bindValue(':rhi', substr($prefix, 0, -1) . '0', SQLITE3_TEXT);
                     $stmt->bindValue(':prefix', $prefix . '%', SQLITE3_TEXT);
                     $stmt->bindValue(':deeper', $prefix . '%/%', SQLITE3_TEXT);
                 }
@@ -927,6 +971,7 @@ class FileIndex {
                 
                 // 비교: 추가/업데이트
                 foreach ($fsItems as $relPath => $info) {
+                    $touchedDir = false;
                     if (isset($indexedInDir[$relPath])) {
                         $idxMod = $indexedInDir[$relPath]['modified'];
                         $fsMod = date('Y-m-d H:i:s', $info['mtime']);
@@ -937,6 +982,7 @@ class FileIndex {
                                 'modified' => $fsMod
                             ]);
                             $updated++;
+                            $touchedDir = true;
                         }
                         unset($indexedInDir[$relPath]);
                     } else {
@@ -946,6 +992,12 @@ class FileIndex {
                             'modified' => date('Y-m-d H:i:s', $info['mtime'])
                         ]);
                         $added++;
+                        $touchedDir = true;
+                    }
+                    // ★ (2026-09-03) 우리가 방금 쓴 디렉터리는 이번 회차에 반드시 스캔한다.
+                    //   이 표시가 없으면 그 안의 새 폴더·파일이 영구히 인덱싱되지 않는다(실측 확인).
+                    if ($touchedDir && $info['is_dir'] && count($forceScanDirs) < $forceScanMax) {
+                        $forceScanDirs[$basePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relPath)] = true;
                     }
                 }
                 
@@ -953,6 +1005,23 @@ class FileIndex {
                 // 현재 디렉토리의 직접 자식들만 비교하므로 이 디렉토리 자체는 완전히 스캔됨
                 // → 다른 디렉토리가 큐에 남아있어도 이 디렉토리의 삭제 판정은 정확
                 foreach ($indexedInDir as $relPath => $row) {
+                    // ★ (2026-09-03) 디렉터리가 사라졌으면 하위 항목까지 함께 지운다.
+                    //   기존에는 removeFile() 로 그 행 하나만 지워, 삭제된 폴더의 하위 파일들이
+                    //   **인덱스에 고아로 남아 검색에 계속 나왔다**(실측 확인).
+                    //   [왜 removeFolder() 를 쓰지 않는가] 그 메서드는 `filepath LIKE '경로/%'` 를
+                    //   ESCAPE 없이 쓴다. 폴더 이름에 % 나 _ 가 있으면 **다른 폴더의 행까지 지운다** —
+                    //   실측: `50%_off` 삭제 시 실제로 존재하는 `50Xyoff` 의 하위 3행이 함께 사라졌다.
+                    //   그래서 여기서는 범위 조건으로 정확히 그 하위만 잘라낸다(와일드카드 없음 +
+                    //   idx_storage_filepath 사용). 상한은 위와 같은 '마지막 바이트 증가' 방식이다.
+                    //   (removeFolder() 자체는 다른 호출부 3곳이 쓰고 있어 손대지 않았다.)
+                    if (!empty($row['is_dir'])) {
+                        $delPrefix = $relPath . '/';
+                        $delStmt = $this->db->prepare('DELETE FROM files WHERE storage_id = :sid AND filepath >= :rlo AND filepath < :rhi');
+                        $delStmt->bindValue(':sid', $storageId, SQLITE3_INTEGER);
+                        $delStmt->bindValue(':rlo', $delPrefix, SQLITE3_TEXT);
+                        $delStmt->bindValue(':rhi', substr($delPrefix, 0, -1) . '0', SQLITE3_TEXT);
+                        $delStmt->execute();
+                    }
                     $this->removeFile($storageId, $relPath);
                     $removed++;
                 }
@@ -993,9 +1062,16 @@ class FileIndex {
                     $queueToSave = array_slice($queueToSave, 0, $maxQueueSize);
                     $truncated = true;
                 }
+                // ★ (2026-09-03) 아직 방문 못 한 강제 스캔 대상만 저장한다(남은 큐와 교집합).
+                $queueSet = array_flip($queueToSave);
+                $forceToSave = [];
+                foreach ($forceScanDirs as $fp => $_) {
+                    if (isset($queueSet[$fp])) $forceToSave[] = $fp;
+                }
                 $checkpointPayload = [
                     'base_path' => $basePath,
                     'queue' => $queueToSave,
+                    'force' => $forceToSave,
                     'saved_at' => time(),
                     'processed_this_run' => $processedCount,
                     'queue_original_size' => $queueCount,
