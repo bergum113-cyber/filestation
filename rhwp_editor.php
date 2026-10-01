@@ -271,7 +271,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     $isRemote = in_array($storageType, ['ftp', 'sftp', 'webdav', 's3', 'smb']);
     
     if ($isRemote) {
-        if (preg_match('/\\.\\.[\\\\/\\\\\\\\]/', $newFilePath)) {
+        // ★ (2026-09-24) 경로 탈출(..) 검사 정규식 수정 — 역슬래시가 한 번 더 들어가(87·168행 식을 두 번 이스케이프) 가운데 '/' 가
+        //   식의 끝으로 읽혀 컴파일 오류 → preg_match 가 false → **검사가 항상 통과**했다. 이 줄은 '다른 이름으로 저장'의
+        //   원격 저장소 경로에서 유일한 경로 검사다(로컬은 realpath 로 막음). 87·168행과 같은 식으로 바꾼다.
+        if (preg_match('/\.\.[\\/\\\\]/', $newFilePath)) {
             echo json_encode(['success' => false, 'error' => 'Invalid path']); exit;
         }
         require_once __DIR__ . '/api/StorageAdapter.php';

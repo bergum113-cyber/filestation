@@ -495,15 +495,16 @@ class FSAudioPlayer {
                 <button class="fap-btn fap-btn-lyrics" title="${isKo ? '가사 보기 (Ctrl+L)' : 'Show lyrics (Ctrl+L)'}" style="display:none;">
                     <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16v2H4V6zm0 4h12v2H4v-2zm0 4h16v2H4v-2zm0 4h12v2H4v-2z" fill="currentColor"/></svg>
                 </button>
-            </div>
-            <div class="fap-volume">
-                <button class="fap-btn fap-btn-vol" title="${isKo ? '음소거 (M) · ↑↓로 볼륨 조절' : 'Mute (M) · ↑↓ to adjust'}">
-                    <svg class="fap-icon-vol-on" viewBox="0 0 24 24" width="18" height="18"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" fill="currentColor"/></svg>
-                    <svg class="fap-icon-vol-off" viewBox="0 0 24 24" width="18" height="18" style="display:none"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" fill="currentColor"/></svg>
-                </button>
-                <div class="fap-vol-bar" title="${isKo ? '↑/↓로 5%씩 조절' : '↑/↓ to adjust 5%'}">
-                    <div class="fap-vol-level"></div>
-                    <div class="fap-vol-thumb"></div>
+                <!-- ★ (2026-09-26) 볼륨(음소거 버튼 + 막대)을 재생 줄 안 맨 끝으로 — 막대는 버튼 위에 뜨는 창(CSS). tabindex=-1: 막대를 누르는 동안 창이 닫히지 않게(:focus-within) -->
+                <div class="fap-volume">
+                    <button class="fap-btn fap-btn-vol" title="${isKo ? '음소거 (M) · ↑↓로 볼륨 조절' : 'Mute (M) · ↑↓ to adjust'}">
+                        <svg class="fap-icon-vol-on" viewBox="0 0 24 24" width="18" height="18"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" fill="currentColor"/></svg>
+                        <svg class="fap-icon-vol-off" viewBox="0 0 24 24" width="18" height="18" style="display:none"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" fill="currentColor"/></svg>
+                    </button>
+                    <div class="fap-vol-bar" tabindex="-1" title="${isKo ? '↑/↓로 5%씩 조절' : '↑/↓ to adjust 5%'}">
+                        <div class="fap-vol-level"></div>
+                        <div class="fap-vol-thumb"></div>
+                    </div>
                 </div>
             </div>
             <div class="fap-playlist">
@@ -584,6 +585,53 @@ class FSAudioPlayer {
         //   사용자는 기기 물리 볼륨 버튼으로 조절
         if (this._isIOS && this.$.root) {
             this.$.root.classList.add('fap-ios');
+        }
+        // ★ (2026-09-26) 재생 줄(볼륨 포함 8개)이 좁은 폭에서 넘치지 않게 — 넘치면 간격을 줄이고(fap-narrow), 그래도 넘치면 버튼 여백·재생
+        //   버튼을 줄인다(fap-xnarrow). 플레이어 폭이 바뀔 때(ResizeObserver)와 스킨을 바꿀 때 다시 잰다. 재는 동안 전환을 끈다(fap-fitting —
+        //   모바일 전체 규칙 '* { transition-duration: 0.1s }' 때문에 크기가 한 박자 늦게 바뀌어 잘못 재는 것을 막음, 동영상 조작 줄과 같은 이유).
+        this._fapFitControls = () => {
+            try {
+                const r = this.$ && this.$.root, c = r && r.querySelector('.fap-controls');
+                if (!r || !c || this._destroyed) return;
+                r.classList.add('fap-fitting');
+                r.classList.remove('fap-narrow', 'fap-xnarrow');
+                const _dg = (window._hlsDiag && typeof window._diagLog === 'function') ? { cw: c.clientWidth } : null;
+                if (_dg) _dg.sw0 = c.scrollWidth;
+                if (c.clientWidth > 0) {
+                    if (c.scrollWidth > c.clientWidth + 1) r.classList.add('fap-narrow');
+                    if (_dg) _dg.sw1 = c.scrollWidth;
+                    if (c.scrollWidth > c.clientWidth + 1) r.classList.add('fap-xnarrow');
+                }
+                // ★ (2026-09-26) 진단 기록(hlsdiag=1, 탐색기) — 크기별로 제대로 되는지 실제 기기 수치로 확인(펜닐 요청). 동작 변경 없음.
+                if (_dg) {
+                    try {
+                        const sk = r.querySelector('.fap-seek');
+                        const cont = this.container;
+                        const cs = getComputedStyle(r);
+                        _dg.swEnd = c.scrollWidth;
+                        _dg.narrow = r.classList.contains('fap-narrow'); _dg.xnarrow = r.classList.contains('fap-xnarrow');
+                        _dg.skin = (String(r.className).match(/fap-skin-[\w-]+/) || ['default'])[0];
+                        _dg.rootW = r.clientWidth; _dg.rootSW = r.scrollWidth; _dg.contW = cont ? cont.clientWidth : null;
+                        _dg.seekW = sk ? sk.clientWidth : null; _dg.seekSW = sk ? sk.scrollWidth : null;
+                        _dg.cols = cs.gridTemplateColumns; _dg.vw = window.innerWidth;
+                        _dg.items = Array.prototype.map.call(c.children, (e) => ((String(e.className).match(/fap-btn-[\w-]+|fap-volume/) || ['?'])[0].replace('fap-btn-', '') + ':' + e.offsetWidth)).join(' ');
+                        window._diagLog('fap_fit', _dg);
+                    } catch (x) {}
+                }
+                r.classList.remove('fap-fitting');
+            } catch (e) {}
+        };
+        if (typeof ResizeObserver === 'function' && this.$ && this.$.root) {
+            // ★ (2026-09-26) 재생 줄의 각 버튼도 지켜본다 — 가사 버튼은 처음엔 숨겨졌다가 가사를 찾으면 나타나는데(1790행) 플레이어 크기는
+            //   그대로라 다시 재지 않아, 저장된 스킨(APlayer Fixed)으로 처음 열면 간격이 안 줄고 넘쳤다(펜닐 제보 — 다른 스킨을 거쳐 돌아오면 줄어듦).
+            //   재기가 버튼 크기를 바꿔 다시 알림이 오므로 다음 프레임에 한 번만(되먹임 반복 방지). 닫을 때 해제.
+            this._fapRO = new ResizeObserver(() => {
+                if (this._fapRaf) return;
+                this._fapRaf = requestAnimationFrame(() => { this._fapRaf = 0; this._fapFitControls(); });
+            });
+            this._fapRO.observe(this.$.root);
+            const _ctl = this.$.root.querySelector('.fap-controls');
+            if (_ctl) Array.prototype.forEach.call(_ctl.children, (el) => this._fapRO.observe(el));
         }
         this._updateLoopUI();
         this._updateVolUI();
@@ -771,6 +819,7 @@ class FSAudioPlayer {
     }
     
     _applySkin(skinId) {
+        try { if (this._fapFitControls) requestAnimationFrame(() => this._fapFitControls()); } catch (e) {}   // ★ (2026-09-26) 스킨마다 버튼 크기·간격이 달라 다시 잰다
         if (!this.$) return;
         const root = this.$.root;
         if (!root) return;
@@ -994,6 +1043,9 @@ class FSAudioPlayer {
         });
         // Volume button (mute toggle)
         this.$.btnVol.addEventListener('click', () => {
+            // ★ (2026-09-26) iOS: 볼륨 값은 바꿀 수 없으므로(audio.volume 읽기 전용) 음소거만 켜고 끈다. iOS 는 시각화(Web Audio)를
+            //   쓰지 않아(_initVisualizer 가 바로 끝남) audio.muted 로 소리가 확실히 꺼진다. 그 밖의 기기는 종전 그대로(볼륨 0 ↔ 이전 볼륨).
+            if (this._isIOS) { this.audio.muted = !this.audio.muted; this._updateVolUI(); return; }
             if (this._getVolume() > 0) { this._prevVolume = this._getVolume(); this._setVolume(0); }
             else { this._setVolume(this._prevVolume || 0.8); }
             this._updateVolUI();
@@ -1160,24 +1212,70 @@ class FSAudioPlayer {
         });
         // Media Session API (잠금화면/알림센터 컨트롤)
         if ('mediaSession' in navigator) {
-            navigator.mediaSession.setActionHandler('play', () => this.togglePlay());
-            navigator.mediaSession.setActionHandler('pause', () => this.togglePlay());
-            navigator.mediaSession.setActionHandler('previoustrack', () => this.prev());
-            navigator.mediaSession.setActionHandler('nexttrack', () => this.next());
-            try {
-                navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-                    this.audio.currentTime = Math.max(0, this.audio.currentTime - (details.seekOffset || 10));
-                });
-                navigator.mediaSession.setActionHandler('seekforward', (details) => {
-                    this.audio.currentTime = Math.min(this.audio.duration || 0, this.audio.currentTime + (details.seekOffset || 10));
-                });
-                navigator.mediaSession.setActionHandler('seekto', (details) => {
-                    if (details.seekTime != null) this.audio.currentTime = details.seekTime;
-                });
-            } catch(e) {}
+            // ★ (2026-09-18) 핸들러를 **각각 독립적으로** 등록한다 (탐색기 app.js 와 같은 수정).
+            //   [종전 결함] seekbackward·seekforward·seekto 가 한 try 안에 있어,
+            //   앞의 하나가 예외를 던지면 seekto 까지 등록되지 않고 조용히 삼켜졌다.
+            //   seekto 핸들러가 없으면 iOS 잠금화면 스크러버는 끌려도 적용되지 않는다.
+            const _msHandlers = {
+                play: () => this.togglePlay(),
+                pause: () => this.togglePlay(),
+                previoustrack: () => this.prev(),
+                nexttrack: () => this.next(),
+                seekbackward: (details) => {
+                    this.audio.currentTime = Math.max(0, this.audio.currentTime - ((details && details.seekOffset) || 10));
+                },
+                seekforward: (details) => {
+                    this.audio.currentTime = Math.min(this.audio.duration || 0, this.audio.currentTime + ((details && details.seekOffset) || 10));
+                },
+                seekto: (details) => {
+                    if (!details || details.seekTime == null) return;
+                    // ★ (2026-09-23) 끝까지 끌면 '곡이 끝난 것'으로 처리한다 (탐색기 app.js 와 같은 이유).
+                    //   iOS 가 곡 길이를 처음에 틀리게 계산하면 '끝'으로 보이는 곳이 실제 끝이 아니어서
+                    //   다음 곡으로 넘어가지 않는다. 끝 0.5초 이내면 자연스러운 곡 끝 처리(_onEnded)를 부른다.
+                    {
+                        const _d = this.audio.duration;
+                        if (_d && isFinite(_d) && details.seekTime >= _d - 0.5) {
+                            const _idxBefore = this.currentIndex;
+                            const _abOn = (this._abA !== null && this._abB !== null);
+                            const _mode = this.loop;
+                            this._onEnded();
+                            const _stayed = !_abOn && _mode !== 'one' && _mode !== 'all'
+                                            && this.currentIndex === _idxBefore;
+                            if (_stayed) {
+                                try { this.audio.currentTime = details.seekTime; } catch (e) {}
+                            }
+                            return;
+                        }
+                    }
+                    // ★ (2026-09-17) 탐색 직후 1.5초는 timeupdate 발 갱신을 건너뛰고,
+                    //   새 위치를 곧바로 알려 잠금화면과 앱의 인식을 맞춘다.
+                    this._psSuppressUntil = Date.now() + 1500;
+                    this.audio.currentTime = details.seekTime;
+                    try {
+                        if (this.audio.duration && isFinite(this.audio.duration)) {
+                            navigator.mediaSession.setPositionState({
+                                duration: this.audio.duration,
+                                playbackRate: this.audio.playbackRate || 1,
+                                position: Math.min(details.seekTime, this.audio.duration)
+                            });
+                        }
+                    } catch (e) {}
+                }
+            };
+            Object.keys(_msHandlers).forEach((_act) => {
+                try { navigator.mediaSession.setActionHandler(_act, _msHandlers[_act]); } catch (e) {}
+            });
             // positionState 업데이트
+            // ★ (2026-09-17) 종전에는 timeupdate 마다(초당 4회쯤) 제한 없이 호출했다.
+            //   그러면 사용자가 잠금화면 스크러버를 끄는 동안에도 앱이 현재 위치를 계속 보고해
+            //   드래그가 되돌아간다(iOS 27 증상). 명세도 위치가 **불연속으로 바뀔 때** 부르라고 한다.
+            //   ①평상시 1초 1회로 제한 ②탐색 직후 1.5초는 건너뜀.
             a.addEventListener('timeupdate', () => {
                 if (!a.duration || !isFinite(a.duration)) return;
+                const _now = Date.now();
+                if (this._psSuppressUntil && _now < this._psSuppressUntil) return;
+                if (this._psLastAt && _now - this._psLastAt < 1000) return;
+                this._psLastAt = _now;
                 try {
                     navigator.mediaSession.setPositionState({
                         duration: a.duration,
@@ -1186,6 +1284,25 @@ class FSAudioPlayer {
                     });
                 } catch(e) {}
             });
+            // ★ (2026-09-22) positionState 즉시 갱신 — 탐색기(app.js)와 같은 이유.
+            //   화면이 꺼지면 iOS 가 timeupdate 를 멈춰 positionState 가 낡는다. 확실히 발생하는
+            //   이벤트(화면 꺼짐·재생 시작·탐색 완료·길이 확정)에서 throttle 을 건너뛰고 갱신한다.
+            const _psNow = () => {
+                if (!a.duration || !isFinite(a.duration)) return;
+                try {
+                    navigator.mediaSession.setPositionState({
+                        duration: a.duration,
+                        playbackRate: a.playbackRate || 1,
+                        position: Math.min(a.currentTime, a.duration)
+                    });
+                    this._psLastAt = Date.now();
+                } catch (e) {}
+            };
+            ['playing', 'seeked', 'loadedmetadata', 'durationchange'].forEach((_ev) => {
+                a.addEventListener(_ev, _psNow);
+            });
+            this._psOnHidden = () => { if (document.hidden) _psNow(); };
+            document.addEventListener('visibilitychange', this._psOnHidden);
             
             // ★ BF Cache 복원 시 MediaMetadata 재설정 (z_music/simple_mp3_player 참조)
             // iOS Safari에서 뒤로가기로 페이지 복원 시 MediaMetadata가 날아감 → 썸네일 사라짐
@@ -1264,6 +1381,11 @@ class FSAudioPlayer {
     _loadTrack(idx, autoplay) {
         if (idx < 0 || idx >= this.playlist.length) return;
         this.currentIndex = idx;
+        // ★ (2026-09-17) positionState 의 throttle·억제창을 곡 전환 시 초기화한다.
+        //   스크러버를 끝까지 끌어 다음 곡으로 넘어갈 때, 탐색 억제창(1.5초)이 남아 있으면
+        //   새 곡의 위치·길이가 잠금화면에 늦게 반영된다(옛 곡 정보가 잠깐 보임).
+        this._psSuppressUntil = 0;
+        this._psLastAt = 0;
         this._clearAb();  // ★ 구간 반복은 곡 단위 — 곡이 바뀌면 해제
         this._markShufflePlayed(idx);  // ★ 셔플 진행 추적 (전곡 소진 시 자동 재셔플)
         const track = this.playlist[idx];
@@ -1497,7 +1619,21 @@ class FSAudioPlayer {
      * 트랙의 가사 로드 — track.lyricsApiUrl이 있으면 fetch
      * 응답 형식: { source: 'lrc'|'uslt'|'txt', synced: bool, text: string, language?: string }
      */
+    // ★ (2026-09-26) 가사 불러오기를 감싼다 — 원래 본문(_loadLyricsInner)은 그대로. 곡을 넘기는 순간 가사 아이콘이 보이고 있었으면 확인이 끝날 때까지
+    //   보이는 모습 그대로 유지(fap-lyrics-keep, 눌리지는 않음)하고, 결과가 나오면 한 번만 바뀐다 — 원래 코드는 불러오기 시작에 아이콘을 숨겨
+    //   가사가 있는 곡에서도 스피커가 잠깐 당겨졌다 돌아왔다(펜닐 요청). 곡을 빨리 넘겨 옛 요청이 늦게 끝나도 순번(_lyricsLoadToken — 첫 await 전에
+    //   올라감)이 달라 새 요청의 표시를 건드리지 않고, 새 요청이 시작될 때 표시를 그 요청 기준으로 다시 정하므로 표시가 남지 않는다.
     async _loadLyrics(track) {
+        const root = this.$ && this.$.root, btn = this.$ && this.$.btnLyrics;
+        const keep = !!(root && btn && btn.style.display !== 'none');
+        if (root) root.classList.toggle('fap-lyrics-keep', keep);
+        const p = this._loadLyricsInner(track);
+        const myTok = this._lyricsLoadToken;
+        try { await p; } finally {
+            if (root && this._lyricsLoadToken === myTok) root.classList.remove('fap-lyrics-keep');
+        }
+    }
+    async _loadLyricsInner(track) {
         if (this._destroyed) return;
         
         // 토큰: 빠른 트랙 전환 시 이전 fetch 결과 무시
@@ -1516,6 +1652,9 @@ class FSAudioPlayer {
         if (this.$.root) this.$.root.classList.add('fap-no-inline-lyrics');
         
         // API URL 없으면 즉시 가사 비우기 + wrap 숨김 (가사 없는 트랙)
+        // ★ (2026-09-26) 가사를 확인하지 않는 곡(가사 주소 없음 — 탐색기 원격 저장소·보관함 등)은 표시 — 가사 버튼 자리를 남기지 않게(CSS).
+        //   가사를 확인하는 곡은 버튼이 숨겨져도 자리를 남겨, 곡을 넘길 때 재생 줄이 좌우로 흔들리지 않게 한다(펜닐 제보).
+        if (this.$.root) this.$.root.classList.toggle('fap-lyrics-na', !track || !track.lyricsApiUrl);
         if (!track || !track.lyricsApiUrl) {
             this._lyrics = null;
             this._lyricsSynced = false;
@@ -2102,8 +2241,14 @@ class FSAudioPlayer {
         const v = this._getVolume();
         this.$.volLevel.style.width = (v * 100) + '%';
         this.$.volThumb.style.left = (v * 100) + '%';
-        this.$.iconVolOn.style.display = v > 0 ? '' : 'none';
-        this.$.iconVolOff.style.display = v > 0 ? 'none' : '';
+        if (this.$.volBar) this.$.volBar.setAttribute('data-pct', Math.round(v * 100) + '%');   // ★ (2026-09-26) 볼륨 창에 현재 크기(%) 표시 — CSS .fap-vol-bar::after(펜닐 요청)
+        // ★ (2026-09-26) 음소거(iOS 버튼)도 아이콘에 반영 — 그 밖의 기기는 muted 가 늘 false 라 종전과 같다.
+        // ★ (2026-09-27) iOS 는 음소거 여부로만 — 볼륨 값은 iOS 에서 소리에 영향이 없는데(읽기 전용), 저장된 값(fap-volume)이 0 이면
+        //   음소거를 풀어도 '볼륨 > 0' 이 늘 거짓이라 아이콘이 계속 음소거 모양이었다(펜닐 제보 — 아이폰, PC 는 정상). 0 은 예전 코드가
+        //   iOS 에서도 음소거를 볼륨 0 으로 저장하던 때 남은 값으로 보인다. 그 밖의 기기는 종전 그대로(볼륨이 실제 소리와 같이 움직임).
+        const _on = this._isIOS ? !this.audio.muted : (v > 0 && !this.audio.muted);
+        this.$.iconVolOn.style.display = _on ? '' : 'none';
+        this.$.iconVolOff.style.display = _on ? 'none' : '';
     }
     
     // ★ 볼륨 변경 시 화면에 잠깐 표시되는 토스트 (Spotify/YouTube Music 데스크톱 스타일)
@@ -3718,6 +3863,65 @@ class FSAudioPlayer {
         if (item) item.classList.add('fap-pl-search-hit');
     }
 
+    // ★ (2026-09-23) 재생목록 썸네일 불러오기 순서 조절 — **곡이 먼저**(펜닐: 5Mbps 에서 랜덤 재생 시 곡 시작 3~6초).
+    //   [원인] 곡이 바뀌면 재생목록이 현재 곡 위치로 스크롤되며 새로 보이는 줄의 커버를 한꺼번에 받았다(곡당 7~33장).
+    //   잠금화면처럼 **아무도 목록을 안 볼 때도** 받았고, 서버는 목록용에도 원본 크기 커버를 보낸다 →
+    //   지금 들을 곡 파일과 대역폭을 나눠 썼다(로그: 오전 곡 정보 0.3초 / 오후 3.6초, 커버 요청 전환당 0건 / 7건).
+    //   [처리] 메모리 캐시에 있으면 즉시(종전과 같음). 없으면 대기열에 넣고
+    //     ① 화면이 꺼져 있으면 받지 않는다 — 화면이 켜지면 그때 받는다
+    //     ② 현재 곡을 불러오는 중이면(재생 요청 후 재생 가능 전) 기다린다 — 최대 4초, 무한정 기다리지 않음
+    //     ③ 동시에 3장까지만, 이미 목록에서 빠진 줄은 건너뛴다
+    //   현재 곡 커버(플레이어·잠금화면)는 이 대기열을 거치지 않는다 — 종전 그대로 즉시.
+    _plCoverLoad(imgEl, origUrl) {
+        if (!imgEl || !origUrl) return;
+        if (this._coverBlobCache.has(origUrl)) { imgEl.src = this._coverBlobCache.get(origUrl); return; }
+        if (!this._plCoverQ) {
+            this._plCoverQ = [];
+            this._plCoverActive = 0;
+            this._plCoverWaitFrom = 0;
+            this._plCoverVis = () => { if (!document.hidden) this._plCoverPump(); };
+            document.addEventListener('visibilitychange', this._plCoverVis);
+        }
+        // 화면이 꺼진 채 곡을 여러 번 넘기면 빠진 줄이 쌓이므로 가끔 정리한다(떨어진 요소를 붙잡아 두지 않게)
+        if (this._plCoverQ.length > 60) this._plCoverQ = this._plCoverQ.filter((j) => j.imgEl.isConnected);
+        this._plCoverQ.push({ imgEl, origUrl });
+        // ★ (2026-09-26) 바로 돌리지 않고 지금 그리는 목록이 끝난 직후(마이크로태스크)에 한 번 돌린다.
+        //   [결함 — 09-23 제가 만든 것] _vsRender 는 줄(li)을 DocumentFragment 에 만들고 **반복이 끝난 뒤** 목록에 붙이는데, 이 함수가
+        //   그 전에 불려 곧바로 _plCoverPump 가 돌면 이미지가 아직 문서에 붙지 않아(isConnected=false) '목록에서 빠진 줄'로 모두
+        //   버려졌다 → 캐시에 없는 목록 썸네일이 전혀 나오지 않았다(펜닐 제보). 빠진 줄 건너뛰기는 스크롤로 실제 빠진 줄용이라 그대로.
+        if (!this._plCoverKick) {
+            this._plCoverKick = true;
+            Promise.resolve().then(() => { this._plCoverKick = false; this._plCoverPump(); });
+        }
+    }
+
+    _plCoverPump() {
+        if (this._destroyed || !this._plCoverQ) return;
+        if (document.hidden) return;                       // ① 보는 사람이 없다 — 화면이 켜지면 visibilitychange 로 다시 온다
+        const a = this.audio;
+        const loading = !!(a && !a.paused && a.readyState < 3);
+        if (loading) {                                     // ② 곡이 먼저
+            if (!this._plCoverWaitFrom) this._plCoverWaitFrom = Date.now();
+            if (Date.now() - this._plCoverWaitFrom < 4000) {
+                clearTimeout(this._plCoverWait);
+                this._plCoverWait = setTimeout(() => this._plCoverPump(), 300);
+                return;
+            }
+        } else {
+            this._plCoverWaitFrom = 0;
+        }
+        while (this._plCoverActive < 3 && this._plCoverQ.length) {   // ③ 동시에 3장까지
+            const job = this._plCoverQ.shift();
+            if (!job.imgEl.isConnected) continue;
+            this._plCoverActive++;
+            const done = () => { this._plCoverActive--; this._plCoverPump(); };
+            this._getCachedCoverUrl(job.origUrl).then((cachedUrl) => {
+                if (!this._destroyed && job.imgEl.isConnected) job.imgEl.src = cachedUrl || job.origUrl;
+                done();
+            }, done);
+        }
+    }
+
     _vsRender() {
         const list = this.$.plList;
         if (!list || !this.playlist.length) return;
@@ -3826,13 +4030,8 @@ class FSAudioPlayer {
             // ★ 메모리 캐시에서 가져와 비동기로 src 세팅
             //   캐시 hit → 즉시 (네트워크 X) / 캐시 miss → 한 번 fetch 후 캐시 저장
             if (asyncCoverUrl) {
-                const imgEl = li.querySelector('.fap-pl-cover img');
-                const origUrl = asyncCoverUrl;
-                this._getCachedCoverUrl(origUrl).then(cachedUrl => {
-                    // li가 이미 DOM에서 제거됐으면 무시 (가상 스크롤에서 빠르게 스크롤 시)
-                    if (this._destroyed || !imgEl || !imgEl.isConnected) return;
-                    imgEl.src = cachedUrl || origUrl;
-                });
+                // ★ (2026-09-23) 곧바로 받지 않고 순서 조절 대기열로(_plCoverLoad) — 곡이 먼저, 화면 꺼짐이면 나중에
+                this._plCoverLoad(li.querySelector('.fap-pl-cover img'), asyncCoverUrl);
             }
             // 재생 중인 곡 마퀴
             if (i === this.currentIndex && !this.audio.paused) {
@@ -4228,8 +4427,13 @@ class FSAudioPlayer {
 
     // ── Destroy ──
     destroy() {
+        try { if (this._fapRO) { this._fapRO.disconnect(); this._fapRO = null; } if (this._fapRaf) { cancelAnimationFrame(this._fapRaf); this._fapRaf = 0; } } catch (e) {}   // ★ (2026-09-26) 재생 줄 폭 관찰 해제
         if (this._destroyed) return;
         this._destroyed = true;
+        // ★ (2026-09-23) 재생목록 썸네일 대기열 정리(이벤트 해제·타이머 중지·떨어진 요소 참조 해제)
+        clearTimeout(this._plCoverWait);
+        if (this._plCoverVis) { document.removeEventListener('visibilitychange', this._plCoverVis); this._plCoverVis = null; }
+        this._plCoverQ = null;
         this.audio.pause();
         // 비주얼라이저 정리
         this._stopVisualizer();
@@ -4352,6 +4556,12 @@ class FSAudioPlayer {
         if (this._mediaSessionVisHandler) {
             document.removeEventListener('visibilitychange', this._mediaSessionVisHandler);
             this._mediaSessionVisHandler = null;
+        }
+        // ★ (2026-09-22) positionState 즉시 갱신용 리스너 해제 — document 에 붙이므로
+        //   플레이어를 닫았다 여는 매 회 쌓이지 않도록 반드시 떼어낸다.
+        if (this._psOnHidden) {
+            document.removeEventListener('visibilitychange', this._psOnHidden);
+            this._psOnHidden = null;
         }
         this.container.innerHTML = '';
     }

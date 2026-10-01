@@ -441,6 +441,7 @@ class ShareManager {
                 @unlink($shareAudioDir . '/' . $key . '.bin');
                 @unlink($shareAudioDir . '/' . $key . '.meta');
                 @unlink($shareAudioDir . '/' . $key . '.nocover');
+                @unlink($shareAudioDir . '/' . $key . '.w512.jpg');   // ★ (2026-09-26) 줄인 커버(09-23 share.php 커버 512px) — 빠져 있어 공유를 지워도 남았다(재검토)
             }
         }
         
@@ -459,6 +460,7 @@ class ShareManager {
                             @unlink($shareAudioDir . '/' . $key . '.img');
                             @unlink($shareAudioDir . '/' . $key . '.meta');
                             @unlink($shareAudioDir . '/' . $key . '.nocover');
+                            @unlink($shareAudioDir . '/' . $key . '.w512.jpg');   // ★ (2026-09-26) 줄인 커버(09-23 share.php 커버 512px) — 빠져 있어 공유를 지워도 남았다(재검토)
                         }
                     }
                 }
@@ -667,6 +669,20 @@ class ShareManager {
             $fileManager->transcodeShareStream($fullPath);
             exit;
         }
+
+        // ★ (2026-09-30) 일반재생 빠른 시작(원본 스트리밍) — mp4 를 다시 인코딩하지 않고 키프레임 조각으로(FileManager::directStreamFile).
+        //   위의 검증(accessShare: 토큰·만료·비밀번호 / isSharePathSafe 또는 폴더 하위 파일 validateSharedFolderSubPath)을 모두 통과한 뒤,
+        //   스트리밍 공유 + stream=1 일 때만(HLS·트랜스코딩과 같은 조건). 조각 주소에도 같은 file= 를 붙여 조각마다 같은 검증을 다시 거친다.
+        //   스트리밍이라 다운로드 횟수는 늘지 않음(위 !stream 조건).
+        if ($isStream && isset($_GET['ds'])) {
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+            require_once __DIR__ . '/FileManager.php';
+            $fileManager = new FileManager();
+            $segBase = 'share.php?t=' . rawurlencode($token) . '&download=1&stream=1'
+                     . (($subFile !== null && $subFile !== '') ? '&file=' . rawurlencode($subFile) : '') . '&ds=segment';
+            $fileManager->directStreamFile($fullPath, $segBase);
+            exit;
+        }
         
         if ($isStream) {
             // 스트리밍: 올바른 MIME + inline
@@ -712,7 +728,7 @@ class ShareManager {
         }
         
         // RFC 5987 형식으로 파일명 인코딩
-        $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $filename);
+        $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $filename);
         $filenameEncoded = rawurlencode($filename);
         
         // 0바이트 파일 처리
@@ -744,6 +760,21 @@ class ShareManager {
                 }
                 if ($end >= $filesize) {
                     $end = $filesize - 1;
+                }
+                // ★ (2026-09-23) 음악 재생(미리보기·공유 스트리밍)은 한 번에 최대 1MB 만 보낸다 — 나머지는 재생기가 이어서 요청한다.
+                //   [원인] 곡 파일을 '처음부터 끝까지'로 요청하면 5~11MB 전체를 12~23Mbps 로 한꺼번에 밀어냈는데, 휴대폰 회선이
+                //   5Mbps 면 수 MB 가 망 중간에 쌓인다. 그 상태에서 곡을 넘기면 새 곡의 요청·응답이 쌓인 데이터 뒤에서 기다려
+                //   곡 시작이 3~4초 늦었다(09-23 Apache 로그: 서버 처리는 0.01~0.1초인데 휴대폰의 '맛보기 2바이트 → 본 요청'
+                //   간격이 3초 — 이전 곡 전송 직후 넘긴 경우에만, 오전의 빠른 회선에선 0초).
+                //   [처리] 요청 범위가 1MB 보다 크면 끝을 '시작+1MB' 로 줄여 206 으로 보낸다(RFC 9110 §15.3.7 — 서버는 요청 범위의
+                //   일부만 보낼 수 있고, Content-Range 로 스스로 설명되므로 재생기가 나머지를 이어서 요청한다).
+                //   1MB 는 320kbps 기준 약 26초 분량이라 재생이 끊기지 않고, 넘길 때 쌓여 있는 양이 최대 1MB(5Mbps 에서 약 1.6초)로 준다.
+                //   음악 재생에만 적용 — 일반 다운로드·동영상·이미지·범위 요청이 아닌 경우는 종전과 같다.
+                if ($isStream && isset($mime) && strpos($mime, 'audio/') === 0) {
+                    $capBytes = 1048576;
+                    if ($end - $start + 1 > $capBytes) {
+                        $end = $start + $capBytes - 1;
+                    }
                 }
             }
             http_response_code(206);
@@ -779,10 +810,15 @@ class ShareManager {
             fseek($fp, $start);
             $remaining = $end - $start + 1;
             $chunkSize = 1048576; // 1MB
-            while ($remaining > 0 && !feof($fp)) {
+            // ★ (2026-09-30) 브라우저가 끊으면 바로 멈춘다 — 종전엔 이 갈래(속도 제한 없음 + 구간 요청)만 끊김 확인 없이 반복 뒤에 한 번 flush 해,
+            //   아이폰 동영상의 구간 요청(Range: bytes=0- — 파일 전체)을 트랜스코딩 전환 등으로 끊어도 서버가 1.5GB 를 계속 읽고 보내려 할 수 있었다
+            //   (펜닐 로그: 원본 다운로드가 열려 있는 동안만 다른 작은 요청의 서버 처리가 3~7초). 속도 제한 갈래와 같게 connection_aborted() 확인 +
+            //   조각마다 flush(PHP 는 내보내다 실패할 때 끊김을 안다). 보내는 데이터는 같다.
+            while ($remaining > 0 && !feof($fp) && !connection_aborted()) {
                 $read = min($chunkSize, $remaining);
                 echo fread($fp, $read);
                 $remaining -= $read;
+                flush();
             }
             flush();
             fclose($fp);
@@ -846,7 +882,7 @@ class ShareManager {
         }
         
         // RFC 5987 형식으로 파일명 인코딩
-        $zipNameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $zipName);
+        $zipNameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $zipName);
         $zipNameEncoded = rawurlencode($zipName);
         
         header('Content-Type: application/zip');

@@ -1,0 +1,287 @@
+/* ─────────────────────────────────────────────────────────────────────────
+ * FSVideoSkin — 동영상 플레이어 새 껍데기 (A 겹침형)
+ * ★ (2026-09-23) 1단계. 모든 규칙은 .fsvs-* 와 body.fsvs-active 아래로만 적용된다
+ *   (껍데기가 꺼져 있으면 아무 영향도 없다).
+ * ───────────────────────────────────────────────────────────────────────── */
+.fsvs-root {
+    /* ★ (2026-09-23) 강조색 #667eea → 유튜브 빨강(펜닐 지시). 진행바와 켜진 버튼 표시가 같은 색을 쓴다.
+       흰색으로 바꾸려면 이 두 줄만 #FFFFFF / rgba(255,255,255,0.22) 로. 구간 반복(A-B)은 구분을 위해 호박색 유지. */
+    --fsvs-accent: #FF0033;
+    --fsvs-accent-soft: rgba(255, 0, 51, 0.28);
+    /* ★ (2026-09-23) 켜진 버튼·설정 칩은 흰색 계열 — 빨강으로 통일하니 어색하다는 펜닐 의견.
+       대부분의 플레이어처럼 **진행바만 강조색(빨강)**, 켜짐 표시는 흰 테두리 + 옅은 흰 배경. */
+    --fsvs-on-bg: rgba(255, 255, 255, 0.18);
+    --fsvs-on-bd: rgba(255, 255, 255, 0.75);
+    --fsvs-ab: #F2B84B;
+    --fsvs-panel: rgba(14, 16, 30, 0.8);
+    --fsvs-ink: #F2F3F8;
+    --fsvs-muted: #D5D8E6;
+    position: absolute;
+    inset: 0;
+    z-index: 15;
+    pointer-events: none;   /* 빈 영역 탭은 영상(기존 동작)으로 그대로 전달 */
+    color: var(--fsvs-ink);
+    font-variant-numeric: tabular-nums;
+    font-family: inherit;
+}
+.fsvs-root .fsvs-btn {
+    pointer-events: auto;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1.5px solid transparent;
+    border-radius: 10px;
+    margin: 0;
+    padding: 0;
+    min-width: 40px;
+    height: 40px;   /* ★ (2026-09-23) 44 → 40: 조작 줄 높이를 유튜브 비율로 줄임(펜닐 지시) */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.fsvs-root .fsvs-btn:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 2px; }
+/* 이전·다음: 처음·끝에서 누를 수 없는 버튼은 흐리게 */
+.fsvs-root .fsvs-btn:disabled { opacity: 0.35; cursor: default; }
+/* ★ (2026-09-23) 자리가 모자라 접힌 버튼 — ⚙ 메뉴 '더 보기'로 옮겨진다(fitRow) */
+.fsvs-root .fsvs-collapsed { display: none !important; }
+.fsvs-root .fsvs-btn:disabled:active { transform: none; }
+.fsvs-root .fsvs-btn.is-on { background: var(--fsvs-on-bg); border-color: var(--fsvs-on-bd); }
+
+/* 하단 조작부 */
+.fsvs-bar {
+    pointer-events: auto;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 0 8px 4px;   /* ★ (2026-09-23) 전체 높이 약 86px → 58px */
+    background: var(--fsvs-panel);
+    transition: opacity .2s ease;
+}
+.fsvs-prog {
+    height: 14px;   /* 진행바 누르는 영역. 막대 자체는 4px(올리면 6px) */
+    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    touch-action: none;
+}
+.fsvs-prog:focus-visible { outline: 2px solid #FFFFFF; outline-offset: -2px; border-radius: 6px; }
+.fsvs-track { position: relative; flex: 1; height: 4px; border-radius: 2px; background: rgba(255,255,255,0.18); transition: height .1s ease; }
+.fsvs-prog:hover .fsvs-track, .fsvs-prog:focus-visible .fsvs-track { height: 6px; }
+.fsvs-buf { position: absolute; left: 0; top: 0; height: 100%; border-radius: 2px; background: rgba(255,255,255,0.34); }
+.fsvs-abband { position: absolute; top: -3px; height: calc(100% + 6px); box-sizing: border-box; border-radius: 3px; background: rgba(242,184,75,0.5); border: 1px solid var(--fsvs-ab); }
+.fsvs-played { position: absolute; left: 0; top: 0; height: 100%; border-radius: 2px; background: var(--fsvs-accent); }
+.fsvs-thumb { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 6px; background: #FFFFFF; transition: transform .1s ease; }
+.fsvs-prog:hover .fsvs-thumb { transform: scale(1.2); }
+
+.fsvs-row { display: flex; align-items: center; gap: 2px; min-height: 40px; }
+.fsvs-row .fsvs-play { width: 40px; height: 40px; border-radius: 20px; background: rgba(255,255,255,0.1); }
+.fsvs-volrange { pointer-events: auto; width: 88px; accent-color: #FFFFFF; margin: 0 6px 0 2px; }
+.fsvs-time { margin-left: 10px; font-size: 13px; color: var(--fsvs-muted); white-space: nowrap; }
+.fsvs-spacer { flex: 1; }
+.fsvs-root .fsvs-speedchip { height: 26px; min-width: 0; padding: 0 10px; border-radius: 13px; font-size: 13px; font-weight: 700; background: var(--fsvs-on-bg); border-color: var(--fsvs-on-bd); margin-right: 4px; }
+.fsvs-root .fsvs-ab { min-width: 52px; padding: 0 8px; font-size: 14px; font-weight: 700; }
+.fsvs-root .fsvs-ab.is-half { background: rgba(242,184,75,0.12); border-color: rgba(242,184,75,0.6); }
+.fsvs-root .fsvs-ab.is-on { background: rgba(242,184,75,0.28); border-color: var(--fsvs-ab); }
+.fsvs-root .fsvs-cc { min-width: 48px; padding: 0 8px; font-size: 13px; font-weight: 700; }
+.fsvs-root .fsvs-cc.is-off { border-color: rgba(255,255,255,0.3); text-decoration: line-through; }
+
+/* ⚙ 메뉴 */
+.fsvs-menu {
+    pointer-events: auto;
+    position: absolute;
+    right: 16px;
+    bottom: 66px;            /* 기본값 — 열 때 JS 가 조작 줄 높이 + 8px 로 다시 정한다 */
+    width: 340px;
+    max-width: calc(100% - 32px);
+    /* ★ (2026-09-23) 스크롤(max-height+overflow) 을 없앴다 — 플레이어가 작으면 JS(fitMenu)가
+       두 칸 배치 → 촘촘하게 → 비율 축소 순으로 맞춰 한 번에 다 보이게 한다(펜닐 지시). */
+    transform-origin: bottom right;
+    box-sizing: border-box;
+    padding: 16px;
+    border-radius: 14px;
+    background: #1C1F36;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+/* ★ (2026-09-23) !important — 닫힌 설정 창은 어떤 배치 규칙보다 우선해 사라져야 한다.
+   [결함] 아래 두 칸 배치(.fsvs-menu.fsvs-2col { display: grid }) 가 이 규칙과 우선순위가 같고(0,2,0) 더 뒤에 있어
+   이겼다 → 가로모드처럼 폭이 넓어 두 칸일 때 ⚙·✕ 로 닫아도 창이 계속 보였다(펜닐 제보). */
+.fsvs-menu[hidden] { display: none !important; }
+/* 맞춤 단계 ② 두 칸 배치(폭이 넉넉할 때) — 높이가 약 절반이 된다 */
+.fsvs-menu.fsvs-2col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; row-gap: 12px; align-items: start; max-width: none; }
+/* ★ (2026-09-25) 세 칸 — 폭이 넓고 높이가 낮은 플레이어에서 높이를 줄인다 */
+.fsvs-menu.fsvs-3col { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 16px; row-gap: 12px; align-items: start; max-width: none; }
+.fsvs-menu.fsvs-3col .fsvs-sec + .fsvs-sec { margin-top: 0; }
+.fsvs-menu.fsvs-3col.fsvs-compact { row-gap: 8px; }
+.fsvs-menu.fsvs-3col.fsvs-compact .fsvs-sec + .fsvs-sec { margin-top: 0; }
+.fsvs-menu.fsvs-2col .fsvs-sec + .fsvs-sec { margin-top: 0; }
+/* 맞춤 단계 ③ 촘촘하게 */
+.fsvs-menu.fsvs-compact { padding: 10px 12px; }
+.fsvs-menu.fsvs-compact .fsvs-sectitle { font-size: 12px; margin-bottom: 4px; }
+.fsvs-menu.fsvs-compact .fsvs-sec + .fsvs-sec { margin-top: 8px; }
+.fsvs-menu.fsvs-2col.fsvs-compact { row-gap: 8px; }
+.fsvs-menu.fsvs-2col.fsvs-compact .fsvs-sec + .fsvs-sec { margin-top: 0; }
+.fsvs-menu.fsvs-compact .fsvs-chips { gap: 6px; }
+.fsvs-root .fsvs-menu.fsvs-compact .fsvs-chip { height: 28px; min-width: 40px; padding: 0 8px; font-size: 13px; }
+.fsvs-menu.fsvs-compact .fsvs-subrow { gap: 6px; }
+.fsvs-menu.fsvs-compact .fsvs-subrow + .fsvs-subrow { margin-top: 6px; }
+/* 맞춤 단계 ⑤ 화면 아래에서 올라오는 판 — 플레이어가 너무 작을 때(휴대폰 세로 등). 화면 전체 폭, 영상 밖 */
+.fsvs-menu.fsvs-sheet { position: fixed; left: 0; right: 0; bottom: 0; width: auto; max-width: none; z-index: 2147483000;
+    border-radius: 14px 14px 0 0; padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); box-shadow: 0 -8px 24px rgba(0,0,0,0.35); }
+/* 조작 줄이 화면에 보이면 판을 그 바로 위에 띄운다(⚙ 를 덮지 않게) — 네 모서리 둥글게 */
+.fsvs-menu.fsvs-sheet.fsvs-raised { left: 8px; right: 8px; border-radius: 14px; padding-bottom: 12px; }
+/* 머리줄(제목 + ✕) — 판일 때만 */
+.fsvs-menuhead { display: none; }
+.fsvs-menu.fsvs-sheet .fsvs-menuhead { display: flex; align-items: center; justify-content: space-between; margin: -6px -4px 6px 0; grid-column: 1 / -1; }
+.fsvs-menutitle { font-size: 15px; font-weight: 700; }
+
+/* ★ (2026-09-23) 휴대폰(≤1024px) 목록 버튼을 뱃지와 같은 줄로 — 새 껍데기가 켜진 동안만.
+   기존 규칙은 우상단에 음성 선택(6px) → 화질 선택(44px) → 목록(82px) 순으로 쌓는데,
+   새 껍데기가 켜지면 화질 선택은 ⚙ 안으로 들어가 숨겨지므로 목록이 빈자리 아래에 떨어져 있었다(펜닐 제보).
+   ★ (2026-09-23) 음성 선택도 ⚙ 안으로 들어가 숨겨지므로(펜닐 지시) 목록은 **항상** 6px(뱃지와 같은 줄).
+   (종전엔 음성 선택이 있으면 그 아래 44px 로 내렸다 — 이제 빈자리 아래로 떨어지므로 그 규칙을 뺐다.) */
+@media (max-width: 1024px) {
+    body.fsvs-active .video-player-wrap.fsvs-on .fs-vp-toggle { top: 6px !important; }
+    /* ★ (2026-09-23) 휴대폰 가운데 버튼(재생 · ±5초) 다시 보이게 — 새 껍데기가 켜진 동안만(펜닐 지시).
+       기존 규칙은 1024px 이하에서 이 버튼들을 숨긴다(style.css·share.php) — 휴대폰은 브라우저 기본 컨트롤이
+       재생을 맡았기 때문. 새 껍데기가 기본 컨트롤을 대신하면서 휴대폰 가운데에 아무 버튼도 없게 됐다.
+       보이기/투명도는 기존 규칙을 그대로 따른다(탐색기는 휴대폰용 show-controls 규칙이 이미 있음). */
+    body.fsvs-active .video-player-wrap.fsvs-on .video-play-overlay,
+    body.fsvs-active #player-wrap.fsvs-on .video-play-overlay { display: flex !important; }
+    /* 공유 페이지에는 휴대폰용 '탭하면 보이기'(show-controls) 규칙이 없어 탐색기와 같게 맞춘다 */
+    body.fsvs-active #player-wrap.fsvs-on.playing.show-controls .video-play-overlay { opacity: 0.6; }
+    body.fsvs-active #player-wrap.fsvs-on.playing.show-controls .video-play-overlay.video-seek-btn { pointer-events: auto; }
+}
+.fsvs-sec + .fsvs-sec { margin-top: 14px; }
+.fsvs-sectitle { font-size: 13px; color: #B9BDD0; margin-bottom: 8px; }
+.fsvs-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+/* ★ (2026-09-23) 다국어 음성 — 항목 글자가 길어 한 줄에 하나씩(왼쪽 정렬, 길면 줄바꿈) */
+.fsvs-root .fsvs-chips.fsvs-list .fsvs-chip { flex: 1 1 100%; justify-content: flex-start; text-align: left; white-space: normal; height: auto; min-height: 32px; padding-top: 6px; padding-bottom: 6px; }
+/* ★ (2026-09-25) 음성 목록을 여러 칸 격자로 — 11개가 한 줄에 하나씩이면 설정 창이 너무 높아졌다(펜닐 제보).
+   칸 최소 폭 150px, 긴 이름('Brazilian Portuguese · EAC3 · 5.1(side)')은 두 줄로 줄바꿈. 좁은 창이면 자연히 한 칸. */
+.fsvs-root .fsvs-chips.fsvs-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.fsvs-root .fsvs-chips.fsvs-list .fsvs-chip { width: 100%; min-width: 0; line-height: 1.25; }
+.fsvs-pair { display: flex; gap: 8px; width: 100%; }
+.fsvs-pair .fsvs-chip { flex: 1; }
+.fsvs-root .fsvs-chip {
+    height: 36px;
+    min-width: 52px;
+    padding: 0 10px;
+    border-radius: 8px;
+    font-size: 14px;
+    background: rgba(255,255,255,0.06);
+    border-color: rgba(255,255,255,0.14);
+}
+.fsvs-root .fsvs-chip.is-on { font-weight: 600; background: var(--fsvs-on-bg); border-color: var(--fsvs-on-bd); }
+/* ★ (2026-09-23) 자막 행: [이름] [줄이기] [현재 값] [늘리기] — 누를 때마다 현재 값이 바뀌어 반응이 보인다 */
+.fsvs-subrow { display: grid; grid-template-columns: 34px minmax(0, 1fr) 72px minmax(0, 1fr); gap: 8px; align-items: center; width: 100%; }
+.fsvs-subrow + .fsvs-subrow { margin-top: 8px; }
+.fsvs-rowlabel { font-size: 13px; color: #B9BDD0; }
+.fsvs-val { text-align: center; font-size: 14px; font-weight: 700; }
+.fsvs-subrow .fsvs-chip { min-width: 0; padding: 0 6px; }
+/* 누른 칩 잠깐 강조 + 모든 버튼 눌림 효과 */
+.fsvs-root .fsvs-chip.is-flash { background: var(--fsvs-on-bg); border-color: var(--fsvs-on-bd); }
+.fsvs-root .fsvs-btn:active { transform: scale(0.96); }
+@media (prefers-reduced-motion: reduce) { .fsvs-root .fsvs-btn:active { transform: none; } }
+
+/* 재생 중 유휴: 조작부 숨김 */
+.fsvs-on.fsvs-idle .fsvs-bar { opacity: 0; pointer-events: none; }
+.fsvs-on.fsvs-idle { cursor: none; }
+
+/* 좁은 화면(휴대폰): 음량 막대·PIP 는 숨기고 간격을 줄인다 */
+@media (max-width: 600px) {
+    .fsvs-volrange, .fsvs-root .fsvs-pip { display: none !important; }
+    .fsvs-time { margin-left: 4px; font-size: 12px; }
+    .fsvs-root .fsvs-btn { min-width: 36px; }
+    .fsvs-root .fsvs-ab { min-width: 40px; padding: 0 4px; }
+    .fsvs-menu { right: 8px; left: 8px; width: auto; max-width: none; }
+}
+
+@media (prefers-reduced-motion: reduce) { .fsvs-bar { transition: none; } }
+
+/* 자막: 조작 줄이 보일 때만 그 높이만큼 올린다(유휴로 숨으면 원위치). 펜닐이 맞춘 bottom 값은 그대로 둔다 */
+/* ★ (2026-09-26) 올리는 양은 스크립트가 계산한 --fsvs-sub-raise(겹치는 만큼, 조작 줄 높이 이하). 없으면 종전처럼 조작 줄 높이 */
+.fsvs-on .subtitle-overlay { transform: translateY(calc(-1 * var(--fsvs-sub-raise, var(--fsvs-bar-h, 0px)))); transition: transform .2s ease; }
+.fsvs-on.fsvs-idle .subtitle-overlay { transform: none; }
+
+/* 껍데기가 켜진 동안에만 기존 조작부를 가린다 — 요소는 그대로 두어 껍데기가 대신 눌러준다 */
+/* 탐색기 */
+body.fsvs-active .preview-footer .vec-container,
+body.fsvs-active #preview-content .subtitle-controls,
+body.fsvs-active #preview-content .video-fullscreen-btn,
+body.fsvs-active #video-quality-select,
+body.fsvs-active #video-audio-select,   /* ★ (2026-09-23) 다국어 음성 — ⚙ 설정의 '오디오'로 옮김 */
+/* 공유 페이지 — #player-controls 의 버튼 18개는 전부 껍데기가 대신한다(확인함) */
+body.fsvs-active #player-controls,
+body.fsvs-active #share-quality-wrap,
+body.fsvs-active #share-audio-track-wrap,   /* ★ (2026-09-23) 다국어 음성 — ⚙ 설정의 '오디오'로 옮김 */
+body.fsvs-active #player-wrap .fs-subtitle-controls,
+/* 스트리밍의 노란 실제 길이 표시 — 새 진행바가 실제 길이 기준이라 중복 */
+body.fsvs-active #preview-content .transcode-duration,
+body.fsvs-active #player-wrap .transcode-duration { display: none !important; }
+/* 스트리밍: '갈 수 있는 구간'임을 버퍼 표시와 구분해 조금 더 밝게 */
+.fsvs-streaming .fsvs-buf { background: rgba(255,255,255,0.42); }
+@media (prefers-reduced-motion: reduce) { .fsvs-on .subtitle-overlay { transition: none; } }
+
+/* ★ (2026-09-24) 가운데 버튼(5초 뒤로·재생·5초 앞으로) 크기 — 탐색기·공유·PC·휴대폰·일반 재생·스트리밍 공통(펜닐 지시).
+   종전: 재생 72px(아이콘 48)·±5초 52px(아이콘 26) — 조작 줄 버튼(36~40px)의 거의 두 배라 커 보였다.
+   다른 플레이어(유튜브·넷플릭스 모바일 등)처럼 조작 줄보다 한 단계만 크게: 재생 56px(아이콘 32),
+   ±5초는 손가락으로 누르기 좋은 최소 크기 44px(아이콘 22)를 지킨다. 두 버튼 사이 간격도 같은 비율로
+   영상 폭의 20%(96~150px) → 16%(76~120px). 스킨이 붙은 플레이어(.fsvs-on)에만 적용 — 원래 규칙은 그대로라
+   스킨을 끄면 원래 크기. 원래 규칙(선택자 1~2개 클래스)보다 우선순위가 높아 !important 없이 덮어쓴다. */
+body.fsvs-active .fsvs-on .video-play-overlay:not(.video-seek-btn) { width: 56px; height: 56px; }
+body.fsvs-active .fsvs-on .video-play-overlay:not(.video-seek-btn) svg { width: 32px; height: 32px; }
+body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn { width: 44px; height: 44px; }
+body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn svg { width: 22px; height: 22px; }
+body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn-back { left: calc(50% - 50px - clamp(24px, 4%, 40px)); }
+body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn-fwd { left: calc(50% + 50px + clamp(24px, 4%, 40px)); }
+/* ★ (2026-09-26) 조작 줄 촘촘하게(fitRow — 자리가 모자랄 때 접기 전에). 휴대폰 규칙(버튼 36px·재생 40px·시간 12px)보다 우선하도록 선택자를 강하게. */
+.fsvs-root .fsvs-row.fsvs-tight { gap: 0; }
+.fsvs-root .fsvs-row.fsvs-tight .fsvs-btn { min-width: 32px; }
+.fsvs-root .fsvs-row.fsvs-tight .fsvs-play { width: 36px; height: 36px; }
+.fsvs-root .fsvs-row.fsvs-tight .fsvs-time { margin-left: 2px; font-size: 11px; }
+/* ★ (2026-09-26) iOS 는 볼륨 값을 바꿀 수 없어 슬라이더를 늘 숨긴다(가로 화면 포함) — 볼륨 버튼은 음소거 켜기/끄기로 남는다. */
+.fsvs-root.fsvs-ios .fsvs-volrange { display: none !important; }
+/* ★ (2026-09-26) 좁을 때 시간 표시를 조작 줄 위(진행 막대 위 왼쪽)로 — fitRow 가 촘촘하게 한 뒤에도 모자랄 때 붙인다.
+   위치 기준은 .fsvs-bar(absolute). 영상 위에 겹치므로 옅은 바탕으로 읽기 쉽게, 누름은 통과. */
+.fsvs-root .fsvs-row.fsvs-timeup .fsvs-time { position: absolute; left: 8px; bottom: calc(100% + 4px); margin: 0; font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 4px; background: rgba(0, 0, 0, 0.55); pointer-events: none; white-space: nowrap; }
+/* ★ (2026-09-26) 조작 줄 배치를 계산하는 동안 전환을 끈다(fitRow 가 잠깐 붙였다 뗌) — 모바일 전체 규칙 '* { transition-duration: 0.1s !important }'
+   (style.css 10544행, 원래 코드)가 크기까지 애니메이션으로 만들어 계산이 한 박자 늦은 크기를 잡던 문제. 이 규칙이 그것보다 강하다(둘 다 !important, 선택자가 강함). */
+.fsvs-root .fsvs-row.fsvs-fitting, .fsvs-root .fsvs-row.fsvs-fitting * { transition: none !important; }
+/* ★ (2026-09-26) 켜짐 표시를 버튼 안쪽에 작게(위아래 5px·좌우 3px) — 종전엔 버튼 상자 전체(높이 40px)에 바탕·테두리를 칠해
+   재생 막대에 닿고, 촘촘할 때(간격 0) 켜진 버튼끼리 붙었다(펜닐 제보 사진 5). 누르는 영역은 그대로. 표시는 아이콘·글자 뒤에 깔린다.
+   조작 줄(.fsvs-row) 버튼만 — 처음엔 .fsvs-btn 전체에 걸어 ⚙ 메뉴의 선택 칩(같은 .fsvs-btn)까지 바뀌었다(재검토에서 발견, 바로잡음). */
+.fsvs-root .fsvs-row .fsvs-btn { position: relative; }   /* 조작 줄만(켜짐 표시 ::before 기준) — 메뉴 버튼·칩은 종전 그대로 */
+.fsvs-root .fsvs-row .fsvs-btn.is-on { background: transparent; border-color: transparent; isolation: isolate; }
+.fsvs-root .fsvs-row .fsvs-btn.is-on::before { content: ''; position: absolute; top: 5px; bottom: 5px; left: 3px; right: 3px; border-radius: 8px; background: var(--fsvs-on-bg); border: 1.5px solid var(--fsvs-on-bd); z-index: -1; pointer-events: none; }
+.fsvs-root .fsvs-row .fsvs-ab.is-on::before { background: rgba(242, 184, 75, 0.28); border-color: var(--fsvs-ab); }
+/* ★ (2026-09-26) 버튼·시간 표시 줄바꿈 금지 — 촘촘할 때 'A-B' 가 'A-'/'B' 두 줄로 접혀 폭이 줄어(40 → 34px) fitRow 가 '들어간다'고
+   잘못 판단했다(펜닐 제보 사진 1, hlsdiag: W=359 에서 ab:34). 줄바꿈이 없으면 실제 폭으로 재어 시간 표시를 위로 옮기는 단계로 간다. */
+.fsvs-root .fsvs-row .fsvs-btn, .fsvs-root .fsvs-row .fsvs-time { white-space: nowrap; }   /* 조작 줄만 — ⚙ 메뉴 칩(같은 .fsvs-btn)은 긴 이름을 줄바꿈해야 한다(재검토: 처음엔 전체에 걸어 메뉴 칩까지 한 줄 고정) */
+/* ★ (2026-09-26) 다른 상태 표시도 켜짐 표시처럼 버튼 안쪽에 작게 — A-B 의 'A 만 지정'(is-half)·자막 꺼짐(is-off)이 버튼 상자 전체에
+   테두리를 둘러 크게 보였다(사진 2~4, 앞 수정에서 is-on 만 바꾸고 빠뜨림). 색·자막 꺼짐 취소선은 원래대로. */
+.fsvs-root .fsvs-row .fsvs-ab.is-half, .fsvs-root .fsvs-row .fsvs-cc.is-off { background: transparent; border-color: transparent; isolation: isolate; }
+.fsvs-root .fsvs-row .fsvs-ab.is-half::before, .fsvs-root .fsvs-row .fsvs-cc.is-off::before { content: ''; position: absolute; top: 5px; bottom: 5px; left: 3px; right: 3px; border-radius: 8px; z-index: -1; pointer-events: none; }
+.fsvs-root .fsvs-row .fsvs-ab.is-half::before { background: rgba(242, 184, 75, 0.12); border: 1.5px solid rgba(242, 184, 75, 0.6); }
+.fsvs-root .fsvs-row .fsvs-cc.is-off::before { background: transparent; border: 1.5px solid rgba(255, 255, 255, 0.3); }
+/* ★ (2026-09-26) 설정 창 크기를 재는 동안 전환을 끈다(fitMenu 가 잠깐 붙였다 뗌) — 조작 줄의 .fsvs-fitting 과 같은 이유·같은 방식. */
+.fsvs-root .fsvs-menu.fsvs-fitting, .fsvs-root .fsvs-menu.fsvs-fitting * { transition: none !important; }
+/* ★ (2026-09-26) 조작 줄 배치를 재는 동안 버튼이 줄어들지 못하게 — 음악 플레이어(.fap-fitting)와 같은 이유. 버튼이 flex 안에서 억지로 줄어(flex-shrink)
+   필요 폭이 실제보다 작게 잡혔다(hlsdiag 12:41 — W=359 에서 재생 36→35px·CC 34→33px 로 1px 씩 눌린 채 '들어간다'). 재는 동안만 실제 필요 폭으로 판단, 평소엔 원래대로. */
+.fsvs-root .fsvs-row.fsvs-fitting > * { flex-shrink: 0 !important; }
+/* ★ (2026-09-26) 가운데 ±5초 버튼 간격 — 재생 버튼 옆에 모아 두는 것이 일반적(iOS 기본 플레이어는 재생 버튼 좌우에 건너뛰기 버튼을 붙임)이라
+   가장자리 사이 간격을 24~40px(재생 버튼 지름 56px 의 약 0.4~0.7배)로. 중심 거리 = 재생 반지름 28 + ±5초 반지름 22 + clamp(24px, 4%, 40px).
+   종전 clamp(76px, 16%, 120px) 은 PC 큰 화면에서 중심 120px(가장자리 약 70px)으로 벌어졌다(펜닐 제보). 휴대폰 360px 은 76 → 74px 로 거의 같음. */
+/* ★ (2026-09-29) 동영상 배지(재생 방식·해상도·용량) — 스킨이 켜지면 화질·음성 선택 상자는 ⚙ 메뉴로 들어가 숨겨져(위 규칙) 오른쪽 위가 빈다.
+   탐색기는 모바일에서 배지를 화질 상자와 겹치지 않게 40% 로 묶어 두어(style.css — 원래 코드, 화질 상자가 '없거나 비었을 때'만 풂) 숨겨진
+   상자 때문에 배지가 계속 말줄임됐다(펜닐 제보). 스킨이 켜졌을 땐 영상 폭(− 여백)까지 쓰고, 그보다 길면 한 줄 말줄임.
+   공유는 폭 제한이 없어 긴 배지가 좁은 폭에서 여러 줄로 접혀 영상을 가렸다 → 같은 폭·한 줄 말줄임으로(가로가 좁으면 줄여서). 스킨이 꺼진 경우는 그대로. */
+body.fsvs-active .video-player-wrap .video-stream-badge { max-width: calc(100% - 12px) !important; }
+body.fsvs-active #player-wrap .stream-badge { max-width: calc(100% - 20px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ★ (2026-09-29) 오류 배지('❌' 로 시작 — 스킨 JS 가 fsvs-badge-error 를 붙임)는 줄이지 않고 전부 보이게 줄바꿈(펜닐 요청). 폭은 영상 폭까지. */
+body.fsvs-active .video-player-wrap .video-stream-badge.fsvs-badge-error { white-space: normal !important; overflow: visible !important; text-overflow: clip !important; max-width: calc(100% - 12px) !important; }
+body.fsvs-active #player-wrap .stream-badge.fsvs-badge-error { white-space: normal; overflow: visible; text-overflow: clip; max-width: calc(100% - 20px); }
+

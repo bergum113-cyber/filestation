@@ -2970,10 +2970,16 @@ class FileManager {
         // 오디오/비디오 트랙 정보 조회
         if (isset($_GET['info'])) {
             $probeCmd = escapeshellarg($ffmpeg) . ' -i ' . $inputPath . ' 2>&1';
+            $_infoProbeT0 = microtime(true);   // ★ (2026-09-26) 진단용 — 서버 조사 시간(probe_ms)
             $output = shell_exec($probeCmd);
+            $_infoProbeMs = (int)round((microtime(true) - $_infoProbeT0) * 1000);
             
             $audioTracks = [];
-            if (preg_match_all('/Stream\s+#(\d+):(\d+)(?:\(([a-z]+)\))?:\s*Audio:\s*(\w+)[^,]*,\s*(\d+)\s*Hz[^,]*,\s*([^,\r\n]+)/i', $output, $matches, PREG_SET_ORDER)) {
+            // ★ (2026-09-25) mp4 의 음성 줄은 스트림 번호 뒤에 식별 번호가 붙는다 — 'Stream #0:1[0x2](eng): Audio: aac …'
+            //   (mkv 는 'Stream #0:1(eng): Audio: …'). 종전 식은 이를 몰라 mp4 에서 음성을 0개로 읽어, 다국어 mp4(FileStation
+            //   H.264 변환 결과 포함)에서 음성 고르기가 나오지 않았다(펜닐 제보, 실제 ffmpeg 7.0.2 출력으로 확인). '[...]' 를 선택으로
+            //   허용한다 — 값을 잡지 않는 묶음이라 뒤의 언어·코덱·채널 번호는 그대로.
+            if (preg_match_all('/Stream\s+#(\d+):(\d+)(?:\[[^\]]*\])?(?:\(([a-z]+)\))?:\s*Audio:\s*(\w+)[^,]*,\s*(\d+)\s*Hz[^,]*,\s*([^,\r\n]+)/i', $output, $matches, PREG_SET_ORDER)) {
                 foreach ($matches as $m) {
                     $streamIdx = $m[2];
                     $lang = $m[3] ?? '';
@@ -3015,6 +3021,7 @@ class FileManager {
             echo json_encode([
                 'audio_tracks' => $audioTracks,
                 'encoder' => $this->getHwEncoderInfo(),
+                'probe_ms' => $_infoProbeMs,   // ★ (2026-09-26) 진단용 — 기존 필드는 그대로
                 'duration' => $duration,
                 'video_codec' => $videoCodec,
                 'video_resolution' => $videoResolution,
@@ -3312,6 +3319,202 @@ class FileManager {
         fclose($pipes[1]);
         proc_terminate($process, 9);
         proc_close($process);
+        exit;
+    }
+
+    /**
+     * ★ (2026-09-30) 원본 스트리밍(탐색 가능) — mp4 를 다시 인코딩하지 않고(-c:v copy) 원본 키프레임 경계로 잘라 HLS 로 보낸다.
+     *   펜닐 요청: 느린 회선에서 일반재생은 목차(moov, 1시간 영상 ≈ 4MB)를 다 받아야 시작하고 탐색도 거의 안 됨, 트랜스코딩은 빠르지만
+     *   화질이 바뀌고 탐색이 제한됨 → 원본 화질 그대로 + 빠른 시작 + 자유 탐색. 동영상 파일은 읽기만 하고, 임시 파일도 만들지 않는다.
+     *   ds=playlist : 영상 전체의 조각 목록(VOD — 처음부터 전체 길이라 어디로든 탐색 가능). 키프레임은 Mp4KeyIndex 로 목차만 읽어 구하고
+     *                 APCu(메모리)에 1시간 보관(디스크 사용 없음). 조각 주소의 k 는 파일 상태(크기·수정 시각) 표시.
+     *   ds=segment  : 요청한 조각 하나를 그 자리에서 복사 재포장해 곧바로 흘려보낸다(-ss 키프레임 pts ~ -to 다음 키프레임 dts,
+     *                 -copyts 로 원래 시각 유지 — 조각 이음새 영상 0초·프레임 수 원본과 같음, 음성은 AAC 한 프레임(0.021초) 겹침: 시험 확인).
+     *                 끊기면(탐색으로 재생기가 취소) ffmpeg 종료. 파일이 바뀌었으면(k 불일치) 409.
+     *   경로·권한·ffmpeg·한글 경로는 hlsStream 과 같은 함수(getRealPath·isPathSafe·findFfmpeg·짧은 경로·escapeShellPath). 권한은 api.php 에서.
+     *   H.264(avc1/avc3)만 — HEVC 는 TS 조각에 담기 어려워 415(클라이언트가 일반재생으로 돌아감). 음성이 AAC 가 아니면 음성만 AAC 로 변환.
+     */
+    public function directStream(int $storageId, string $path): void {
+        $fail = function (int $code, string $err) { http_response_code($code); header('Content-Type: application/json'); header('Cache-Control: no-store'); echo json_encode(['error' => $err]); exit; };
+
+        $realPath = $this->storage->getRealPath($storageId);
+        if (!$realPath) $fail(404, 'Storage not found');
+        $fullPath = $realPath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
+        if (!is_file($fullPath)) $fail(404, 'File not found');
+        if (!$this->isPathSafe($realPath, $fullPath)) $fail(403, 'Invalid path');
+        $this->directStreamFile($fullPath, 'api.php?action=direct_stream&ds=segment&storage_id=' . $storageId . '&path=' . rawurlencode($path));
+    }
+
+    /**
+     * ★ (2026-09-30) 원본 스트리밍 공용 부분 — 검증이 끝난 실제 파일 경로와 조각 주소 앞부분($segBase)을 받아 목록·조각을 처리한다.
+     *   탐색기(directStream — 로그인·폴더 권한·isPathSafe)와 공유(ShareManager::downloadShare — 토큰·만료·비밀번호·isSharePathSafe·폴더 하위 파일 검증)가
+     *   각자 검증을 마친 뒤 부른다. 이 함수는 경로 검증을 하지 않으므로 반드시 검증된 경로만 넘길 것.
+     */
+    public function directStreamFile(string $fullPath, string $segBase): void {
+        require_once __DIR__ . '/Mp4KeyIndex.php';
+        $ds = $_GET['ds'] ?? 'playlist';
+        $fail = function (int $code, string $err) { http_response_code($code); header('Content-Type: application/json'); header('Cache-Control: no-store'); echo json_encode(['error' => $err]); exit; };
+        if (!is_file($fullPath)) $fail(404, 'File not found');
+        if (strtolower(pathinfo($fullPath, PATHINFO_EXTENSION)) !== 'mp4') $fail(415, 'not_mp4');
+
+        // 키프레임 목록 — 파일 크기·수정 시각이 같으면 메모리 캐시 사용
+        $st = @stat($fullPath);
+        // ★ (2026-09-30) '|v2' — 목차에 음성 트랙 목록(acodecs)이 생겨 예전 저장값을 쓰지 않게(조각 주소의 k 도 함께 바뀜)
+        $key = 'fs_ds_' . md5($fullPath . '|' . ($st['size'] ?? 0) . '|' . ($st['mtime'] ?? 0) . '|v2');
+        $tag = substr($key, 6, 12);
+        $useApcu = function_exists('apcu_fetch') && (!function_exists('apcu_enabled') || @apcu_enabled());
+        $idx = null;
+        if ($useApcu) { $hit = false; $c = @apcu_fetch($key, $hit); if ($hit && is_array($c)) $idx = $c; }
+        if ($idx === null) {
+            $idx = Mp4KeyIndex::read($fullPath);
+            if ($idx === null) $fail(415, 'unsupported_file');
+            if ($useApcu) @apcu_store($key, $idx, 3600);
+        }
+        // ★ (2026-09-30) H.264 는 TS 조각(종전), HEVC(hvc1/hev1)는 조각 mp4(fMP4 — hls.js·사파리는 HEVC 를 TS 로 받지 않음). 둘 다 복사(다시 인코딩 없음).
+        $vc = $idx['vcodec'];
+        $isHevc = in_array($vc, ['hvc1', 'hev1'], true);
+        if (!$isHevc && !in_array($vc, ['avc1', 'avc3'], true)) $fail(415, 'unsupported_codec');
+        // ★ (2026-09-30) 음성 여러 개 — a=번호(0부터, ffmpeg 0:a:N 순서). 범위 밖이면 거절. 음성이 없으면 0.
+        $acodecs = $idx['acodecs'] ?? ((($idx['acodec'] ?? '') !== '') ? [$idx['acodec']] : []);
+        $a = (int)($_GET['a'] ?? 0);
+        if ($acodecs) { if ($a < 0 || $a >= count($acodecs)) $fail(400, 'bad_audio'); } else { $a = 0; }
+        $segs = Mp4KeyIndex::plan($idx, 4.0);
+        if (!$segs) $fail(415, 'unsupported_file');
+        $sfx = '&k=' . $tag . '&a=' . $a;
+
+        if ($ds === 'playlist') {
+            $td = 1; foreach ($segs as $sg) $td = max($td, (int)ceil($sg[1] - $sg[0]));
+            $out = "#EXTM3U\n#EXT-X-VERSION:" . ($isHevc ? 7 : 3) . "\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-TARGETDURATION:{$td}\n#EXT-X-MEDIA-SEQUENCE:0\n";
+            if ($isHevc) $out .= "#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-MAP:URI=\"" . preg_replace('/([?&])ds=segment/', '$1ds=init', $segBase, 1) . $sfx . "\"\n";
+            foreach ($segs as $i => $sg) $out .= sprintf("#EXTINF:%.6f,\n%s%s&i=%d\n", $sg[1] - $sg[0], $segBase, $sfx, $i);
+            $out .= "#EXT-X-ENDLIST\n";
+            header('Content-Type: application/vnd.apple.mpegurl');
+            header('Cache-Control: no-store');
+            header('Content-Length: ' . strlen($out));
+            echo $out;
+            exit;
+        }
+        if (!($ds === 'segment' || ($ds === 'init' && $isHevc))) $fail(400, 'bad_request');
+        if (($_GET['k'] ?? '') !== $tag) $fail(409, 'file_changed');
+        $i = ($ds === 'init') ? 0 : (int)($_GET['i'] ?? -1);        // 초기화 조각은 첫 조각을 만들어 그 목차 부분만 쓴다(조각마다 목차가 같음 — 검증)
+        if (!isset($segs[$i])) $fail(404, 'no_segment');
+
+        $ffmpeg = $this->findFfmpeg();
+        if (!$ffmpeg) $fail(500, 'ffmpeg not available');
+        $ffmpegInput = $fullPath;
+        if (PHP_OS_FAMILY === 'Windows') { $short = $this->getWindowsShortPath($fullPath); if ($short) $ffmpegInput = $short; }
+        $inputPath = $this->escapeShellPath($ffmpegInput);
+        [$ss, , $cut] = $segs[$i];
+        // ★ (2026-09-30) 초기화 조각은 목차(ftyp+moov)만 쓰므로 첫 0.1초 분량만 만든다 — 전체 조각으로 만든 목차와 바이트 단위로 같음 확인
+        //   (HEVC hvc1/hev1·음성 복사/변환·38MB 조각 파일; 출력 38MB → 0.58MB).
+        if ($ds === 'init') $cut = min($cut, $ss + 0.1);
+        $hasA = count($acodecs) > 0;
+        if (!$hasA || $acodecs[$a] === 'mp4a') {
+            $in = ' -ss ' . sprintf('%.6f', $ss) . ' -i ' . $inputPath;
+            $maps = ' -map 0:v:0' . ($hasA ? ' -map 0:a:' . $a : '');
+            $codecs = ' -c:v copy' . ($hasA ? ' -c:a copy' : '');
+        } else {
+            // ★ (2026-09-30) AAC 가 아닌 음성(AC-3 등)은 AAC 로 변환 — 이때 음성은 이 조각의 시작 dts(=앞 조각의 끊는 시각)부터 따로 읽는다.
+            //   영상 시작(키프레임 표시 시각)부터 풀면 B프레임 영상에서 표시·해석 시각 차이만큼 조각마다 소리가 비었다(0.05~0.2초, 시험에서 확인).
+            //   복사는 ffmpeg 가 약간 앞부터 가져와 겹치므로 해당 없음.
+            $ass = $i > 0 ? $segs[$i - 1][2] : 0.0;
+            $in = ' -ss ' . sprintf('%.6f', $ss) . ' -i ' . $inputPath . ' -ss ' . sprintf('%.6f', $ass) . ' -i ' . $inputPath;
+            $maps = ' -map 0:v:0 -map 1:a:' . $a;
+            $codecs = ' -c:v copy -c:a aac -b:a 192k -ac 2';
+        }
+        $fmt = $isHevc
+            ? ' -tag:v hvc1 -f mp4 -movflags +frag_keyframe+empty_moov+default_base_moof+frag_discont'   // hvc1: 사파리 필수, frag_discont: 조각 시작 시각을 실제 값으로
+            : ' -muxdelay 0 -muxpreload 0 -output_ts_offset 10 -f mpegts';
+        $cmd = escapeshellarg($ffmpeg) . ' -hide_banner -loglevel error -nostdin' . $in
+             . ' -to ' . sprintf('%.6f', $cut) . ' -copyts' . $maps . $codecs . ' -avoid_negative_ts disabled' . $fmt . ' pipe:1';
+
+        $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null', 'w']];
+        @set_time_limit(0);
+        $process = @proc_open($cmd, $descriptors, $pipes);
+        if (!is_resource($process)) $fail(500, 'ffmpeg_start_failed');
+        fclose($pipes[0]);
+        ignore_user_abort(true);
+        register_shutdown_function(function () use ($process, &$pipes) {
+            if (is_resource($pipes[1] ?? null)) @fclose($pipes[1]);
+            if (is_resource($process)) { @proc_terminate($process, 9); @proc_close($process); }
+        });
+
+        if ($isHevc) {
+            // 조각 mp4 는 시작 시각을 바로잡아야 하므로 다 받은 뒤 보낸다(복사라 빠름).
+            // ★ (2026-09-30) 크기 제한은 PHP memory_limit 에 맞춘다(한도의 60% − 지금 사용량, 최소 32MB) — 예전 고정 512MB 는 memory_limit 512M 과
+            //   같아 제한에 닿기 전에 치명 오류가 났다. 넘으면 오류 응답(재생기는 빠른 시작 안전장치로 넘어감). 보낼 땐 복사본 없이 나눠서(아래).
+            $ml = trim((string)ini_get('memory_limit'));
+            if ($ml === '' || $ml === '-1') { $mlB = 1024 * 1048576; }                  // 제한 없음 — 1GB 로 본다
+            else {
+                $mlB = (int)$ml; $u = strtolower(substr($ml, -1));
+                if ($u === 'g') $mlB *= 1073741824; elseif ($u === 'm') $mlB *= 1048576; elseif ($u === 'k') $mlB *= 1024;
+            }
+            $cap = max(8 * 1048576, (int)($mlB * 0.6) - memory_get_usage(true));   // 한도 비교는 '확보한 양'(true) 기준
+            // ★ (2026-09-30) 한 문자열로 이어 붙이지 않고 일정한 크기의 덩어리로 모은다 — 이어 붙이면 늘릴 때 순간 두 벌이 필요해 제한에 닿기 전에
+            //   치명 오류가 났다(실측). 덩어리 크기가 일정하므로 위치 → 덩어리 번호를 바로 계산한다.
+            //   크기는 1,024,000 바이트 — 딱 1MB(1,048,576)는 머리 정보까지 PHP 할당 묶음(2MB)에 하나만 들어가 실제로 2배를 차지했다
+            //   (1MB×40 → 78MB 확보, 1,024,000×40 → 38MB 확보 실측).
+            $BLK = 1024000; $blocks = []; $cur = ''; $total = 0;
+            while (!feof($pipes[1])) {
+                $chunk = fread($pipes[1], $BLK);
+                if ($chunk === false || $chunk === '') break;
+                $total += strlen($chunk);
+                if ($total > $cap) { $blocks = []; $cur = ''; @fclose($pipes[1]); @proc_terminate($process, 9); @proc_close($process); $fail(500, 'segment_too_large'); }
+                $cur .= $chunk;
+                while (strlen($cur) >= $BLK) { $blocks[] = substr($cur, 0, $BLK); $cur = (string)substr($cur, $BLK); }
+            }
+            if ($cur !== '') $blocks[] = $cur;
+            $cur = '';
+            @fclose($pipes[1]); @proc_close($process);
+            $get = function (int $o, int $n) use (&$blocks, $BLK, $total): string {   // 위치·길이로 읽기(덩어리 경계에 걸쳐도 이어 붙임)
+                if ($o < 0 || $n <= 0 || $o >= $total) return '';
+                $n = min($n, $total - $o); $out = '';
+                while ($n > 0) {
+                    $bi = intdiv($o, $BLK); $bo = $o % $BLK; $take = min($n, $BLK - $bo);
+                    $out .= substr($blocks[$bi], $bo, $take); $o += $take; $n -= $take;
+                }
+                return $out;
+            };
+            $parts = Mp4KeyIndex::fmp4Split($get, $total, 10.0);
+            if ($parts === null) $fail(500, 'segment_failed');
+            while (ob_get_level()) ob_end_clean();
+            header('Content-Type: video/mp4');
+            header('Cache-Control: no-store');
+            if ($ds === 'init') {
+                header('Content-Length: ' . strlen($parts['init']));
+                echo $parts['init'];
+                exit;
+            }
+            header('Content-Length: ' . $parts['fragLen']);
+            foreach ($parts['parts'] as $pt) {
+                if ($pt[0] === 's') { echo $pt[1]; @flush(); continue; }
+                for ($p = $pt[1], $end = $pt[1] + $pt[2]; $p < $end; $p += $BLK) {   // 영상 자료는 덩어리에서 1MB 씩 꺼내 보냄
+                    echo $get($p, min($BLK, $end - $p)); @flush();
+                    if (connection_aborted()) exit;
+                }
+            }
+            exit;
+        }
+
+        $first = fread($pipes[1], 65536);
+        if ($first === false || $first === '') {                          // 아무것도 안 나오면 빈 영상 대신 오류 응답
+            @fclose($pipes[1]); @proc_terminate($process, 9); @proc_close($process);
+            $fail(500, 'segment_failed');
+        }
+        while (ob_get_level()) ob_end_clean();
+        header('Content-Type: video/mp2t');
+        header('Cache-Control: no-store');
+        header('X-Accel-Buffering: no');
+        echo $first; @flush();
+        while (!feof($pipes[1])) {
+            $chunk = fread($pipes[1], 65536);
+            if ($chunk === false || $chunk === '') break;
+            echo $chunk; @flush();
+            if (connection_aborted()) break;                            // 탐색 등으로 재생기가 취소
+        }
+        @fclose($pipes[1]);
+        @proc_terminate($process, 9);
+        @proc_close($process);
         exit;
     }
 
@@ -5381,7 +5584,7 @@ class FileManager {
         // 0바이트 파일 처리
         if ($filesize === 0) {
             header('Content-Type: ' . $mimeType);
-            $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $filename);
+            $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $filename);
             $filenameEncoded = rawurlencode($filename);
             if ($inline) {
                 header("Content-Disposition: inline; filename=\"{$filenameSafe}\"; filename*=UTF-8''{$filenameEncoded}");
@@ -5412,6 +5615,21 @@ class FileManager {
                 if ($end >= $filesize) {
                     $end = $filesize - 1;
                 }
+                // ★ (2026-09-23) 음악 재생(미리보기·공유 스트리밍)은 한 번에 최대 1MB 만 보낸다 — 나머지는 재생기가 이어서 요청한다.
+                //   [원인] 곡 파일을 '처음부터 끝까지'로 요청하면 5~11MB 전체를 12~23Mbps 로 한꺼번에 밀어냈는데, 휴대폰 회선이
+                //   5Mbps 면 수 MB 가 망 중간에 쌓인다. 그 상태에서 곡을 넘기면 새 곡의 요청·응답이 쌓인 데이터 뒤에서 기다려
+                //   곡 시작이 3~4초 늦었다(09-23 Apache 로그: 서버 처리는 0.01~0.1초인데 휴대폰의 '맛보기 2바이트 → 본 요청'
+                //   간격이 3초 — 이전 곡 전송 직후 넘긴 경우에만, 오전의 빠른 회선에선 0초).
+                //   [처리] 요청 범위가 1MB 보다 크면 끝을 '시작+1MB' 로 줄여 206 으로 보낸다(RFC 9110 §15.3.7 — 서버는 요청 범위의
+                //   일부만 보낼 수 있고, Content-Range 로 스스로 설명되므로 재생기가 나머지를 이어서 요청한다).
+                //   1MB 는 320kbps 기준 약 26초 분량이라 재생이 끊기지 않고, 넘길 때 쌓여 있는 양이 최대 1MB(5Mbps 에서 약 1.6초)로 준다.
+                //   음악 재생에만 적용 — 일반 다운로드·동영상·이미지·범위 요청이 아닌 경우는 종전과 같다.
+                if ($inline && strpos($mimeType, 'audio/') === 0) {
+                    $capBytes = 1048576;
+                    if ($end - $start + 1 > $capBytes) {
+                        $end = $start + $capBytes - 1;
+                    }
+                }
             }
             http_response_code(206);
             header("Content-Range: bytes {$start}-{$end}/{$filesize}");
@@ -5421,7 +5639,7 @@ class FileManager {
         header('Content-Type: ' . $mimeType);
         
         // RFC 5987 형식으로 파일명 인코딩 (모든 브라우저 지원)
-        $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $filename);
+        $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $filename);
         $filenameEncoded = rawurlencode($filename);
         
         if ($inline) {
@@ -5493,10 +5711,15 @@ class FileManager {
         } else {
             // 무제한 속도 (부분 요청)
             $chunkSize = 1048576; // 1MB 청크
-            while ($remaining > 0 && !feof($fp)) {
+            // ★ (2026-09-30) 브라우저가 끊으면 바로 멈춘다 — 종전엔 이 갈래(속도 제한 없음 + 구간 요청)만 끊김 확인 없이 반복 뒤에 한 번 flush 해,
+            //   아이폰 동영상의 구간 요청(Range: bytes=0- — 파일 전체)을 트랜스코딩 전환 등으로 끊어도 서버가 1.5GB 를 계속 읽고 보내려 할 수 있었다
+            //   (펜닐 로그: 원본 다운로드가 열려 있는 동안만 다른 작은 요청의 서버 처리가 3~7초). 속도 제한 갈래와 같게 connection_aborted() 확인 +
+            //   조각마다 flush(PHP 는 내보내다 실패할 때 끊김을 안다). 보내는 데이터는 같다.
+            while ($remaining > 0 && !feof($fp) && !connection_aborted()) {
                 $chunk = min($chunkSize, $remaining);
                 echo fread($fp, $chunk);
                 $remaining -= $chunk;
+                flush();
             }
             flush();
         }
@@ -5539,7 +5762,7 @@ class FileManager {
         header('Content-Type: ' . $mimeType);
         header('Accept-Ranges: bytes');
         
-        $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $filename);
+        $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $filename);
         $filenameEncoded = rawurlencode($filename);
         if ($inline) {
             header("Content-Disposition: inline; filename=\"{$filenameSafe}\"; filename*=UTF-8''{$filenameEncoded}");
@@ -5717,7 +5940,7 @@ class FileManager {
         $zipSize = filesize($zipPath);
         
         // RFC 5987 형식으로 파일명 인코딩
-        $zipNameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $zipName);
+        $zipNameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $zipName);
         $zipNameEncoded = rawurlencode($zipName);
         
         header('Content-Type: application/zip');
@@ -9650,6 +9873,11 @@ class FileManager {
         $nativeVideoCodecs = ['h264', 'vp8', 'vp9', 'av1'];
         $canPlayNative = empty($videoCodec) || in_array($videoCodec, $nativeVideoCodecs);
         
+        // ★ (2026-09-26) 음성 개수·서버 조사 시간 추가(기존 필드는 그대로) — 같은 ffmpeg -i 결과를 세므로 추가 비용 없음.
+        //   audio_count: 휴대폰에서 다국어 mp4 는 처음부터 스트리밍으로 열기 위해(펜닐 제보: 아이폰에서 다국어 mp4 가 반응 없음).
+        //   probe_ms: 파일 정보를 읽는 데 걸린 시간 — 진단 기록(media_info_response)으로 서버 쪽이 느린지 가르기 위해.
+        //   mp4 의 음성 줄은 'Stream #0:1[0x2](eng): Audio: …' 라 번호 뒤를 '.*' 로 넘긴다(식별 번호가 있어도 셈).
+        $audioCount = (int)preg_match_all('/Stream\s+#\d+:\d+.*Audio:/i', (string)$output);
         return [
             'success' => true,
             'video_codec' => $videoCodec,
@@ -9657,6 +9885,8 @@ class FileManager {
             'resolution' => $resolution,
             'can_play_native' => $canPlayNative,
             'file_size' => $fileSize,
+            'audio_count' => $audioCount,
+            'probe_ms' => $_probeDur,
         ];
     }
     
@@ -9843,7 +10073,7 @@ class FileManager {
         $progressFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'fs_conv_prog_' . md5($outPath . microtime(true)) . '.txt';
 
         // 변환 명령 빌더 (vArgs만 다르게)
-        $buildConvCmd = function($vArgs, $aArgsOverride = null) use ($ffmpeg, $fullPath, $aArgs, $progressFile, $tmpOut, $cvArg, $convSid) {
+        $buildConvCmd = function($vArgs, $aArgsOverride = null) use ($ffmpeg, $fullPath, $aArgs, $progressFile, $tmpOut, $cvArg, $convSid, $audioCodec) {
             $aUse = ($aArgsOverride !== null) ? $aArgsOverride : $aArgs; // copy 폴백 시 오디오도 재인코딩(-c:a aac)
             // ★ (2026-08-24) VA-API 지원 — 이 변환 경로도 detectHwEncoder() 결과를 그대로 쓰므로
             //   VA-API 가 선택되면 여기서도 **장치 인자와 업로드 필터**가 필요하다.
@@ -9861,6 +10091,12 @@ class FileManager {
                 . ' -map 0:v:0 -map 0:a? -sn '                     // -sn: 자막/데이터 스트림 무시(손상 stream 회피) — 트랜스코딩 일관
                 . $vaVf
                 . ' ' . $vArgs . ' ' . $aUse
+                // ★ (2026-09-25) 음성 '기본' 표시를 첫 음성 하나로 정리 — 다국어 mkv 는 여러 음성에 기본 표시가 붙은 경우가 흔한데,
+                //   그대로 mp4 로 바꾸면 ffmpeg 가 그 음성들을 **모두 켜짐·각기 다른 그룹(=동시에 재생)** 으로 기록한다
+                //   (실제 ffmpeg 7.0.2 로 확인 — 기본 1개면 첫 음성만 켜짐·같은 그룹). PC 크롬은 이를 무시하고 첫 음성만 재생하지만
+                //   아이폰은 따라서 다국어 mp4 가 재생되지 않고 음성을 골라야 재생됐다(펜닐 제보). 음성이 있을 때만 붙인다
+                //   (음성 없는 영상에 붙이면 버전에 따라 오류가 날 수 있어서). 모든 변환 갈래가 이 빌더를 거친다.
+                . ($audioCodec !== '' ? ' -disposition:a 0 -disposition:a:0 default' : '')
                 . ' -metadata comment=convsid_' . $convSid        // 취소/새로고침 시 wmic로 이 ffmpeg 찾아 kill
                 . ' -movflags +faststart'
                 . ' -f mp4'                                        // 출력 포맷 명시 — 임시 확장자(.converting)라 ffmpeg가 확장자로 포맷 추론 못 하므로 필수
@@ -12505,7 +12741,11 @@ class FileManager {
             $output = shell_exec($probeCmd);
             
             $audioTracks = [];
-            if (preg_match_all('/Stream\s+#(\d+):(\d+)(?:\(([a-z]+)\))?\:\s*Audio:\s*(\w+)[^,]*,\s*(\d+)\s*Hz[^,]*,\s*([^,\r\n]+)/i', $output, $matches, PREG_SET_ORDER)) {
+            // ★ (2026-09-25) mp4 의 음성 줄은 스트림 번호 뒤에 식별 번호가 붙는다 — 'Stream #0:1[0x2](eng): Audio: aac …'
+            //   (mkv 는 'Stream #0:1(eng): Audio: …'). 종전 식은 이를 몰라 mp4 에서 음성을 0개로 읽어, 다국어 mp4(FileStation
+            //   H.264 변환 결과 포함)에서 음성 고르기가 나오지 않았다(펜닐 제보, 실제 ffmpeg 7.0.2 출력으로 확인). '[...]' 를 선택으로
+            //   허용한다 — 값을 잡지 않는 묶음이라 뒤의 언어·코덱·채널 번호는 그대로.
+            if (preg_match_all('/Stream\s+#(\d+):(\d+)(?:\[[^\]]*\])?(?:\(([a-z]+)\))?\:\s*Audio:\s*(\w+)[^,]*,\s*(\d+)\s*Hz[^,]*,\s*([^,\r\n]+)/i', $output, $matches, PREG_SET_ORDER)) {
                 foreach ($matches as $m) {
                     $title = '';
                     if (preg_match('/Stream\s+#' . preg_quote($m[1] . ':' . $m[2]) . '.*\n\s*Metadata:\s*\n\s*title\s*:\s*(.+)/i', $output, $tm)) {
@@ -12668,6 +12908,63 @@ class FileManager {
         
         fclose($pipes[1]);
         proc_close($process);
+        exit;
+    }
+
+    /**
+     * ★ (2026-09-23) 음악 커버를 긴 변 $maxSide 로 줄인 JPEG — 플레이어·잠금화면·재생목록 표시용(비율 유지, 자르지 않음).
+     *   [배경] 서버가 MP3 에 든 **원본 크기 커버**를 그대로 보내, 5Mbps 에서 커버 한 장에 2.4~3.6초가 걸렸고
+     *   그동안 곡 정보가 늦게 와 곡 시작이 3~4초 밀렸다(09-23 20:00 로그 — 5번 모두 곡 정보가 커버 완료 0.4~0.8초 뒤).
+     *   - 캐시: $cacheFile 에 저장, 있으면 그대로 돌려준다.
+     *   - 원본이 이미 $maxSide 이하면 null — 호출 측이 원본을 그대로 보낸다(다시 압축하지 않음).
+     *   - 실패(GD 없음·손상된 이미지)·너무 큰 이미지(1600만 화소 초과, 메모리 보호)·줄였는데 더 커지면 null — 원본으로 대체.
+     *   - GD 사용 방식은 generateMp3Thumbnail 과 같다(검은 바탕 + imagecopyresampled + JPEG 85).
+     * @return array|null ['data' => JPEG 바이트, 'mime' => 'image/jpeg']
+     */
+    public static function resizedCover(string $data, string $cacheFile, int $maxSide): ?array {
+        if ($maxSide <= 0 || $data === '') return null;
+        if (is_file($cacheFile)) {
+            $c = @file_get_contents($cacheFile);
+            if ($c !== false && $c !== '') return ['data' => $c, 'mime' => 'image/jpeg'];
+            @unlink($cacheFile);
+        }
+        if (!function_exists('imagecreatefromstring') || !function_exists('getimagesizefromstring')) return null;
+        $info = @getimagesizefromstring($data);
+        if (!$info || (int)$info[0] <= 0 || (int)$info[1] <= 0) return null;
+        $w = (int)$info[0]; $h = (int)$info[1];
+        if ($w <= $maxSide && $h <= $maxSide) return null;
+        if ($w * $h > 16000000) return null;
+        $src = @imagecreatefromstring($data);
+        if (!$src) return null;
+        $scale = $maxSide / max($w, $h);
+        $nw = max(1, (int)round($w * $scale));
+        $nh = max(1, (int)round($h * $scale));
+        $dst = imagecreatetruecolor($nw, $nh);
+        imagefilledrectangle($dst, 0, 0, $nw, $nh, imagecolorallocate($dst, 0, 0, 0));
+        imagecopyresampled($dst, $src, 0, 0, 0, 0, $nw, $nh, $w, $h);
+        ob_start();
+        $ok = @imagejpeg($dst, null, 85);
+        $out = (string)ob_get_clean();
+        imagedestroy($src);
+        imagedestroy($dst);
+        if (!$ok || $out === '' || strlen($out) >= strlen($data)) return null;
+        @file_put_contents($cacheFile, $out);
+        return ['data' => $out, 'mime' => 'image/jpeg'];
+    }
+
+    /** ★ (2026-09-23) 커버 바이트 전송 — audioCover 의 기존 전송과 같은 헤더(ETag·304·30일 캐시) */
+    private static function sendCoverBytes(string $data, string $mime, string $etag): void {
+        if (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) {
+            http_response_code(304);
+            header('ETag: ' . $etag);
+            header('Cache-Control: public, max-age=2592000, immutable');
+            exit;
+        }
+        header('Content-Type: ' . $mime);
+        header('Content-Length: ' . strlen($data));
+        header('ETag: ' . $etag, true);
+        header('Cache-Control: public, max-age=2592000, immutable', true);
+        echo $data;
         exit;
     }
 
@@ -13227,7 +13524,7 @@ class FileManager {
      * 
      * 원격 스토리지는 ID3 추출 안 함 (성능 문제) - 404 반환하여 클라이언트가 폴더 이미지 fallback
      */
-    public function audioCover(int $storageId, string $relativePath): void {
+    public function audioCover(int $storageId, string $relativePath, int $maxSide = 0): void {
         if (!$this->storage->checkPermission($storageId, 'can_read')) {
             http_response_code(403);
             exit;
@@ -13285,6 +13582,14 @@ class FileManager {
         $cacheImgFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.img';
         // 네거티브 캐시 마커 (커버 없는 파일임을 기억 → 반복 파싱 방지)
         $cacheNoCoverFile = $cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.nocover';
+        // ★ (2026-09-23) 줄인 커버 요청(sz) — 줄인 캐시가 있으면 원본을 읽지 않고 바로 보낸다.
+        //   $maxSide 가 0 이면(기존 주소) 아래 흐름은 종전과 완전히 같다.
+        $rzFile = $maxSide > 0 ? ($cacheDir . DIRECTORY_SEPARATOR . $cacheKey . '.w' . $maxSide . '.jpg') : null;
+        $rzEtag = '"' . $cacheKey . '-w' . $maxSide . '"';
+        if ($rzFile && is_file($rzFile) && (int)@filesize($rzFile) > 0) {
+            $rzData = @file_get_contents($rzFile);
+            if ($rzData !== false && $rzData !== '') self::sendCoverBytes($rzData, 'image/jpeg', $rzEtag);
+        }
         
         if (is_file($cacheMetaFile) && is_file($cacheImgFile)) {
             // 캐시 히트: 즉시 반환 (단, 0바이트 파일은 무시 — 디스크 가득 참 등으로 쓰기 실패한 경우)
@@ -13300,6 +13605,10 @@ class FileManager {
                         header('ETag: ' . $etag);
                         header('Cache-Control: public, max-age=2592000, immutable');
                         exit;
+                    }
+                    if ($rzFile) {   // ★ (2026-09-23) 줄인 커버 요청 — 만들어 보낸다(원본이 이미 작거나 실패하면 null → 아래 원본 그대로)
+                        $rz = self::resizedCover((string)@file_get_contents($cacheImgFile), $rzFile, $maxSide);
+                        if ($rz) self::sendCoverBytes($rz['data'], $rz['mime'], $rzEtag);
                     }
                     header('Content-Type: ' . $mime);
                     header('Content-Length: ' . $imgFileSize);
@@ -13341,6 +13650,10 @@ class FileManager {
         // 캐시 저장 (실패해도 응답은 계속)
         @file_put_contents($cacheMetaFile, $cover['mime']);
         @file_put_contents($cacheImgFile, $cover['data']);
+        if ($rzFile) {   // ★ (2026-09-23) 줄인 커버 요청 — 원본은 위에서 캐시해 두고, 줄인 것을 보낸다
+            $rz = self::resizedCover($cover['data'], $rzFile, $maxSide);
+            if ($rz) self::sendCoverBytes($rz['data'], $rz['mime'], $rzEtag);
+        }
         
         // HTTP 응답
         // ★ ETag + 30일 캐시 + immutable (캐시 히트 분기와 동일 정책)

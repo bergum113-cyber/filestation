@@ -399,7 +399,7 @@ $rateLimitExclude = [
     'vault_decrypt_save', 'vault_decrypt_save_chunk', 'vault_delete', 'vault_server_copy',
     'vault_preview_temp', 'vault_preview_serve', 'vault_preview_cleanup', 'vault_preview_touch',
     // 스트리밍 (세그먼트 연속 요청)
-    'transcode', 'hls_stream',
+    'transcode', 'hls_stream', 'direct_stream',   // ★ (2026-09-30) 원본 스트리밍 조각 연속 요청(GET)
     // ZIP 내부 목록 조회
     'zip_list', 'archive_list', 'archive_preview'
 ];
@@ -496,7 +496,7 @@ $csrfExclude = [
     'sso_config', 'sso_ldap_login', 'sso_oidc_auth', 'sso_oidc_callback', 'sso_oidc_silent_auth',
     'sso_saml_auth', 'sso_saml_callback', 'sso_saml_metadata',
     // 스트리밍 (GET 기반)
-    'transcode', 'hls_stream',
+    'transcode', 'hls_stream', 'direct_stream',   // ★ (2026-09-30) 원본 스트리밍 조각 연속 요청(GET)
     // ZIP 내부 목록 (GET 기반)
     'zip_list', 'archive_list', 'archive_preview',
     // 미디어 재생 중 세션 유지용 heartbeat (세션 인증만 있음, 상태 변경 없음)
@@ -1595,13 +1595,19 @@ try {
                 }
                 // 입력 파싱 — JSON body
                 $raw = file_get_contents('php://input');
-                if (strlen($raw) > 4096) {
+                // ★ (2026-09-23) 묶음 전송 지원 — {batch:[{event,detail,t},…]} 는 64KB·50건까지, 한 건 방식({event,detail})은 종전대로 4KB
+                if (strlen($raw) > 65536) {
                     $result = ['success' => false, 'error' => 'payload_too_large'];
                     break;
                 }
                 $data = json_decode($raw, true);
                 if (!is_array($data)) {
                     $result = ['success' => false, 'error' => 'invalid_json'];
+                    break;
+                }
+                $isBatch = isset($data['batch']) && is_array($data['batch']);
+                if (!$isBatch && strlen($raw) > 4096) {
+                    $result = ['success' => false, 'error' => 'payload_too_large'];
                     break;
                 }
                 
@@ -1619,19 +1625,35 @@ try {
                 //   디버그 로그는 순수 조회용이라 활동 갱신 안 해야 함
                 $_isAuthed = isset($_SESSION['user_id']);
                 $_username = $_SESSION['username'] ?? null;
-                $logEntry = [
-                    'ts' => date('Y-m-d H:i:s'),
-                    'ts_ms' => round(microtime(true) * 1000),
-                    'ip' => $_SERVER['REMOTE_ADDR'] ?? '?',
-                    'ua_short' => substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 100),
-                    'authed' => $_isAuthed ? 'Y' : 'N',
-                    'user' => $_isAuthed ? ($_username ?? '?') : '-',
-                    'event' => $data['event'] ?? 'unknown',
-                    'detail' => $data['detail'] ?? null,
-                ];
-                // 한 줄 JSON으로 append (tail -f 친화적)
-                $line = json_encode($logEntry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
-                @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
+                // ★ (2026-09-23) 묶음이면 각 항목을 한 줄씩. 시각: 항목에 휴대폰 기록 시각(t)이 있고 서버 시각과 10분 이내면
+                //   그것을 ts·ts_ms 로 쓴다(묶음은 한 번에 도착하므로 서버 시각을 쓰면 모두 같아진다). 서버가 받은 시각은 rx_ms.
+                //   한 건 방식(t 없음)은 종전과 같이 서버 시각. 한 항목이 4KB 를 넘으면 그 항목만 버린다.
+                $rxMs = round(microtime(true) * 1000);
+                $items = $isBatch ? array_slice($data['batch'], 0, 50) : [$data];
+                $lines = '';
+                foreach ($items as $it) {
+                    if (!is_array($it)) continue;
+                    $tsMs = $rxMs;
+                    if ($isBatch && isset($it['t']) && is_numeric($it['t']) && abs((float)$it['t'] - $rxMs) <= 600000) {
+                        $tsMs = (int)round((float)$it['t']);
+                    }
+                    $logEntry = [
+                        'ts' => date('Y-m-d H:i:s', (int)floor($tsMs / 1000)),
+                        'ts_ms' => $tsMs,
+                        'ip' => $_SERVER['REMOTE_ADDR'] ?? '?',
+                        'ua_short' => substr($_SERVER['HTTP_USER_AGENT'] ?? '', 0, 100),
+                        'authed' => $_isAuthed ? 'Y' : 'N',
+                        'user' => $_isAuthed ? ($_username ?? '?') : '-',
+                        'event' => $it['event'] ?? 'unknown',
+                        'detail' => $it['detail'] ?? null,
+                    ];
+                    if ($isBatch) $logEntry['rx_ms'] = $rxMs;
+                    // 한 줄 JSON으로 append (tail -f 친화적)
+                    $line = json_encode($logEntry, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . "\n";
+                    if ($isBatch && strlen($line) > 4608) continue;
+                    $lines .= $line;
+                }
+                if ($lines !== '') @file_put_contents($logFile, $lines, FILE_APPEND | LOCK_EX);
                 
                 $result = ['success' => true];
             } catch (\Throwable $e) {
@@ -1786,7 +1808,7 @@ try {
             
             // 파일명 인코딩 (RFC 5987)
             $fileNameEncoded = rawurlencode($fileName);
-            $fileNameAscii = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $fileName);
+            $fileNameAscii = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $fileName);
             
             header('Content-Type: ' . $mimeType);
             if ($isInline) {
@@ -3803,7 +3825,7 @@ try {
             }
             
             header('Content-Type: application/octet-stream');
-            $origNameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $origName);
+            $origNameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $origName);
             $origNameEncoded = rawurlencode($origName);
             header("Content-Disposition: attachment; filename=\"{$origNameSafe}\"; filename*=UTF-8''{$origNameEncoded}");
             header('Content-Length: ' . filesize($filePath));
@@ -5154,7 +5176,7 @@ try {
             }
             
             header('Content-Type: ' . $mime);
-            $fileNameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $fileName);
+            $fileNameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $fileName);
             $fileNameEncoded = rawurlencode($fileName);
             if ($isInline) {
                 header("Content-Disposition: inline; filename=\"{$fileNameSafe}\"; filename*=UTF-8''{$fileNameEncoded}");
@@ -6318,6 +6340,23 @@ try {
             _sessionDebugLog('STEP:hls_stream_done');
             break;
         
+        case 'direct_stream':
+            // ★ (2026-09-30) 원본 스트리밍(탐색 가능) — mp4 를 다시 인코딩하지 않고 키프레임 경계로 잘라 HLS 로(FileManager::directStream).
+            //   인증·권한은 hls_stream 과 같게: 로그인 → 세션 닫기 → 폴더 권한.
+            $auth->requireLogin();
+            session_write_close();
+            $storageId = (int)($_GET['storage_id'] ?? 0);
+            $path = $_GET['path'] ?? '';
+            $dsDir = dirname($path);
+            if ($dsDir === '.') $dsDir = '';
+            if (!$storage->checkFolderPermission($storageId, $dsDir ?: $path)) {
+                http_response_code(403);
+                echo json_encode(['error' => 'No permission']);
+                break;
+            }
+            $fileManager->directStream($storageId, $path);
+            break;
+
         case 'transcode_log':
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제
@@ -6366,6 +6405,31 @@ try {
                 $result = ['success' => true, 'cleared' => true]; break;
             }
             if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+                // ★ (2026-09-26) 묶음 전송(batch) 추가 — 기존 한 건 방식(event·data)은 그대로.
+                //   [결함] 클라이언트가 기록 하나당 요청 하나를 보내, 진단 기록을 늘린 뒤(누름·가운데 버튼 등) 분당 120 공용 제한에 걸려
+                //   기록이 버려지고(09-26 00:53 기록에서 자동 시작 구간 누락) 진단 중엔 평소 요청까지 제한을 받을 수 있었다.
+                //   batch: JSON 배열 [{event, data}, …] — 최대 100건·전체 128KB·한 건 8KB. 줄바꿈은 공백으로(한 기록 = 한 줄).
+                if (isset($_POST['batch'])) {
+                    try {
+                        $raw = (string)$_POST['batch'];
+                        if (strlen($raw) <= 131072) {
+                            $arr = json_decode($raw, true);
+                            if (is_array($arr)) {
+                                if (is_file($logFile) && filesize($logFile) > 5242880) @file_put_contents($logFile, '');
+                                $lines = '';
+                                foreach (array_slice($arr, 0, 100) as $it) {
+                                    if (!is_array($it)) continue;
+                                    $ev = substr(str_replace(["\r", "\n"], ' ', (string)($it['event'] ?? '')), 0, 8192);
+                                    if ($ev === '') continue;
+                                    $dt = substr(str_replace(["\r", "\n"], ' ', (string)($it['data'] ?? '')), 0, 8192);
+                                    $lines .= '[' . date('Y-m-d H:i:s') . '] ' . $ev . ($dt !== '' ? ' | ' . $dt : '') . "\n";
+                                }
+                                if ($lines !== '') @file_put_contents($logFile, $lines, FILE_APPEND | LOCK_EX);
+                            }
+                        }
+                    } catch (Exception $e) {}
+                    $result = ['success' => true]; break;
+                }
                 try {
                     $event = $_POST['event'] ?? ($input['event'] ?? '');
                     $data = $_POST['data'] ?? ($input['data'] ?? '');
@@ -6510,7 +6574,9 @@ try {
             }
             $fileManager->audioCover(
                 (int)($_GET['storage_id'] ?? 0),
-                $coverPath
+                $coverPath,
+                // ★ (2026-09-23) &sz=512 — 줄인 커버(플레이어·잠금화면·재생목록). 캐시가 늘지 않게 512 만 허용, 없으면 원본(종전)
+                ((int)($_GET['sz'] ?? 0) === 512) ? 512 : 0
             );
             break;
             
@@ -8620,7 +8686,7 @@ try {
             $zipSize = filesize($zipPath);
             
             // RFC 5987 형식으로 파일명 인코딩
-            $zipNameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $zipName);
+            $zipNameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $zipName);
             $zipNameEncoded = rawurlencode($zipName);
             
             header('Content-Type: application/zip');
@@ -12960,7 +13026,7 @@ try {
             $downloadName = $nameWithoutExt . '_v' . date('Ymd_His', (int)explode('_', $versionId)[0]) . '.' . $ext;
             
             // RFC 5987 안전한 Content-Disposition
-            $downloadNameSafe = preg_replace('/[^\x20-\x7E]|["\\]/', '_', $downloadName);
+            $downloadNameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $downloadName);
             $downloadNameEncoded = rawurlencode($downloadName);
             
             header('Content-Type: application/octet-stream');

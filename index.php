@@ -124,6 +124,8 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📁%3C/text%3E%3C/svg%3E">
     <?php endif; ?>
     <link rel="stylesheet" href="assets/css/style.css?v=<?php echo substr(md5_file(__DIR__ . '/assets/css/style.css'), 0, 10); ?>">
+    <!-- ★ (2026-09-23) 동영상 새 껍데기(기본 켜짐 — ?vskin=0 으로 끔). 규칙은 .fsvs-* 로만 적용돼 꺼져 있으면 영향 없음 -->
+    <link rel="stylesheet" href="assets/css/fs-video-skin.css?v=<?php echo substr(md5_file(__DIR__ . '/assets/css/fs-video-skin.css'), 0, 10); ?>">
     <link rel="stylesheet" href="assets/lib/viewerjs/viewer.min.css">
     <!-- 테마 깜빡임 방지: localStorage에서 테마 즉시 로드 -->
     <script>
@@ -5741,6 +5743,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
     <script src="assets/vendor/hls.min.js"></script>
     <script src="assets/js/e2e-crypto.js?v=<?php echo substr(md5_file(__DIR__ . '/assets/js/e2e-crypto.js'), 0, 10); ?>"></script>
     <script src="assets/js/app.js?v=<?php echo substr(md5_file(__DIR__ . '/assets/js/app.js'), 0, 10); ?>"></script>
+    <script src="assets/js/fs-video-skin.js?v=<?php echo substr(md5_file(__DIR__ . '/assets/js/fs-video-skin.js'), 0, 10); ?>"></script>
 <!-- 알림 드롭다운 (body 직접 자식 - overflow hidden 회피) -->
 <div class="notify-dropdown" id="notify-dropdown">
     <div class="notify-dropdown-header"><?php _e('notifications'); ?></div>

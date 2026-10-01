@@ -69,6 +69,15 @@ if (isset($_GET['cover']) && $_GET['cover'] === '1') {
     }
     
     // 캐시 ETag (캐시 키에 mtime 포함이라 immutable)
+    // ★ (2026-09-23) &sz=512 — 줄인 커버(탐색기 audio_cover 와 같은 함수·같은 규칙). 512 만 허용, 없으면 원본(종전).
+    //   원본이 이미 작거나 줄이기에 실패하면 원본을 그대로 보낸다. 캐시 키는 파일 이름에 쓰므로 16진수 형식만 받는다.
+    if ((int)($_GET['sz'] ?? 0) === 512 && preg_match('/^[a-f0-9]{32,40}$/', (string)($cover['cache_key'] ?? ''))) {
+        require_once __DIR__ . '/api/FileManager.php';
+        $rzDir = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data')) . '/thumbcache/share_audio';
+        if (!is_dir($rzDir)) @mkdir($rzDir, 0755, true);
+        $rz = FileManager::resizedCover($cover['data'], $rzDir . '/' . $cover['cache_key'] . '.w512.jpg', 512);
+        if ($rz) $cover = ['mime' => $rz['mime'], 'data' => $rz['data'], 'cache_key' => $cover['cache_key'] . '-w512'];
+    }
     $etag = '"' . $cover['cache_key'] . '"';
     if (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) {
         http_response_code(304);
@@ -312,6 +321,19 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         $share['is_dir'] = 0;                     // 폴더 → 단일 파일로
     }
     // 음악 폴더는 폴더 stream 흐름 그대로 (트랙 목록 또는 음악 플레이어)
+}
+
+// ★ (2026-09-22) HTML 캐시 방지 — 새로 배포한 JS 를 아이폰이 받지 않던 문제.
+//   [원인] index.php 에는 no-cache 헤더가 있는데(2026-09-02) share.php 에는 없었다.
+//   JS 는 `?v=<파일해시>` 로 버스팅하지만, HTML 자체가 캐시되면 옛 해시를 참조한 채
+//   새 파일을 아예 요청하지 않는다 → 공유 링크에서는 '캐시 초기화'를 해야 반영됐다.
+//   [범위] 여기는 HTML 출력 직전이다. 커버·JSON·파일 스트리밍은 전부 이보다 앞에서 exit 로
+//   빠지므로 영향이 없다(전역에 넣으면 스트리밍까지 영향이 갈 수 있어 피했다).
+//   자산(js/css)은 해시 URL 이라 여전히 캐시되므로 트래픽은 늘지 않는다.
+if (!headers_sent()) {
+    header('Cache-Control: no-cache, must-revalidate');
+    header('Pragma: no-cache');
+    header('Expires: 0');
 }
 ?>
 <!DOCTYPE html>
@@ -741,6 +763,15 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             }
             #share-quality-wrap .share-q-label { display: none !important; }
         }
+        /* ★ (2026-09-27) 가운데 버튼(재생·±5초) :hover 고착 방지 — 아이폰에서 재생 버튼을 탭하면 :hover 가 남아(656행 '.playing:hover → 0.6') 3초 자동 숨김과
+           상관없이 다른 곳을 탭할 때까지 보였다(펜닐 제보). 탐색기('.playing:not(.show-controls):hover .video-play-overlay → 0')와 같은 규칙.
+           ±5초는 '보일 때만 클릭'(667~668행) 원칙대로 이때 클릭도 막는다. 가운데 재생 버튼은 투명해도 눌러 일시정지(655행) 그대로. 터치로 보이게 한 상태(show-controls)는 영향 없음.
+           [범위] 손가락이 주 입력인 기기(pointer: coarse)만 — 처음엔 위 max-width 목록에 넣어 좁은 PC 창에서 마우스를 올려도 가운데 버튼이 안 보이게 바뀌었다(재검토에서 발견).
+           hover: none 은 헤드리스 크롬이 PC 도 참으로 알려 시험으로 구분이 안 돼 pointer: coarse 로(실제 기기도 휴대폰·태블릿 coarse, 마우스 PC fine). */
+        @media (max-width: 1024px) and (pointer: coarse) {
+            .player-wrap.playing:not(.show-controls):hover .video-play-overlay { opacity: 0 !important; }
+            .player-wrap.playing:not(.show-controls):hover .video-play-overlay.video-seek-btn { pointer-events: none !important; }
+        }
         /* 재생방식/화질 셀렉트 공통 베이스 (본체 .playback-mode-select와 동일 톤) */
         #share-playback-mode, #share-quality-select {
             background: rgba(0, 0, 0, 0.7);
@@ -768,6 +799,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         .player-controls .ctrl-btn { background: #f0f0f0; border: 1px solid #ddd; border-radius: 6px; padding: 5px 10px; font-size: 12px; cursor: pointer; transition: all 0.15s; color: #555; }
         .player-controls .ctrl-btn:hover { background: #e0e0f0; border-color: #667eea; color: #667eea; }
         .player-controls .ctrl-btn.active { background: #667eea; color: #fff; border-color: #667eea; }
+        /* ★ (2026-09-11) 반복 on/off 를 한눈에 구분 (탐색기 .vec-on / .vec-badge 와 같은 규칙) */
+        .player-controls .ctrl-btn.ctrl-on { box-shadow: 0 0 0 2px rgba(102, 126, 234, 0.55); font-weight: 700; }
+        .ctrl-badge { font-size: 9px; font-weight: 700; line-height: 1; margin-left: 3px; padding: 1px 3px; border-radius: 3px; background: #fff; color: #667eea; vertical-align: middle; }
         .ctrl-sep { width: 1px; height: 20px; background: #ddd; margin: 0 2px; }
         /* ★ 구간 반복(A-B) 시간 표시 — 동영상은 진행바가 브라우저 기본 컨트롤이라
            시크바에 눈금을 못 그리므로 컨트롤 줄에 텍스트로 구간을 보여준다 */
@@ -826,6 +860,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             font-size: 11px;
             color: rgba(255,255,255,0.85);
         }
+        /* ★ (2026-09-10) 자막 OFF 상태 표시 — 흐리게 + 취소선으로 한눈에 구분 */
+        .sub-toggle-btn { font-weight: 700; letter-spacing: 0.5px; }
+        .sub-toggle-btn.sub-off { opacity: 0.45; text-decoration: line-through; }
         .fs-subtitle-controls .fs-sub-sep {
             width: 1px;
             background: rgba(255,255,255,0.2);
@@ -1240,6 +1277,15 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 $nativeVideo = ['mp4','webm','ogg'];
                 $nativeAudio = ['mp3','wav','ogg','flac','m4a','aac','opus'];
                 $needsTranscode = $isVideo && !in_array($ext, $nativeVideo);
+                // ★ (2026-09-11) 재생방식 셀렉트(일반재생/트랜스코딩)를 내보낼지 — **mp4 한정**이다.
+                //   [왜 mp4 만] 탐색기(app.js)가 `_navExt === 'mp4'` 조건을 쓰는데 공유만
+                //   mp4/webm/ogg 전부 내보내 **두 화면의 동작이 달랐다**(펜닐 지적).
+                //   기준을 탐색기에 맞춘다.
+                //   [왜 $needsTranscode 로 가르지 않나] $needsTranscode 는 코덱 미지원·500MB 초과·
+                //   force_transcode 로도 켜진다. 그 경우 확장자는 mp4 라 일반재생이 실제로 가능하므로
+                //   선택지를 남겨야 한다(모바일 500MB 케이스). 반면 .ts 처럼 확장자 자체가 브라우저
+                //   재생 불가면 눌러도 되지 않으므로 아예 내보내지 않는다.
+                $canPlayNative = $isVideo && $ext === 'mp4';
                 
                 // ★ 디버그 로그 (펜닐님 진단용 — 비활성화: 함수 본체만 주석, 호출은 no-op)
                 //   재활성 시 아래 본체 주석 해제하면 즉시 작동
@@ -1269,6 +1315,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 $videoCodec = '';
                 $videoResolution = '';
                 $fileSize = $share['size'] ?? 0;
+                $_shareAudioCount = 0;   // ★ (2026-09-26) 음성 개수(아래 조사 블록에서 셈 — 조사하지 않으면 0)
                 if ($isVideo && !$needsTranscode) {
                     // 실제 파일 경로 구하기
                     $_db = JsonDB::getInstance();
@@ -1314,6 +1361,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                             
                             if ($_probeBin) {
                                 $_probeOut = @shell_exec(escapeshellarg($_probeBin) . ' -i ' . escapeshellarg($_realFile) . ' 2>&1');
+                                // ★ (2026-09-26) 음성 개수 — 탐색기 getMediaInfo 의 audio_count 와 같은 식(mp4 의 '#0:1[0x2]' 도 셈)
+                                $_shareAudioCount = (int)preg_match_all('/Stream\s+#\d+:\d+.*Audio:/i', (string)$_probeOut);
                                 $_codecLog('probeOut 길이: ' . strlen((string)$_probeOut));
                                 $_codecLog('probeOut 일부: ' . substr((string)$_probeOut, 0, 500));
                                 if (preg_match('/Stream\s+#\d+:\d+.*Video:\s*(\w+)/i', $_probeOut, $_vm)) {
@@ -1328,8 +1377,19 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                                 // 코덱 미지원 → 트랜스코딩
                                 $nativeCodecs = ['h264', 'vp8', 'vp9', 'av1'];
                                 $_codecLog('videoCodec in nativeCodecs: ' . (in_array($videoCodec, $nativeCodecs) ? 'YES (네이티브 재생)' : 'NO (트랜스코드)'));
-                                if ($videoCodec && !in_array($videoCodec, $nativeCodecs)) {
+                                // ★ (2026-09-30) HEVC 는 브라우저가 확실히 재생하는 애플 기기(아이폰·아이패드의 모든 브라우저, 맥 사파리)면
+                                //   일반재생 빠른 시작(서버가 fMP4 조각으로 복사)으로 — 서버는 브라우저 지원을 직접 알 수 없어 기기로만 가린다.
+                                //   못 풀면 빠른 시작이 트랜스코딩으로 넘긴다(_shareTriggerTranscode). 그 밖의 기기는 종전처럼 트랜스코딩.
+                                $_ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
+                                $_hevcFastUa = ($videoCodec === 'hevc') && ($ext ?? '') === 'mp4' && ($shareType ?? '') === 'stream'
+                                    && (preg_match('/iPhone|iPad|iPod/i', $_ua)
+                                        || (preg_match('/Macintosh/i', $_ua) && preg_match('/Safari\//', $_ua) && !preg_match('/Chrome|Chromium|CriOS|Edg|Firefox|FxiOS|OPR/i', $_ua)));
+                                if ($videoCodec && !in_array($videoCodec, $nativeCodecs) && !$_hevcFastUa) {
                                     $needsTranscode = true;
+                                    // ★ (2026-09-11) 코덱 미지원이면 네이티브로 못 트므로 재생방식 셀렉트도 내린다.
+                                    //   탐색기(app.js)의 `!needsTranscodeByCodec && ext==='mp4'` 조건과 맞추는 것.
+                                    //   이 판정은 $canPlayNative 계산(위쪽)보다 뒤에 오므로 여기서 다시 내려준다.
+                                    $canPlayNative = false;
                                     $_codecLog('needsTranscode 설정: TRUE');
                                 }
                             }
@@ -1340,6 +1400,13 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                     if (!$needsTranscode && $fileSize > 500 * 1024 * 1024) {
                         $ua = $_SERVER['HTTP_USER_AGENT'] ?? '';
                         if (preg_match('/Android|iPhone|iPad|iPod|Mobile/i', $ua)) {
+                            $needsTranscode = true;
+                        }
+                    }
+                    // ★ (2026-09-26) 휴대폰에서 음성이 2개 이상인 파일도 트랜스코딩 — 바로 위 500MB 규칙과 같은 방식(탐색기와 같은 규칙).
+                    //   다국어 mp4 는 파일 앞 목차가 음성 수만큼 커서 아이폰 일반 재생이 한참 반응이 없었다(펜닐 제보). 트랜스코딩은 서버가 첫 음성으로 보낸다.
+                    if (!$needsTranscode && $_shareAudioCount >= 2) {
+                        if (preg_match('/Android|iPhone|iPad|iPod|Mobile/i', $_SERVER['HTTP_USER_AGENT'] ?? '')) {
                             $needsTranscode = true;
                         }
                     }
@@ -1359,6 +1426,11 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 if ($pageSubFile !== null) {
                     $streamUrl .= "&file=" . urlencode($pageSubFile);
                 }
+// ★ (2026-09-30) 일반재생 빠른 시작(원본 스트리밍 방식 — 다시 인코딩 없이 키프레임 조각, 원본 화질). 탐색기와 같은 조건:
+//   스트리밍 공유 · mp4 · 트랜스코딩 아님 · H.264 · 음성 1개 이하. 코덱을 모르면(ffprobe 없음 등) 종전 일반재생.
+//   서버 처리는 ShareManager::downloadShare(모든 공유 검증 뒤) → FileManager::directStreamFile.
+$fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNative) && ($ext ?? '') === 'mp4'
+    && (($videoCodec ?? '') === 'h264' || (($videoCodec ?? '') === 'hevc' && !empty($_hevcFastUa))) && ($shareType ?? '') === 'stream';   // ★ (2026-09-30) HEVC·음성 여러 개도
                 
                 // 같은 폴더의 자막 파일 자동 검색
                 $autoSubtitles = [];
@@ -1455,22 +1527,22 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             <!-- 폴더 stream sub-file: 트랙 네비게이션 (동영상 2개 이상일 때만 표시 — 펜닐 v5.8.1e) -->
             <div style="margin:8px 0 12px;display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;">
                 <?php if ($folderTrackPrev): ?>
-                    <a href="<?= htmlspecialchars($folderTrackPrev) ?>" style="color:#667eea;text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid rgba(102,126,234,0.4);border-radius:4px;">◀ <?= __('prev_track', '이전') ?></a>
+                    <a id="share-track-prev" href="<?= htmlspecialchars($folderTrackPrev) ?>" style="color:#667eea;text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid rgba(102,126,234,0.4);border-radius:4px;">◀ <?= __('prev_track', '이전') ?></a>
                 <?php else: ?>
                     <span style="color:#888;font-size:13px;padding:4px 10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;">◀ <?= __('prev_track', '이전') ?></span>
                 <?php endif; ?>
-                <span style="color:#aaa;font-size:13px;padding:4px 10px;">📋 <?= htmlspecialchars((string)$folderTrackIndex) ?> / <?= htmlspecialchars((string)$folderTrackTotal) ?></span>
                 <?php if ($folderTrackNext): ?>
-                    <a href="<?= htmlspecialchars($folderTrackNext) ?>" style="color:#667eea;text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid rgba(102,126,234,0.4);border-radius:4px;"><?= __('next_track', '다음') ?> ▶</a>
+                    <a id="share-track-next" href="<?= htmlspecialchars($folderTrackNext) ?>" style="color:#667eea;text-decoration:none;font-size:13px;padding:4px 10px;border:1px solid rgba(102,126,234,0.4);border-radius:4px;"><?= __('next_track', '다음') ?> ▶</a>
                 <?php else: ?>
                     <span style="color:#888;font-size:13px;padding:4px 10px;border:1px solid rgba(255,255,255,0.1);border-radius:4px;"><?= __('next_track', '다음') ?> ▶</span>
                 <?php endif; ?>
-                <button type="button" id="share-pl-toggle-btn" class="share-pl-toggle" title="<?= __('playlist_toggle', '목록 열기/닫기') ?>">📋 <?= __('playlist', '목록') ?></button>
+                <!-- ★ (2026-09-23) '📋 목록' → '☰ 3 / 12' (현재 / 전체) — 펜닐 지시. 바로 옆에 따로 있던 '📋 3 / 12' 표시는 버튼과 같은 내용이라 합쳤다 -->
+                <button type="button" id="share-pl-toggle-btn" class="share-pl-toggle" title="<?= __('playlist_toggle', '목록 열기/닫기') ?>" aria-label="<?= __('playlist_toggle', '목록 열기/닫기') ?> (<?= htmlspecialchars((string)$folderTrackIndex) ?> / <?= htmlspecialchars((string)$folderTrackTotal) ?>)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg><span><?= htmlspecialchars((string)$folderTrackIndex) ?> / <?= htmlspecialchars((string)$folderTrackTotal) ?></span></button>
             </div>
             <?php endif; ?>
             
             <div class="info">
-                <div>📦 <?= formatFileSize($share['size'] ?? 0) ?> · 📅 <?= htmlspecialchars(date('Y-m-d H:i', strtotime($share['created_at']))) ?><?php if ($share['expire_at']): ?> · ⏰ ~<?= htmlspecialchars(date('Y-m-d', strtotime($share['expire_at']))) ?><?php endif; ?></div>
+                <div><?php /* ★ (2026-09-27) 용량이 저장되지 않은 공유(폴더 음악 재생 목록 등 — size 0)는 '0 B' 대신 용량을 빼고 공유일부터(펜닐 요청) */ if ((int)($share['size'] ?? 0) > 0): ?>📦 <?= formatFileSize($share['size']) ?> · <?php endif; ?>📅 <?= htmlspecialchars(date('Y-m-d H:i', strtotime($share['created_at']))) ?><?php if ($share['expire_at']): ?> · ⏰ ~<?= htmlspecialchars(date('Y-m-d', strtotime($share['expire_at']))) ?><?php endif; ?></div>
             </div>
             
             <?php if ($isFolderAudioPlaylist): ?>
@@ -1514,11 +1586,15 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 </div>
                 <!-- ★ Quality 셀렉터 (v5.8.1c) — 트랜스코딩 영상 / 위치 통일: top:4px right:4px -->
                 <div id="share-quality-wrap" style="display:none;position:absolute;top:4px;right:4px;z-index:14;opacity:0;transition:opacity 0.3s;">
-                    <!-- ★ 재생방식 셀렉트 (트랜스코딩 영상 — 일반재생으로 전환 가능) -->
+                    <!-- ★ 재생방식 셀렉트 (트랜스코딩 영상 — 일반재생으로 전환 가능)
+                         ★ (2026-09-11) 확장자가 네이티브 재생 불가(.ts 등)면 선택지가 '트랜스코딩' 하나뿐이므로
+                            셀렉트 자체를 렌더하지 않는다. JS 는 getElementById 널가드가 있어 안전하다. -->
+                    <?php if ($canPlayNative): ?>
                     <select id="share-playback-mode" style="font-size:12px;max-width:110px;margin-right:4px;vertical-align:middle;">
                         <option value="transcode" selected><?= __('playback_transcode', '트랜스코딩') ?></option>
                         <option value="native"><?= __('playback_native', '일반재생') ?></option>
                     </select>
+                    <?php endif; ?>
                     <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;"><span class="share-q-label">🎬 <?= __('quality_label', '화질') ?>:</span>
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
@@ -1539,17 +1615,21 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 <div class="stream-badge native">▶ <?= __('native_playback', '일반 재생') ?><?php if ($videoCodec): ?> (<?= htmlspecialchars(strtoupper($videoCodec)) ?><?php if ($videoResolution): ?> <?= htmlspecialchars($videoResolution) ?><?php endif; ?><?php if ($fileSize > 0): ?> <?= htmlspecialchars(formatFileSize($fileSize)) ?><?php endif; ?>)<?php endif; ?></div>
                 <!-- ★ Quality 셀렉터 (v5.8.1c) — 네이티브 재생 영상에도 표시 -->
                 <div id="share-quality-wrap" style="display:none;position:absolute;top:4px;right:4px;z-index:14;opacity:0;transition:opacity 0.3s;">
-                    <!-- ★ 재생방식 셀렉트 (네이티브 영상 — PC/모바일에서 트랜스코딩으로 전환 가능) -->
+                    <!-- ★ 재생방식 셀렉트 (네이티브 영상 — PC/모바일에서 트랜스코딩으로 전환 가능)
+                         ★ (2026-09-11) mp4 한정 — 탐색기(app.js)와 기준을 맞춘다.
+                            webm/ogg 는 네이티브로 잘 재생되고 탐색기에도 셀렉트가 없다. -->
+                    <?php if ($canPlayNative): ?>
                     <select id="share-playback-mode" style="font-size:12px;max-width:110px;margin-right:4px;vertical-align:middle;">
                         <option value="native" selected><?= __('playback_native', '일반재생') ?></option>
                         <option value="transcode"><?= __('playback_transcode', '트랜스코딩') ?></option>
                     </select>
+                    <?php endif; ?>
                     <label style="color:#fff;font-size:12px;text-shadow:0 0 3px #000;"><span class="share-q-label">🎬 <?= __('quality_label', '화질') ?>:</span>
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
-                <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>">
-                    <source src="<?= htmlspecialchars($streamUrl) ?>" type="video/mp4">
+                <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>"<?php if (!empty($fastNative)): ?> data-direct-url="<?= htmlspecialchars($streamUrl . '&ds=playlist') ?>" data-native-src="<?= htmlspecialchars($streamUrl) ?>" data-direct-codec="<?= htmlspecialchars((string)($videoCodec ?? '')) ?>" data-audio-count="<?= (int)($_shareAudioCount ?? 0) ?>"<?php endif; ?>>
+                    <?php if (empty($fastNative)): ?><source src="<?= htmlspecialchars($streamUrl) ?>" type="video/mp4"><?php endif; ?>
                 </video>
                 <div class="video-play-overlay" id="share-play-pause">
                     <svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg>
@@ -1575,13 +1655,16 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 <button class="ctrl-btn" data-speed="1.5">1.5x</button>
                 <button class="ctrl-btn" data-speed="2">2x</button>
                 <div class="ctrl-sep"></div>
-                <button class="ctrl-btn" id="btn-video-loop" title="<?= __('video_loop', '반복 재생') ?>">🔁</button>
-                <?php /* 구간 반복(A-B): 실시간 변환·HLS는 되감기가 불안정해 그 모드에선 아예 렌더하지 않음 */ ?>
+                <?php /* ★ (2026-09-11) 🔁(영상 전체 반복)은 **항상 렌더**한다.
+                         끝→처음 되감기 1회뿐이라 실시간 변환·HLS 에서도 문제없이 동작하므로 숨길 이유가 없다.
+                         반면 구간 반복(A-B)은 되감기가 잦아 그 모드에서 불안정하므로 아예 렌더하지 않는다. */ ?>
+                <button class="ctrl-btn" id="btn-video-loop" title="<?= __('video_loop_one', '이 영상만 반복') ?>">🔁</button>
                 <?php if (empty($needsTranscode)): ?>
                 <button class="ctrl-btn" id="btn-video-ab" title="<?= __('video_ab_set_a', '구간 반복: 눌러서 A 지정') ?>">A-B</button>
                 <span class="ctrl-ab-range" id="video-ab-range" style="display:none;"></span>
                 <?php endif; ?>
                 <div class="ctrl-sep"></div>
+                <button class="ctrl-btn sub-toggle-btn" id="btn-sub-toggle" title="<?= __('sub_toggle_off', '자막 끄기') ?>">CC</button>
                 <button class="ctrl-btn" id="btn-sub-down" title="<?= __('sub_size_down', '자막 축소') ?>">A-</button>
                 <button class="ctrl-btn" id="btn-sub-up" title="<?= __('sub_size_up', '자막 확대') ?>">A+</button>
                 <button class="ctrl-btn" id="btn-sub-pos-up" title="<?= __('sub_pos_up', '자막 위로') ?>">▲</button>
@@ -1606,7 +1689,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 // ★ 보안: 비밀번호는 URL에 노출하지 않음 (서버 로그/Referer 누출 방지)
                 //   페이지 렌더링 시점엔 이미 $_SESSION['share_authenticated'][$token] = true 상태이므로
                 //   cover=1 호출 시 accessShare가 세션 플래그로 인증 통과 (메인의 audio_cover 패턴과 동일)
-                $coverUrl = "share.php?t=" . urlencode($token) . "&cover=1";
+                $coverUrl = "share.php?t=" . urlencode($token) . "&cover=1&sz=512";   // ★ (2026-09-23) 줄인 커버
             ?>
             <link rel="stylesheet" href="assets/css/fs-audio-player.css?v=<?= substr(md5_file(__DIR__ . '/assets/css/fs-audio-player.css'), 0, 10) ?>">
             <div class="player-wrap audio-wrap">
@@ -1824,6 +1907,60 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
     <!-- 단일 audio 파일 OR 폴더 stream(다중 트랙) 모두 필요 -->
     <script src="assets/js/fs-audio-player.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-audio-player.js'), 0, 10) ?>"></script>
     <?php endif; ?>
+    <?php if (empty($isAudio) && empty($isFolderAudioPlaylist)): ?>
+    <!-- ★ (2026-09-23) 동영상 새 껍데기(기본 켜짐 — ?vskin=0 으로 끔, 같은 브라우저라면 탐색기에서 끈 것이 여기도 적용)
+         [수정] 처음엔 이 두 줄을 바로 위 음악 조건(isAudio) 안에 넣어서 **동영상 공유에는 파일이 내려가지 않았다**(펜닐 확인).
+         동영상 공유일 때만 싣는다 — 음악 공유의 #stream-player 는 <audio> 라 필요 없다. -->
+    <?php
+    // ★ (2026-09-23) 새 껍데기 글자 번역 — 공유 페이지엔 JS 번역 함수(window.t)가 없어 스킨이 항상 한국어로 나왔다.
+    //   방문자 언어로 번역한 스킨 글자만 넣는다(JSON_HEX_TAG 로 </script> 등 끼어들기 차단).
+    $__fsvsI18n = [
+        'audio_track' => __('audio_track', '오디오'),   // ★ (2026-09-25) 음성을 ⚙ 로 옮기며 스킨이 쓰기 시작 — 빠져 영어 공유 페이지에서 '오디오'로 나왔다
+        'close' => __('close', '닫기'),
+        'fsvs_ab_clear' => __('fsvs_ab_clear', '구간 반복 해제'),
+        'fsvs_ab_set_a' => __('fsvs_ab_set_a', '구간 반복: A 지정'),
+        'fsvs_ab_set_b' => __('fsvs_ab_set_b', '구간 반복: B 지정'),
+        'fsvs_bigger' => __('fsvs_bigger', '크게'),
+        'fsvs_default' => __('fsvs_default', '기본'),
+        'fsvs_higher' => __('fsvs_higher', '위로'),
+        'fsvs_lower' => __('fsvs_lower', '아래로'),
+        'fsvs_more' => __('fsvs_more', '더 보기'),
+        'fsvs_smaller' => __('fsvs_smaller', '작게'),
+        'fsvs_sub_pos' => __('fsvs_sub_pos', '위치'),
+        'fsvs_sub_size' => __('fsvs_sub_size', '크기'),
+        'fsvs_sub_sync' => __('fsvs_sub_sync', '싱크'),
+        'fsvs_unmute' => __('fsvs_unmute', '소리 켜기'),
+        'fullscreen' => __('fullscreen', '전체화면'),
+        'mute' => __('mute', '음소거'),
+        'next_video' => __('next_video', '다음 영상'),
+        'pause' => __('pause', '일시정지'),
+        'pip' => __('pip', 'PIP 작은 창'),
+        'play' => __('play', '재생'),
+        'playback_mode' => __('playback_mode', '재생 방식'),
+        'playback_speed' => __('playback_speed', '재생 속도'),
+        'prev_video' => __('prev_video', '이전 영상'),
+        'quality' => __('quality', '화질'),
+        'sec' => __('sec', '초'),
+        'seek' => __('seek', '재생 위치'),
+        'settings' => __('settings', '설정'),
+        'sub_toggle_off' => __('sub_toggle_off', '자막 끄기'),
+        'sub_toggle_on' => __('sub_toggle_on', '자막 켜기'),
+        'subtitle' => __('subtitle', '자막'),
+        'video_ab' => __('video_ab', '구간 반복'),
+        'video_ab_clear' => __('video_ab_clear', '눌러서 해제'),
+        'video_ab_set_a' => __('video_ab_set_a', '구간 반복: 눌러서 A 지정'),
+        'video_ab_set_b' => __('video_ab_set_b', '눌러서 B 지정'),
+        'video_loop_one' => __('video_loop_one', '이 영상만 반복'),
+        'video_loop_one_off' => __('video_loop_one_off', '이 영상만 반복: 끔'),
+        'video_loop_one_on' => __('video_loop_one_on', '이 영상만 반복: 켬 (끝나면 처음부터 · 다음 영상으로 안 넘어감)'),
+        'video_loop_one_on_s' => __('video_loop_one_on_s', '이 영상만 반복: 켬'),
+        'volume' => __('volume', '음량')
+    ];
+    ?>
+    <script nonce="<?= $cspNonce ?>">window.LANG_STRINGS = Object.assign(window.LANG_STRINGS || {}, <?= json_encode($__fsvsI18n, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>);</script>
+    <link rel="stylesheet" href="assets/css/fs-video-skin.css?v=<?= substr(md5_file(__DIR__ . '/assets/css/fs-video-skin.css'), 0, 10) ?>">
+    <script src="assets/js/fs-video-skin.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-video-skin.js'), 0, 10) ?>"></script>
+    <?php endif; ?>
     <script nonce="<?= $cspNonce ?>">
     (function() {
         const player = document.getElementById('stream-player');
@@ -1877,7 +2014,15 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             const _ua = navigator.userAgent.toLowerCase();
             const _isRealMobile = /android|iphone|ipad|ipod/i.test(_ua) && ('ontouchend' in document);
             document.querySelectorAll('.video-seek-btn').forEach(btn => {
-                if (_isRealMobile) { btn.style.display = 'none'; return; }
+                // ★ (2026-09-23) 새 껍데기가 켜져 있으면 휴대폰에서도 이벤트를 건다 — 종전엔 휴대폰이면 숨기고
+                //   이벤트도 걸지 않았는데, 껍데기가 이 버튼을 보이게 하면서 눌러도 반응이 없었다(펜닐 제보).
+                const _skinOn = (() => {
+                    try {
+                        if (new URLSearchParams(window.location.search).get('vskin') === '0') return false;
+                        return !!window.FSVideoSkin && localStorage.getItem('fs_vskin') !== '0';
+                    } catch (e) { return !!window.FSVideoSkin; }
+                })();
+                if (_isRealMobile && !_skinOn) { btn.style.display = 'none'; return; }
                 const back = btn.classList.contains('video-seek-btn-back');
                 const seek = (e) => {
                     e.stopPropagation();
@@ -1912,6 +2057,31 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             if (playerWrap) playerWrap.classList.remove('has-initial-overlay');
             if (status) status.classList.add('active');
             if (controls) controls.style.display = '';
+            // ★ (2026-09-24) 일반 재생 중 다른 음성을 골라 넘어온 경우(fs_audio·fs_seek — 새 껍데기 ⚙ '오디오') —
+            //   기존 음성 변경과 같은 방식으로 변환 주소에 &audio=·&seek= 를 붙이고 위치 보정값을 둔다.
+            //   선택 표시(_curAudio)도 hlsUrl 의 audio= 로 정해지므로 함께 맞는다. 숫자만 받고, 쓴 뒤엔 주소에서 지워
+            //   새로고침해도 같은 전환이 반복되지 않게 한다.
+            try {
+                const _q = new URLSearchParams(window.location.search);
+                const _fa = _q.get('fs_audio'), _fsk = _q.get('fs_seek');
+                if (_fa && /^\d{1,3}$/.test(_fa)) {
+                    const _sk = parseFloat(_fsk);
+                    const _hasSeek = !!_fsk && isFinite(_sk) && _sk > 1 && _sk < 1e6;
+                    const _apply = (u) => {
+                        let r = String(u || '').replace(/&audio=\d+/g, '').replace(/&seek=[^&]*/g, '') + '&audio=' + _fa;
+                        if (_hasSeek) r += '&seek=' + _sk.toFixed(2);
+                        return r;
+                    };
+                    if (player.dataset.hlsUrl) player.dataset.hlsUrl = _apply(player.dataset.hlsUrl);
+                    if (player.dataset.transcodeUrl) player.dataset.transcodeUrl = _apply(player.dataset.transcodeUrl);
+                    if (_hasSeek) player._qualitySeekOffset = _sk;
+                }
+                if (_fa !== null || _fsk !== null) {
+                    const _cu = new URL(window.location.href);
+                    _cu.searchParams.delete('fs_audio'); _cu.searchParams.delete('fs_seek');
+                    history.replaceState(history.state, '', _cu.toString());
+                }
+            } catch (e) {}
             // ★ 실시간 변환·HLS로 넘어가면 되감기가 불안정하므로 구간 반복을 끄고 숨긴다 (v5.8.3d)
             try { if (typeof window._shareAbHide === 'function') window._shareAbHide(); } catch (e) {}
             
@@ -2919,6 +3089,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 // duration 표시
                 if (info.duration && info.duration > 0) {
                     const realDur = info.duration;
+                    player._knownDuration = realDur;   // ★ (2026-09-23) 새 껍데기가 실제 길이로 진행바를 그리도록 읽기용으로 둔다
                     const fmt = (sec) => {
                         const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = Math.floor(sec%60);
                         return h > 0 ? `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}` : `${m}:${s.toString().padStart(2,'0')}`;
@@ -2940,6 +3111,82 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         }
         <?php endif; ?>
         <?php if (empty($needsTranscode) && $isVideo): ?>
+            // ★ (2026-09-30) 일반재생 빠른 시작 — 서버가 조건을 맞춘 영상만 data-direct-url 이 있다(<source> 없이 와서 원본을 미리 받지 않음).
+            //   hls.js(또는 사파리 내장 HLS)로 전체 조각 목록(VOD)을 재생 — 시각 보정 0 이라 스킨·구간 반복·탐색은 일반재생처럼 그대로.
+            //   시작 전 실패·첫 화면 준비 1.5초 뒤에도 영상 크기 0(못 푸는 영상) → 종전 일반재생(원본 주소)으로 조용히 복귀(탐색기와 같은 규칙).
+            //   트랜스코딩 전환(화질 변경 CASE 2 · 일반재생 실패 전환)이 시작되면 거기서 player._directHls 를 정리하고 player._directOff 로 복귀를 막는다.
+            (function _shareFastNative() {
+                const base = player.dataset.directUrl;
+                if (!base) return;
+                const nativeSrc = player.dataset.nativeSrc || '';
+                const isHevc = player.dataset.directCodec === 'hevc';
+                const audioCount = parseInt(player.dataset.audioCount, 10) || 0;
+                let fell = false, gen = 0;
+                const toNative = (why) => {
+                    if (fell || player._directOff) return;
+                    if (player.dataset.qualityTranscoding || window._shareNativeHls || window._shareNativeHlsSession) return;
+                    fell = true; player._directOn = false;
+                    try { console.warn('[ShareFastNative] 빠른 시작 중단:', why); } catch (e) {}
+                    if (player._directHls) { try { player._directHls.destroy(); } catch (e) {} player._directHls = null; }
+                    // ★ (2026-09-30) HEVC 는 종전 일반재생도 못 풀 가능성이 커 트랜스코딩으로(일반재생 실패 전환과 같은 함수)
+                    if (isHevc && typeof window._shareTriggerTranscode === 'function') { window._shareTriggerTranscode(); return; }
+                    if (!nativeSrc) return;
+                    player.removeAttribute('src');
+                    player.querySelectorAll('source').forEach((x) => x.remove());
+                    const so = document.createElement('source'); so.src = nativeSrc; so.type = 'video/mp4'; player.appendChild(so);
+                    try { player.load(); } catch (e) {}
+                };
+                // a: 음성 번호(서버 a=), start: 시작 위치(초), play: 이어서 재생 — 음성 전환 때 다시 부른다. 회차(gen)로 이전 시도의 처리를 막는다.
+                const attach = (a, start, play) => {
+                    const my = ++gen;
+                    let started = false, recover = 0;
+                    if (player._directHls) { try { player._directHls.destroy(); } catch (e) {} player._directHls = null; }
+                    player._dsAudio = a; player._directOn = true;
+                    const url = base + '&a=' + a;
+                    const checkDims = () => setTimeout(() => {
+                        if (my !== gen || fell || player._directOff) return;
+                        if (player.videoWidth > 0 || player.videoHeight > 0) return;
+                        toNative('no_video');
+                    }, 1500);
+                    const afterReady = () => {
+                        if (play) { try { const pr = player.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (e) {} }
+                        if (audioCount >= 2 && typeof window._shareFsvsPrefetch === 'function') { try { window._shareFsvsPrefetch(); } catch (e) {} }
+                    };
+                    if (typeof Hls !== 'undefined' && Hls.isSupported()) {
+                        const hls = new Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 30, maxMaxBufferLength: 120, backBufferLength: 10, startPosition: start || 0 });
+                        player._directHls = hls;
+                        // 복귀는 hls.js 오류 알림 처리가 끝난 다음 순간에(알림 안에서 destroy 하면 hls.js 내부 'reading trigger' 오류) — toNative 는 한 번만 실행
+                        const later = (why) => setTimeout(() => { if (my === gen) toNative(why); }, 0);
+                        hls.on(Hls.Events.ERROR, (ev, d) => {
+                            if (!d || !d.fatal || my !== gen || fell || player._directOff || player._directHls !== hls) return;
+                            if (!started) { later(d.details || 'error'); return; }
+                            if (++recover > 3) { later('fatal:' + (d.details || '')); return; }
+                            if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { try { hls.startLoad(); } catch (e) { later('restart'); } }
+                            else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { try { hls.recoverMediaError(); } catch (e) { later('recover'); } }
+                            else later(d.details || 'fatal');
+                        });
+                        player.addEventListener('loadedmetadata', () => { if (my !== gen) return; started = true; afterReady(); }, { once: true });
+                        player.addEventListener('loadeddata', () => { if (my === gen) checkDims(); }, { once: true });
+                        hls.loadSource(url);
+                        hls.attachMedia(player);
+                    } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+                        // 사파리 내장 HLS — 시작 전 오류는 여기서 받아(아래 '일반재생 실패 → 트랜스코딩' 처리까지 가지 않게)
+                        const onErr = (e) => { if (my !== gen || started || fell) return; try { e.stopImmediatePropagation(); } catch (x) {} toNative('native_hls'); };
+                        player.addEventListener('error', onErr);
+                        player.addEventListener('loadedmetadata', () => { if (my !== gen) return; started = true; player.removeEventListener('error', onErr); if (start > 0) { try { player.currentTime = start; } catch (e) {} } afterReady(); }, { once: true });
+                        player.addEventListener('loadeddata', () => { if (my === gen) checkDims(); }, { once: true });
+                        player.src = url;
+                    } else {
+                        toNative('no_hls');
+                    }
+                };
+                // 음성 전환(스킨 ⚙ 음성) — 보던 위치·재생 상태 그대로 그 음성으로 다시 붙인다
+                window._shareDirectSwitch = (i) => {
+                    if (fell || !player._directOn || player._directOff) return;
+                    attach(i, player.currentTime || 0, !player.paused);
+                };
+                attach(0, 0, false);
+            })();
         // === 네이티브 재생 영상도 Quality 셀렉터 활성화 (v5.8.1c) ===
         // - 'original' 선택 시: 네이티브 재생 유지 (가장 빠름)
         // - 비-original 선택 시: 트랜스코딩 모드 전환 + 해당 quality 적용
@@ -2993,6 +3240,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 
                 // CASE 2: 네이티브 → 트랜스코딩 (비-original 선택)
                 if (newQuality !== 'original' && !isTranscoding) {
+                    // ★ (2026-09-30) 일반재생 빠른 시작 중이면 그 hls 를 먼저 정리(아래에서 트랜스코딩 HLS 를 새로 붙임) — 복귀도 막음
+                    if (player._directHls) { try { player._directHls.destroy(); } catch (e) {} player._directHls = null; } player._directOff = true; player._directOn = false;
                     
                     // 배지 갱신
                     const badge = document.querySelector('.stream-badge');
@@ -3000,6 +3249,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                         badge.className = 'stream-badge transcode';
                         badge.textContent = '⚡ <?= __('realtime_streaming', '실시간 스트리밍') ?>';
                     }
+                    // ★ (2026-09-30) 재생방식 셀렉트도 '트랜스코딩'으로 맞춘다 — 종전엔 배지만 바꿔 ⚙ 에 '일반재생'이 선택된 채 트랜스코딩(HLS)으로
+                    //   재생됐다(펜닐 제보). autoTranscode 표시는 여기서 '일반재생'을 다시 고르면 새로고침으로 돌아가게 하는 데 쓴다(아래 셀렉트 처리).
+                    { const _pbS = document.getElementById('share-playback-mode'); if (_pbS) { _pbS.value = 'transcode'; _pbS.dataset.autoTranscode = '1'; } }
                     
                     // 상태 표시
                     const status = document.getElementById('transcode-status');
@@ -3119,6 +3371,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                         badge.className = 'stream-badge native';
                         badge.textContent = '▶ <?= __('native_playback', '일반 재생') ?>';
                     }
+                    // ★ (2026-09-30) 재생방식 셀렉트도 '일반재생'으로 되돌리고 자동 전환 표시를 지운다(탐색기 CASE 3 과 같게) — CASE 2 에서 '트랜스코딩'으로
+                    //   맞추게 한 뒤(같은 날) 여기서 되돌리지 않아, 화질을 바꿨다가 '원본'으로 돌아와 일반재생인데 ⚙ 에 '트랜스코딩'이 남았다(재검토에서 발견).
+                    { const _pbR = document.getElementById('share-playback-mode'); if (_pbR) { _pbR.value = 'native'; delete _pbR.dataset.autoTranscode; } }
                     
                     // 시점 복원 + 자동 재생
                     player.addEventListener('loadedmetadata', () => {
@@ -3214,7 +3469,12 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                                 window.location.href = window.location.href + _sep + 'force_transcode=1';
                             }
                         }
-                        // 'native'는 이미 네이티브 재생 중이므로 무동작
+                        // 'native'는 이미 네이티브 재생 중이므로 무동작 — ★ (2026-09-30) 단, 화질 변경·일반재생 실패로 페이지 안에서 트랜스코딩으로
+                        //   넘어온 경우(autoTranscode)는 새로고침해 일반재생으로 돌아간다(이 영상은 서버가 일반재생으로 정한 것). '트랜스코딩' 선택과 같은 새로고침 방식.
+                        else if (_pbModeNat.value === 'native' && _pbModeNat.dataset.autoTranscode === '1') {
+                            try { const _u2 = new URL(window.location.href); _u2.searchParams.delete('force_transcode'); window.location.href = _u2.toString(); }
+                            catch (e) { window.location.reload(); }
+                        }
                     });
                 }
             }
@@ -3226,6 +3486,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             const _triggerTranscodeFallback = () => {
                 if (_nativeFallbackDone) return;
                 _nativeFallbackDone = true;
+                // ★ (2026-09-30) 일반재생 빠른 시작 중이면 그 hls 를 정리하고 빠른 시작의 복귀를 막는다(두 복귀가 겹치지 않게)
+                if (player._directHls) { try { player._directHls.destroy(); } catch (e) {} player._directHls = null; } player._directOff = true; player._directOn = false;
                 // ★ 이 경로는 startTranscode()를 타지 않는다. 네이티브로 시작해 A-B 버튼이
                 //   렌더된 상태이므로 여기서도 꺼줘야 변환·HLS에서 구간 반복이 남지 않는다.
                 try { if (typeof window._shareAbHide === 'function') window._shareAbHide(); } catch (e) {}
@@ -3236,6 +3498,9 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 // 배지 업데이트
                 const badge = document.querySelector('.stream-badge');
                 if (badge) { badge.className = 'stream-badge transcode'; badge.textContent = '⚡ <?= __('realtime_streaming', '실시간 스트리밍') ?>'; }
+                // ★ (2026-09-30) 재생방식 셀렉트도 '트랜스코딩'으로 맞춘다 — 종전엔 배지만 바꿔 ⚙ 에 '일반재생'이 선택된 채 트랜스코딩(HLS)으로
+                //   재생됐다(펜닐 제보). autoTranscode 표시는 여기서 '일반재생'을 다시 고르면 새로고침으로 돌아가게 하는 데 쓴다(아래 셀렉트 처리).
+                { const _pbS = document.getElementById('share-playback-mode'); if (_pbS) { _pbS.value = 'transcode'; _pbS.dataset.autoTranscode = '1'; } }
                 
                 // 상태 표시
                 const status = document.getElementById('transcode-status');
@@ -3315,6 +3580,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 }, 1000);
                 <?php endif; ?>
             };
+            window._shareTriggerTranscode = _triggerTranscodeFallback;   // ★ (2026-09-30) 일반재생 빠른 시작(HEVC)이 못 풀면 여기로
             
             // 네이티브 비디오 에러 시 전환
             player.addEventListener('error', (e) => {
@@ -3447,10 +3713,19 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             let _loopOn = false;
             try { _loopOn = sessionStorage.getItem('share_video_loop') === '1'; } catch (e) {}
             const _applyLoop = () => {
+                // ★ (2026-09-11) 영상 전체 반복 — 원래 동작으로 되돌림.
+                //   자동 다음 재생은 🔁 이 켜져 있으면 무시한다(기존 결정 유지).
                 player.loop = _loopOn;
                 _loopBtn.classList.toggle('active', _loopOn);
-                _loopBtn.title = _loopOn ? <?= json_encode(__('video_loop_on', '반복 재생: 켬 (끝나면 처음부터)')) ?>
-                                         : <?= json_encode(__('video_loop_off', '반복 재생: 끔')) ?>;
+                _loopBtn.classList.toggle('ctrl-on', _loopOn);
+                _loopBtn.setAttribute('aria-pressed', _loopOn ? 'true' : 'false');
+                // ★ on/off 를 한눈에 — 켜지면 아이콘 옆에 ON 배지를 붙인다.
+                _loopBtn.innerHTML = _loopOn ? '🔁<span class="ctrl-badge">ON</span>' : '🔁';
+                // ★ (2026-09-11) 음악 플레이어의 🔁 은 '전체/한 곡' 3단계라, 같은 아이콘이라도
+                //   동영상 쪽은 **이 영상 하나만** 반복한다는 점을 툴팁에 분명히 적는다(펜닐 지적).
+                _loopBtn.title = _loopOn
+                    ? <?= json_encode(__('video_loop_one_on',  '이 영상만 반복: 켬 (끝나면 처음부터 · 다음 영상으로 안 넘어감)')) ?>
+                    : <?= json_encode(__('video_loop_one_off', '이 영상만 반복: 끔')) ?>;
             };
             _applyLoop();
             _loopBtn.addEventListener('click', () => {
@@ -3490,12 +3765,17 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             window._shareAbHide = () => { _abDisabled = true; _abHideOnly(); };
             // 폴더 '자동 다음 재생' 핸들러가 구간 반복 중인지 확인하는 용도 (아래 ended 가드)
             window._shareAbActive = () => _abA !== null && _abB !== null;
+            // ★ (2026-09-23) 새 껍데기가 진행바에 구간을 그리도록 현재 A·B 값을 읽기 전용으로 내준다(동작 변경 없음)
+            window._shareAbState = () => ({ a: _abA, b: _abB });
             const _abUpdate = () => {
                 if (!_abSeekable()) { _abHideOnly(); return; }
                 _abBtn.style.display = '';
                 const hasA = _abA !== null, hasB = _abB !== null;
                 _abBtn.textContent = (hasA && !hasB) ? 'A' : 'A-B';
+                // ★ (2026-09-11) on/off 를 한눈에 — A 만 찍힌 중간 상태와 구간 확정 상태를 나눠 표시.
                 _abBtn.classList.toggle('active', hasA);
+                _abBtn.classList.toggle('ctrl-on', hasA && hasB);
+                _abBtn.setAttribute('aria-pressed', hasA ? 'true' : 'false');
                 _abBtn.title = hasB ? <?= json_encode(__('video_ab', '구간 반복') . ' · ' . __('video_ab_clear', '눌러서 해제')) ?>
                              : hasA ? <?= json_encode(__('video_ab_set_b', '눌러서 B 지정')) ?>
                                     : <?= json_encode(__('video_ab_set_a', '구간 반복: 눌러서 A 지정')) ?>;
@@ -3669,7 +3949,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 // 각 트랙별 streamUrl/coverUrl/lyricsApiUrl는 sub-file 기반 (basename 화이트리스트 검증)
                 const folderTracks = <?= json_encode($folderTracks, JSON_UNESCAPED_UNICODE) ?>;
                 const folderStreamBase = "share.php?t=<?= urlencode($token) ?>&download=1&stream=1";
-                const folderCoverBase = "share.php?t=<?= urlencode($token) ?>&cover=1";
+                const folderCoverBase = "share.php?t=<?= urlencode($token) ?>&cover=1&sz=512";   // ★ (2026-09-23) 줄인 커버
                 const folderLyricsBase = "share.php?t=<?= urlencode($token) ?>&lyrics=1";
                 
                 _fsDbg('folderTracks parsed', { count: folderTracks.length, first: folderTracks[0] });
@@ -3917,7 +4197,10 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                         player.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; });
                     } catch(e) {}
                     if (player.paused) player.play().catch(() => {});
-                    player.webkitEnterFullscreen();
+                    // ★ (2026-09-23) 재생 전이라 영상 정보(readyState 0)가 없으면 아이폰이 전체화면을 거부했다
+                    //   (예외가 처리되지 않아 재생만 시작됨 — 펜닐 제보). 정보가 오는 즉시 들어간다.
+                    if (player.readyState >= 1) { try { player.webkitEnterFullscreen(); } catch (e) {} }
+                    else { player.addEventListener('loadedmetadata', () => { try { player.webkitEnterFullscreen(); } catch (e) {} }, { once: true }); }
                 }
             });
         }
@@ -3953,7 +4236,33 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         };
         
         // 자막 액션 함수들 (기존 ctrl-btn + floating 패널 공유)
+        // ★ (2026-09-10) 자막 On/Off — 기본 켜짐, 저장하지 않는다(영상마다 초기화).
+        //   표시 경로가 둘이라 두 곳 모두 이 값을 본다:
+        //     ①일반 재생  : timeupdate 핸들러가 subOverlay 를 갱신
+        //     ②iOS 전체화면: 네이티브 textTracks (webkitbeginfullscreen 에서 showing)
+        let subEnabled = true;
+        // ★ (2026-09-23) 새 껍데기가 자막 유무·켜짐·싱크를 읽도록 읽기 전용 창구를 연다(동작 변경 없음).
+        //   껍데기 연결 코드는 이 함수 밖에 있어 subCues·subEnabled·subSyncOffset 를 직접 볼 수 없다.
+        window._shareSubState = () => ({ has: subCues.length > 0, on: subEnabled !== false, sync: subSyncOffset || 0 });
+        const applySubEnabled = () => {
+            document.querySelectorAll('.sub-toggle-btn').forEach(b => {
+                b.classList.toggle('sub-off', !subEnabled);
+                b.setAttribute('aria-pressed', subEnabled ? 'true' : 'false');
+                b.title = subEnabled
+                    ? <?= json_encode(__('sub_toggle_off', '자막 끄기')) ?>
+                    : <?= json_encode(__('sub_toggle_on', '자막 켜기')) ?>;
+            });
+            if (!subEnabled) {
+                if (subOverlay) { subOverlay.innerHTML = ''; subOverlay.style.display = 'none'; }
+                try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = _shareIdleModeFs; } catch (e) {}
+            } else {
+                if (subOverlay && !_iosSubActive) subOverlay.style.display = '';
+                if (_iosSubActive) { try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = 'showing'; } catch (e) {} }
+            }
+        };
+
         const subActions = {
+            toggle: () => { subEnabled = !subEnabled; applySubEnabled(); },
             sizeDown: () => {
                 subSize = Math.max(0.6, subSize - 0.1);
                 if (subOverlay) subOverlay.style.fontSize = subSize + 'em';
@@ -3965,22 +4274,27 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             posUp: () => {
                 subBottom = Math.min(40, subBottom + 2);
                 if (subOverlay) subOverlay.style.bottom = subBottom + '%';
+                if (window._shareRebuildNativeCues) window._shareRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 반영
             },
             posDown: () => {
                 subBottom = Math.max(0, subBottom - 2);
                 if (subOverlay) subOverlay.style.bottom = subBottom + '%';
+                if (window._shareRebuildNativeCues) window._shareRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 반영
             },
             syncDown: () => {
                 subSyncOffset = Math.max(-30, subSyncOffset - 0.5);
                 updateSyncDisplay();
+                if (window._shareRebuildNativeCues) window._shareRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 반영
             },
             syncUp: () => {
                 subSyncOffset = Math.min(30, subSyncOffset + 0.5);
                 updateSyncDisplay();
+                if (window._shareRebuildNativeCues) window._shareRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 반영
             },
             syncReset: () => {
                 subSyncOffset = 0;
                 updateSyncDisplay();
+                if (window._shareRebuildNativeCues) window._shareRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 반영
             }
         };
         
@@ -3989,6 +4303,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         const btnSubUp = document.getElementById('btn-sub-up');
         const btnSubPosUp = document.getElementById('btn-sub-pos-up');
         const btnSubPosDown = document.getElementById('btn-sub-pos-down');
+        const btnSubToggle = document.getElementById('btn-sub-toggle');
+        if (btnSubToggle) btnSubToggle.addEventListener('click', subActions.toggle);
         if (btnSubDown) btnSubDown.addEventListener('click', subActions.sizeDown);
         if (btnSubUp) btnSubUp.addEventListener('click', subActions.sizeUp);
         if (btnSubPosUp) btnSubPosUp.addEventListener('click', subActions.posUp);
@@ -4009,6 +4325,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             const fsSubCtrl = document.createElement('div');
             fsSubCtrl.className = 'fs-subtitle-controls';
             fsSubCtrl.innerHTML = `
+                <button type="button" class="fs-sub-btn sub-toggle-btn" data-act="toggle" title="<?= __('sub_toggle_off', '자막 끄기') ?>">CC</button>
+                <span class="fs-sub-sep"></span>
                 <button type="button" class="fs-sub-btn" data-act="sizeDown" title="<?= __('sub_size_down', '자막 축소') ?>">A-</button>
                 <button type="button" class="fs-sub-btn" data-act="sizeUp" title="<?= __('sub_size_up', '자막 확대') ?>">A+</button>
                 <button type="button" class="fs-sub-btn" data-act="posUp" title="<?= __('sub_pos_up', '자막 위로') ?>">▲</button>
@@ -4063,15 +4381,24 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         let _shareNativeTrack = null;  // addTextTrack으로 만든 트랙 참조 (cue 갱신용)
         
         // cues 재주입 헬퍼 (fullscreen 진입 시 cue가 비어있으면 호출)
+        // ★ (2026-09-28) 아이폰 전체화면 자막(네이티브)에도 위치·싱크 설정 반영(펜닐 요청) — 넣기 전에 기존 cue 를 비우고, 위치는 subBottom 으로
+        //   '자막 상자 아래쪽을 (100-subBottom)%'에, 싱크는 플레이어 자막이 '재생 시각 + 오프셋'으로 보이므로 cue 시각에서 오프셋을 뺀다
+        //   (시작 0 미만은 0, 끝 0 이하는 넣지 않음). 전체화면 진입 코드는 그대로(진입 순간엔 건드리지 않음).
         const _shareInjectCues = (track, cueArr) => {
+            try { if (track.cues && track.cues.length) { for (const oc of Array.from(track.cues)) { try { track.removeCue(oc); } catch (eR) {} } } } catch (eR2) {}
+            const _off = subSyncOffset || 0;
+            const _line = Math.max(0, Math.min(100, 100 - (isFinite(subBottom) ? subBottom : 10)));
             let added = 0;
             for (const c of cueArr) {
                 try {
+                    const _cs = c.start - _off, _ce = c.end - _off;
+                    if (!(_ce > 0)) continue;
                     const txt = c.text.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '');
-                    const vc = new VTTCue(c.start, c.end, txt);
+                    const vc = new VTTCue(Math.max(0, _cs), _ce, txt);
                     // iOS가 default 위치로 그릴 때 화면 밖 잘림 방어 — line:90% (하단)
-                    vc.line = 90;
+                    vc.line = _line;
                     vc.lineAlign = 'end';
+                    vc.snapToLines = false;   // ★ (2026-09-28) snapToLines=false — 없으면 line 90 이 '위에서 90번째 줄'(기본 snapToLines=true)로 해석되고 lineAlign 'end' 도 무시돼, 화면 밖 줄을 엔진마다 다르게 끌어올려 아이폰 전체화면에서 두 줄 이상이 한 줄보다 위에 나왔다(펜닐 제보). false 면 '자막 상자 아래쪽을 90% 지점에' — 주석의 원래 의도, 줄이 늘면 위로 쌓임.
                     track.addCue(vc);
                     added++;
                 } catch(eC) {}
@@ -4095,23 +4422,41 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             }
         };
         window._shareEnsureCues = _shareEnsureCues;  // fullscreen 클릭 핸들러에서 호출
+        // ★ (2026-09-28) 설정(위치·싱크)이 바뀌면 숨겨 둔 네이티브 트랙의 cue 를 새로 만든다 — 아이폰에서만(PC·안드로이드는 트랙이 disabled 라
+        //   cues 가 null → 기존 cue 를 못 지워 쌓이는 것을 막음). _isIOSDeviceShare 는 아래에서 선언되지만 설정 버튼을 누를 때(초기화 뒤)만 불린다.
+        window._shareRebuildNativeCues = () => {
+            try { if (!_isIOSDeviceShare) return; if (_shareNativeTrack && subCues.length) _shareInjectCues(_shareNativeTrack, subCues); } catch (eRb) {}
+        };
         
         function _updateTrackElement() {
             // 기존 <track> 엘리먼트 제거
             player.querySelectorAll('track').forEach(t => t.remove());
             // 기존 addTextTrack으로 만든 트랙은 제거 불가 → 모드만 disabled로 + cue 비움
             if (_shareNativeTrack) {
-                try { _shareNativeTrack.mode = 'disabled'; } catch(e) {}
+                // ★ (2026-09-28) 순서 바로잡음 — 종전엔 먼저 disabled 로 만든 뒤 cue 를 지우려 해, disabled 에선 cues 가 null 이라 하나도 지워지지 않았다.
+                //   바로 아래에서 모든 트랙을 평소 모드(아이폰 hidden)로 되돌리므로 옛 트랙이 cue 를 가진 채 되살아나고, 전체화면 진입 때 모든 트랙을
+                //   showing 으로 켜 아이폰 전체화면에서 자막 파일을 바꾸면 옛 자막과 새 자막이 겹쳐 나왔다(재검토 — 실제 Chromium 재현).
+                //   cue 를 읽을 수 있게 hidden 으로 → 모두 지우고 → disabled 로(화면 표시엔 영향 없음, 트랙 감시는 showing 만 되돌림).
+                try { if (_shareNativeTrack.mode === 'disabled') _shareNativeTrack.mode = 'hidden'; } catch(e) {}   // ★ (2026-09-28) cue 를 읽으려면 disabled 가 아니어야 함(disabled 면 cues 가 null)
                 try {
                     while (_shareNativeTrack.cues && _shareNativeTrack.cues.length) {
                         _shareNativeTrack.removeCue(_shareNativeTrack.cues[0]);
                     }
                 } catch(e) {}
-                _shareNativeTrack = null;
+                // ★ (2026-09-28) 목록에 남아 있으면 버리지 않고 다시 쓴다(아래에서 새 자막을 넣음) — 새로 만들면 지울 수 없는 빈 트랙이 쌓여
+                //   아이폰 전체화면 자막 메뉴에 빈 '자막' 항목이 여러 개 생겼다(펜닐 요청). 목록에서 사라진 경우만 종전처럼 끄고 버린다.
+                if (![...player.textTracks].includes(_shareNativeTrack)) {
+                    try { _shareNativeTrack.mode = 'disabled'; } catch(e) {}
+                    _shareNativeTrack = null;
+                }
             }
             // 자막 cue 유무에 따라 floating 컨트롤 표시 토글
             if (window._shareToggleHasSubs) window._shareToggleHasSubs();
-            if (subCues.length === 0) return;
+            if (subCues.length === 0) {
+                // ★ (2026-09-28) 다시 쓰려고 남긴 트랙은 비울 때 잠깐 hidden 으로 바꿨으니 평소 모드로(아이폰 hidden, 그 밖 disabled)
+                try { if (_shareNativeTrack) _shareNativeTrack.mode = (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) ? 'hidden' : 'disabled'; } catch(e) {}
+                return;
+            }
             
             const _isIOSDevice = /iPad|iPhone|iPod/.test(navigator.userAgent) || 
                                  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -4120,7 +4465,7 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             //   메뉴엔 표시하지만 cue를 그리지 않는 알려진 이슈 (flowplayer #1151, video.js #7356)
             //   → video.addTextTrack() + track.addCue() 직접 호출이 안정적
             try {
-                _shareNativeTrack = player.addTextTrack('subtitles', '자막', 'ko');
+                if (!_shareNativeTrack) _shareNativeTrack = player.addTextTrack('subtitles', '자막', 'ko');   // ★ (2026-09-28) 남겨 둔 트랙이 있으면 다시 씀
                 _shareInjectCues(_shareNativeTrack, subCues);
             } catch(eT) {}
             
@@ -4148,6 +4493,14 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             setTimeout(_setShowing, 500);
             // track 요소 직접 모드 설정 (textTracks 컬렉션과 별개로)
             try { player.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; }); } catch(e) {}
+            // ★ (2026-09-10) 2단계 — 자막 OFF 면 방금 켠 것을 즉시 되돌린다.
+            //   [왜 이 형태인가] 위 강제 'showing' 은 iOS Safari 가 모드를 덮어쓰는 미해결 버그를
+            //   우회하려고 여러 시점에 반복 호출된다. 그 호출들을 각각 고치면 하나만 빠져도
+            //   자막이 다시 켜지므로, 마지막에 한 번 되돌리고 같은 시점들에 재확인한다.
+            if (!subEnabled) {
+                const _off = () => { try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = _shareIdleModeFs; } catch(e) {} };
+                _off(); setTimeout(_off, 60); setTimeout(_off, 220); setTimeout(_off, 520);
+            }
             if (subOverlay) subOverlay.style.display = 'none';
         });
         player.addEventListener('webkitendfullscreen', () => {
@@ -4155,10 +4508,31 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
             try { for (let i = 0; i < player.textTracks.length; i++) player.textTracks[i].mode = _shareIdleModeFs; } catch(e) {}
             if (subOverlay) subOverlay.style.display = '';
         });
+        // ★ (2026-09-27) 텍스트 트랙 변경 감시 — 탐색기(app.js textTracks 'change' 감시)와 같은 역할. 아이폰이 재생을 시작하며 네이티브 자막 트랙을
+        //   스스로 'showing' 으로 켜면, 플레이어가 그리는 자막(subtitle-overlay)과 함께 자막이 2개 나왔다(펜닐 제보 — 아이폰 공유, CC 를 껐다 켜면 하나).
+        //   종전 공유 코드는 자막을 불러온 직후·0.3초·1초에만 숨김으로 돌려 그 뒤에 켜진 것을 되돌리지 못했다.
+        //   공유는 전체화면 버튼이 들어가기 직전에 일부러 'showing' 으로 켜고(전체화면 안에서 아이폰이 자막을 그리게), 전체화면 표시(_iosSubActive)는
+        //   전체화면이 실제로 시작된 뒤 켜지므로 바로 되돌리지 않고 0.25초 뒤 다시 확인해 그때 전체화면이면 건드리지 않는다. 'showing' 만 되돌린다.
+        if (player.textTracks && player.textTracks.addEventListener) {
+            let _shareTrackGuardTimer = 0;
+            player.textTracks.addEventListener('change', () => {
+                if (_iosSubActive) return;
+                clearTimeout(_shareTrackGuardTimer);
+                _shareTrackGuardTimer = setTimeout(() => {
+                    if (_iosSubActive || player.webkitDisplayingFullscreen) return;
+                    try { for (let i = 0; i < player.textTracks.length; i++) { if (player.textTracks[i].mode === 'showing') player.textTracks[i].mode = _shareIdleModeFs; } } catch (e) {}
+                }, 250);
+            });
+        }
         
         // 자막 동기화
         player.addEventListener('timeupdate', () => {
             if (!subOverlay || subCues.length === 0) return;
+            // ★ (2026-09-10) 자막 OFF 면 그리지 않는다(1단계 — 일반 재생 경로).
+            if (!subEnabled) {
+                if (subOverlay.innerHTML !== '') subOverlay.innerHTML = '';
+                return;
+            }
             if (_iosSubActive) return; // iOS 전체화면 중엔 네이티브 track이 처리
             const t = player.currentTime + subSyncOffset;
             let found = '';
@@ -4295,6 +4669,154 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
         })();
         <?php endif; ?>
     })();
+
+        // ★ (2026-09-23) 동영상 새 껍데기(FSVideoSkin) — 공유 페이지 연결. 기본 켜짐(?vskin=0 으로 끔).
+        //   탐색기와 같은 부품을 쓰고, 기존 버튼(#player-controls)을 '대신 눌러준다'.
+        //   스트리밍(트랜스코딩·HLS)에는 붙지 않으며 재생 중 바뀌면 스스로 물러난다.
+        (function () {
+            // ★ (2026-09-23) 이 코드는 위 메인 함수 **밖**에 있다 — 그 안의 player·subCues 등은 보이지 않는다.
+            //   (처음엔 그 변수들을 그대로 써서 실제 페이지에선 첫 줄에서 '정의되지 않음' 오류로 멈췄다)
+            //   영상은 직접 찾고, 자막 상태는 window._shareSubState 창구로 읽는다.
+            const player = document.getElementById('stream-player');
+            const wrap = document.getElementById('player-wrap');
+            // <video> 에만 붙인다(음악 공유의 #stream-player 는 <audio>) — 방어용
+            if (!player || player.tagName !== 'VIDEO' || !wrap || !window.FSVideoSkin) return;
+            // ★ (2026-09-23) 기본 켜짐 — ?vskin=0 으로 끄고(기억) ?vskin=1 로 다시 켠다. 저장소를 못 쓰면 켜짐.
+            const enabled = () => {
+                try {
+                    const q = new URLSearchParams(window.location.search).get('vskin');
+                    if (q === '0') localStorage.setItem('fs_vskin', '0');
+                    if (q === '1') localStorage.removeItem('fs_vskin');
+                    return localStorage.getItem('fs_vskin') !== '0';
+                } catch (e) { return true; }
+            };
+            const byId = (id) => document.getElementById(id);
+            const shown = (b) => !!(b && b.style.display !== 'none');
+            // 스트리밍 판별: 처음부터 트랜스코딩(has-initial-overlay) 이거나, 소스가 변환 주소·HLS(blob)일 때
+            const isStreaming = () => {
+                const src = player.currentSrc || player.getAttribute('src') || '';
+                return wrap.classList.contains('has-initial-overlay') || /[?&](transcode|hls)=1/.test(src) || src.indexOf('blob:') === 0;
+            };
+            const SUB = { 'size-down': 'btn-sub-down', 'size-up': 'btn-sub-up', 'pos-up': 'btn-sub-pos-up', 'pos-down': 'btn-sub-pos-down',
+                          'sync-down': 'btn-sub-sync-down', 'sync-up': 'btn-sub-sync-up', 'sync-reset': 'btn-sub-sync-reset' };
+            // ★ (2026-09-24) 일반 재생 중 다국어 음성(펜닐 지시 — 4번 '나'). 탐색기(app.js _fsvsNativeAudio)와 같은 규칙:
+            //   사파리는 audioTracks 로 즉시 전환, 그 밖의 브라우저는 그 음성으로 스트리밍 전환(보던 위치부터) —
+            //   공유의 기존 '스트리밍으로 전환'처럼 force_transcode=1 로 다시 열고(autoplay=1 이면 변환 자동 시작),
+            //   음성 번호·위치는 fs_audio·fs_seek 로 넘겨 startTranscode 가 변환 주소에 붙인다.
+            //   음성 이름은 서버 정보(transcodeUrl + &info=1 — ffmpeg 로 읽기만 함)로 공유 음성 상자와 같은 모양.
+            const fsvsAudio = { info: null, req: false };
+            const fsvsPrefetchAudio = () => {
+                try {
+                    if (fsvsAudio.req || (isStreaming() && !player._directOn) || !player.dataset.transcodeUrl) return;   // ★ (2026-09-30) 빠른 시작 중도
+                    const src = player.currentSrc || player.getAttribute('src') || '';
+                    if (src.indexOf('blob:') === 0 && !player._directOn) return;
+                    fsvsAudio.req = true;
+                    fetch(player.dataset.transcodeUrl + '&info=1', { credentials: 'same-origin' })
+                        .then((r) => (r.ok ? r.json() : null))
+                        .then((d) => { fsvsAudio.info = (d && Array.isArray(d.audio_tracks)) ? d.audio_tracks : []; })
+                        .catch(() => {});
+                } catch (e) {}
+            };
+            window._shareFsvsPrefetch = fsvsPrefetchAudio;   // ★ (2026-09-30) 빠른 시작이 준비되면 부른다(음성 2개 이상)
+            const fsvsNativeAudio = () => {
+                // ★ (2026-09-30) 일반재생 빠른 시작 중 — 조각엔 고른 음성 하나만 담기므로 서버 음성 목록(순서 = 서버 a=번호)으로 보여 주고
+                //   고르면 그 음성으로 다시 붙인다(_shareDirectSwitch — 보던 위치·재생 상태 유지).
+                if (player._directOn) {
+                    const ds = fsvsAudio.info;
+                    if (!ds || ds.length < 2) return null;
+                    const curA = player._dsAudio || 0;
+                    return {
+                        tracks: ds.map((t, i) => ({ label: [t.language, t.codec, t.channels, t.title].filter(Boolean).join(' · ') || ('Track ' + (i + 1)), on: i === curA })),
+                        select: (i) => { if (i !== (player._dsAudio || 0) && typeof window._shareDirectSwitch === 'function') window._shareDirectSwitch(i); }
+                    };
+                }
+                const srv = fsvsAudio.info, at = player.audioTracks;
+                const safari = !!(at && at.length >= 2);
+                const n = safari ? at.length : (srv ? srv.length : 0);
+                if (n < 2) return null;
+                const label = (i) => {
+                    const s = (srv && srv.length === n) ? srv[i] : null;
+                    if (s) return [s.language, s.codec, s.channels, s.title].filter(Boolean).join(' · ') || ('Track ' + (i + 1));
+                    const t = safari ? at[i] : null;
+                    return (t && (t.label || t.language)) || ('Track ' + (i + 1));
+                };
+                let cur = 0;
+                if (safari) { for (let i = 0; i < at.length; i++) { if (at[i].enabled) { cur = i; break; } } }
+                const tracks = [];
+                for (let i = 0; i < n; i++) tracks.push({ label: label(i), on: i === cur });
+                return {
+                    tracks,
+                    select: (i) => {
+                        if (safari) { for (let k = 0; k < at.length; k++) at[k].enabled = (k === i); return; }
+                        const tr = srv && srv[i]; const idx = tr ? parseInt(tr.index, 10) : NaN;
+                        if (!isFinite(idx) || idx < 0) return;
+                        const t = player.currentTime || 0;
+                        const u = new URL(window.location.href);
+                        u.searchParams.set('force_transcode', '1');
+                        u.searchParams.set('autoplay', '1');
+                        u.searchParams.set('fs_audio', String(idx));
+                        if (t > 1) u.searchParams.set('fs_seek', t.toFixed(2)); else u.searchParams.delete('fs_seek');
+                        try { player.pause(); } catch (e) {}
+                        window.location.href = u.toString();
+                    }
+                };
+            };
+            const ctx = {
+                nativeAudio: () => ((isStreaming() && !player._directOn) ? null : fsvsNativeAudio()),   // ★ (2026-09-30) 빠른 시작 중에도
+                isStreaming,
+                timeOffset: () => player._qualitySeekOffset || 0,
+                knownDuration: () => player._knownDuration || 0,
+                setSpeed: (v) => { const b = document.querySelector('#player-controls [data-speed="' + v + '"]'); if (b) b.click(); else player.playbackRate = v; },
+                toggleLoop: () => { const b = byId('btn-video-loop'); if (b) b.click(); },
+                isLoop: () => !!player.loop,
+                abVisible: () => shown(byId('btn-video-ab')),
+                clickAb: () => { const b = byId('btn-video-ab'); if (b) b.click(); },
+                abState: () => (typeof window._shareAbState === 'function' ? window._shareAbState() : {}),
+                hasCc: () => { const st = window._shareSubState ? window._shareSubState() : null; return !!(st && st.has) && !!byId('btn-sub-toggle'); },
+                toggleCc: () => { const b = byId('btn-sub-toggle'); if (b) b.click(); },
+                ccOn: () => { const st = window._shareSubState ? window._shareSubState() : null; return st ? st.on : true; },
+                subAct: (name) => { const b = byId(SUB[name]); if (b) b.click(); },
+                subSync: () => { const st = window._shareSubState ? window._shareSubState() : null; return st ? st.sync : 0; },
+                hasPip: () => shown(byId('btn-pip')),
+                togglePip: () => { const b = byId('btn-pip'); if (b) b.click(); },
+                toggleFs: () => { const b = byId('btn-fullscreen'); if (b) b.click(); },
+                // ★ (2026-09-23) 다국어 음성(share-audio-select)도 ⚙ 로 — 음성이 2개 이상일 때만 기존 코드가 만든다
+                selects: () => [byId('share-quality-select'), byId('share-playback-mode'), byId('share-audio-select')].filter((s) => s && s.options && s.options.length > 1),
+                // ★ (2026-09-23) 이전·다음 영상 — 폴더 공유에서 영상이 2개 이상일 때(목록 버튼이 있을 때)만.
+                //   페이지의 기존 이전·다음 링크(#share-track-prev/next)로 이동한다.
+                hasList: () => !!byId('share-pl-toggle-btn'),
+                canPrev: () => !!byId('share-track-prev'),
+                canNext: () => !!byId('share-track-next'),
+                goPrev: () => { const a = byId('share-track-prev'); if (a && a.href) window.location.href = a.href; },
+                goNext: () => { const a = byId('share-track-next'); if (a && a.href) window.location.href = a.href; }
+            };
+            const tryAttach = () => {
+                try {
+                    // ★ (2026-09-23) 스트리밍에도 붙는다. 단 첫 화면의 '변환 시작' 덮개가 있는 동안엔 붙지 않는다
+                    //   (덮개를 눌러야 변환이 시작되므로, 그 위를 덮으면 재생을 시작할 수 없다).
+                    if (!enabled() || wrap.classList.contains('has-initial-overlay')) { window.FSVideoSkin.detach(wrap); return; }
+                    if (!wrap._fsvs) window.FSVideoSkin.attach({ video: player, wrap: wrap, ctx: ctx });
+                } catch (e) {}
+            };
+            tryAttach();
+            // 트랜스코딩 → 일반 재생으로 되돌아온 경우 다시 붙인다(떼어지는 쪽은 부품이 스스로 감시)
+            player.addEventListener('loadedmetadata', tryAttach);
+            player.addEventListener('play', tryAttach);   // 덮개를 눌러 변환이 시작된 뒤 붙는다
+            // ★ (2026-09-24) 일반 재생이면 음성 목록을 미리 받아 둔다(정보만 — 변환 안 함). 공유 쪽은 페이지당 영상 하나.
+            if (!wrap.classList.contains('has-initial-overlay')) fsvsPrefetchAudio();
+            // ★ (2026-09-23) '변환 시작' 덮개가 사라지는 **즉시** 붙인다(펜닐 제보: 공유 트랜스코딩에서 기존 조작 줄이 보임).
+            //   [원인] 변환 시작을 누르면 기존 코드가 덮개를 지우고 기존 조작 줄(#player-controls)을 보이게 하는데(startTranscode),
+            //   스킨은 재생 신호(play)를 기다렸다가 붙어서 변환 준비 동안 — 자동 재생이 막히면 계속 — 기존 조작 줄이 보였다.
+            //   일반 재생은 덮개가 없어 처음부터 붙으므로 안 보였다. 덮개 클래스가 빠지는 순간을 지켜보다 한 번 붙이고 감시를 끝낸다.
+            if (wrap.classList.contains('has-initial-overlay') && typeof MutationObserver !== 'undefined') {
+                try {
+                    const _ovWatch = new MutationObserver(() => {
+                        if (!wrap.classList.contains('has-initial-overlay')) { _ovWatch.disconnect(); tryAttach(); }
+                    });
+                    _ovWatch.observe(wrap, { attributes: true, attributeFilter: ['class'] });
+                } catch (e) {}
+            }
+        })();
     </script>
     <?php endif; ?>
     <?php endif; ?>

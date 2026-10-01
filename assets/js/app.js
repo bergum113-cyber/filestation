@@ -182,28 +182,98 @@
 (function() {
     // 진단 토글 (기본 false — 명시적으로 켜야 활성)
     if (typeof window._hlsDiag === 'undefined') window._hlsDiag = false;
+    // ★ (2026-09-25) 아이폰 등 콘솔이 없는 기기에서도 진단을 켤 수 있게 — 주소에 &hlsdiag=1 (끄기 &hlsdiag=0).
+    //   같은 탭에선 새로고침해도 유지(sessionStorage). 재생 동작은 바꾸지 않고 **기록만** 한다(펜닐: 500MB 넘는 다국어 mp4 가
+    //   아이폰에서 음성을 골라야 재생되는 원인 확인용). 기록은 기존과 같이 서버 data/hls_diag.log (api.php?action=hls_diag_log 로 받기).
+    try {
+        const _dq = new URLSearchParams(window.location.search).get('hlsdiag');
+        if (_dq === '1') { window._hlsDiag = true; sessionStorage.setItem('fs_hlsdiag', '1'); }
+        else if (_dq === '0') { sessionStorage.removeItem('fs_hlsdiag'); }
+        else if (sessionStorage.getItem('fs_hlsdiag') === '1') { window._hlsDiag = true; }
+    } catch (e) {}
+    // 영상 이벤트를 문서 한 곳에서 받아 기록(영상 이벤트는 거품이 올라오지 않으므로 capture 단계). 진단이 꺼져 있으면 아무것도 안 함.
+    //   timeupdate·progress 처럼 잦은 이벤트는 넣지 않는다(요청 수 제한 대비).
+    ['loadstart', 'loadedmetadata', 'canplay', 'play', 'playing', 'pause', 'waiting', 'stalled', 'error', 'ended', 'emptied'].forEach((_ev) => {
+        document.addEventListener(_ev, (e) => {
+            if (!window._hlsDiag || !e.target || e.target.tagName !== 'VIDEO') return;
+            const v = e.target;
+            let be = 0; try { be = v.buffered.length ? +v.buffered.end(v.buffered.length - 1).toFixed(2) : 0; } catch (x) {}
+            try {
+                window._diagLog && window._diagLog('v_' + _ev, {
+                    t: +(v.currentTime || 0).toFixed(2), rs: v.readyState, ns: v.networkState, paused: v.paused, bufEnd: be,
+                    isReady: v._isReady, hls: !!v._hlsInstance, method: v._streamMethod || '', src: String(v.currentSrc || v.getAttribute('src') || '').slice(0, 60),
+                    err: v.error ? v.error.code : 0
+                });
+            } catch (x) {}
+        }, true);
+    });
+    // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 플레이어를 누른 순간: 손가락 아래 요소·'준비 전' 여부·가운데 버튼이 눌릴 수 있는지.
+    //   가운데 버튼이 '준비 전'(pointer-events:none)이면 누름이 버튼이 아닌 영상·감싸개로 간다 — 그 차이를 기록으로 가른다.
+    ['touchend', 'click'].forEach((_ev) => {
+        document.addEventListener(_ev, (e) => {
+            if (!window._hlsDiag) return;
+            try {
+                const tg = e.target, w = tg && tg.closest ? tg.closest('.video-player-wrap') : null;
+                if (!w) return;
+                const nm = String(tg.tagName || '').toLowerCase() + (tg.id ? '#' + tg.id : '')
+                    + (typeof tg.className === 'string' && tg.className.trim() ? '.' + tg.className.trim().split(/\s+/).slice(0, 3).join('.') : '');
+                const ov = w.querySelector('.video-play-overlay:not(.video-seek-btn)');
+                const cs = ov ? getComputedStyle(ov) : null, v = w.querySelector('video');
+                window._diagLog && window._diagLog('ui_tap', {
+                    type: e.type, target: nm.slice(0, 80), notReady: w.classList.contains('video-not-ready'),
+                    overlayPE: cs ? cs.pointerEvents : '', overlayDisp: cs ? cs.display : '', overlayOp: cs ? cs.opacity : '',
+                    skin: w.classList.contains('fsvs-on'), isReady: v ? v._isReady : null, paused: v ? v.paused : null
+                });
+            } catch (x) {}
+        }, true);
+    });
+    // 재생 명령 기록 — 누가 play() 를 불렀고 실패했는지(예: NotAllowedError). 진단을 켠 채 페이지를 열었을 때만 감싼다.
+    //   원래 play() 를 그대로 부르고 그 결과(promise)를 그대로 돌려준다 — 실패 기록용 처리만 덧붙인다.
+    if (window._hlsDiag && !HTMLMediaElement.prototype._fsDiagWrapped) {
+        const _origPlay = HTMLMediaElement.prototype.play;
+        HTMLMediaElement.prototype.play = function () {
+            let who = '';
+            try { who = String(new Error().stack || '').split('\n').slice(1, 4).map((s) => s.trim().replace(/https?:\/\/[^\s)]*\//g, '')).join(' < ').slice(0, 180); } catch (x) {}
+            const v = this;
+            try { window._diagLog && window._diagLog('play_call', { tag: v.tagName, isReady: v._isReady, rs: v.readyState, src: String(v.currentSrc || v.getAttribute('src') || '').slice(0, 40), who }); } catch (x) {}
+            const p = _origPlay.apply(this, arguments);
+            try { if (p && typeof p.catch === 'function') p.catch((err) => { try { window._diagLog && window._diagLog('play_reject', { tag: v.tagName, name: err && err.name, msg: String(err && err.message || '').slice(0, 80), who }); } catch (x) {} }); } catch (x) {}
+            return p;
+        };
+        HTMLMediaElement.prototype._fsDiagWrapped = true;
+    }
     
     let logQueue = [];
     let flushTimer = null;
     
     // 큐에 쌓인 로그를 서버에 일괄 전송 (네트워크 오버헤드 최소화)
+    // ★ (2026-09-26) 묶음 전송 — 종전엔 기록 하나당 요청 하나(keepalive)라, 진단 기록을 늘린 뒤 분당 120 공용 제한·keepalive 한도(64KB)에
+    //   걸려 기록이 버려졌다(09-26 00:53 기록 누락). 모은 기록을 요청 1번(최대 50건)으로 보내고, 제한(429)·네트워크 실패면
+    //   2초 뒤 최대 2번 다시 보낸다(대기열 최대 500건). keepalive 는 60KB 이하일 때만. 진단이 꺼져 있으면 여기 오지 않는다.
+    let _diagRetryTimer = null;
     function flushQueue() {
         if (logQueue.length === 0) return;
-        const items = logQueue.slice();
-        logQueue.length = 0;
-        items.forEach(item => {
-            try {
-                const fd = new FormData();
-                fd.append('event', item.event);
-                fd.append('data', item.data);
-                fetch('api.php?action=hls_diag_log', {
-                    method: 'POST',
-                    body: fd,
-                    credentials: 'same-origin',
-                    keepalive: true  // 페이지 종료 시에도 전송 시도
-                }).catch(() => {});
-            } catch(e) {}
-        });
+        const items = logQueue.splice(0, 50);
+        const retryLater = () => {
+            const again = items.filter((it) => (it._tries = (it._tries || 0) + 1) <= 2);
+            if (again.length) {
+                logQueue.unshift(...again);
+                if (logQueue.length > 500) logQueue.length = 500;
+                if (!_diagRetryTimer) _diagRetryTimer = setTimeout(() => { _diagRetryTimer = null; flushQueue(); }, 2000);
+            }
+        };
+        try {
+            const fd = new FormData();
+            const body = JSON.stringify(items.map((it) => ({ event: it.event, data: it.data })));
+            fd.append('batch', body);
+            fetch('api.php?action=hls_diag_log', {
+                method: 'POST',
+                body: fd,
+                credentials: 'same-origin',
+                keepalive: body.length < 60000   // 페이지 종료 시에도 전송 시도(브라우저 keepalive 한도 안에서만)
+            }).then((r) => { if (!r.ok) retryLater(); }).catch(() => retryLater());
+        } catch(e) {}
+        if (logQueue.length > 0 && !_diagRetryTimer) setTimeout(flushQueue, 50);   // 50건 넘게 쌓였으면 이어서
     }
     
     // 외부 노출 — 로그 호출 (window.App._diagLog 또는 window._diagLog)
@@ -221,6 +291,73 @@
             flushTimer = setTimeout(() => { flushTimer = null; flushQueue(); }, 100);
         } catch(e) {}
     };
+    // ★ (2026-09-30) 표시 상태·네트워크 진단 — 기록만(재생 동작 변경 없음), 진단이 켜졌을 때만(펜닐: 모바일 느린 인터넷에서 ⚙ 재생 방식·배지·
+    //   실제 재생이 안 맞는 문제를 추정이 아니라 로그로 확정하려고. 앞서 '표시가 안 맞는' 원인을 한 번 잘못 짚었다 — 표시 값이 로그에 없어서).
+    //   ① ui_state — ⚙ 재생방식·화질 값, 배지 문구, 실제 재생 방식(영상 주소로 판별)을 1초마다 살펴 바뀌었을 때만 기록.
+    //      셀렉트 value 를 코드로 바꾸면 요소 변화 감시(MutationObserver)에 잡히지 않아 짧은 주기 확인으로 한다.
+    //   ② net_sample — 미리보기 영상이 있으면 5초마다: 버퍼 증가량(5초 동안 받아진 재생 시간 — 일반재생·HLS 공통 '실제 받는 속도'),
+    //      waiting·stalled 횟수, 브라우저 리소스 타이밍의 받은 양·시간(api.php 요청 — HLS 조각 등. 영상 요소가 직접 받는 원본은 안 잡힐 수 있음),
+    //      연결 정보(브라우저가 줄 때만 — 아이폰 사파리는 없음). 리소스 타이밍은 250건에서 멈추므로 읽은 뒤 비운다(다른 코드는 안 씀 — 확인).
+    (function () {
+        const _pv = () => { const pc = document.getElementById('preview-content'); return pc ? pc.querySelector('video.preview-video') : null; };
+        const _kind = (v) => {
+            try {
+                const src = v ? (v.currentSrc || v.src || '') : '';
+                if (!src) return '(주소 없음)';
+                if (src.indexOf('blob:') === 0) return 'HLS(hls.js)';
+                if (src.indexOf('hls_stream') >= 0) return 'HLS(아이폰 자체)';
+                if (src.indexOf('action=transcode') >= 0) return '변환 스트림';
+                return '일반재생';
+            } catch (e) { return '?'; }
+        };
+        let _lastUi = '', _waits = 0, _stalls = 0, _lastBuf = null;
+        document.addEventListener('waiting', (e) => { if (window._hlsDiag && e.target && e.target.tagName === 'VIDEO') _waits++; }, true);
+        document.addEventListener('stalled', (e) => { if (window._hlsDiag && e.target && e.target.tagName === 'VIDEO') _stalls++; }, true);
+        setInterval(() => {
+            if (!window._hlsDiag) { _lastUi = ''; return; }
+            const pc = document.getElementById('preview-content'); if (!pc) return;
+            const v = _pv();
+            const sel = pc.querySelector('.playback-mode-select'), qp = pc.querySelector('#quality-picker'), bd = pc.querySelector('.video-stream-badge');
+            if (!v && !bd) { _lastUi = ''; return; }
+            const st = { mode: sel ? sel.value : '(없음)', quality: qp ? qp.value : '(없음)', badge: bd ? (bd.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) : '(없음)', actual: _kind(v) };
+            const key = JSON.stringify(st);
+            if (key !== _lastUi) { _lastUi = key; window._diagLog('ui_state', st); }
+        }, 1000);
+        setInterval(() => {
+            if (!window._hlsDiag) { _lastBuf = null; return; }
+            const v = _pv(); if (!v) { _lastBuf = null; _waits = 0; _stalls = 0; return; }
+            let be = 0; try { be = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0; } catch (e) {}
+            const o = { t: +(v.currentTime || 0).toFixed(1), bufEnd: +be.toFixed(1), rs: v.readyState, ns: v.networkState, paused: v.paused, actual: _kind(v), waits: _waits, stalls: _stalls };
+            if (_lastBuf !== null) o.bufGain5s = +(be - _lastBuf).toFixed(1);
+            try {
+                const ents = performance.getEntriesByType('resource').filter((r) => /api\.php|share\.php/.test(r.name));
+                if (ents.length) {
+                    let kb = 0, ms = 0; ents.forEach((r) => { kb += (r.transferSize || r.encodedBodySize || 0) / 1024; ms += r.duration; });
+                    o.res = { n: ents.length, kb: Math.round(kb), ms: Math.round(ms), kbps: ms > 0 ? Math.round(kb * 8 / (ms / 1000)) : null };
+                    // ★ (2026-09-30) 느린 원인을 가리는 세부 — 작은 요청이 3~5초씩 걸린 원인(연결 대기인지 서버 처리인지)을 추정 대신 기록으로.
+                    //   proto: 연결 방식(http/1.1 이면 아이폰은 서버당 동시 연결 6개 — 대기 가능, h2 면 연결 제한 아님),
+                    //   avgMs: 요청 하나당 평균 — queue(요청 보내기 전 대기·연결) / server(보낸 뒤 첫 응답까지 — 서버 처리) / recv(받기),
+                    //   acts: action 별 건수, slowest: 가장 오래 걸린 요청. 같은 출처라 세부 시각을 브라우저가 준다(없으면 0 — 빼고 계산).
+                    try {
+                        const proto = {}, acts = {}; let q = 0, sv = 0, rc = 0, nt = 0, slow = null;
+                        ents.forEach((r) => {
+                            const pk = r.nextHopProtocol || '?'; proto[pk] = (proto[pk] || 0) + 1;
+                            const m = /[?&]action=([a-zA-Z0-9_]+)/.exec(r.name); const a = m ? m[1] : (/share\.php/.test(r.name) ? 'share' : '?');
+                            acts[a] = (acts[a] || 0) + 1;
+                            if (r.requestStart > 0 && r.responseStart > 0) { q += r.requestStart - r.startTime; sv += r.responseStart - r.requestStart; rc += r.responseEnd - r.responseStart; nt++; }
+                            if (!slow || r.duration > slow.ms) slow = { a: a, ms: Math.round(r.duration) };
+                        });
+                        o.res.proto = proto; o.res.acts = acts; o.res.slowest = slow;
+                        if (nt) o.res.avgMs = { queue: Math.round(q / nt), server: Math.round(sv / nt), recv: Math.round(rc / nt) };
+                    } catch (e2) {}
+                }
+                performance.clearResourceTimings();
+            } catch (e) {}
+            try { const c = navigator.connection; if (c) o.conn = { type: c.effectiveType, down: c.downlink, rtt: c.rtt }; } catch (e) {}
+            _lastBuf = be; _waits = 0; _stalls = 0;
+            window._diagLog('net_sample', o);
+        }, 5000);
+    })();
 })();
 
 // === [COVER_DIAG] iOS 음악 썸네일 누락 진단 모듈 (펜닐님 진단용 — 임시) ===
@@ -851,15 +988,16 @@ class FSAudioPlayer {
                 <button class="fap-btn fap-btn-lyrics" title="${isKo ? '가사 보기 (Ctrl+L)' : 'Show lyrics (Ctrl+L)'}" style="display:none;">
                     <svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 6h16v2H4V6zm0 4h12v2H4v-2zm0 4h16v2H4v-2zm0 4h12v2H4v-2z" fill="currentColor"/></svg>
                 </button>
-            </div>
-            <div class="fap-volume">
-                <button class="fap-btn fap-btn-vol" title="${isKo ? '음소거 (M) · ↑↓로 볼륨 조절' : 'Mute (M) · ↑↓ to adjust'}">
-                    <svg class="fap-icon-vol-on" viewBox="0 0 24 24" width="18" height="18"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" fill="currentColor"/></svg>
-                    <svg class="fap-icon-vol-off" viewBox="0 0 24 24" width="18" height="18" style="display:none"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" fill="currentColor"/></svg>
-                </button>
-                <div class="fap-vol-bar" title="${isKo ? '↑/↓로 5%씩 조절' : '↑/↓ to adjust 5%'}">
-                    <div class="fap-vol-level"></div>
-                    <div class="fap-vol-thumb"></div>
+                <!-- ★ (2026-09-26) 볼륨(음소거 버튼 + 막대)을 재생 줄 안 맨 끝으로 — 막대는 버튼 위에 뜨는 창(CSS). tabindex=-1: 막대를 누르는 동안 창이 닫히지 않게(:focus-within) -->
+                <div class="fap-volume">
+                    <button class="fap-btn fap-btn-vol" title="${isKo ? '음소거 (M) · ↑↓로 볼륨 조절' : 'Mute (M) · ↑↓ to adjust'}">
+                        <svg class="fap-icon-vol-on" viewBox="0 0 24 24" width="18" height="18"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" fill="currentColor"/></svg>
+                        <svg class="fap-icon-vol-off" viewBox="0 0 24 24" width="18" height="18" style="display:none"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" fill="currentColor"/></svg>
+                    </button>
+                    <div class="fap-vol-bar" tabindex="-1" title="${isKo ? '↑/↓로 5%씩 조절' : '↑/↓ to adjust 5%'}">
+                        <div class="fap-vol-level"></div>
+                        <div class="fap-vol-thumb"></div>
+                    </div>
                 </div>
             </div>
             <div class="fap-playlist">
@@ -940,6 +1078,53 @@ class FSAudioPlayer {
         //   사용자는 기기 물리 볼륨 버튼으로 조절
         if (this._isIOS && this.$.root) {
             this.$.root.classList.add('fap-ios');
+        }
+        // ★ (2026-09-26) 재생 줄(볼륨 포함 8개)이 좁은 폭에서 넘치지 않게 — 넘치면 간격을 줄이고(fap-narrow), 그래도 넘치면 버튼 여백·재생
+        //   버튼을 줄인다(fap-xnarrow). 플레이어 폭이 바뀔 때(ResizeObserver)와 스킨을 바꿀 때 다시 잰다. 재는 동안 전환을 끈다(fap-fitting —
+        //   모바일 전체 규칙 '* { transition-duration: 0.1s }' 때문에 크기가 한 박자 늦게 바뀌어 잘못 재는 것을 막음, 동영상 조작 줄과 같은 이유).
+        this._fapFitControls = () => {
+            try {
+                const r = this.$ && this.$.root, c = r && r.querySelector('.fap-controls');
+                if (!r || !c || this._destroyed) return;
+                r.classList.add('fap-fitting');
+                r.classList.remove('fap-narrow', 'fap-xnarrow');
+                const _dg = (window._hlsDiag && typeof window._diagLog === 'function') ? { cw: c.clientWidth } : null;
+                if (_dg) _dg.sw0 = c.scrollWidth;
+                if (c.clientWidth > 0) {
+                    if (c.scrollWidth > c.clientWidth + 1) r.classList.add('fap-narrow');
+                    if (_dg) _dg.sw1 = c.scrollWidth;
+                    if (c.scrollWidth > c.clientWidth + 1) r.classList.add('fap-xnarrow');
+                }
+                // ★ (2026-09-26) 진단 기록(hlsdiag=1, 탐색기) — 크기별로 제대로 되는지 실제 기기 수치로 확인(펜닐 요청). 동작 변경 없음.
+                if (_dg) {
+                    try {
+                        const sk = r.querySelector('.fap-seek');
+                        const cont = this.container;
+                        const cs = getComputedStyle(r);
+                        _dg.swEnd = c.scrollWidth;
+                        _dg.narrow = r.classList.contains('fap-narrow'); _dg.xnarrow = r.classList.contains('fap-xnarrow');
+                        _dg.skin = (String(r.className).match(/fap-skin-[\w-]+/) || ['default'])[0];
+                        _dg.rootW = r.clientWidth; _dg.rootSW = r.scrollWidth; _dg.contW = cont ? cont.clientWidth : null;
+                        _dg.seekW = sk ? sk.clientWidth : null; _dg.seekSW = sk ? sk.scrollWidth : null;
+                        _dg.cols = cs.gridTemplateColumns; _dg.vw = window.innerWidth;
+                        _dg.items = Array.prototype.map.call(c.children, (e) => ((String(e.className).match(/fap-btn-[\w-]+|fap-volume/) || ['?'])[0].replace('fap-btn-', '') + ':' + e.offsetWidth)).join(' ');
+                        window._diagLog('fap_fit', _dg);
+                    } catch (x) {}
+                }
+                r.classList.remove('fap-fitting');
+            } catch (e) {}
+        };
+        if (typeof ResizeObserver === 'function' && this.$ && this.$.root) {
+            // ★ (2026-09-26) 재생 줄의 각 버튼도 지켜본다 — 가사 버튼은 처음엔 숨겨졌다가 가사를 찾으면 나타나는데(1790행) 플레이어 크기는
+            //   그대로라 다시 재지 않아, 저장된 스킨(APlayer Fixed)으로 처음 열면 간격이 안 줄고 넘쳤다(펜닐 제보 — 다른 스킨을 거쳐 돌아오면 줄어듦).
+            //   재기가 버튼 크기를 바꿔 다시 알림이 오므로 다음 프레임에 한 번만(되먹임 반복 방지). 닫을 때 해제.
+            this._fapRO = new ResizeObserver(() => {
+                if (this._fapRaf) return;
+                this._fapRaf = requestAnimationFrame(() => { this._fapRaf = 0; this._fapFitControls(); });
+            });
+            this._fapRO.observe(this.$.root);
+            const _ctl = this.$.root.querySelector('.fap-controls');
+            if (_ctl) Array.prototype.forEach.call(_ctl.children, (el) => this._fapRO.observe(el));
         }
         this._updateLoopUI();
         this._updateVolUI();
@@ -1129,6 +1314,7 @@ class FSAudioPlayer {
     }
     
     _applySkin(skinId) {
+        try { if (this._fapFitControls) requestAnimationFrame(() => this._fapFitControls()); } catch (e) {}   // ★ (2026-09-26) 스킨마다 버튼 크기·간격이 달라 다시 잰다
         if (!this.$) return;
         const root = this.$.root;
         if (!root) return;
@@ -1375,6 +1561,9 @@ class FSAudioPlayer {
         });
         // Volume button (mute toggle)
         this.$.btnVol.addEventListener('click', () => {
+            // ★ (2026-09-26) iOS: 볼륨 값은 바꿀 수 없으므로(audio.volume 읽기 전용) 음소거만 켜고 끈다. iOS 는 시각화(Web Audio)를
+            //   쓰지 않아(_initVisualizer 가 바로 끝남) audio.muted 로 소리가 확실히 꺼진다. 그 밖의 기기는 종전 그대로(볼륨 0 ↔ 이전 볼륨).
+            if (this._isIOS) { this.audio.muted = !this.audio.muted; this._updateVolUI(); return; }
             if (this._getVolume() > 0) { this._prevVolume = this._getVolume(); this._setVolume(0); }
             else { this._setVolume(this._prevVolume || 0.8); }
             this._updateVolUI();
@@ -1410,6 +1599,8 @@ class FSAudioPlayer {
                     if (this._trkReadyLogged) return;
                     this._trkReadyLogged = true;
                 }
+                // ★ (2026-09-04) 실제 소리가 나기 시작한 시점 표시 — 아래 waiting/stalled 게이트용.
+                if (evName === 'playing') this._trkPlayingSeen = true;
                 this._msLog('trk_' + evName, {
                     idx: this.currentIndex,
                     ios: !!this._isIOS,
@@ -1417,6 +1608,64 @@ class FSAudioPlayer {
                     ms: Date.now() - this._trkStartAt,
                     buffered: (a.buffered && a.buffered.length) ? Math.round(a.buffered.end(a.buffered.length - 1) * 100) / 100 : 0
                 });
+            });
+        });
+        // ★ (2026-09-04) 재생 중 끊김 계측 — 지하철 등에서 곡 전환 직후 소리가 끊기는 증상 규명용.
+        //   waiting  : 버퍼가 말라 재생이 멈춤(= 사용자가 듣는 끊김)
+        //   stalled  : 데이터가 안 들어옴(네트워크 정체)
+        //   playing  : 위 이벤트들은 기존 trk_playing 로 회복 시각이 남으므로 별도 추가 불필요
+        //   [기록 항목] 곡 시작 후 경과, 재생 위치, 남은 버퍼(초) — 이 셋이면
+        //   "버퍼가 몇 초 남았을 때 끊겼는지"가 바로 나온다.
+        //   [부하] 끊길 때만 발생한다. 연속 발생 대비로 2초 throttle 을 건다.
+        ['waiting', 'stalled'].forEach((evName) => {
+            a.addEventListener(evName, () => {
+                if (!this._trkStartAt) return;
+                // ★ (2026-09-04) **재생이 실제로 시작된 뒤**의 것만 기록한다.
+                //   waiting 은 곡을 새로 로드할 때도(아직 데이터가 없으므로) 발생하는데,
+                //   그건 '끊김'이 아니라 정상 로딩이다. 그것까지 기록하면
+                //   ①곡당 1건씩 늘 발생해 '끊길 때만'이라는 전제가 깨지고
+                //   ②그 직후 2초 throttle 에 **진짜 끊김이 삼켜진다**.
+                //   하필 증상이 "전환 직후 초반"이라 정확히 그 구간을 놓치게 된다.
+                if (!this._trkPlayingSeen) return;
+                // ★ (2026-09-10) buffered 는 **현재 재생 위치가 속한 구간**으로 재야 한다.
+                //   [이전 오류] a.buffered.end(length-1)(마지막 구간의 끝)을 썼는데,
+                //   진행바를 크게 움직이면 버퍼가 [0~10초],[2600~2613초] 처럼 조각난다.
+                //   그러면 '마지막 구간의 끝'은 재생 위치와 무관해져, 실제로는 버퍼가
+                //   말랐는데도 ahead 가 수천 초로 찍힌다(실측 로그의 at=6초 / ahead=2607초).
+                //   그 값을 근거로 "버퍼 문제가 아니다"라고 오판할 뻔했다.
+                //   [예외 방어] buffered / start() / end() 는 미디어 요소 상태에 따라 예외를
+                //   던질 수 있다(InvalidStateError · IndexSizeError). 이 블록은 하필
+                //   **문제 상황(끊김)** 에서 도는 데다 접근 횟수도 여럿이라, 통째로 감싼다.
+                //   실패하면 값 없이라도 기록해 "끊겼다"는 사실 자체는 남긴다.
+                const cur = a.currentTime || 0;
+                let nRanges = 0, bufEnd = 0, lastEnd = 0, inRange = false, bufErr = null;
+                try {
+                    const b = a.buffered;
+                    nRanges = (b && b.length) ? b.length : 0;
+                    for (let i = 0; i < nRanges; i++) {
+                        // 경계에서 부동소수 오차로 빠지지 않도록 아주 작은 여유를 둔다.
+                        if (cur >= b.start(i) - 0.01 && cur <= b.end(i) + 0.01) {
+                            bufEnd = b.end(i);
+                            inRange = true;
+                            break;
+                        }
+                    }
+                    lastEnd = nRanges ? b.end(nRanges - 1) : 0;
+                } catch (e) {
+                    bufErr = (e && e.name) ? e.name : 'error';
+                }
+                this._msLog('trk_' + evName, {
+                    bufErr: bufErr,                                         // null 이 정상. 값이 있으면 버퍼 정보를 못 읽은 것
+                    idx: this.currentIndex,
+                    ms: Date.now() - this._trkStartAt,
+                    at: Math.round(cur * 100) / 100,
+                    ranges: nRanges,                                        // 1 초과면 탐색으로 조각난 상태
+                    inRange: inRange,                                       // false = 재생 위치가 버퍼 밖(진짜 굶음)
+                    buffered: Math.round(bufEnd * 100) / 100,               // 현재 위치가 속한 구간의 끝
+                    ahead: Math.round(Math.max(0, bufEnd - cur) * 100) / 100, // ★실제 남은 재생 여유
+                    lastEnd: Math.round(lastEnd * 100) / 100,               // 예전 계산값 — 위와 다르면 조각난 것
+                    netType: (navigator.connection && navigator.connection.effectiveType) || null
+                }, 2000);
             });
         });
         a.addEventListener('timeupdate', () => {
@@ -1481,7 +1730,8 @@ class FSAudioPlayer {
             // 재생 중 세션 keepalive + 화면 자동 잠금 방지
             this._startMediaKeepalive();
             this._acquireWakeLock();
-            this._msLog('play');
+            // ★ (2026-09-23) 건강 상태를 함께 남긴다 — 일시정지 → 재생 복구 직후의 상태 비교용.
+            this._msLog('play', this._msHealth());
             // 다른 탭 동영상 등으로 오디오 포커스를 뺏긴 뒤라면 여기서 컨텍스트를 되살린다
             this._resumeAudioCtx('play');
         });
@@ -1496,9 +1746,21 @@ class FSAudioPlayer {
             //   실제 로그에서 백그라운드 중 우리가 시키지 않은 ms_pause가 확인됐다.
             //   다른 탭 자체는 막을 수 없지만(브라우저 탭 격리), '뺏긴 신호'로 삼아
             //   세션을 다시 잡아 잠금화면 표시를 우리 것으로 되돌린다.
-            const wasSelf = !!this._selfPause;
+            // ★ (2026-09-22) 곡 끝에 도달해 생긴 pause 는 '자체 정지'로 본다.
+            //   [원인] HTML 명세상 곡 끝에서는 pause → ended 순서로 이벤트가 난다. 이 pause 는
+            //   우리가 시킨 게 아니라 _selfPause 가 false 이고, 그래서 '다른 앱이 뺏어갔다'로
+            //   오판돼 강한 재획득으로 세션을 통째로 놓았다 → 잠금화면이 회색 ◀◀▶▶ 로 바뀜.
+            //   실측: 09-22 08:30:28 seekto(곡 끝) → pause_external → reacquire_release hard=True.
+            //   [처방] 그 시점엔 명세상 audio.ended 가 이미 true 다. iOS 의 순서 차이에 대비해
+            //   재생 위치가 끝 0.3초 안인 경우도 함께 본다. 곡 중간에 다른 앱이 진짜로 뺏어간
+            //   경우(ended=false)는 종전대로 외부 정지로 잡힌다.
+            const _atEnd = !!a.ended || (isFinite(a.duration) && a.duration > 0
+                                         && a.currentTime >= a.duration - 0.3);
+            const wasSelf = !!this._selfPause || _atEnd;
             this._selfPause = false;
-            this._msLog(wasSelf ? 'pause' : 'pause_external');
+            // ★ (2026-09-23) 건강 상태를 함께 남긴다 — 화면 꺼짐 중 일시정지는 증상 복구 시도일 수 있다.
+            this._msLog(wasSelf ? 'pause' : 'pause_external',
+                        Object.assign(_atEnd ? { atEnd: true } : {}, this._msHealth()));
             if (!wasSelf && !this._destroyed) {
                 const t = this.playlist[this.currentIndex];
                 // ★ (2026-08-20) 외부(다른 탭/앱)가 세션을 가져간 흔적을 표시해 둔다.
@@ -1587,23 +1849,179 @@ class FSAudioPlayer {
         });
         // Media Session API (잠금화면/알림센터 컨트롤)
         if ('mediaSession' in navigator) {
-            navigator.mediaSession.setActionHandler('play', () => this.togglePlay());
-            navigator.mediaSession.setActionHandler('pause', () => this.togglePlay());
-            navigator.mediaSession.setActionHandler('previoustrack', () => this.prev());
-            navigator.mediaSession.setActionHandler('nexttrack', () => this.next());
-            try {
-                navigator.mediaSession.setActionHandler('seekbackward', (details) => {
-                    this.audio.currentTime = Math.max(0, this.audio.currentTime - (details.seekOffset || 10));
-                });
-                navigator.mediaSession.setActionHandler('seekforward', (details) => {
-                    this.audio.currentTime = Math.min(this.audio.duration || 0, this.audio.currentTime + (details.seekOffset || 10));
-                });
-                navigator.mediaSession.setActionHandler('seekto', (details) => {
-                    if (details.seekTime != null) this.audio.currentTime = details.seekTime;
-                });
-            } catch(e) {}
+            // ★ (2026-09-18) 핸들러를 **각각 독립적으로** 등록한다.
+            //   [종전 결함] seekbackward·seekforward·seekto 가 한 try 안에 있어,
+            //   앞의 하나가 예외를 던지면 **seekto 까지 등록되지 않고 조용히 삼켜졌다.**
+            //   seekto 핸들러가 없으면 iOS 잠금화면 스크러버는 끌려도 적용되지 않는다
+            //   (펜닐의 "움직이는데 취소된다" 증상, 09-18 로그의 ms_seekto 0건과 일치).
+            //   이제 하나가 실패해도 나머지는 살아남는다.
+            const _msHandlers = {
+                play: () => this.togglePlay(),
+                pause: () => this.togglePlay(),
+                previoustrack: () => this.prev(),
+                nexttrack: () => this.next(),
+                seekbackward: (details) => {
+                    this.audio.currentTime = Math.max(0, this.audio.currentTime - ((details && details.seekOffset) || 10));
+                },
+                seekforward: (details) => {
+                    this.audio.currentTime = Math.min(this.audio.duration || 0, this.audio.currentTime + ((details && details.seekOffset) || 10));
+                },
+                seekto: (details) => {
+                    if (!details || details.seekTime == null) return;
+                    // ★ (2026-09-23) 끝까지 끌면 '곡이 끝난 것'으로 처리한다.
+                    //   [원인] iOS 가 곡 길이를 처음에 틀리게 계산하고 재생 중에 바로잡는 경우가 있다
+                    //   (09-23 로그: 같은 곡 안에서 183.72→216.50초, 240.07→248.04초 등 3건).
+                    //   그러면 잠금화면에 '끝'으로 보이는 곳이 실제 끝이 아니어서 ended 가 오지 않고
+                    //   다음 곡으로 넘어가지 않았다(두세 번 끌어야 넘어감).
+                    //   [처리] 끝 0.5초 이내면 탐색 대신 자연스러운 곡 끝 처리(_onEnded)를 그대로 부른다.
+                    //   _onEnded 가 구간 반복·한 곡 반복·전체 반복·반복 없음을 모두 처리하므로
+                    //   곡이 실제로 끝났을 때와 동작이 같다.
+                    {
+                        const _d = this.audio.duration;
+                        if (_d && isFinite(_d) && details.seekTime >= _d - 0.5) {
+                            this._lastSeektoAt = Date.now();
+                            const _idxBefore = this.currentIndex;
+                            const _abOn = (this._abA !== null && this._abB !== null);
+                            const _mode = this.loop;
+                            this._onEnded();
+                            // 마지막 곡(반복 없음)이라 다음 곡이 없으면 원래대로 끝 위치로 보낸다.
+                            // (구간 반복·한 곡 반복은 _onEnded 가 위치를 직접 정하고,
+                            //  전체 반복은 단일 곡이어도 다시 올리므로 제외)
+                            const _stayed = !_abOn && _mode !== 'one' && _mode !== 'all'
+                                            && this.currentIndex === _idxBefore;
+                            if (_stayed) {
+                                try { this.audio.currentTime = details.seekTime; } catch (e) {}
+                            }
+                            this._msLog('seekto', {
+                                to: Math.round(details.seekTime * 100) / 100,
+                                dur: Math.round(_d * 100) / 100,
+                                toEnd: true,
+                                mode: _mode,
+                                ab: _abOn,
+                                advanced: this.currentIndex !== _idxBefore,
+                                stayed: _stayed,
+                                vis: (typeof document !== 'undefined') ? document.visibilityState : null
+                            });
+                            return;
+                        }
+                    }
+                    // ★ (2026-09-17) 잠금화면 스크러버가 '움직이다 취소'되던 문제.
+                    //   탐색 직후 1.5초는 timeupdate 발 positionState 갱신을 건너뛰고,
+                    //   새 위치를 곧바로 알려 잠금화면과 앱의 인식을 맞춘다.
+                    const _before = this.audio.currentTime;
+                    this._lastSeektoAt = Date.now();   // ★ (2026-09-23) 건강 상태 계측용
+                    // ★ (2026-09-19) 대입 '직전' 상태를 읽어 둔다 — 실패 한 건의 정체를 가리기 위함.
+                    //   [배경] 09-19 로그에서 seekto 14건 중 13건은 0.3초 안에 seeked 가 왔는데
+                    //   한 건만(19:07:27) 요청은 도달했는데 seeked 가 오지 않았다. 즉 currentTime
+                    //   대입이 무시된 것이다. 그때 탐색 가능한 상태였는지 알아야 처방이 갈린다.
+                    //   [예외 방어] seekable·readyState 접근은 미디어 상태에 따라 예외를 던질 수
+                    //   있으므로 통째로 감싼다. 실패해도 아래 대입과 로그는 그대로 진행된다.
+                    let _skN = null, _skEnd = null, _canSeek = null, _rsB = null, _netS = null;
+                    try {
+                        _rsB = this.audio.readyState;
+                        _netS = this.audio.networkState;
+                        const _sk = this.audio.seekable;
+                        _skN = (_sk && _sk.length) ? _sk.length : 0;
+                        if (_skN) {
+                            _skEnd = Math.round(_sk.end(_skN - 1) * 100) / 100;
+                            _canSeek = false;
+                            for (let i = 0; i < _skN; i++) {
+                                if (details.seekTime >= _sk.start(i) - 0.01 && details.seekTime <= _sk.end(i) + 0.01) {
+                                    _canSeek = true; break;
+                                }
+                            }
+                        } else {
+                            _canSeek = false;
+                        }
+                    } catch (e) { _skN = 'err'; }
+                    this._psSuppressUntil = Date.now() + 1500;
+                    this.audio.currentTime = details.seekTime;
+                    try {
+                        if (this.audio.duration && isFinite(this.audio.duration)) {
+                            navigator.mediaSession.setPositionState({
+                                duration: this.audio.duration,
+                                playbackRate: this.audio.playbackRate || 1,
+                                position: Math.min(details.seekTime, this.audio.duration)
+                            });
+                            this._psSentAt = Date.now();   // ★ (2026-09-23) 건강 상태용 — 실제로 보낸 시각
+                        }
+                    } catch (e) {}
+                    this._msLog('seekto', {
+                        to: Math.round(details.seekTime * 100) / 100,
+                        from: Math.round(_before * 100) / 100,
+                        dur: (this.audio.duration && isFinite(this.audio.duration))
+                             ? Math.round(this.audio.duration * 100) / 100 : null,
+                        fast: !!details.fastSeek,
+                        vis: (typeof document !== 'undefined') ? document.visibilityState : null,
+                        // ★ (2026-09-19) 진단용 — 대입 직전 상태와 직후 결과
+                        seekableN: _skN,      // seekable 구간 개수 (0 이면 탐색 불가)
+                        seekEnd: _skEnd,      // seekable 마지막 구간의 끝(초)
+                        canSeek: _canSeek,    // 요청 위치가 seekable 안에 들어오는가
+                        rsBefore: _rsB,       // 대입 직전 readyState
+                        netState: _netS,      // networkState
+                        after: Math.round((this.audio.currentTime || 0) * 100) / 100  // 대입 직후 위치
+                    });
+                }
+            };
+            const _msOk = [], _msFail = {};
+            Object.keys(_msHandlers).forEach((_act) => {
+                try {
+                    navigator.mediaSession.setActionHandler(_act, _msHandlers[_act]);
+                    _msOk.push(_act);
+                } catch (e) {
+                    // 지원하지 않는 액션은 여기서 끝난다 — 다른 액션에 영향을 주지 않는다.
+                    _msFail[_act] = (e && e.name) ? e.name : 'error';
+                }
+            });
+            // ★ (2026-09-18) 어떤 액션이 등록됐는지 한 번 남긴다 — init 때 1회뿐이라 부하가 없다.
+            //   다음 로그에서 "seekto 가 등록조차 안 됐는지" 가 바로 확정된다.
+            this._msLog('action_handlers', { ok: _msOk, fail: _msFail });
             // positionState 업데이트
+            // ★ (2026-09-17) 종전에는 timeupdate 마다(초당 4회쯤) 제한 없이 호출했다.
+            //   MediaSession 명세는 **위치가 불연속으로 바뀔 때**(탐색·트랙 전환·배속 변경) 부르라고 한다.
+            //   매번 호출하면 사용자가 잠금화면 스크러버를 끄는 동안에도 앱이 현재 위치를 계속
+            //   보고해 드래그가 되돌아간다(iOS 27 에서 펜닐이 겪은 '움직이다 취소' 증상).
+            //   ①평상시 1초 1회로 제한 ②탐색 직후 1.5초는 건너뜀.
+            //   잠금화면은 position·playbackRate 로 스스로 보간하므로 진행 표시는 그대로 매끄럽다.
             a.addEventListener('timeupdate', () => {
+                if (!a.duration || !isFinite(a.duration)) return;
+                const _now = Date.now();
+                if (this._psSuppressUntil && _now < this._psSuppressUntil) return;   // 탐색 직후
+                if (this._psLastAt && _now - this._psLastAt < 1000) return;          // 1초 throttle
+                this._psLastAt = _now;
+                // ★ (2026-09-19) positionState 가 얼마나 낡는지 계측 — 동작 변경 없음.
+                //   [왜] 스크러버가 안 먹을 때 ⏪⏩ 도 같이 안 먹는다(펜닐 확인) →
+                //   특정 액션이 아니라 **탐색 계열 전체**가 죽는다. MediaSession 은 위치 보고가
+                //   낡으면 iOS 가 탐색 조작을 받아주지 않는다. 백그라운드에서 timeupdate 가
+                //   드물어지면 그렇게 될 수 있다(앱을 열면 갱신이 재개돼 다시 되는 것과 맞는다).
+                //   [부하] 정상이면 1초 간격이라 아무것도 남지 않는다. 5초 넘게 벌어질 때만 남긴다.
+                if (this._psPrevAt) {
+                    const _gap = _now - this._psPrevAt;
+                    if (_gap > 5000) {
+                        this._msLog('ps_gap', {
+                            gap: _gap,
+                            at: Math.round((a.currentTime || 0) * 100) / 100,
+                            dur: Math.round(a.duration * 100) / 100
+                        });
+                    }
+                }
+                this._psPrevAt = _now;
+                try {
+                    navigator.mediaSession.setPositionState({
+                        duration: a.duration,
+                        playbackRate: a.playbackRate || 1,
+                        position: Math.min(a.currentTime, a.duration)
+                    });
+                    this._psSentAt = _now;   // ★ (2026-09-23) 건강 상태용 — 실제로 보낸 시각
+                } catch(e) {}
+            });
+            // ★ (2026-09-22) positionState 즉시 갱신 — throttle 을 건너뛴다.
+            //   [원인] timeupdate 에서만 갱신하는데 화면이 꺼지면 iOS 가 timeupdate 를 멈춰
+            //   positionState 가 낡는다(실측 09-22 08:04:04 ms_ps_gap 78,599ms). 낡으면 iOS 가
+            //   탐색 조작(스크러버·⏪⏩)을 받아주지 않는 것으로 보인다.
+            //   [처방] 타이머 대신 **확실히 발생하는 이벤트**에서 즉시 갱신한다. 특히 화면이 꺼지는
+            //   순간 가장 최신 값을 남기고 잠들게 한다. 갱신을 더 자주 할 뿐이라 부작용이 없다.
+            const _psNow = () => {
                 if (!a.duration || !isFinite(a.duration)) return;
                 try {
                     navigator.mediaSession.setPositionState({
@@ -1611,7 +2029,25 @@ class FSAudioPlayer {
                         playbackRate: a.playbackRate || 1,
                         position: Math.min(a.currentTime, a.duration)
                     });
-                } catch(e) {}
+                    const _t = Date.now();
+                    this._psLastAt = _t;
+                    this._psPrevAt = _t;
+                    this._psSentAt = _t;   // ★ (2026-09-23) 건강 상태용 — 실제로 보낸 시각
+                } catch (e) {}
+            };
+            ['playing', 'seeked', 'loadedmetadata', 'durationchange'].forEach((_ev) => {
+                a.addEventListener(_ev, _psNow);
+            });
+            this._psOnHidden = () => { if (document.hidden) _psNow(); };
+            document.addEventListener('visibilitychange', this._psOnHidden);
+
+            // ★ (2026-09-17) 탐색이 실제로 반영됐는지 기록 — '요청은 왔는데 되돌아갔다'를 구분한다.
+            //   조작할 때만 발생하므로 평소 부하가 없다.
+            a.addEventListener('seeked', () => {
+                this._msLog('seeked', {
+                    at: Math.round((a.currentTime || 0) * 100) / 100,
+                    dur: (a.duration && isFinite(a.duration)) ? Math.round(a.duration * 100) / 100 : null
+                });
             });
             
             // ★ BF Cache 복원 시 MediaMetadata 재설정 (z_music/simple_mp3_player 참조)
@@ -1648,7 +2084,16 @@ class FSAudioPlayer {
                 //   따라서 복귀(visible)를 기준으로 표시해야 그 다음 재생에서 간격+캐시버스팅이 적용된다.
                 //   잠금화면에서 곡만 자동으로 넘어가는 동안에는 페이지가 계속 hidden 이라
                 //   이 플래그가 서지 않아 **곡 전환 시 빈 썸네일이 생기지 않는다**.
-                if (!document.hidden) this._needsHardReacq = true;
+                // ★ (2026-09-23) 복귀했을 때 **우리 음악이 계속 재생 중이면** 세션을 뺏긴 적이 없으므로 예약하지 않는다.
+                //   [원인] 화면만 켰다 끄고(재생 계속) 다음 곡으로 넘어가면 강한 재획득이 실행됐고, 그 뒤
+                //   **일시정지→재생 전까지 잠금화면 탐색이 막혔다**(09-23 15:07 로그 — 직전엔 먹고, 33초 무반응, 일시정지·재생 뒤 다시 먹음.
+                //   README 에 가능성으로 적어 둔 것이 실제로 확인됨). 위 재현 절차(다른 앱이 가져감)에서는 우리 음악이 멈춰 있으므로
+                //   종전대로 예약된다. 외부에 뺏긴 정지(pause_external)의 예약(위쪽)은 그대로.
+                if (!document.hidden) {
+                    const _stillPlaying = !!(this.audio && !this.audio.paused && !this.audio.ended);
+                    if (!_stillPlaying) this._needsHardReacq = true;
+                    this._msLog('vis_hard', { scheduled: !_stillPlaying, playing: _stillPlaying });
+                }
                 // ★ (2026-08-20) 미복원 세션 즉시 복구
                 //   _reacquireMediaSession 은 metadata=null 로 놓은 뒤 다음 틱에 되돌리는데,
                 //   그 사이 화면이 잠기거나 백그라운드로 가면 타이머가 스로틀되어
@@ -1746,6 +2191,17 @@ class FSAudioPlayer {
         //   (data/debug_logs 폴더가 있을 때만) — 평소 부하 0.
         this._trkStartAt = Date.now();
         this._trkReadyLogged = false;
+        this._trkPlayingSeen = false;   // ★ (2026-09-04) 새 곡 시작 — 아래 끊김 판정 초기화
+        // ★ (2026-09-17) positionState 의 throttle·억제창을 곡 전환 시 초기화한다.
+        //   [왜] 스크러버를 끝까지 끌어 다음 곡으로 넘어가는 경우, 탐색 억제창(1.5초)이 남아 있어
+        //   **새 곡의 위치·길이가 잠금화면에 늦게 반영**된다(옛 곡 정보가 잠깐 보임).
+        //   곡이 바뀌는 것은 위치가 불연속으로 바뀌는 대표적인 경우이므로 즉시 갱신돼야 한다.
+        this._psSuppressUntil = 0;
+        this._psLastAt = 0;
+        this._psPrevAt = 0;   // ★ (2026-09-19) 곡 경계에서 ps_gap 오탐이 나지 않도록 함께 초기화
+        this._msLogAt = this._msLogAt || {};
+        delete this._msLogAt['trk_waiting'];   // 곡이 바뀌면 throttle 도 초기화(전환 직후 끊김을 놓치지 않기 위함)
+        delete this._msLogAt['trk_stalled'];
         this._msLog('trk_start', {
             idx: idx,
             shuffle: !!this.shuffle,
@@ -1756,7 +2212,19 @@ class FSAudioPlayer {
             downlink: (navigator.connection && navigator.connection.downlink) || null
         });
         this._selfPause = true;
+        // ★ (2026-09-04) 곡 전환 지연 원인 규명용 계측 — 시각을 지역 변수에 모으기만 한다.
+        //   [배경] 실측상 곡 전환마다 loadstart 까지 약 670ms 가 붙는다(125곡 중 93곡이
+        //   600~800ms 한 봉우리 = 회선 변동이 아니라 고정 지연). 다운로드 구간은 200~1300ms 로
+        //   정상 분포한다. 즉 체감 1초 중 3분의 2가 '요청 시작 전 대기'다.
+        //   [가르려는 것] src 대입 자체가 늦는가(우리 코드) vs 대입은 즉시인데 브라우저가
+        //   loadstart 를 늦게 주는가(iOS 동작). 둘은 처방이 정반대라 추측하지 않는다.
+        //   [주의] 지점마다 _msLog 를 부르면 곡당 POST 가 6건 늘고 그 요청들이 측정 대상
+        //   구간에서 연결을 다퉈 결과를 왜곡한다(_debugLog 는 이벤트당 fetch 1건, 배치 없음).
+        //   그래서 여기서는 **모으기만** 하고 전송은 아래 임계 구간이 끝난 뒤 1회만 한다.
+        const _phT0 = this._trkStartAt || Date.now();
+        const _ph = { srcBefore: Date.now() - _phT0 };
         this.audio.src = track.url;
+        _ph.srcAfter = Date.now() - _phT0;
         // 재생 중이면 마퀴, 아니면 일반 텍스트
         if (!this.audio.paused || autoplay) {
             this._setMarqueeTitle(track.name);
@@ -1771,13 +2239,16 @@ class FSAudioPlayer {
         this.$.durTime.textContent = '0:00';
         // 트랙 메타 정보 업데이트 (서버 캐시가 있으면 즉시, 없으면 loadedmetadata 대기)
         this._updateTrackMeta();
+        _ph.afterMeta = Date.now() - _phT0;
         // 트랙 커버 업데이트 (ID3 우선, 폴더 이미지 fallback)
         this._updateTrackCover(track);
+        _ph.afterCover = Date.now() - _phT0;
         // Update playlist active (virtual scroll)
         this._vsUpdateActive();
         this._vsRender();
         // Scroll active into view
         this._vsScrollToIndex(idx);
+        _ph.afterRender = Date.now() - _phT0;
         // ★ Media Session은 재생을 시작하기 '전에' 설정한다.
         //   브라우저는 재생이 시작되는 순간 미디어 세션을 활성화하는데, 그 시점에 metadata가
         //   비어 있거나(첫 재생) 이전 트랙 것이면 잠금화면·알림 카드에 우리 정보가 실리지 못한다.
@@ -1786,12 +2257,20 @@ class FSAudioPlayer {
         //   artwork는 이 시점에 이전 트랙 것이 남을 수 있으나,
         //   _updateTrackCover의 비동기 콜백에서 다시 호출되어 확정됨 (iOS Safari 대응)
         this._updateMediaSession(track);
+        _ph.beforePlay = Date.now() - _phT0;
         if (autoplay) {
             this.audio.play().catch(() => {});
         }
         if (this.onTrackChange) this.onTrackChange(idx);
         // 가사 로드 (LRC > USLT > TXT) — 비동기, 실패해도 무시
         this._loadLyrics(track);
+        // ★ (2026-09-04) 위에서 모은 구간별 시각을 **여기서 한 번만** 보낸다.
+        //   임계 구간(트랙 시작 ~ 오디오 요청 시작)이 모두 끝난 뒤이므로 계측이
+        //   그 구간의 연결을 다투지 않는다. 추가되는 요청은 곡당 1건뿐이다.
+        //   [판정] srcAfter 가 작은데 trk_loadstart 가 크면 → 브라우저(iOS) 지연, 코드로 불가.
+        //          afterCover·afterRender 가 크면 → 우리 코드가 메인 스레드를 잡는 것, 수정 가능.
+        _ph.done = Date.now() - _phT0;
+        this._msLog('trk_phases', _ph);
     }
     
     // ── 가사 (LRC + USLT + TXT) ──
@@ -1800,7 +2279,21 @@ class FSAudioPlayer {
      * 트랙의 가사 로드 — track.lyricsApiUrl이 있으면 fetch
      * 응답 형식: { source: 'lrc'|'uslt'|'txt', synced: bool, text: string, language?: string }
      */
+    // ★ (2026-09-26) 가사 불러오기를 감싼다 — 원래 본문(_loadLyricsInner)은 그대로. 곡을 넘기는 순간 가사 아이콘이 보이고 있었으면 확인이 끝날 때까지
+    //   보이는 모습 그대로 유지(fap-lyrics-keep, 눌리지는 않음)하고, 결과가 나오면 한 번만 바뀐다 — 원래 코드는 불러오기 시작에 아이콘을 숨겨
+    //   가사가 있는 곡에서도 스피커가 잠깐 당겨졌다 돌아왔다(펜닐 요청). 곡을 빨리 넘겨 옛 요청이 늦게 끝나도 순번(_lyricsLoadToken — 첫 await 전에
+    //   올라감)이 달라 새 요청의 표시를 건드리지 않고, 새 요청이 시작될 때 표시를 그 요청 기준으로 다시 정하므로 표시가 남지 않는다.
     async _loadLyrics(track) {
+        const root = this.$ && this.$.root, btn = this.$ && this.$.btnLyrics;
+        const keep = !!(root && btn && btn.style.display !== 'none');
+        if (root) root.classList.toggle('fap-lyrics-keep', keep);
+        const p = this._loadLyricsInner(track);
+        const myTok = this._lyricsLoadToken;
+        try { await p; } finally {
+            if (root && this._lyricsLoadToken === myTok) root.classList.remove('fap-lyrics-keep');
+        }
+    }
+    async _loadLyricsInner(track) {
         if (this._destroyed) return;
         // 이전 가사 초기화
         this._lyrics = null;       // [{time: 0.0, text: '...'}, ...] (synced 시) 또는 [{text:...}] (정적)
@@ -1816,6 +2309,9 @@ class FSAudioPlayer {
         // (열린 채 두고 _renderLyrics에서 갱신 — 가사 없으면 아래 catch에서 닫음)
         
         // API URL 없으면 종료
+        // ★ (2026-09-26) 가사를 확인하지 않는 곡(가사 주소 없음 — 탐색기 원격 저장소·보관함 등)은 표시 — 가사 버튼 자리를 남기지 않게(CSS).
+        //   가사를 확인하는 곡은 버튼이 숨겨져도 자리를 남겨, 곡을 넘길 때 재생 줄이 좌우로 흔들리지 않게 한다(펜닐 제보).
+        if (this.$.root) this.$.root.classList.toggle('fap-lyrics-na', !track || !track.lyricsApiUrl);
         if (!track || !track.lyricsApiUrl) {
             if (this.$.lyricsModal && this.$.lyricsModal.style.display !== 'none') {
                 this._closeLyricsModal();
@@ -2567,8 +3063,14 @@ class FSAudioPlayer {
         const v = this._getVolume();
         this.$.volLevel.style.width = (v * 100) + '%';
         this.$.volThumb.style.left = (v * 100) + '%';
-        this.$.iconVolOn.style.display = v > 0 ? '' : 'none';
-        this.$.iconVolOff.style.display = v > 0 ? 'none' : '';
+        if (this.$.volBar) this.$.volBar.setAttribute('data-pct', Math.round(v * 100) + '%');   // ★ (2026-09-26) 볼륨 창에 현재 크기(%) 표시 — CSS .fap-vol-bar::after(펜닐 요청)
+        // ★ (2026-09-26) 음소거(iOS 버튼)도 아이콘에 반영 — 그 밖의 기기는 muted 가 늘 false 라 종전과 같다.
+        // ★ (2026-09-27) iOS 는 음소거 여부로만 — 볼륨 값은 iOS 에서 소리에 영향이 없는데(읽기 전용), 저장된 값(fap-volume)이 0 이면
+        //   음소거를 풀어도 '볼륨 > 0' 이 늘 거짓이라 아이콘이 계속 음소거 모양이었다(펜닐 제보 — 아이폰, PC 는 정상). 0 은 예전 코드가
+        //   iOS 에서도 음소거를 볼륨 0 으로 저장하던 때 남은 값으로 보인다. 그 밖의 기기는 종전 그대로(볼륨이 실제 소리와 같이 움직임).
+        const _on = this._isIOS ? !this.audio.muted : (v > 0 && !this.audio.muted);
+        this.$.iconVolOn.style.display = _on ? '' : 'none';
+        this.$.iconVolOff.style.display = _on ? 'none' : '';
     }
     
     // ★ 볼륨 변경 시 화면에 잠깐 표시되는 토스트 (Spotify/YouTube Music 데스크톱 스타일)
@@ -4207,6 +4709,65 @@ class FSAudioPlayer {
         if (item) item.classList.add('fap-pl-search-hit');
     }
 
+    // ★ (2026-09-23) 재생목록 썸네일 불러오기 순서 조절 — **곡이 먼저**(펜닐: 5Mbps 에서 랜덤 재생 시 곡 시작 3~6초).
+    //   [원인] 곡이 바뀌면 재생목록이 현재 곡 위치로 스크롤되며 새로 보이는 줄의 커버를 한꺼번에 받았다(곡당 7~33장).
+    //   잠금화면처럼 **아무도 목록을 안 볼 때도** 받았고, 서버는 목록용에도 원본 크기 커버를 보낸다 →
+    //   지금 들을 곡 파일과 대역폭을 나눠 썼다(로그: 오전 곡 정보 0.3초 / 오후 3.6초, 커버 요청 전환당 0건 / 7건).
+    //   [처리] 메모리 캐시에 있으면 즉시(종전과 같음). 없으면 대기열에 넣고
+    //     ① 화면이 꺼져 있으면 받지 않는다 — 화면이 켜지면 그때 받는다
+    //     ② 현재 곡을 불러오는 중이면(재생 요청 후 재생 가능 전) 기다린다 — 최대 4초, 무한정 기다리지 않음
+    //     ③ 동시에 3장까지만, 이미 목록에서 빠진 줄은 건너뛴다
+    //   현재 곡 커버(플레이어·잠금화면)는 이 대기열을 거치지 않는다 — 종전 그대로 즉시.
+    _plCoverLoad(imgEl, origUrl) {
+        if (!imgEl || !origUrl) return;
+        if (this._coverBlobCache.has(origUrl)) { imgEl.src = this._coverBlobCache.get(origUrl); return; }
+        if (!this._plCoverQ) {
+            this._plCoverQ = [];
+            this._plCoverActive = 0;
+            this._plCoverWaitFrom = 0;
+            this._plCoverVis = () => { if (!document.hidden) this._plCoverPump(); };
+            document.addEventListener('visibilitychange', this._plCoverVis);
+        }
+        // 화면이 꺼진 채 곡을 여러 번 넘기면 빠진 줄이 쌓이므로 가끔 정리한다(떨어진 요소를 붙잡아 두지 않게)
+        if (this._plCoverQ.length > 60) this._plCoverQ = this._plCoverQ.filter((j) => j.imgEl.isConnected);
+        this._plCoverQ.push({ imgEl, origUrl });
+        // ★ (2026-09-26) 바로 돌리지 않고 지금 그리는 목록이 끝난 직후(마이크로태스크)에 한 번 돌린다.
+        //   [결함 — 09-23 제가 만든 것] _vsRender 는 줄(li)을 DocumentFragment 에 만들고 **반복이 끝난 뒤** 목록에 붙이는데, 이 함수가
+        //   그 전에 불려 곧바로 _plCoverPump 가 돌면 이미지가 아직 문서에 붙지 않아(isConnected=false) '목록에서 빠진 줄'로 모두
+        //   버려졌다 → 캐시에 없는 목록 썸네일이 전혀 나오지 않았다(펜닐 제보). 빠진 줄 건너뛰기는 스크롤로 실제 빠진 줄용이라 그대로.
+        if (!this._plCoverKick) {
+            this._plCoverKick = true;
+            Promise.resolve().then(() => { this._plCoverKick = false; this._plCoverPump(); });
+        }
+    }
+
+    _plCoverPump() {
+        if (this._destroyed || !this._plCoverQ) return;
+        if (document.hidden) return;                       // ① 보는 사람이 없다 — 화면이 켜지면 visibilitychange 로 다시 온다
+        const a = this.audio;
+        const loading = !!(a && !a.paused && a.readyState < 3);
+        if (loading) {                                     // ② 곡이 먼저
+            if (!this._plCoverWaitFrom) this._plCoverWaitFrom = Date.now();
+            if (Date.now() - this._plCoverWaitFrom < 4000) {
+                clearTimeout(this._plCoverWait);
+                this._plCoverWait = setTimeout(() => this._plCoverPump(), 300);
+                return;
+            }
+        } else {
+            this._plCoverWaitFrom = 0;
+        }
+        while (this._plCoverActive < 3 && this._plCoverQ.length) {   // ③ 동시에 3장까지
+            const job = this._plCoverQ.shift();
+            if (!job.imgEl.isConnected) continue;
+            this._plCoverActive++;
+            const done = () => { this._plCoverActive--; this._plCoverPump(); };
+            this._getCachedCoverUrl(job.origUrl).then((cachedUrl) => {
+                if (!this._destroyed && job.imgEl.isConnected) job.imgEl.src = cachedUrl || job.origUrl;
+                done();
+            }, done);
+        }
+    }
+
     _vsRender() {
         const list = this.$.plList;
         if (!list || !this.playlist.length) return;
@@ -4315,13 +4876,8 @@ class FSAudioPlayer {
             // ★ 메모리 캐시에서 가져와 비동기로 src 세팅
             //   캐시 hit → 즉시 (네트워크 X) / 캐시 miss → 한 번 fetch 후 캐시 저장
             if (asyncCoverUrl) {
-                const imgEl = li.querySelector('.fap-pl-cover img');
-                const origUrl = asyncCoverUrl;
-                this._getCachedCoverUrl(origUrl).then(cachedUrl => {
-                    // li가 이미 DOM에서 제거됐으면 무시 (가상 스크롤에서 빠르게 스크롤 시)
-                    if (this._destroyed || !imgEl || !imgEl.isConnected) return;
-                    imgEl.src = cachedUrl || origUrl;
-                });
+                // ★ (2026-09-23) 곧바로 받지 않고 순서 조절 대기열로(_plCoverLoad) — 곡이 먼저, 화면 꺼짐이면 나중에
+                this._plCoverLoad(li.querySelector('.fap-pl-cover img'), asyncCoverUrl);
             }
             // 재생 중인 곡 마퀴
             if (i === this.currentIndex && !this.audio.paused) {
@@ -4380,6 +4936,25 @@ class FSAudioPlayer {
     //   기록 조건은 기존 방식 그대로 — data/debug_logs 폴더가 있을 때만 서버에 남는다.
     //   (폴더가 없으면 App._debugLog가 즉시 종료되어 평소 부하 0)
     //   throttleMs를 주면 같은 이벤트가 그 간격 안에서 반복 기록되지 않는다.
+    // ★ (2026-09-23) 미디어 세션 건강 상태 — 간헐적 증상을 로그에 정확히 남기기 위함.
+    //   증상이 나면 iOS 가 탐색 요청을 아예 보내지 않아 우리 쪽엔 아무 이벤트도 오지 않는다.
+    //   대신 펜닐이 복구하려고 누르는 '화면 꺼짐 중 일시정지 → 재생'에 이 값을 붙이면,
+    //   증상 당시 무엇이 비어 있었는지(위치·강한 재획득·탐색 요청) 정확히 잡힌다.
+    //   값이 null 이면 앱을 연 뒤 그 일이 한 번도 없었다는 뜻이다.
+    _msHealth() {
+        const _now = Date.now();
+        const _ago = (t) => (t ? _now - t : null);
+        return {
+            // _psLastAt 은 throttle 용이라 곡 전환 때 0 으로 초기화되고 탐색 시엔 갱신되지 않는다.
+            // 그대로 쓰면 곡 전환 직후 '한 번도 안 보냄'으로 오해되므로, 실제로 보낸 시각만
+            // 기록하는 전용 값(_psSentAt, 초기화하지 않음)을 쓴다.
+            sincePs:   _ago(this._psSentAt),          // 마지막 위치 보고 뒤 경과(ms)
+            sinceHard: _ago(this._lastHardReacqAt),   // 마지막 강한 재획득 뒤 경과(ms)
+            sinceSeek: _ago(this._lastSeektoAt),      // 마지막 탐색 요청 수신 뒤 경과(ms)
+            lastPsOk:  (typeof this._lastRestorePs === 'boolean') ? this._lastRestorePs : null
+        };
+    }
+
     _msLog(event, extra, throttleMs) {
         try {
             if (typeof App === 'undefined' || !App._debugLog) return;
@@ -4474,6 +5049,7 @@ class FSAudioPlayer {
             const _hard = !!this._needsHardReacq;
             this._needsHardReacq = false;
             if (_hard) {
+                this._lastHardReacqAt = Date.now();   // ★ (2026-09-23) 건강 상태 계측용
                 // 1) 세션 놓기 (강한 재획득에서만)
                 ms.metadata = null;
                 ms.playbackState = 'none';
@@ -4521,7 +5097,33 @@ class FSAudioPlayer {
                 try {
                     ms.playbackState = (this.audio && !this.audio.paused) ? 'playing' : 'paused';
                 } catch(e) {}
-                this._msLog('reacquire_done', { reason: reason || '', via: via });
+                // ★ (2026-09-23) 위치(positionState)도 함께 되살린다 — 잠금화면 탐색이 막히던 근본 원인.
+                //   [원인] 강한 재획득은 metadata=null · playbackState='none' 으로 세션을 비우는데,
+                //   이때 iOS 가 위치 정보까지 지운다. 여기서 메타데이터와 재생 상태는 복원했지만
+                //   **위치는 복원하지 않았고**(_updateMediaSession 도 위치를 보고하지 않는다),
+                //   화면이 꺼져 있으면 timeupdate 도 오지 않아 위치가 영영 비어 있었다.
+                //   위치가 없는 세션이면 iOS 가 스크러버·⏪10·⏩10 을 모두 막는다.
+                //   (playing 에서 위치를 보고하는 _psNow 는 세션을 비운 바로 그 순간에 실행돼 소용이 없었다.)
+                //   [증거] 09-23 로그 — 강한 재획득 3건이 전부 화면 꺼짐 중 곡 전환이었고,
+                //   일시정지→재생(약한 재획득 + 위치 보고)으로 복구되던 펜닐 관찰과 일치한다.
+                let _psPushed = false;
+                try {
+                    const _au = this.audio;
+                    if (_au && _au.duration && isFinite(_au.duration)) {
+                        ms.setPositionState({
+                            duration: _au.duration,
+                            playbackRate: _au.playbackRate || 1,
+                            position: Math.min(_au.currentTime, _au.duration)
+                        });
+                        const _t = Date.now();
+                        this._psLastAt = _t;   // throttle 기준
+                        this._psPrevAt = _t;   // 노후 계측 기준
+                        this._psSentAt = _t;   // ★ (2026-09-23) 건강 상태용 — 실제로 보낸 시각
+                        _psPushed = true;
+                    }
+                } catch(e) {}
+                this._lastRestorePs = _psPushed;   // ★ (2026-09-23) 건강 상태 계측용
+                this._msLog('reacquire_done', { reason: reason || '', via: via, psPushed: _psPushed });
             };
             this._reacqRestore = restore;   // 복귀 시 재시도용
             // ★ (2026-08-20) 복원을 **다음 틱이 아니라 실제 시간차를 두고** 한다.
@@ -5023,8 +5625,13 @@ class FSAudioPlayer {
 
     // ── Destroy ──
     destroy() {
+        try { if (this._fapRO) { this._fapRO.disconnect(); this._fapRO = null; } if (this._fapRaf) { cancelAnimationFrame(this._fapRaf); this._fapRaf = 0; } } catch (e) {}   // ★ (2026-09-26) 재생 줄 폭 관찰 해제
         if (this._destroyed) return;
         this._destroyed = true;
+        // ★ (2026-09-23) 재생목록 썸네일 대기열 정리(이벤트 해제·타이머 중지·떨어진 요소 참조 해제)
+        clearTimeout(this._plCoverWait);
+        if (this._plCoverVis) { document.removeEventListener('visibilitychange', this._plCoverVis); this._plCoverVis = null; }
+        this._plCoverQ = null;
         this._selfPause = true;
         this.audio.pause();
         // 비주얼라이저 정리
@@ -5141,6 +5748,12 @@ class FSAudioPlayer {
         if (this._mediaSessionVisHandler) {
             document.removeEventListener('visibilitychange', this._mediaSessionVisHandler);
             this._mediaSessionVisHandler = null;
+        }
+        // ★ (2026-09-22) positionState 즉시 갱신용 리스너 해제 — document 에 붙이므로
+        //   플레이어를 닫았다 여는 매 회 쌓이지 않도록 반드시 떼어낸다.
+        if (this._psOnHidden) {
+            document.removeEventListener('visibilitychange', this._psOnHidden);
+            this._psOnHidden = null;
         }
         // ★ v5.8.1j: artwork maintenance 타이머 정리 (메모리 누수 방지)
         if (this._artworkMaintenanceTimer) {
@@ -5290,22 +5903,55 @@ const App = {
         //   첫 호출에서만 1회 fetch 발생, 그 후엔 자동 비활성화
         //   펜닐님이 폴더 다시 만들면 페이지 새로고침 시 재활성화됨
         this._debugLogDisabled = false;
+        // ★ (2026-09-23) 진단 로그를 **모아서** 보낸다 — 2초마다 또는 25건이 차면 한 번에(서버는 묶음·한 건 둘 다 받음).
+        //   [원인] 로그 1건 = 요청 1개라, 곡을 넘길 때마다 10~15개가 한꺼번에 나갔다. 서버의 공통 요청 제한(IP당 분당 120)에
+        //   걸려 오늘 진단 로그 **2,248건이 429 로 버려졌고**, 같은 제한을 쓰는 실제 기능(공유 업로드 알림 확인)까지 9번 거절됐다.
+        //   [시각] 각 로그에 **휴대폰에서 기록한 시각(t)** 을 붙인다 — 서버는 묶음이면 이 시각을 ts·ts_ms 로 쓰고 받은 시각은 rx_ms 로 따로 남긴다.
+        //   (종전엔 ts·ts_ms 가 '서버가 받은 시각'이라 로그 요청의 망 지연이 섞여 있었다 — 이제 더 정확해진다)
+        //   [빠짐 방지] 화면이 꺼지거나 페이지를 떠날 때 남은 로그를 곧바로 보낸다(sendBeacon).
+        this._debugLogQ = [];
+        this._debugLogTimer = null;
         this._debugLog = function(event, detail) {
             if (this._debugLogDisabled) return;
             try {
-                const payload = JSON.stringify({ event: event, detail: detail || null });
-                fetch('api.php?action=debug_log', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: payload,
-                    keepalive: true,
-                }).then(r => r.json()).then(j => {
-                    if (j && j.disabled) {
-                        this._debugLogDisabled = true;
-                    }
-                }).catch(() => {});
+                this._debugLogQ.push({ event: event, detail: detail || null, t: Date.now() });
+                if (this._debugLogQ.length >= 25) {
+                    this._debugLogFlush(false);
+                } else if (!this._debugLogTimer) {
+                    this._debugLogTimer = setTimeout(() => this._debugLogFlush(false), 2000);
+                }
             } catch(e) {}
         };
+        this._debugLogFlush = function(useBeacon) {
+            try {
+                clearTimeout(this._debugLogTimer);
+                this._debugLogTimer = null;
+                if (this._debugLogDisabled || !this._debugLogQ.length) { this._debugLogQ = []; return; }
+                const batch = this._debugLogQ.splice(0, 50);   // 서버 한도(50건)에 맞춰 나눈다
+                const payload = JSON.stringify({ batch: batch });
+                if (useBeacon && navigator.sendBeacon) {
+                    navigator.sendBeacon('api.php?action=debug_log', new Blob([payload], { type: 'application/json' }));
+                } else {
+                    fetch('api.php?action=debug_log', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: payload,
+                        keepalive: true,
+                    }).then(r => r.json()).then(j => {
+                        if (j && j.disabled) {
+                            this._debugLogDisabled = true;
+                            this._debugLogQ = [];
+                        }
+                    }).catch(() => {});
+                }
+                if (this._debugLogQ.length) this._debugLogFlush(useBeacon);   // 50건 넘게 쌓였으면 이어서
+            } catch(e) {}
+        };
+        if (!this._debugLogHooked) {
+            this._debugLogHooked = true;
+            document.addEventListener('visibilitychange', () => { if (document.hidden) this._debugLogFlush(true); });
+            window.addEventListener('pagehide', () => this._debugLogFlush(true));
+        }
         // init() 시작 시점 로그
         this._debugLog('init_start', {
             url: location.pathname,
@@ -22485,6 +23131,42 @@ const App = {
         this._reloadFilesKeepScroll();
     },
     
+    // ★ (2026-09-27) 공유 목록(내 공유 링크·공유 관리)에서 파일 이름을 누르면 탐색기에서 그 위치로 이동(펜닐 요청).
+    //   파일은 들어 있는 폴더를 열어 그 파일을 선택 표시, 폴더는 그 폴더를 연다. 검색 결과에서 쓰는 navigateToSearchResult 를 그대로 재사용 —
+    //   selectStorage 는 끝에서 최상위 폴더를 따로 불러와(loadFiles) 이어서 navigate 하면 불러오기가 두 번 겹치므로 쓰지 않는다.
+    //   관리자는 다른 사용자의 공유도 보므로 내 저장소 목록(this.storages)에 없는 저장소면 이동하지 않고 안내한다.
+    //   경로는 HTML 속성에 넣지 않고 공유 번호로 목록(_sharesData)에서 찾는다(경로의 따옴표 등 특수문자에 안전).
+    _gotoShareLocation(id) {
+        const s = (this._sharesData || []).find(x => String(x.id) === String(id));
+        if (!s) return;
+        const st = (this.storages || []).find(x => x.id == s.storage_id);
+        if (!st) {
+            this.toast(t('share_goto_no_access', '이 공유의 저장소에 접근할 수 없어 위치를 열 수 없습니다'), 'warning');
+            return;
+        }
+        this.hideModal('modal-shares-list');
+        // ★ (2026-09-27) 재검토 — 공유 창은 어느 화면에서든 열리므로 이동 전에 기존 코드와 같은 준비를 한다(navigateToSearchResult 는 검색 도중에만
+        //   불려 이런 처리가 없다). ①게시판 화면이면 나가기(뒤로 가기 처리 6179행과 같게 exitBoardView(false) — 파일을 다시 불러오지 않음)
+        //   ②보관함 화면이면 해제(navigate()·_navGoTo 와 같은 3줄) — 안 하면 loadFiles 가 보관함 불러오기로 돌려(11273행) 공유 위치로 가지 않았다
+        //   ③저장소가 다르면 사이드바 표시(#storage-list a — 실제 사이드바 요소)와 저장소별 보기 설정 복원(_navGoTo 와 같게).
+        if (this.boardInlineMode) this.exitBoardView(false);
+        if (this.vault && this.vault.isVaultView) {
+            this.vault.isVaultView = false;
+            this.vault.currentVaultPath = null;
+            const vt = document.getElementById('vault-toolbar');
+            if (vt) vt.remove();
+        }
+        if (s.storage_id != this.currentStorage) {
+            this.currentStorage = s.storage_id;
+            $('#storage-list a').removeClass('active');
+            $(`#storage-list a[data-id="${s.storage_id}"]`).addClass('active');
+            this._restoreStorageSettings(s.storage_id);
+        }
+        const filePath = String(s.file_path || '');
+        const isDir = !!(s.is_dir || filePath.endsWith('/'));
+        this.navigateToSearchResult({ storage_id: s.storage_id, path: filePath.replace(/\/+$/, ''), is_dir: isDir });
+    },
+
     _renderShares() {
         const filter = $('#shares-filter').val() || 'all';
         const typeFilter = $('#shares-type-filter').val() || 'all';
@@ -22573,7 +23255,7 @@ const App = {
                         <input type="checkbox" class="share-check" data-id="${s.id}" onclick="event.stopPropagation();App._updateSharesDeleteBtn();">
                         <span class="share-file-icon">${shareIcon}</span>
                         <div class="share-file-info">
-                            <div class="share-file-name" title="${this.escapeHtml(s.file_path)}">${this.escapeHtml(fileName)}</div>
+                            <div class="share-file-name share-file-name-link" role="button" tabindex="0" title="${this.escapeHtml(s.file_path)}" onclick="App._gotoShareLocation(${s.id})" onkeydown="if(event.key==='Enter'){event.preventDefault();App._gotoShareLocation(${s.id});}">${this.escapeHtml(fileName)}</div>
                             <div class="share-file-path">${this.escapeHtml(s.file_path)}</div>
                         </div>
                         <span class="share-link-icon" title="${t('shared','공유됨')}">🔗</span>
@@ -35322,6 +36004,15 @@ const App = {
     },
     
     _showPreviewImpl(item) {
+        // ★ (2026-09-30) 크기 보충 — 두 번 탭·더블클릭·Enter 로 열 때 항목을 { path, name, isDir } 로 새로 만들어 size 가 빠졌다
+        //   (펜닐 로그 preview_defer itemSize: undefined). 현재 목록(this.files — 서버가 size 를 정수 바이트로 줌)에서 같은 경로를 찾아 복사본에
+        //   채운다(넘겨받은 객체는 안 바꿈, 크기가 이미 있는 항목은 그대로). 휴대폰 500MB 판단(원본 미루기·파일 정보 실패 시 대비 경로)이 크기를 쓴다.
+        //   목록에 없는 파일(다른 폴더의 검색·최근 결과)과 보관함·압축 미리보기(_vaultBlobUrl)는 종전 그대로.
+        if (item && item.size === undefined && !item.isDir && !item.is_dir && !item._vaultBlobUrl && item.path) {
+            const _lf = (this.files || []).find(f => f && f.path === item.path && !f.is_dir);
+            if (_lf && _lf.size !== undefined) item = Object.assign({}, item, { size: _lf.size });
+        }
+        this._directActive = false;   // ★ (2026-09-30) 원본 스트리밍 표시는 새 미리보기마다 초기화
         // 이전 미디어 체크 플래그 초기화
         this._checkMediaInfo = false;
         // ★ 현재 미리보기 item 저장 (대용량 동영상 '네이티브로 전환' 버튼이 재생 재시작에 사용)
@@ -35715,7 +36406,10 @@ const App = {
                         <input type="text" class="fs-vp-search" id="fs-vp-search" placeholder="${t('search', '검색...')}" />
                         <div class="fs-vp-body" id="fs-vp-body">${itemsHtml}</div>
                     </aside>`;
-                    toggleBtnHtml = `<button type="button" class="fs-vp-toggle" id="fs-vp-toggle" title="${t('playlist_toggle', '목록 열기/닫기')}">📋 ${t('playlist', '목록')}</button>`;
+                    // ★ (2026-09-23) '📋 목록' → '☰ 3 / 12' (현재 / 전체) — 펜닐 지시. 다음 영상으로 넘어가면 미리보기를
+                    //   다시 그리므로 숫자도 매번 새로 들어간다. 제목·읽기 도우미용 설명은 그대로 둔다.
+                    const _vpCur = folderVideos.findIndex(f => f.path === item.path) + 1;
+                    toggleBtnHtml = `<button type="button" class="fs-vp-toggle" id="fs-vp-toggle" title="${t('playlist_toggle', '목록 열기/닫기')}" aria-label="${t('playlist_toggle', '목록 열기/닫기')} (${_vpCur} / ${folderVideos.length})"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg><span>${_vpCur > 0 ? _vpCur : '-'} / ${folderVideos.length}</span></button>`;
                 }
 
                 // ★ flex 레이아웃: 영상 + 패널을 fs-vp-flex로 감싸기 (패널 열림 시만 옆에 표시)
@@ -35728,12 +36422,27 @@ const App = {
                 const _initialNotReady = (needsTranscode || (!needsTranscode && !item._vaultBlobUrl)) ? ' video-not-ready' : '';
                 const _initialControlsAttr = _initialNotReady ? '' : 'controls ';
                 
+                // ★ (2026-09-30) 휴대폰에서 500MB 넘는 mp4 는 어차피 트랜스코딩이므로 원본 주소를 처음에 넣지 않는다(파일 정보 뒤 일반재생으로 결정되면 그때 넣음).
+                //   종전엔 열자마자 원본(action=download)을 받기 시작해, 5Mbps 모바일 회선·HTTP/2 한 연결에서 그 큰 데이터가 앞에 쌓여 작은 요청(변환 정보 등)의
+                //   응답이 3~5초 뒤로 밀렸다 — 변환 정보 5초 시간 초과·트랜스코딩 시작 지연(펜닐 로그 net_sample: 큰 전송이 있을 때만 서버 3~5초, 없으면 93ms).
+                //   조건은 파일 정보 뒤 판단(모바일·500MB 초과·일반재생 강제 아님)과 같게 — 모바일 판정은 파일 정보 실패 경로의 좁은 판정(iPadOS 데스크톱 UA 제외)을
+                //   써서 성공·실패 어느 경로든 트랜스코딩으로 정해지게 한다. PC·500MB 이하·'일반재생' 선택·보관함은 종전 그대로.
+                // ★ (2026-09-30) 크기를 모를 때(항목에 size 가 없거나 0 — 최근 파일·검색 등 따로 만든 항목, 색인에 크기 없음)도 미룬다. 종전엔
+                //   '500MB 초과'만 봐서 크기를 모르면 원본을 받았다(펜닐 로그 15:01 — 새 코드인데 E09·E11 모두 원본 다운로드 시작, 실제
+                //   _showPreviewImpl 에 크기 있는 항목을 넣으면 미뤄짐을 확인). 결정은 파일 정보(서버가 실제 크기를 읽음)로 하므로 트랜스코딩이면
+                //   원본을 안 받고, 일반재생이면 복원(세 경로)이 넣는다. 크기를 알고 500MB 이하면 종전처럼 바로 받음. 파일 정보 전엔 원래 재생 불가(video-not-ready).
+                const _itemSz = Number(item.size) || 0;
+                // ★ (2026-09-30) 일반재생 빠른 시작을 합치면서 mp4 는 기기 상관없이 원본을 미룬다 — H.264·음성 1개면 원본 파일을 받지 않고 조각으로
+                //   재생하므로 미리 받으면 낭비, 그 밖(HEVC 등)은 파일 정보 뒤 복원(세 경로). 파일 정보 전엔 원래 재생 불가(video-not-ready)라 늦어지지 않음.
+                const _deferNativeSrc = !needsTranscode && !item._vaultBlobUrl && ext === 'mp4';
+                // ★ (2026-09-30) 진단 기록(동작 변경 없음) — 원본을 미뤘는지와 근거(넘어온 크기)
+                try { window._diagLog && window._diagLog('preview_defer', { defer: _deferNativeSrc, itemSize: (item.size === undefined ? 'undefined' : item.size), ext: ext, force: !!this._forceNativePlayback, mobile: /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && ('ontouchend' in document), needsTranscode: needsTranscode }); } catch (eD) {}
                 const videoInnerHtml = `<div class="video-player-wrap${_initialNotReady}" style="max-width:100%;max-height:100%;">
                     ${streamBadge}
                     ${audioSelectHtml}
                     ${qualitySelectHtml}
                     ${toggleBtnHtml}
-                    <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-width:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''}>${needsTranscode ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
+                    <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-width:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''} ${_deferNativeSrc ? 'data-deferred-src="' + url + '"' : ''}>${(needsTranscode || _deferNativeSrc) ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
                     <div class="video-play-overlay" id="video-play-overlay"><svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></div>
                     <button type="button" class="video-play-overlay video-seek-btn video-seek-btn-back" aria-label="${t('seek_back_5', '5초 뒤로')}" title="${t('seek_back_5', '5초 뒤로')}"><svg viewBox="0 0 24 24" width="26" height="26" fill="white" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif">5</text></svg></button>
                     <button type="button" class="video-play-overlay video-seek-btn video-seek-btn-fwd" aria-label="${t('seek_fwd_5', '5초 앞으로')}" title="${t('seek_fwd_5', '5초 앞으로')}"><svg viewBox="0 0 24 24" width="26" height="26" fill="white" aria-hidden="true"><path d="M4 13c0 4.42 3.58 8 8 8s8-3.58 8-8h-2c0 3.31-2.69 6-6 6s-6-2.69-6-6 2.69-6 6-6v4l5-5-5-5v4c-4.42 0-8 3.58-8 8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif">5</text></svg></button>
@@ -35811,7 +36520,12 @@ const App = {
                     setTimeout(() => {
                         // DOM 삽입 후 빌드 (videoInnerHtml이 #preview-content에 들어간 다음)
                         if (document.getElementById('video-quality-select')) {
-                            this._buildQualitySelectUI(_nativeTranscodeBase, /* nativeMode = */ true);
+                            // ★ (2026-09-30) 무조건 '일반재생'이 아니라 그 순간 실제 상태로 — 이 타이머보다 트랜스코딩(_startTranscode)이 먼저 화질 UI 를 만들면
+                            //   (파일 정보가 캐시에 있고 서버가 빨리 답할 때) 여기서 재생방식 셀렉트를 '일반재생'으로 덮어써, 트랜스코딩 중인데 ⚙ 에 '일반재생'이
+                            //   선택돼 보였다(펜닐 제보 — 아이폰 500MB 이상 mp4). 트랜스코딩 여부는 화질 변경 처리와 같은 기준(data-transcode-base).
+                            const _qvNow = document.querySelector('#preview-content .preview-video');
+                            const _isTrNow = !!(_qvNow && _qvNow.getAttribute('data-transcode-base'));
+                            this._buildQualitySelectUI(_nativeTranscodeBase, /* nativeMode = */ !_isTrNow);
                         }
                     }, 50);
                 }
@@ -35937,7 +36651,7 @@ const App = {
                         // Vault는 복호화된 blob만 접근 가능하므로 ID3 추출 불가
                         // ★ &v=mtime: 파일 변경 시 URL 달라져 IDB 캐시 자동 무효화 (서버는 v 파라미터 무시)
                         coverApiUrl: (isMp3 && _isLocalStorage && !f._vaultBlobUrl)
-                            ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(f.path)}&enc=b64&v=${_fMtime}`
+                            ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(f.path)}&enc=b64&v=${_fMtime}&sz=512`
                             : null,
                         // 가사 URL (오디오 + 로컬 스토리지만, LRC > USLT > TXT 우선순위)
                         // Vault는 같은 폴더 LRC/TXT 접근 가능하지만 USLT는 불가 (복호화된 blob에서 추출 불가)
@@ -35981,7 +36695,7 @@ const App = {
                         // 싱글 트랙 fallback: mp3 + 로컬 스토리지일 때만 ID3 커버 URL 제공 (base64 인코딩)
                         // ★ &v=mtime: 파일 변경 시 URL 달라져 IDB 캐시 자동 무효화
                         coverApiUrl: (_singleIsMp3 && _isLocalStorage && !item._vaultBlobUrl)
-                            ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(item.path)}&enc=b64&v=${_itemMtime}`
+                            ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(item.path)}&enc=b64&v=${_itemMtime}&sz=512`
                             : null,
                         // 가사 URL (오디오 + 로컬 스토리지만)
                         lyricsApiUrl: (_isLocalStorage && !item._vaultBlobUrl && ['mp3','m4a','flac','ogg','wav','aac','opus','ape','alac','aiff'].includes(_singleExt))
@@ -36191,6 +36905,9 @@ const App = {
                             
                             // ↑/↓: 볼륨 5% 조절
                             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                                // ★ (2026-09-26) iOS 는 볼륨 값을 바꿀 수 없어 건너뛴다 — 공유 페이지(share.php ↑↓)와 같은 규칙.
+                                //   iOS 볼륨 아이콘을 보이게 한 뒤 그대로 두면 아이패드+키보드에서 아이콘만 음소거로 바뀌고 소리는 그대로였다(재검토).
+                                if (player._isIOS) return;
                                 if (player._getVolume && player._setVolume) {
                                     const delta = e.key === 'ArrowUp' ? 0.05 : -0.05;
                                     player._setVolume(player._getVolume() + delta);
@@ -36204,6 +36921,13 @@ const App = {
                             
                             // M: 음소거 토글 (버튼 클릭 핸들러 패턴 그대로)
                             if (e.key === 'm' || e.key === 'M') {
+                                // ★ (2026-09-26) iOS: 볼륨 버튼과 같게 audio.muted 켜기/끄기(버튼 클릭 처리의 iOS 분기와 같은 동작)
+                                if (player._isIOS && player.audio) {
+                                    player.audio.muted = !player.audio.muted;
+                                    if (player._updateVolUI) player._updateVolUI();
+                                    e.preventDefault();
+                                    return;
+                                }
                                 if (player._getVolume && player._setVolume) {
                                     if (player._getVolume() > 0) {
                                         player._prevVolume = player._getVolume();
@@ -36491,6 +37215,7 @@ const App = {
                     // console.log('[PreplayDebug] media_info API call:', (window._mediaInfoTimings.apiCall - window._mediaInfoTimings.start).toFixed(0) + 'ms after DOM ready');
                 }
                 
+                const _miT0 = performance.now();   // ★ (2026-09-26) 진단 기록용(응답까지 걸린 시간)
                 this.api('media_info', { storage_id: _miStorageId, path: _miPath }, 'GET', this._mediaInfoAbort.signal).then(info => {
                     // ★ 디버그: API 응답 시각
                     if (window._mediaInfoTimings) {
@@ -36501,6 +37226,8 @@ const App = {
                     }
                     _dbg(`media_info RESPONSE: info=${JSON.stringify(info)}, currentPath=${this._mediaInfoPath}, requestPath=${_miPath}`);
                     if (!info) { _dbg('media_info ABORTED (null)'); return; }
+                    // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 서버 조사 시간(probe_ms)과 전체 걸린 시간을 비교해 느린 쪽을 가른다
+                    try { if (window._diagLog) window._diagLog('media_info_response', { probe_ms: info.probe_ms, total_ms: Math.round(performance.now() - _miT0), audio_count: info.audio_count, file_size: info.file_size, can_native: info.can_play_native }); } catch (e) {}
                     
                     // 응답 도착 시 다른 파일로 전환되었으면 무시
                     if (this._mediaInfoPath !== _miPath || this._mediaInfoStorageId !== _miStorageId) return;
@@ -36525,7 +37252,7 @@ const App = {
                         const _itemSize2 = info.file_size || item.size || 0;
                         const _MOBILE_LIMIT2 = 500 * 1024 * 1024;
                         const _shouldTranscodeF2 = !App._forceNativePlayback && _isMobileF2 && _itemSize2 > _MOBILE_LIMIT2;
-                        App._forceNativePlayback = false; App._forceTranscode = false; // 1회성 — 사용 후 리셋
+                        App._forceNativePlayback = false; App._forceTranscode = false; App._forceDirect = false; // 1회성 — 사용 후 리셋 (★ 2026-09-30 원본 스트리밍 포함)
                         
                         if (_shouldTranscodeF2) {
                             // 모바일 + 대용량: 트랜스코딩 폴백
@@ -36572,6 +37299,7 @@ const App = {
                                 if (_nw2) _nw2.classList.remove('video-not-ready');
                             }
                         }
+                        if (!_shouldTranscodeF2) App._restoreDeferredNativeSrc();   // ★ (2026-09-30) 일반재생 쪽 — 원본을 미뤄 뒀으면 지금 넣음(평소엔 무동작)
                         return;
                     }
                 const codecName = (info.video_codec || '').toUpperCase();
@@ -36586,17 +37314,42 @@ const App = {
                 const fileSize = info.file_size || 0;
                 
                 // 트랜스코딩 필요 여부: 코덱 미지원 OR (모바일 + 대용량)
-                const needsTranscodeByCodec = (info.can_play_native === false);
+                // ★ (2026-09-30) HEVC 도 브라우저가 재생할 수 있으면(아이폰·사파리, 하드웨어 지원 PC) 일반재생 빠른 시작(서버가 fMP4 조각으로 복사)으로 —
+                //   서버 media_info 는 브라우저를 모르므로 HEVC 를 항상 can_play_native=false 로 준다. 못 하면 종전처럼 트랜스코딩.
+                const _hevcFast = !item._vaultBlobUrl && (item.name || item.path || '').split('.').pop().toLowerCase() === 'mp4'
+                    && (info.video_codec || '').toLowerCase() === 'hevc' && this._hevcFastOk();
+                const needsTranscodeByCodec = (info.can_play_native === false) && !_hevcFast;
                 // ★ '네이티브로 전환' 버튼으로 강제 시 대용량 사유는 무시 (코덱 미지원은 네이티브 불가라 유지)
                 const _forceNative = !!this._forceNativePlayback;
                 this._forceNativePlayback = false; // 1회성 — 사용 후 즉시 리셋
                 const needsTranscodeBySize = !_forceNative && isMobileDevice && fileSize > MOBILE_SIZE_LIMIT;
+                // ★ (2026-09-26) 휴대폰에서 음성이 2개 이상인 파일도 처음부터 스트리밍 — 500MB 초과 규칙과 같은 자리·같은 방식
+                //   (설정에서 '일반재생'을 고르면 _forceNative 로 종전처럼 일반 재생). [원인] 다국어 mp4 는 파일 앞 목차(moov)가 음성 수만큼
+                //   커서(97분·음성 11개 ≈ 13MB, 추정) 아이폰 일반 재생이 목차를 받는 동안 반응이 없었고, 음성을 골라 스트리밍이 되면 재생됐다
+                //   (펜닐 제보·09-25 진단 기록). 스트리밍은 서버가 첫 음성을 AAC 스테레오로 보내므로 음성을 고르지 않아도 재생된다. PC 는 그대로.
+                const _audioCount = parseInt(info.audio_count, 10) || 0;
+                const needsTranscodeByAudio = !_forceNative && isMobileDevice && _audioCount >= 2;
                 // ★ 재생방식 셀렉트 '트랜스코딩' 선택 시 강제 트랜스코딩 (500MB 이하도) — 1회성
                 const _forceTrans = !!this._forceTranscode;
                 this._forceTranscode = false;
-                const shouldTranscode = needsTranscodeByCodec || needsTranscodeBySize || _forceTrans;
+                const shouldTranscode = needsTranscodeByCodec || needsTranscodeBySize || needsTranscodeByAudio || _forceTrans;
+                // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 일반 재생/스트리밍 결정과 그 근거
+                try { window._diagLog && window._diagLog('preview_decision', { shouldTranscode, byCodec: needsTranscodeByCodec, bySize: needsTranscodeBySize, byAudio: needsTranscodeByAudio, forceNative: _forceNative, forceTrans: _forceTrans, isMobileDevice, fileSize, audioCount: _audioCount, ua: navigator.userAgent.slice(0, 90), platform: navigator.platform, touchPts: navigator.maxTouchPoints, ontouchend: ('ontouchend' in document) }); } catch (x) {}
                 
                 if (!shouldTranscode) {
+                    // ★ (2026-09-30) 일반재생 빠른 시작 — H.264·음성 1개 mp4 는 원본을 다시 인코딩하지 않고 키프레임 조각으로 받아(FileManager::directStream)
+                    //   빨리 시작하고 자유롭게 탐색한다(펜닐 결정: ⚙ '원본 스트리밍'을 일반재생에 합침, PC·휴대폰 공통). 화질은 원본 그대로.
+                    //   HEVC·음성 2개 이상(아이폰 음성 전환)·보관함·HLS 를 못 쓰는 브라우저는 종전 일반재생. 빠른 시작이 실패해도 종전 일반재생으로 돌아감.
+                    const _fastExt = (item.name || item.path || '').split('.').pop().toLowerCase();
+                    const _fastHls = (window.Hls && Hls.isSupported()) || !!document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+                    const _fastOk = !item._vaultBlobUrl && _fastExt === 'mp4' && _fastHls
+                        && ((info.video_codec || '').toLowerCase() === 'h264' || _hevcFast);   // ★ (2026-09-30) HEVC·음성 여러 개도(음성은 ⚙ 에서 전환)
+                    if (_fastOk) {
+                        this._showNativeBtn = true;
+                        this._startDirectStream(App._mediaInfoStorageId, App._mediaInfoPath, info, badgeParent, fileSize);
+                        return;
+                    }
+                    App._restoreDeferredNativeSrc();   // ★ (2026-09-30) 원본을 미뤄 뒀으면 지금 넣음(평소엔 무동작)
                     // 네이티브 재생 가능
                     if (badgeParent) {
                         badgeParent.className = 'video-stream-badge native';
@@ -36607,6 +37360,8 @@ const App = {
                     const _nativeVid = document.querySelector('#preview-content .preview-video');
                     if (_nativeVid) {
                         _nativeVid._isReady = true;
+                        // ★ (2026-09-26) 일반 재생으로 결정됐으니 이제 음성 목록을 미리 받는다(열 때 media_info 와 겹치지 않게 이 시점으로 옮김)
+                        try { if (App._fsvsPrefetchAudioInfo) setTimeout(() => App._fsvsPrefetchAudioInfo(_nativeVid), 0); } catch (e) {}
                         if (_nativeVid._hadControls) {
                             try { _nativeVid.setAttribute('controls', ''); } catch(e) {}
                         }
@@ -36632,6 +37387,9 @@ const App = {
                 let transcodeReason = '';
                 if (needsTranscodeByCodec) {
                     transcodeReason = `${codecName} → ${isKo3 ? '실시간 변환 재생' : 'Transcoding'}`;
+                } else if (needsTranscodeByAudio && !needsTranscodeBySize) {
+                    // ★ (2026-09-26) 다국어 사유 — 배지 글자(기존 사유 글자와 같은 방식: 한국어/영어)
+                    transcodeReason = isKo3 ? `다국어(음성 ${_audioCount}개) → 스트리밍 재생` : `Multi-audio(${_audioCount}) → Streaming`;
                 } else {
                     const sizeMB = Math.round(fileSize / (1024 * 1024));
                     transcodeReason = isKo3 ? `대용량(${sizeMB}MB) → 스트리밍 재생` : `Large file(${sizeMB}MB) → Streaming`;
@@ -36671,6 +37429,8 @@ const App = {
                     newVid.addEventListener('play', function _newVidGuard() {
                         if (newVid._isReady === false) {
                             if (window._videoDebug) console.log('[VD PRE-PLAY GUARD] newVid blocked');
+                            // ★ (2026-09-25) 진단 기록(동작 변경 없음) — 준비 전 재생을 막는 순간을 남긴다
+                            try { if (window._diagLog) window._diagLog('newvid_guard_block', { rs: newVid.readyState, ns: newVid.networkState, t: newVid.currentTime, bufLen: newVid.buffered ? newVid.buffered.length : 0, hls: !!newVid._hlsInstance }); } catch (e) {}
                             try { newVid.pause(); } catch(e) {}
                         }
                     });
@@ -36697,7 +37457,14 @@ const App = {
                     const audioDiv = document.createElement('div');
                     audioDiv.className = 'video-audio-select';
                     audioDiv.id = 'video-audio-select';
-                    wrap.insertBefore(audioDiv, wrap.querySelector('video'));
+                    // ★ (2026-09-26) 영상 앞에 넣되 **wrap 의 직계 자식**을 기준으로 — 자막을 불러오면 _loadSubtitles 가 영상을 .video-sub-wrapper 안으로
+                    //   옮겨(41556행) 영상이 wrap 의 직계 자식이 아니게 되는데, 그때 wrap.insertBefore(x, 영상) 은 NotFoundError 를 던진다.
+                    //   [결함] 이 오류로 media_info 처리(.then)가 스트리밍 예약 전에 멈추고 .catch 의 일반 재생 복구로 빠져, 자막이 든 mp4 가 아이폰에서
+                    //   재생·가운데 버튼 모두 반응이 없었다(펜닐 제보 — hlsdiag 기록: 결정은 스트리밍인데 tc_enter 없음, 새 영상 주소 없음·isReady:true).
+                    //   자막이 없으면 기준이 영상 자체라 종전과 같은 자리, 자막이 있으면 자막 상자 앞(화면상 같은 자리).
+                    let _refV = wrap.querySelector('video');
+                    while (_refV && _refV.parentNode !== wrap) _refV = _refV.parentNode;
+                    wrap.insertBefore(audioDiv, _refV || null);
                 }
                 const tcUrl = `api.php?action=transcode&storage_id=${App._mediaInfoStorageId}&path=${encodeURIComponent(App._mediaInfoPath)}`;
                 if (window._startTranscodeTimer) clearTimeout(window._startTranscodeTimer);
@@ -36729,6 +37496,8 @@ const App = {
             }).catch(err => {
                 // ★ AbortError는 사용자가 모달 닫거나 다른 파일 전환한 정상 abort — 처리 X
                 if (err && err.name === 'AbortError') return;
+                // ★ (2026-09-26) 진단 기록 — media_info 처리 도중 오류(이번 NotFoundError 처럼)가 나면 원인을 남긴다(동작 변경 없음)
+                try { window._diagLog && window._diagLog('media_info_then_error', { name: err && err.name, msg: String(err && err.message || '').slice(0, 120), stack: String(err && err.stack || '').split('\n').slice(0, 3).join(' < ').replace(/https?:\/\/[^\s)]*\//g, '').slice(0, 200) }); } catch (x) {}
                 
                 // ★ media_info 실패 시 폴백 동작 (펜닐 v5.8.1e 결정 — iOS Safari abort race 보완)
                 //   모바일 + 500MB 이상: 트랜스코딩 폴백 (메모리/배터리 안전)
@@ -36737,7 +37506,7 @@ const App = {
                 const _itemSize = item.size || 0;
                 const _MOBILE_LIMIT = 500 * 1024 * 1024;
                 const _shouldTranscodeFb = !App._forceNativePlayback && _isMobileFb && _itemSize > _MOBILE_LIMIT;
-                App._forceNativePlayback = false; App._forceTranscode = false; // 1회성 — 사용 후 리셋
+                App._forceNativePlayback = false; App._forceTranscode = false; App._forceDirect = false; // 1회성 — 사용 후 리셋 (★ 2026-09-30 원본 스트리밍 포함)
                 
                 if (_shouldTranscodeFb) {
                     // 모바일 + 대용량: 트랜스코딩 폴백
@@ -36786,6 +37555,7 @@ const App = {
                         if (_nw) _nw.classList.remove('video-not-ready');
                     }
                 }
+                if (!_shouldTranscodeFb) App._restoreDeferredNativeSrc();   // ★ (2026-09-30) 일반재생 쪽 — 원본을 미뤄 뒀으면 지금 넣음(평소엔 무동작)
             });
             }, 50); // abort 후 50ms 지연
         }
@@ -36878,7 +37648,10 @@ const App = {
                 vid.addEventListener('loadedmetadata', () => {
                     // ★ 코덱 미지원 감지: 오디오만 재생되고 비디오 트랙 없는 경우
                     // H.265/HEVC MP4는 Chrome/Edge에서 오디오만 디코딩, videoWidth=0
-                    if (vid.videoWidth === 0 && vid.videoHeight === 0 && !vid.dataset.transcodeBase) {
+                    // ★ (2026-09-30) 원본 스트리밍(App._directActive) 중엔 건너뜀 — 아이폰(hls.js)은 loadedmetadata 때 첫 화면을 아직 안 풀어 폭·높이가
+                    //   0 이라 멀쩡한 H.264 를 '코덱 미지원'으로 보고 트랜스코딩으로 넘겼다(펜닐 로그 17:36 — ds_start 뒤 loadedmetadata 에서 전환).
+                    //   원본 스트리밍은 _startDirectStream 이 첫 화면 준비(loadeddata) 뒤 다시 확인한다. 일반재생은 종전 그대로.
+                    if (vid.videoWidth === 0 && vid.videoHeight === 0 && !vid.dataset.transcodeBase && !App._directActive) {
                         const isKo3 = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
                         const badge = wrap.querySelector('.video-stream-badge');
                         if (badge) {
@@ -37067,7 +37840,11 @@ const App = {
                 const ua = navigator.userAgent.toLowerCase();
                 const isRealMobileDevice = /android|iphone|ipad|ipod/i.test(ua) && ('ontouchend' in document);
                 
-                if (isRealMobileDevice) {
+                // ★ (2026-09-23) 새 껍데기가 켜져 있으면 휴대폰에서도 PC 처럼 이벤트를 건다.
+                //   종전엔 휴대폰이면 브라우저 기본 컨트롤이 재생을 맡아 이 버튼을 숨기고 이벤트도 걸지 않았는데,
+                //   새 껍데기는 기본 컨트롤을 대신하므로 이 버튼이 보이게 됐고 → 눌러도 반응이 없었다(펜닐 제보).
+                //   껍데기가 꺼져 있으면 종전 그대로.
+                if (isRealMobileDevice && !App._videoSkinEnabled()) {
                     playOverlay.style.display = 'none';
                 } else {
                     const iconPlay = playOverlay.querySelector('.icon-play');
@@ -37087,19 +37864,22 @@ const App = {
                         if (e.type === 'touchend') e.preventDefault();
                         // ★ 더블클릭/마우스 채터링 방어: 마지막 토글 후 300ms 내 재호출 무시
                         //   play()는 비동기라 연속 클릭 시 재생 직후 pause로 즉시 정지되는 문제 차단
+                        // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 가운데 버튼이 실제로 눌렸는지·그 순간 상태
+                        try { window._diagLog && window._diagLog('center_tap', { h: 'A', type: e.type, isReady: vid._isReady, paused: vid.paused, rs: vid.readyState, src: String(vid.currentSrc || vid.getAttribute('src') || '').slice(0, 50), notReady: !!(vid.closest('.video-player-wrap') && vid.closest('.video-player-wrap').classList.contains('video-not-ready')) }); } catch (x) {}
                         const _nowTP = Date.now();
-                        if (vid._lastToggleAt && _nowTP - vid._lastToggleAt < 300) return;
+                        if (vid._lastToggleAt && _nowTP - vid._lastToggleAt < 300) { try { window._diagLog && window._diagLog('center_tap_blocked', { h: 'A', why: 'debounce300ms' }); } catch (x) {} return; }
                         vid._lastToggleAt = _nowTP;
                         if (window._videoDebug) {
                             // console.log('[VD CLICK] togglePlay[overlay1] isReady=' + vid._isReady + ' paused=' + vid.paused + ' hasControls=' + vid.hasAttribute('controls'));
                         }
                         // ★ 버퍼 준비 안 된 상태에서 재생 시도 차단 (play Promise 지연 → 모달 닫아도 소리 나는 원인)
                         if (vid._isReady === false) {
+                            try { window._diagLog && window._diagLog('center_tap_blocked', { h: 'A', why: 'isReady=false' }); } catch (x) {}
                             if (window._videoDebug) console.log('[VD CLICK] BLOCKED by _isReady=false');
                             return;
                         }
                         if (vid.paused || vid.ended) {
-                            vid.play().catch(() => {});
+                            vid.play().catch((err) => { try { window._diagLog && window._diagLog('center_play_fail', { h: 'A', name: err && err.name, msg: String(err && err.message || '').slice(0, 80) }); } catch (x) {} });
                         } else {
                             vid.pause();
                         }
@@ -37199,7 +37979,7 @@ const App = {
                     
                     if (isIOS) {
                         // iOS: 재생 중에만 네이티브 전체화면 (동기 호출, 제스처 컨텍스트 유지)
-                        if (!vid.paused && vid.webkitEnterFullscreen) {
+                        if (vid.webkitEnterFullscreen) {   // ★ (2026-09-23) 재생 중이 아니어도 — 준비 여부는 _iosEnterNativeFs 가 처리
                             // ★ 핵심 fix: fullscreen 직전 cue가 비어있으면 재주입
                             //   iOS Safari가 hidden 모드의 cue 메모리를 회수하거나
                             //   HLS src 전환 등으로 textTrack의 cues가 비워지는 케이스 방어
@@ -37226,7 +38006,7 @@ const App = {
                                 }
                                 vid.querySelectorAll('track').forEach(t => { if (t.track) t.track.mode = 'showing'; });
                             } catch(e) {}
-                            vid.webkitEnterFullscreen();
+                            App._iosEnterNativeFs(vid);
                         }
                         // 재생 전/일시정지면 무시
                         return;
@@ -37390,7 +38170,9 @@ const App = {
     async _startTranscode(transcodeBaseUrl, storageId, path) {
         // console.log('[EncoderDebug] _startTranscode called', {storageId, path: path ? path.substring(0, 50) : '?', hasVideo: !!document.querySelector('#preview-content .preview-video')});
         const video = document.querySelector('#preview-content .preview-video');
-        if (!video) { /* console.log('[EncoderDebug] _startTranscode: no video element'); */ return; }
+        if (!video) { try { window._diagLog && window._diagLog('tc_exit', { why: 'no_video' }); } catch (x) {} return; }
+        // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 스트리밍 시작 진입
+        try { window._diagLog && window._diagLog('tc_enter', { url: String(transcodeBaseUrl || '').replace(/^.*?&path=[^&]*/, '…'), hlsStarting: !!window._hlsStarting, isReady: video._isReady, src: String(video.currentSrc || video.getAttribute('src') || '').slice(0, 40) }); } catch (x) {}
         
         // ★ 이중 호출 가드 (펜닐님 진단: PC만 두 번 호출되어 폴더 두 개 생성)
         //   같은 transcodeBaseUrl로 짧은 시간(2초) 안에 재호출되면 블록
@@ -37419,6 +38201,11 @@ const App = {
         const transcodeAbort = new AbortController();
         window._transcodeAbort = transcodeAbort;
         const aborted = () => transcodeAbort.signal.aborted;
+        // ★ (2026-09-30) 시작 즉시 ⚙ 재생방식을 '트랜스코딩'으로 맞춘다 — 종전엔 트랜스코딩 정보 응답(또는 5초 시간 초과) 뒤에야 맞춰, 느린 회선에서
+        //   트랜스코딩으로 정해진 뒤 약 5초 동안 '일반재생'이 보였다(펜닐 로그 ui_state). 뒤에서 부르는 _buildQualitySelectUI(…, false) 가 하는
+        //   같은 일을 먼저 할 뿐(_showNativeBtn 이 거짓이면 셀렉트 없음 그대로). 이중 호출 방지로 막힌 호출은 위에서 이미 빠짐.
+        this._directActive = false;   // ★ (2026-09-30) 원본 스트리밍 중 화질 변경 등으로 트랜스코딩으로 넘어가면 표시도 '트랜스코딩'
+        try { const _qdNow = document.getElementById('video-quality-select'); if (_qdNow) this._ensureQualityNativeBtn(_qdNow, /* nativeMode = */ false); } catch (eQ) {}
         
         // === 디버그 오버레이 ===
         const _dbg = (() => {
@@ -37515,6 +38302,8 @@ const App = {
                     // 모달 닫기/전환 시(transcodeAbort) info 요청도 함께 취소
                     const _onTranscodeAbort = () => infoController.abort();
                     transcodeAbort.signal.addEventListener('abort', _onTranscodeAbort);
+                    window._tcI0 = performance.now();   // ★ (2026-09-26) 진단 기록(동작 변경 없음)
+                    try { window._diagLog && window._diagLog('tc_info_request', {}); } catch (x) {}
                     let infoResp;
                     try {
                         infoResp = await fetch(`api.php?action=transcode&storage_id=${storageId}&path=${encodeURIComponent(path)}&info=1`, {
@@ -37524,12 +38313,14 @@ const App = {
                         clearTimeout(infoTimeout);
                         transcodeAbort.signal.removeEventListener('abort', _onTranscodeAbort);
                     }
-                    if (aborted()) return;
+                    try { window._diagLog && window._diagLog('tc_info_http', { status: infoResp && infoResp.status, ms: Math.round(performance.now() - (window._tcI0 || 0)), aborted: aborted() }); } catch (x) {}   // ★ (2026-09-26) 진단 기록(동작 변경 없음)
+                    if (aborted()) { try { window._diagLog && window._diagLog('tc_exit', { why: 'aborted_after_info' }); } catch (x) {} return; }
                     const infoData = await infoResp.json();
                     
                     // ★ [HLS_DIAG] info API 응답 (멀티오디오 검출 + 인코더 정보)
                     if (window._diagLog) {
                         window._diagLog('info_response', {
+                            probe_ms: infoData.probe_ms,   // ★ (2026-09-26) 진단 기록(동작 변경 없음)
                             encoder: infoData.encoder,
                             video_codec: infoData.video_codec,
                             audio_tracks_count: (infoData.audio_tracks || []).length,
@@ -37677,7 +38468,13 @@ const App = {
                         setTimeout(_repositionDur, 2500);
                     }
                 } catch (e) {
+                    try { window._diagLog && window._diagLog('tc_info_fail', { name: e && e.name, msg: String(e && e.message || '').slice(0, 80), ms: Math.round(performance.now() - (window._tcI0 || 0)) }); } catch (x) {}   // ★ (2026-09-26) 진단 기록(동작 변경 없음)
                     // console.warn('[EncoderDebug] info API error:', e.message || e);
+                    // ★ (2026-09-30) 트랜스코딩 정보 요청이 실패·시간 초과(5초)여도 화질·재생방식 UI 를 트랜스코딩 기준으로 만든다(성공 경로 아래 호출과 같음).
+                    //   종전엔 그 호출이 성공 경로에만 있어, 시간 초과면 미리보기를 열 때 50ms 타이머가 만든 UI 가 그대로 남았다 — 앞에 다른 mp4 를 봤으면
+                    //   재생방식이 '일반재생'으로 선택된 채, 아니면 재생방식이 아예 없는 채 트랜스코딩(HLS)으로 재생(펜닐 제보 — 아이폰 713MB mp4, tc_info_fail 로그).
+                    //   화질 목록은 트랜스코딩 정보와 무관한 고정 목록. 다른 영상으로 넘어가 취소된 경우는 건너뜀(성공 경로의 aborted() 확인과 같음).
+                    if (!aborted()) { try { this._buildQualitySelectUI(transcodeBaseUrl, /* nativeMode = */ false); } catch (eQ) {} }
                 }
             }
             
@@ -37701,10 +38498,11 @@ const App = {
                     }
                     
                     // HLS 세션 시작 (서버에서 ffmpeg 실행 → 즉시 세션 ID 반환)
-                    if (aborted()) return;
+                    if (aborted()) { try { window._diagLog && window._diagLog('tc_exit', { why: 'aborted_before_hls' }); } catch (x) {} return; }
                     
                     // 중복 HLS start 방지 (이미 진행 중이면 스킵)
                     if (window._hlsStarting) {
+                        try { window._diagLog && window._diagLog('tc_exit', { why: 'hlsStarting_lock' }); } catch (x) {}   // ★ (2026-09-26) 진단 기록(동작 변경 없음)
                         return;
                     }
                     window._hlsStarting = true;
@@ -38085,6 +38883,7 @@ const App = {
                                     const bufEnd = video.buffered.end(0);
                                     if (bufEnd >= 1.0) {
                                         video._isReady = true;
+                                        try { if (window._diagLog) window._diagLog('video_ready', { line: 'L38547', t: video.currentTime, bufEnd: (video.buffered && video.buffered.length) ? video.buffered.end(0) : 0 }); } catch (e) {}   // ★ (2026-09-25) 진단 기록
                                         if (window._videoDebug) console.log('[VD SET] _isReady=TRUE (buffered=' + bufEnd.toFixed(1) + 's)');
                                         if (videoWrapper) videoWrapper.classList.remove('video-not-ready');
                                         // ★ 네이티브 controls 복원 (준비 완료)
@@ -38243,6 +39042,7 @@ const App = {
                                                     });
                                                 } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                                                     video.src = swPlaylistUrl;
+                                                    App._markNativeHlsReady(video);   // ★ (2026-09-23) 아이폰 자체 HLS 는 준비 완료로 표시(가운데 재생 버튼이 막히던 문제)
                                                 }
                                             } catch(swErr) {
                                                 if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
@@ -38283,6 +39083,7 @@ const App = {
                                 video.setAttribute('webkit-playsinline', '');
                             }
                             video.src = playlistUrl;
+                            App._markNativeHlsReady(video);   // ★ (2026-09-23) 아이폰 자체 HLS 는 준비 완료로 표시(가운데 재생 버튼이 막히던 문제)
                             video._streamMethod = 'HLS';
                             if (badge) {
                                 const enc = badge.querySelector('.encoder-info');
@@ -38388,6 +39189,7 @@ const App = {
                                     
                                     // SW 재시작 — iOS 네이티브 HLS로 다시 재생
                                     video.src = swPlaylistUrl;
+                                    App._markNativeHlsReady(video);   // ★ (2026-09-23) 아이폰 자체 HLS 는 준비 완료로 표시(가운데 재생 버튼이 막히던 문제)
                                     video._streamMethod = 'HLS';
                                     if (badge) badge.innerHTML = '⚡ HLS ' + t('streaming', '스트리밍') + ' <span class="encoder-info">SW : CPU</span>';
                                     
@@ -38452,6 +39254,7 @@ const App = {
                                     return;
                                 } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                                     video.src = playlistUrl;
+                                    App._markNativeHlsReady(video);   // ★ (2026-09-23) 아이폰 자체 HLS 는 준비 완료로 표시(가운데 재생 버튼이 막히던 문제)
                                     return;
                                 }
                             }
@@ -38742,6 +39545,7 @@ const App = {
                                                         video.removeEventListener('play', preventPlay);
                                                         // ★ 준비 완료 — 재생 버튼 활성화 + 네이티브 controls 복원
                                                         video._isReady = true;
+                                                        try { if (window._diagLog) window._diagLog('video_ready', { line: 'L39208', t: video.currentTime, bufEnd: (video.buffered && video.buffered.length) ? video.buffered.end(0) : 0 }); } catch (e) {}   // ★ (2026-09-25) 진단 기록
                                                         if (videoWrapperMms) videoWrapperMms.classList.remove('video-not-ready');
                                                         if (video._hadControls) {
                                                             try { video.setAttribute('controls', ''); } catch(e) {}
@@ -38766,6 +39570,7 @@ const App = {
                                                 video.removeEventListener('play', preventPlay);
                                                 // ★ 준비 완료 — 재생 버튼 활성화 + 네이티브 controls 복원
                                                 video._isReady = true;
+                                                try { if (window._diagLog) window._diagLog('video_ready', { line: 'L39232', t: video.currentTime, bufEnd: (video.buffered && video.buffered.length) ? video.buffered.end(0) : 0 }); } catch (e) {}   // ★ (2026-09-25) 진단 기록
                                                 if (videoWrapperMms) videoWrapperMms.classList.remove('video-not-ready');
                                                 if (video._hadControls) {
                                                     try { video.setAttribute('controls', ''); } catch(e) {}
@@ -39101,6 +39906,154 @@ const App = {
      *                   - true: 'original' = 네이티브 재생 유지, 다른 값 = 트랜스코딩 전환
      *                   - false: 항상 트랜스코딩 모드 (다른 quality 세션으로 재시작)
      */
+    // ★ (2026-09-30) 일반재생 빠른 시작 중 음성 전환 — 보던 위치·재생 상태 그대로 그 음성(서버 a=번호)의 조각 목록으로 다시 붙인다.
+    _directSwitchAudio(v, i) {
+        const c = v && v._dsCtx;
+        if (!c || !this._directActive || !v.isConnected) return;
+        const t = v.currentTime || 0, play = !v.paused;
+        try { window._diagLog && window._diagLog('ds_audio', { i, t: Math.round(t * 10) / 10, play }); } catch (e) {}
+        this._startDirectStream(c.storageId, c.path, c.info, c.badgeParent, c.fileSize, { audio: i, start: t, play });
+    },
+    // ★ (2026-09-30) 이 브라우저가 HEVC 를 빠른 시작으로 재생할 수 있나 — hls.js 를 쓰면 그 미디어 소스(아이폰은 ManagedMediaSource)가 hvc1 을
+    //   지원한다고 답할 때만, hls.js 를 못 쓰면 영상 태그가 답할 때만. 서버는 HEVC 를 hvc1 조각 mp4 로 보낸다.
+    _hevcFastOk() {
+        try {
+            const T = 'video/mp4; codecs="hvc1.1.6.L93.B0"';
+            if (window.Hls && Hls.isSupported()) {
+                const MS = window.ManagedMediaSource || window.MediaSource;
+                return !!(MS && MS.isTypeSupported && MS.isTypeSupported(T));
+            }
+            return !!document.createElement('video').canPlayType(T);
+        } catch (e) { return false; }
+    },
+    // ★ (2026-09-30) 원본 스트리밍(탐색 가능) — 서버 direct_stream(FileManager::directStream)의 전체 조각 목록(VOD)을 hls.js 로 재생.
+    //   원본 화질 그대로(-c:v copy), 조각은 서버가 요청 때 만들어 흘려보냄(임시 파일 없음). 정리 누수가 없도록 기존과 같은 video._hlsInstance 에 넣는다
+    //   (미리보기 닫기·다음 영상·트랜스코딩 전환이 모두 이것으로 정리). 스킨은 스트리밍으로 보지만 시각 보정 0·seekable = 전체 길이라 어디로든 탐색.
+    //   시작 전 오류(415 H.264 아님·파일 문제·재생 불가 등)면 일반재생으로 복귀, 재생 중 오류는 최대 3번 다시 받기 후 복귀.
+    _startDirectStream(storageId, path, info, badgeParent, fileSize, opt) {
+        const video = document.querySelector('#preview-content .preview-video');
+        if (!video) return;
+        const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+        // ★ (2026-09-30) opt: { audio: 음성 번호(0부터), start: 시작 위치(초), play: 이어서 재생 } — 음성 전환(_directSwitchAudio)이 다시 부를 때
+        opt = opt || {};
+        const audioIdx = Math.max(0, parseInt(opt.audio, 10) || 0);
+        const startAt = Math.max(0, Number(opt.start) || 0);
+        const url = 'api.php?action=direct_stream&ds=playlist&storage_id=' + encodeURIComponent(storageId) + '&path=' + encodeURIComponent(path) + '&a=' + audioIdx;
+        if (video._hlsInstance) { try { video._hlsInstance.destroy(); } catch (e) {} video._hlsInstance = null; }   // 다시 붙일 때 이전 것 정리
+        video._dsCtx = { storageId, path, info, badgeParent, fileSize };
+        video._dsAudio = audioIdx;
+        this._directActive = true;
+        try { window._diagLog && window._diagLog('ds_start', { codec: info && info.video_codec, hlsjs: !!(window.Hls && Hls.isSupported()) }); } catch (e) {}
+        if (video.querySelector('source') || video.getAttribute('src')) {        // 원본이 이미 들어 있으면 떼어 낸다(미루지 않은 경우 대비)
+            try { video.pause(); } catch (e) {}
+            video.querySelectorAll('source').forEach((sEl) => sEl.remove());
+            video.removeAttribute('src');
+            try { video.load(); } catch (e) {}
+        }
+        const setBadge = (label) => {
+            if (!badgeParent) return;
+            badgeParent.className = 'video-stream-badge native';
+            badgeParent.textContent = '▶ ' + label;
+            const sub = document.createElement('span');
+            sub.className = 'codec-info';
+            sub.textContent = ' (' + String((info && info.video_codec) || '').toUpperCase() + (info && info.resolution ? ' ' + info.resolution : '') + (fileSize > 0 ? ' ' + this.formatSize(fileSize) : '') + ')';
+            badgeParent.appendChild(sub);
+        };
+        setBadge(isKo ? '일반 재생' : 'Native');
+        const qd = document.getElementById('video-quality-select');
+        if (qd) this._ensureQualityNativeBtn(qd, false);
+        const markReady = () => {
+            video._isReady = true;
+            if (video._hadControls) { try { video.setAttribute('controls', ''); } catch (e) {} }
+            const w = video.closest('.video-player-wrap');
+            if (w) w.classList.remove('video-not-ready');
+        };
+        let fellBack = false, started = false, recover = 0;
+        const fallback = (why) => {
+            // ★ (2026-09-30) 트랜스코딩 전환이 시작됐으면(화질 변경 CASE 2 등 — transcodeBase 가 먼저 붙고 주소를 지움) 되돌리지 않는다
+            if (fellBack || !video.isConnected || video.dataset.transcodeBase) return;
+            fellBack = true;
+            try { window._diagLog && window._diagLog('ds_fallback', { why: String(why || '').slice(0, 60) }); } catch (e) {}
+            if (video._hlsInstance) { try { video._hlsInstance.destroy(); } catch (e) {} video._hlsInstance = null; }
+            this._directActive = false;
+            video.removeAttribute('src');
+            try { video.load(); } catch (e) {}
+            setBadge(isKo ? '일반 재생' : 'Native');
+            this._restoreDeferredNativeSrc();
+            markReady();
+            const q2 = document.getElementById('video-quality-select');
+            if (q2) this._ensureQualityNativeBtn(q2, true);
+        };
+        // ★ (2026-09-30) 영상을 풀지 못하는 경우(아이폰이 지원하지 않는 H.264 10비트 등 — 소리만 나오고 화면 폭·높이 0) 트랜스코딩으로.
+        //   loadedmetadata 가 아니라 첫 화면 준비(loadeddata) 1.5초 뒤에 본다 — 아이폰은 loadedmetadata 때 폭·높이가 아직 0(펜닐 로그 17:36).
+        //   전환 방식은 기존 '코덱 미지원 감지'와 같다(트랜스코딩 표시 → _startTranscode — 원본 스트리밍 hls 정리·_directActive 해제는 거기서).
+        const checkVideoDims = () => {
+            setTimeout(() => {
+                if (fellBack || !video.isConnected || !this._directActive) return;
+                if (video.videoWidth > 0 || video.videoHeight > 0) return;
+                fellBack = true;
+                try { window._diagLog && window._diagLog('ds_fallback', { why: 'no_video' }); } catch (e) {}
+                if (badgeParent) { badgeParent.className = 'video-stream-badge'; badgeParent.textContent = '⏳ ' + (isKo ? '코덱 미지원 → 트랜스코딩 전환 중...' : 'Unsupported codec → switching to transcode...'); }
+                const tcUrl = 'api.php?action=transcode&storage_id=' + encodeURIComponent(storageId) + '&path=' + encodeURIComponent(path);
+                video.dataset.transcodeBase = tcUrl;
+                App._startTranscode(tcUrl, storageId, path);
+            }, 1500);
+        };
+        // 준비된 뒤: 이어서 재생(음성 전환 때), 음성이 2개 이상이면 음성 이름 조회(⚙ 음성 목록용 — 서버가 ffmpeg 로 읽기만 함)
+        const afterReady = () => {
+            if (opt.play) { try { const pr = video.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (e) {} }
+            if ((parseInt(info && info.audio_count, 10) || 0) >= 2) { try { this._fsvsPrefetchAudioInfo(video); } catch (e) {} }
+        };
+        if (window.Hls && Hls.isSupported()) {
+            const hls = new Hls({
+                enableWorker: true, lowLatencyMode: false,
+                maxBufferLength: 30, maxMaxBufferLength: 120, backBufferLength: 10,
+                startPosition: startAt,
+                manifestLoadingTimeOut: 20000, levelLoadingTimeOut: 20000, fragLoadingTimeOut: 30000,
+                manifestLoadingMaxRetry: 2, levelLoadingMaxRetry: 2, fragLoadingMaxRetry: 3
+            });
+            video._hlsInstance = hls;
+            // ★ (2026-09-30) 복귀는 hls.js 오류 알림 처리가 끝난 다음 순간에 — 알림 안에서 destroy 하면 hls.js 가 이어서 처리하다 내부 값이 비어
+            //   'reading trigger' 오류가 난다(공유 페이지 실제 크롬 시험에서 확인, 코덱 오류 때). fallback 은 한 번만 실행되게 막혀 있다.
+            const later = (why) => setTimeout(() => fallback(why), 0);
+            hls.on(Hls.Events.ERROR, (ev, d) => {
+                try { window._diagLog && window._diagLog('ds_error', { type: d.type, details: d.details, fatal: !!d.fatal, code: d.response && d.response.code }); } catch (e) {}
+                if (!d.fatal || fellBack || video.dataset.transcodeBase) return;
+                if (!started || ++recover > 3) { later(d.details); return; }
+                if (d.type === Hls.ErrorTypes.NETWORK_ERROR) { try { hls.startLoad(); } catch (e) { later(d.details); } }
+                else if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { try { hls.recoverMediaError(); } catch (e) { later(d.details); } }
+                else later(d.details);
+            });
+            video.addEventListener('loadedmetadata', () => { if (fellBack) return; started = true; markReady(); afterReady(); }, { once: true });
+            video.addEventListener('loadeddata', checkVideoDims, { once: true });
+            hls.loadSource(url);
+            hls.attachMedia(video);
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {   // hls.js 를 못 쓰는 브라우저 — 자체 HLS
+            const onErr = () => { if (!started) fallback('native_hls_error'); };
+            video.addEventListener('error', onErr, { once: true });
+            video.addEventListener('loadedmetadata', () => { started = true; video.removeEventListener('error', onErr); markReady(); if (startAt > 0) { try { video.currentTime = startAt; } catch (e) {} } afterReady(); }, { once: true });
+            video.addEventListener('loadeddata', checkVideoDims, { once: true });
+            video.src = url;
+            try { video.load(); } catch (e) {}
+        } else {
+            fallback('no_hls');
+        }
+    },
+
+    // ★ (2026-09-30) 미리보기에서 원본 주소를 미뤄 뒀으면(_deferNativeSrc — mp4 는 빠른 시작이 될 수 있어 파일 정보 뒤 결정) 일반재생으로 결정된 때 넣고 불러온다.
+    //   미뤄 두지 않은 평소엔 아무것도 안 함. 일반재생으로 가는 세 경로(파일 정보 성공·실패 두 곳)에서 부른다.
+    _restoreDeferredNativeSrc() {
+        const v = document.querySelector('#preview-content .preview-video');
+        if (!v) return;
+        const u = v.getAttribute('data-deferred-src');
+        if (!u || v.querySelector('source') || v.getAttribute('src')) return;
+        v.removeAttribute('data-deferred-src');
+        const s = document.createElement('source');
+        s.src = u; s.type = 'video/mp4';
+        v.appendChild(s);
+        try { v.load(); } catch (e) {}
+    },
+
     // 화질 드롭다운 앞 '재생방식'(일반재생/트랜스코딩) 셀렉트 보장 (모바일 대용량 전용)
     //   _showNativeBtn=true(모바일 대용량, 코덱 네이티브 가능)면 셀렉트 추가, false면 잔재 제거.
     //   일반재생 선택 → 네이티브 강제 재생, 트랜스코딩 선택 → 자동 트랜스코딩.
@@ -39111,7 +40064,7 @@ const App = {
         if (this._showNativeBtn) {
             if (existing) {
                 // 이미 있으면 초기값만 현재 모드에 맞게 갱신 (재호출 시 트랜스코딩↔네이티브 반영)
-                existing.value = nativeMode ? 'native' : 'transcode';
+                existing.value = (App._directActive || nativeMode) ? 'native' : 'transcode';   // ★ (2026-09-30) 일반재생 빠른 시작 중도 '일반재생'
                 return;
             }
             const _isKoQ = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
@@ -39127,7 +40080,7 @@ const App = {
             _sel.appendChild(_optN);
             _sel.appendChild(_optT);
             // nativeMode=true면 네이티브 재생 중, false면 트랜스코딩 중 → 실제 상태로 초기값
-            _sel.value = nativeMode ? 'native' : 'transcode';
+            _sel.value = (App._directActive || nativeMode) ? 'native' : 'transcode';
             _sel.addEventListener('change', (e) => {
                 e.stopPropagation();
                 const mode = e.target.value;
@@ -39184,7 +40137,10 @@ const App = {
             if (audioDiv && audioDiv.parentNode) {
                 audioDiv.parentNode.insertBefore(qDiv, audioDiv.nextSibling);
             } else {
-                wrap.insertBefore(qDiv, wrap.querySelector('video'));
+                // ★ (2026-09-26) 위(음성 상자)와 같은 결함 — 자막 상자 안의 영상을 기준으로 넣으면 NotFoundError. wrap 의 직계 자식 기준.
+                let _refQ = wrap.querySelector('video');
+                while (_refQ && _refQ.parentNode !== wrap) _refQ = _refQ.parentNode;
+                wrap.insertBefore(qDiv, _refQ || null);
             }
         }
         // ★ 이중 빌드 방어: 이미 빌드되어있으면 스킵 (네이티브 → 트랜스코딩 전환 시 재호출 케이스)
@@ -39627,8 +40583,8 @@ const App = {
                           (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
             
             if (isIOS) {
-                if (!vid.paused && vid.webkitEnterFullscreen) {
-                    vid.webkitEnterFullscreen();
+                if (vid.webkitEnterFullscreen) {   // ★ (2026-09-23) 재생 중이 아니어도 — 준비 여부는 _iosEnterNativeFs 가 처리
+                    App._iosEnterNativeFs(vid);
                 }
                 return;
             }
@@ -39681,7 +40637,11 @@ const App = {
             const ua = navigator.userAgent.toLowerCase();
             const isRealMobile = /android|iphone|ipad|ipod/i.test(ua) && ('ontouchend' in document);
             
-            if (isRealMobile) {
+            // ★ (2026-09-23) 새 껍데기가 켜져 있으면 휴대폰에서도 **새 영상 요소에 다시 연결**한다.
+            //   [결함] 가운데 재생 버튼을 연결하는 곳은 두 군데다 — 처음 열 때(_showPreviewImpl)와, 트랜스코딩으로 영상 요소가
+            //   새것으로 바뀐 뒤 다시 연결하는 여기. 앞의 것만 고쳐서, 휴대폰 트랜스코딩에서는 가운데 버튼이 **이미 사라진 옛 영상**을
+            //   계속 조작해 눌러도 반응이 없었다(펜닐 제보 — mp4 는 요소가 바뀌지 않아 정상). 껍데기가 꺼져 있으면 종전 그대로.
+            if (isRealMobile && !App._videoSkinEnabled()) {
                 playOverlay.style.display = 'none';
             } else {
                 // 기존 리스너 제거를 위해 새 오버레이로 교체
@@ -39695,19 +40655,22 @@ const App = {
                     e.stopPropagation();
                     if (e.type === 'touchend') e.preventDefault();
                     // ★ 더블클릭/마우스 채터링 방어: 마지막 토글 후 300ms 내 재호출 무시
+                    // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 가운데 버튼이 실제로 눌렸는지·그 순간 상태
+                    try { window._diagLog && window._diagLog('center_tap', { h: 'B(교체 뒤)', type: e.type, isReady: vid._isReady, paused: vid.paused, rs: vid.readyState, src: String(vid.currentSrc || vid.getAttribute('src') || '').slice(0, 50), notReady: !!(vid.closest('.video-player-wrap') && vid.closest('.video-player-wrap').classList.contains('video-not-ready')) }); } catch (x) {}
                     const _nowTP = Date.now();
-                    if (vid._lastToggleAt && _nowTP - vid._lastToggleAt < 300) return;
+                    if (vid._lastToggleAt && _nowTP - vid._lastToggleAt < 300) { try { window._diagLog && window._diagLog('center_tap_blocked', { h: 'B(교체 뒤)', why: 'debounce300ms' }); } catch (x) {} return; }
                     vid._lastToggleAt = _nowTP;
                     if (window._videoDebug) {
                         // console.log('[VD CLICK] togglePlay[overlay2] isReady=' + vid._isReady + ' paused=' + vid.paused);
                     }
                     // ★ 버퍼 준비 안 된 상태에서 재생 시도 차단
                     if (vid._isReady === false) {
+                        try { window._diagLog && window._diagLog('center_tap_blocked', { h: 'B(교체 뒤)', why: 'isReady=false' }); } catch (x) {}
                         if (window._videoDebug) console.log('[VD CLICK] BLOCKED by _isReady=false');
                         return;
                     }
                     if (vid.paused || vid.ended) {
-                        vid.play().catch(() => {});
+                        vid.play().catch((err) => { try { window._diagLog && window._diagLog('center_play_fail', { h: 'B(교체 뒤)', name: err && err.name, msg: String(err && err.message || '').slice(0, 80) }); } catch (x) {} });
                     } else {
                         vid.pause();
                     }
@@ -39791,6 +40754,53 @@ const App = {
     //     showPreview 진입 시 _checkMediaInfo=true 면 video._isReady=false 설정 +
     //     play 이벤트 가드가 즉시 pause() 호출 → 자동 재생 불가
     //     → wrapper의 video-not-ready 클래스 제거를 기다려야 안전하게 play() 가능
+    // ★ (2026-09-23) 같은 폴더의 이전(-1)·다음(+1) 영상으로 이동 — 새 껍데기의 ⏮/⏭ 버튼용.
+    //   목록을 직접 누를 때(fs-vp-item 클릭)와 **완전히 같은 순서**로 이동한다: 목록 스크롤 저장 →
+    //   자동 재생 안 함(수동 이동은 첫 재생을 사용자가 ▶ — 기존 '펜닐 룰') → 모달 유지한 채 새 미리보기.
+    //   기준 목록도 자동 다음 재생과 같다(보이는 목록 = 전체/연관).
+    _fsVpGo(delta) {
+        const list = this._fsVpViewVideos || this._fsVpFolderVideos || [];
+        if (list.length < 2) return false;
+        const cur = list.findIndex(f => f.path === this._fsVpCurrentPath);
+        const target = cur >= 0 ? list[cur + delta] : null;
+        if (!target) return false;
+        try {
+            const body = document.getElementById('fs-vp-body');
+            if (body) sessionStorage.setItem('fs_vp_panel_scroll', String(body.scrollTop));
+        } catch (e) {}
+        App._fsVpPendingAutoPlay = false;
+        App.hideModal('modal-preview', { keepOpen: true });
+        App.showPreview(target);
+        return true;
+    },
+
+    // ★ (2026-09-23) 아이폰 영상 전체화면 — 재생 중이 아니어도 들어가게(펜닐 제보: PC 는 되는데 휴대폰은 재생 중일 때만).
+    //   아이폰은 영상 정보(readyState ≥ 1)가 있어야 webkitEnterFullscreen 을 허용한다. 재생 전엔 정보를 미리 받지 않는
+    //   경우가 많아 곧바로 부르면 거부된다. 정보가 있으면 바로 들어가고, 없으면 (누른 동작 안에서) 재생을 시작해
+    //   정보가 오는 즉시 들어간다. 예외는 삼켜 다른 동작에 영향이 없게 한다.
+    _iosEnterNativeFs(v) {
+        if (!v || !v.webkitEnterFullscreen) return;
+        if (v.readyState >= 1) { try { v.webkitEnterFullscreen(); } catch (e) {} return; }
+        const go = () => { try { v.webkitEnterFullscreen(); } catch (e) {} };
+        v.addEventListener('loadedmetadata', go, { once: true });
+        try { const p = v.play(); if (p && p.catch) p.catch(() => v.removeEventListener('loadedmetadata', go)); } catch (e) {}
+    },
+
+    // ★ (2026-09-23) 아이폰 자체 HLS — 주소를 넣는 즉시 '준비 완료'로 표시한다.
+    //   [원인] 트랜스코딩 영상은 처음부터 틀에 video-not-ready(가운데 버튼 흐림·클릭 차단, 영상 직접 탭 차단)와
+    //   _isReady=false 가 붙고, 이를 푸는 코드는 HLS.js(조각 1초 이상 버퍼링)·MediaSource 경로에만 있었다.
+    //   아이폰은 자체 HLS 를 써서 **끝까지 준비 안 됨**으로 남아, 휴대폰에서도 보이게 된 가운데 재생 버튼이
+    //   트랜스코딩일 때만 눌리지 않았다(펜닐 제보). 예전엔 휴대폰에서 이 버튼이 숨겨지고 기본 컨트롤로 재생해 안 드러났다.
+    //   [처리] 아이폰 자체 HLS 는 버퍼링을 Safari 가 직접 관리하므로 HLS.js 처럼 '쌓일 때까지 재생 막기'가 필요 없다
+    //   (기본 컨트롤도 게이트 없이 재생했다). 주소를 넣는 네 곳에서 곧바로 준비 완료로 표시한다.
+    _markNativeHlsReady(v) {
+        if (!v) return;
+        v._isReady = true;
+        try { if (window._diagLog) window._diagLog('video_ready', { line: 'nativeHls' }); } catch (e) {}   // ★ (2026-09-25) 진단 기록
+        const w = v.closest('.video-player-wrap');
+        if (w) w.classList.remove('video-not-ready');
+    },
+
     _fsVpTryAutoPlay() {
         if (!App._fsVpPendingAutoPlay) return;
         const video = document.querySelector('#preview-content .preview-video');
@@ -40414,7 +41424,8 @@ const App = {
 
         document.querySelectorAll('#preview-content .video-seek-btn').forEach(oldBtn => {
             // 실기기 모바일은 재생 오버레이를 숨기고 브라우저 기본 컨트롤을 쓰므로 탐색 버튼도 함께 숨김
-            if (isRealMobileDevice) { oldBtn.style.display = 'none'; return; }
+            // ★ (2026-09-23) 새 껍데기가 켜져 있으면 휴대폰에서도 이벤트를 건다(가운데 재생 버튼과 같은 이유)
+            if (isRealMobileDevice && !App._videoSkinEnabled()) { oldBtn.style.display = 'none'; return; }
             const btn = oldBtn.cloneNode(true);
             oldBtn.parentNode.replaceChild(btn, oldBtn);
 
@@ -40460,8 +41471,8 @@ const App = {
             <button class="vec-btn" data-speed="1.5">1.5x</button>
             <button class="vec-btn" data-speed="2">2x</button>
             <span class="vec-sep"></span>
-            <button class="vec-btn" id="vec-loop" title="${t('video_loop', '반복 재생')}">🔁</button>
-            <button class="vec-btn" id="vec-ab" title="${t('video_ab_set_a', '구간 반복: 눌러서 A 지정')}">A-B</button>
+            <button class="vec-btn" id="vec-loop" title="${t('video_loop_one', '이 영상만 반복')}">🔁</button>
+            <button class="vec-btn" id="vec-ab" title="${t('video_ab_set_a', '구간 반복: 눌러서 A 지정')}" style="display:none;">A-B</button>
             <span class="vec-ab-range" id="vec-ab-range" style="display:none;"></span>
             <span class="vec-sep"></span>
             <button class="vec-btn" id="vec-pip" title="PIP">🖼️ PIP</button>
@@ -40487,10 +41498,23 @@ const App = {
             let _loopOn = false;
             try { _loopOn = localStorage.getItem('fs_vp_loop') === '1'; } catch (e) {}
             const applyLoop = () => {
+                // ★ (2026-09-11) 영상 전체 반복 — 원래 동작으로 되돌림.
+                //   🔁 과 A-B 는 성격이 다르다: 전체 반복은 끝→처음 되감기 1회라
+                //   스트리밍에서도 문제없이 동작하므로 숨기지 않는다. A-B 만 일반 재생 한정이다.
+                //   자동 다음 재생은 🔁 이 켜져 있으면 무시한다(기존 결정 유지 — loop=true 면
+                //   명세상 ended 가 오지 않으므로 구조적으로도 그렇게 된다).
                 video.loop = _loopOn;
                 loopBtn.classList.toggle('vec-active', _loopOn);
-                loopBtn.title = _loopOn ? t('video_loop_on', '반복 재생: 켬 (끝나면 처음부터)')
-                                        : t('video_loop_off', '반복 재생: 끔');
+                loopBtn.setAttribute('aria-pressed', _loopOn ? 'true' : 'false');
+                // ★ on/off 를 한눈에 — 켜지면 아이콘 옆에 ON 을 붙이고 강조 클래스를 준다.
+                loopBtn.classList.toggle('vec-on', _loopOn);
+                loopBtn.innerHTML = _loopOn ? '🔁<span class="vec-badge">ON</span>' : '🔁';
+                // ★ (2026-09-11) 음악 플레이어의 🔁 은 '전체/한 곡' 3단계라, 같은 아이콘이라도
+                //   동영상 쪽은 **이 영상 하나만** 반복한다는 점을 툴팁에 분명히 적는다(펜닐 지적).
+                //   폴더 자동 다음 재생과 배타적이라는 점도 함께 알린다.
+                loopBtn.title = _loopOn
+                    ? t('video_loop_one_on',  '이 영상만 반복: 켬 (끝나면 처음부터 · 다음 영상으로 안 넘어감)')
+                    : t('video_loop_one_off', '이 영상만 반복: 끔');
             };
             applyLoop();   // 요소 교체(트랜스코딩 전환) 후 재바인딩 시에도 상태 복원
             loopBtn.addEventListener('click', () => {
@@ -40516,9 +41540,16 @@ const App = {
                     ? `${h}:${m.toString().padStart(2,'0')}:${x.toString().padStart(2,'0')}`
                     : `${m}:${x.toString().padStart(2,'0')}`;
             };
-            const abSeekable = () => !video.dataset.transcodeBase && !video._hlsInstance
+            // ★ (2026-09-30) 원본 스트리밍(App._directActive)은 hls 가 있어도 허용 — 영상 전체 조각 목록(VOD)이라 어디로든 탐색되고
+            //   현재 위치가 영상 처음부터의 실제 시각(시각 보정 0)이라 아래 되돌림이 그대로 맞다(펜닐 승인). 트랜스코딩은 transcodeBase 로 여전히 막힘.
+            //   원본 스트리밍 → 트랜스코딩 전환·일반재생 복귀 때는 _directActive 가 꺼지고 아래 이벤트들로 다시 판단해 버튼·구간이 맞게 정리된다.
+            const abSeekable = () => !video.dataset.transcodeBase && (!video._hlsInstance || App._directActive)
                                   && isFinite(video.duration) && video.duration > 0;
             const updateAb = () => {
+                // ★ (2026-09-11) A-B(구간 반복)만 일반 재생에서 보인다.
+                //   되감기가 잦아 스트리밍(HLS·트랜스코딩)에서는 불안정하기 때문.
+                //   ★ (2026-09-30) 원본 스트리밍은 예외(위 abSeekable) — 전체 목록이라 A 로 되돌릴 때 그 조각만 다시 받으면 된다.
+                //   🔁(전체 반복)은 끝→처음 1회뿐이라 스트리밍에서도 동작하므로 여기서 다루지 않는다.
                 if (!abSeekable()) {
                     abBtn.style.display = 'none';
                     if (abRange) abRange.style.display = 'none';
@@ -40528,7 +41559,10 @@ const App = {
                 abBtn.style.display = '';
                 const hasA = video._abA != null, hasB = video._abB != null;
                 abBtn.textContent = (hasA && !hasB) ? 'A' : 'A-B';
+                // ★ on/off 를 한눈에 — A 만 찍힌 중간 상태와 구간 확정 상태를 나눠 표시한다.
                 abBtn.classList.toggle('vec-active', hasA);
+                abBtn.classList.toggle('vec-on', hasA && hasB);
+                abBtn.setAttribute('aria-pressed', hasA ? 'true' : 'false');
                 if (hasB) abBtn.title = t('video_ab', '구간 반복') + ' · ' + t('video_ab_clear', '눌러서 해제');
                 else if (hasA) abBtn.title = t('video_ab_set_b', '눌러서 B 지정');
                 else abBtn.title = t('video_ab_set_a', '구간 반복: 눌러서 A 지정');
@@ -40576,6 +41610,16 @@ const App = {
                 const _abRefresh = () => { if (video._abUpdate) video._abUpdate(); };
                 video.addEventListener('loadedmetadata', _abRefresh);
                 video.addEventListener('durationchange', _abRefresh);
+                // ★ (2026-09-11) 갱신 시점 보강 — 스트리밍 전환 뒤에도 버튼 상태가 맞게.
+                //   _hlsInstance 는 HLS 를 붙이는 도중에, dataset.transcodeBase 는 **네이티브 재생
+                //   실패 후** 전환할 때 켜진다. 둘 다 loadedmetadata 보다 늦을 수 있어, 그때
+                //   updateAb 가 다시 불리지 않으면 버튼이 보이는 채로 남는다(클릭해도 동작은 안 함).
+                //   판정은 abSeekable() 이 스스로 하므로 **호출 시점만 늘린다** — HLS·트랜스코딩
+                //   전환 코드에는 손대지 않는다.
+                video.addEventListener('loadstart', _abRefresh);
+                video.addEventListener('canplay', _abRefresh);
+                video.addEventListener('playing', _abRefresh);
+                video.addEventListener('emptied', _abRefresh);
             }
             updateAb();
         }
@@ -40609,6 +41653,209 @@ const App = {
                 pipBtn.style.display = 'none';
             }
         }
+        // ★ (2026-09-23) 새 껍데기(FSVideoSkin) 연결 — 기본 켜짐, ?vskin=0 으로 끈다.
+        //   이 함수는 처음 열 때와 영상 요소가 바뀐 뒤(_bindVideoPlayerEvents) 모두 불리므로
+        //   여기서 붙이면 요소 교체 후에도 자동으로 다시 붙는다. 실패해도 기존 동작에 영향 없게 감싼다.
+        try { this._attachVideoSkin(); } catch (e) {}
+    },
+
+    // ★ (2026-09-23) 동영상 새 껍데기 — **기본 켜짐**(펜닐 지시).
+    //   끄기: 주소 뒤에 ?vskin=0 (이 브라우저에 기억됨) / 다시 켜기: ?vskin=1 (꺼짐 기억을 지움)
+    //   문제가 생기면 ?vskin=0 한 번으로 그 브라우저만 즉시 원래 화면으로 돌아간다.
+    //   저장소를 못 쓰는 환경(사생활 보호 모드 등)에서도 기본값인 켜짐으로 동작한다.
+    _videoSkinEnabled() {
+        try {
+            const q = new URLSearchParams(window.location.search).get('vskin');
+            if (q === '0') localStorage.setItem('fs_vskin', '0');
+            if (q === '1') localStorage.removeItem('fs_vskin');
+            return localStorage.getItem('fs_vskin') !== '0';
+        } catch (e) { return true; }
+    },
+
+    // 껍데기가 '대신 눌러줄' 기존 조작부. 기능을 새로 만들지 않고 기존 버튼/셀렉트를 호출하므로
+    // 그동안의 수정(구간 반복 스트리밍 숨김, 자막 On/Off 의 iOS 게이트 등)이 그대로 유지된다.
+    _videoSkinCtx(video) {
+        const inPreview = (sel) => document.querySelector('#preview-content ' + sel);
+        const byId = (id) => document.getElementById(id);
+        const shown = (b) => !!(b && b.style.display !== 'none');
+        return {
+            // ★ (2026-09-23) 스트리밍 판별.
+            //   대부분의 변환 경로는 data-transcode-base 를 붙이지만 '대용량 → 스트리밍' 경로(App._startTranscode 직접 호출)는
+            //   붙이지 않고, 아이폰은 그 경로에서 HLS 주소를 video.src 에 직접 넣어 _hlsInstance 도 없다 → 주소로도 판별.
+            //   MediaSource 폴백(MMS·Pipe)은 blob 주소라 _streamMethod 가 함께 있을 때만 스트리밍으로 본다.
+            //   [오판 방지] 보관함(암호화) 동영상도 blob 주소로 일반 재생하므로 blob 만으로는 판단하지 않는다.
+            //   _knownDuration·_streamMethod 는 일반 재생으로 돌아와도 지워지지 않으므로 단독 조건으로 쓰지 않는다
+            //   (복귀 시 주소가 일반 주소로 바뀌므로 blob 조건과 묶으면 남아 있어도 영향이 없다).
+            isStreaming: () => {
+                const src = video.currentSrc || video.getAttribute('src') || '';
+                return !!(video.dataset.transcodeBase || video._hlsInstance
+                    || /[?&]action=(transcode|hls_stream)\b|[?&](transcode|hls)=1\b/.test(src)
+                    || (src.indexOf('blob:') === 0 && video._streamMethod));
+            },
+            timeOffset: () => video._qualitySeekOffset || 0,
+            knownDuration: () => video._knownDuration || 0,
+            setSpeed: (v) => {
+                const b = document.querySelector('.preview-footer .vec-container [data-speed="' + v + '"]');
+                if (b) b.click(); else video.playbackRate = v;
+            },
+            toggleLoop: () => { const b = byId('vec-loop'); if (b) b.click(); },
+            isLoop: () => !!video.loop,
+            abVisible: () => shown(byId('vec-ab')),
+            clickAb: () => { const b = byId('vec-ab'); if (b) b.click(); },
+            abState: () => ({ a: video._abA, b: video._abB }),
+            hasCc: () => !!inPreview('.subtitle-controls .sub-toggle'),
+            toggleCc: () => { const b = inPreview('.subtitle-controls .sub-toggle'); if (b) b.click(); },
+            ccOn: () => video._subEnabled !== false,
+            subAct: (name) => { const b = inPreview('.subtitle-controls .sub-' + name); if (b) b.click(); },
+            subSync: () => video._subSyncOffset || 0,
+            hasPip: () => shown(byId('vec-pip')),
+            togglePip: () => { const b = byId('vec-pip'); if (b) b.click(); },
+            toggleFs: () => { const b = document.querySelector('.video-player-wrap .video-fullscreen-btn'); if (b) b.click(); },
+            // ★ (2026-09-23) 다국어 음성(#video-audio-select 안의 상자)도 ⚙ 로 — 일반 재생·트랜스코딩 모두, 상자가 있을 때만
+            selects: () => ['video-quality-select', 'video-audio-select'].flatMap((id) => { const d = byId(id); return d ? Array.from(d.querySelectorAll('select')) : []; }),
+            // ★ (2026-09-23) 트랜스코딩 전환 때 영상 요소가 교체되면(replaceChild) 새 영상에 곧바로 다시 붙인다.
+            //   종전엔 변환 준비가 끝난 뒤(_bindVideoPlayerEvents)에야 붙어, 그 사이 화질·재생방식 선택이 보였다.
+            onVideoGone: () => { try { this._attachVideoSkin(); } catch (e) {} },
+            // ★ (2026-09-23) 이전·다음 영상 — 폴더에 영상이 2개 이상(목록이 있을 때)만
+            hasList: () => (this._fsVpViewVideos || this._fsVpFolderVideos || []).length >= 2,
+            canPrev: () => { const l = this._fsVpViewVideos || this._fsVpFolderVideos || []; return l.findIndex(f => f.path === this._fsVpCurrentPath) > 0; },
+            canNext: () => { const l = this._fsVpViewVideos || this._fsVpFolderVideos || []; const i = l.findIndex(f => f.path === this._fsVpCurrentPath); return i >= 0 && i < l.length - 1; },
+            goPrev: () => this._fsVpGo(-1),
+            goNext: () => this._fsVpGo(1),
+            // ★ (2026-09-24) 일반 재생 중 다국어 음성 — 스트리밍이면 기존 음성 상자가 맡으므로 null
+            nativeAudio: function () { return (this.isStreaming() && !App._directActive) ? null : App._fsvsNativeAudio(video); }   // ★ (2026-09-30) 일반재생 빠른 시작 중에도
+        };
+    },
+
+    _attachVideoSkin() {
+        if (typeof window.FSVideoSkin === 'undefined') return;
+        const video = document.querySelector('#preview-content .preview-video');
+        const wrap = document.querySelector('.video-player-wrap');
+        if (!video || !wrap) return;
+        // ★ (2026-09-23) 스트리밍에도 붙는다 — 부품이 실제 길이(_knownDuration)·오프셋(_qualitySeekOffset)·
+        //   변환된 끝(seekable)으로 시간축을 그린다. 꺼져 있으면 떼어 두고 기본 컨트롤로 둔다.
+        if (!this._videoSkinEnabled()) { window.FSVideoSkin.detach(wrap); return; }
+        const ctx = this._videoSkinCtx(video);
+        window.FSVideoSkin.attach({ video, wrap, ctx });
+        // ★ (2026-09-24) 일반 재생이면 음성 목록을 미리 받아 둔다(정보 요청 info=1 — 변환은 하지 않음)
+        try { if (!ctx.isStreaming()) this._fsvsPrefetchAudioInfo(video); } catch (e) {}
+    },
+
+    // ★ (2026-09-24) 일반 재생 중 다국어 음성(펜닐 지시 — 4번 '나')
+    //   mp4 에 음성이 여러 개 있어도 음성을 고를 수 있는 브라우저는 사파리뿐(audioTracks — 크롬·엣지·파이어폭스 미지원).
+    //   · 사파리: audioTracks 로 **즉시 전환**(재생이 끊기지 않고 서버 부담 없음)
+    //   · 그 밖: 그 음성으로 **스트리밍 전환, 보던 위치부터** — 대용량 파일 처리(일반 → 스트리밍)와 같은 순서에
+    //     화질·음성 변경과 같은 '&audio=·&seek=' 방식(data-transcode-base·_qualitySeekOffset·_pendingResumeAfterQuality)
+    //   음성 이름은 서버 정보(트랜스코딩 정보 요청 info=1 — ffmpeg 로 읽기만 함)로 기존 음성 상자와 같은 모양
+    //   ('제목 또는 언어 · 코덱 · 채널'). 보관함(암호화)·원격 저장소는 서버 정보를 받지 않는다(기능이 나오지 않을 뿐).
+    _fsvsPrefetchAudioInfo(v) {
+        try {
+            if (!v || v._fsvsAudioInfoReq) return;
+            // ★ (2026-09-26) 일반 재생으로 **결정된 뒤에만**(_isReady === true) — 파일을 열 때의 media_info 와 같은 파일을 동시에
+            //   조사하지 않게 한다(09-25 기록: 다국어 mp4 의 서버 정보 조사가 19초 — 겹침이 원인 중 하나일 수 있음). 결정 지점에서 다시 부른다.
+            if (v._isReady !== true) return;
+            const item = this._currentPreviewItem, sid = this.currentPreviewStorageId || this.currentStorage;   // ★ (2026-09-30) 미리보기 파일의 저장소 — 다른 저장소의 검색 결과를 열면 현재 폴더 저장소(currentStorage)와 달라 다른 파일을 봤다(재현)
+            if (!item || !item.path || sid === undefined || sid === null) return;
+            if (item._vaultBlobUrl || (this.vault && this.vault.isVaultView)) return;
+            const src = v.currentSrc || v.getAttribute('src') || '';
+            if (src.indexOf('blob:') === 0 && !this._directActive) return;   // ★ (2026-09-30) 일반재생 빠른 시작(hls)은 blob 주소여도 조회
+            const st = (this.storages || []).find((x) => String(x.id) === String(sid));
+            // 원격 판정은 기존 코드와 같게 — home(개인)·shared(공유)·local 은 모두 로컬 저장소(6922·7071·7088행)
+            if (st && !['home', 'shared', 'local'].includes(st.storage_type || 'local')) return;
+            v._fsvsAudioInfoReq = true;
+            const cache = this._fsvsAudioInfoCache || (this._fsvsAudioInfoCache = new Map());
+            const key = sid + '|' + item.path;
+            if (cache.has(key)) { v._fsvsAudioInfo = cache.get(key); return; }
+            fetch(`api.php?action=transcode&storage_id=${sid}&path=${encodeURIComponent(item.path)}&info=1`, { credentials: 'same-origin' })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((d) => {
+                    const tr = (d && Array.isArray(d.audio_tracks)) ? d.audio_tracks : [];
+                    if (cache.size > 200) cache.clear();
+                    cache.set(key, tr);
+                    if (v.isConnected) v._fsvsAudioInfo = tr;
+                })
+                .catch(() => {});
+        } catch (e) {}
+    },
+
+    _fsvsNativeAudio(v) {
+        if (!v || !v.isConnected) return null;
+        // ★ (2026-09-30) 일반재생 빠른 시작 중 — 조각에는 고른 음성 하나만 담기므로 서버 음성 목록(순서 = 서버 a=번호)으로 보여 주고,
+        //   고르면 그 음성으로 빠른 시작을 다시 붙인다(보던 위치·재생 상태 유지 — _directSwitchAudio). 사파리 audioTracks 는 여기선 1개뿐이라 안 씀.
+        if (this._directActive) {
+            const ds = Array.isArray(v._fsvsAudioInfo) ? v._fsvsAudioInfo : null;
+            if (!ds || ds.length < 2) return null;
+            const curA = v._dsAudio || 0;
+            return {
+                tracks: ds.map((s, i) => ({ label: [s.title || s.language || ('Track ' + (i + 1)), s.codec, s.channels].filter(Boolean).join(' · '), on: i === curA })),
+                select: (i) => { if (i !== (v._dsAudio || 0)) this._directSwitchAudio(v, i); }
+            };
+        }
+        const srv = Array.isArray(v._fsvsAudioInfo) ? v._fsvsAudioInfo : null;
+        const at = v.audioTracks;
+        const safari = !!(at && at.length >= 2);
+        const n = safari ? at.length : (srv ? srv.length : 0);
+        if (n < 2) return null;
+        const label = (i) => {
+            const s = (srv && srv.length === n) ? srv[i] : null;
+            if (s) return [s.title || s.language || ('Track ' + (i + 1)), s.codec, s.channels].filter(Boolean).join(' · ');
+            const t = safari ? at[i] : null;
+            return (t && (t.label || t.language)) || ('Track ' + (i + 1));
+        };
+        let cur = 0;
+        if (safari) { for (let i = 0; i < at.length; i++) { if (at[i].enabled) { cur = i; break; } } }
+        const tracks = [];
+        for (let i = 0; i < n; i++) tracks.push({ label: label(i), on: i === cur });
+        return {
+            tracks,
+            select: (i) => {
+                try { window._diagLog && window._diagLog('native_audio_switch', { i, safari, t: v.currentTime, paused: v.paused, isReady: v._isReady }); } catch (x) {}   // ★ (2026-09-26) 진단 기록(동작 변경 없음)
+                if (safari) { for (let k = 0; k < at.length; k++) at[k].enabled = (k === i); return; }
+                if (srv && srv[i]) this._fsvsNativeAudioToStream(v, srv[i]);
+            }
+        };
+    },
+
+    _fsvsNativeAudioToStream(v, track) {
+        const item = this._currentPreviewItem, sid = this.currentPreviewStorageId || this.currentStorage;   // ★ (2026-09-30) 미리보기 파일의 저장소 — 다른 저장소의 검색 결과를 열면 현재 폴더 저장소(currentStorage)와 달라 다른 파일을 봤다(재현)
+        if (!v || !item || !item.path || sid === undefined || sid === null || !track) return;
+        const idx = parseInt(track.index, 10);
+        if (!isFinite(idx) || idx < 0) return;
+        const t = v.currentTime || 0;
+        const wasPlaying = !v.paused && !v.ended;
+        // 대용량 파일 처리(일반 → 스트리밍)와 같은 순서: 멈춤 → 주소 비우기 → 준비 전 표시 → _startTranscode
+        v._switchingToTranscode = true;
+        try { v.pause(); } catch (e) {}
+        v.removeAttribute('src');
+        v.querySelectorAll('source').forEach((s) => s.remove());
+        const w = v.closest('.video-player-wrap');
+        if (w && !w.classList.contains('video-not-ready')) w.classList.add('video-not-ready');
+        // 배지의 'native'(일반 재생 — 초록 배경) 표시를 뗀다. 대용량 파일 처리도 전환 전에 떼며(36980행),
+        //   _startTranscode 는 배지 글자만 바꾸므로 떼지 않으면 초록 배지에 '⚡ 스트리밍'이 표시된다(재검토에서 발견).
+        const _badge = document.querySelector('.video-stream-badge');
+        if (_badge) _badge.classList.remove('native');
+        // ★ (2026-09-25) 음성 선택 상자의 틀(#video-audio-select)이 없으면 만든다 — 기존 일반 → 트랜스코딩 전환(37125~37130행)과 같은 방식.
+        //   [결함] 틀은 처음 열 때 트랜스코딩이 필요한 파일(mkv 등)에만 만들어지는데, mp4 는 일반 재생으로 열려 틀이 없었다 →
+        //   _buildAudioTrackUI 가 넣을 곳을 못 찾고 끝나(39291행), 스트리밍으로 바뀐 뒤 ⚙ 에 음성이 안 나와 다시 바꿀 수 없었다(펜닐 제보).
+        if (w && !w.querySelector('#video-audio-select')) {
+            const _ad = document.createElement('div');
+            _ad.className = 'video-audio-select';
+            _ad.id = 'video-audio-select';
+            w.insertBefore(_ad, v.parentNode === w ? v : w.firstChild);
+        }
+        // 화질·음성 변경과 같은 방식: &audio=·&seek= 를 붙이고 위치 보정·이어 재생 표시
+        let base = `api.php?action=transcode&storage_id=${sid}&path=${encodeURIComponent(item.path)}&audio=${idx}`;
+        if (t > 1) base += '&seek=' + t.toFixed(2);
+        v.setAttribute('data-transcode-base', base);
+        v._qualitySeekOffset = t > 1 ? t : 0;
+        v._pendingResumeAfterQuality = wasPlaying;
+        window._lastStartTranscodeUrl = null;
+        window._lastStartTranscodeTime = 0;
+        if (window._startTranscodeTimer) clearTimeout(window._startTranscodeTimer);
+        window._startTranscodeTimer = setTimeout(() => {
+            window._startTranscodeTimer = null;
+            App._startTranscode(base, sid, item.path);
+        }, 100);
     },
     
     // PiP 진입 시 미리보기 모달을 화면에서 숨김 (정리하지 않음 — 영상/ffmpeg 유지)
@@ -40764,6 +42011,8 @@ const App = {
                         subCtrl = document.createElement('div');
                         subCtrl.className = 'subtitle-controls';
                         subCtrl.innerHTML = `
+                            <button class="sub-ctrl-btn sub-toggle" title="${t('sub_toggle','자막 켜기/끄기')}">CC</button>
+                            <span class="sub-ctrl-sep"></span>
                             <button class="sub-ctrl-btn sub-size-down" title="${t('sub_size_down','자막 축소')}">A-</button>
                             <button class="sub-ctrl-btn sub-size-up" title="${t('sub_size_up','자막 확대')}">A+</button>
                             <button class="sub-ctrl-btn sub-pos-up" title="${t('sub_pos_up','자막 위로')}">▲</button>
@@ -40798,6 +42047,37 @@ const App = {
                         };
                         updateSyncDisplay();
                         
+                        // ★ (2026-09-10) 자막 On/Off — 기본 켜짐, 저장하지 않는다(영상마다 초기화).
+                        //   video._subEnabled 를 단일 상태로 두고, 표시 경로 두 곳이 모두 이 값을 본다.
+                        video._subEnabled = true;
+                        //   버튼은 자막 컨트롤 줄(.sub-toggle) 한 곳이다. 이 줄은 자막 파일이 있을 때
+                        //   생성되고 표시 조건이 hover·재생상태뿐이라 자막 ON/OFF 와 무관하므로,
+                        //   전체화면을 포함해 어디서든 다시 켤 수 있다(실기기 확인 완료).
+                        const subToggleBtn = subCtrl.querySelector('.sub-toggle');
+                        const _applySubEnabled = () => {
+                            const on = video._subEnabled !== false;
+                            const _label = on ? t('sub_toggle_off', '자막 끄기') : t('sub_toggle_on', '자막 켜기');
+                            subToggleBtn.classList.toggle('sub-off', !on);
+                            subToggleBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+                            subToggleBtn.title = _label;
+                            if (!on) {
+                                // 일반 재생 경로: 오버레이를 즉시 감춘다(타이머가 다시 켜지 않도록 아래에서도 막는다)
+                                overlay.style.display = 'none';
+                                overlay.innerHTML = '';
+                                // iOS 전체화면 경로: 네이티브 트랙을 내린다
+                                setTrackMode(overlay._fsActive ? 'hidden' : _idleMode);
+                            } else if (overlay._fsActive) {
+                                setTrackMode('showing');
+                            }
+                        };
+                        const _toggleSub = (e) => {
+                            if (e) e.stopPropagation();
+                            video._subEnabled = (video._subEnabled === false);
+                            _applySubEnabled();
+                        };
+                        subToggleBtn.onclick = _toggleSub;
+                        _applySubEnabled();
+
                         subCtrl.querySelector('.sub-size-down').onclick = (e) => {
                             e.stopPropagation();
                             subSize = Math.max(0.6, subSize - 0.1);
@@ -40815,30 +42095,35 @@ const App = {
                             subBottom = Math.min(40, subBottom + 2);
                             overlay.style.setProperty('bottom', subBottom + '%', 'important');
                             localStorage.setItem('subBottom', subBottom);
+                            if (video._subRebuildNativeCues) video._subRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 위치·싱크 반영
                         };
                         subCtrl.querySelector('.sub-pos-down').onclick = (e) => {
                             e.stopPropagation();
                             subBottom = Math.max(0, subBottom - 2);
                             overlay.style.setProperty('bottom', subBottom + '%', 'important');
                             localStorage.setItem('subBottom', subBottom);
+                            if (video._subRebuildNativeCues) video._subRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 위치·싱크 반영
                         };
                         subCtrl.querySelector('.sub-sync-down').onclick = (e) => {
                             e.stopPropagation();
                             video._subSyncOffset = Math.max(-30, (video._subSyncOffset || 0) - 0.5);
                             localStorage.setItem('subSyncOffset', video._subSyncOffset);
                             updateSyncDisplay();
+                            if (video._subRebuildNativeCues) video._subRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 위치·싱크 반영
                         };
                         subCtrl.querySelector('.sub-sync-up').onclick = (e) => {
                             e.stopPropagation();
                             video._subSyncOffset = Math.min(30, (video._subSyncOffset || 0) + 0.5);
                             localStorage.setItem('subSyncOffset', video._subSyncOffset);
                             updateSyncDisplay();
+                            if (video._subRebuildNativeCues) video._subRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 위치·싱크 반영
                         };
                         subCtrl.querySelector('.sub-sync-reset').onclick = (e) => {
                             e.stopPropagation();
                             video._subSyncOffset = 0;
                             localStorage.setItem('subSyncOffset', '0');
                             updateSyncDisplay();
+                            if (video._subRebuildNativeCues) video._subRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 위치·싱크 반영
                         };
                     }
                     
@@ -40858,14 +42143,25 @@ const App = {
                     video._subLabel = sub.label || (t('subtitle','자막') + ' ' + (i+1));
                     
                     // cues를 VTTCue로 추가하는 헬퍼 (재주입 시에도 사용)
+                    // ★ (2026-09-28) 아이폰 전체화면 자막(네이티브)에도 위치·싱크 설정 반영(펜닐 요청) — 넣기 전에 기존 cue 를 비우고,
+                    //   위치는 자막 요소의 실제 bottom %(설정 버튼이 바꾸는 값 — subBottom 은 안쪽 블록 변수라 여기서 안 보임)로 '자막 상자 아래쪽을 (100-bottom)%'에,
+                    //   싱크는 플레이어 자막이 '재생 시각 + 오프셋'으로 보이므로 cue 시각에서 오프셋을 뺀다(시작 0 미만은 0, 끝 0 이하는 넣지 않음).
+                    //   처음 불러올 때도 이 함수라 처음부터 반영. 전체화면 진입 코드는 그대로(진입 순간엔 건드리지 않음 — iOS 가 진입 시점 상태를 쓰는 점 주의).
                     const _injectCues = (track, cueArr) => {
+                        try { if (track.cues && track.cues.length) { for (const oc of Array.from(track.cues)) { try { track.removeCue(oc); } catch (eR) {} } } } catch (eR2) {}
+                        const _off = video._subSyncOffset || 0;
+                        const _bt = parseFloat(overlay && overlay.style.getPropertyValue('bottom'));
+                        const _line = Math.max(0, Math.min(100, 100 - (isFinite(_bt) ? _bt : 10)));
                         let added = 0;
                         for (const cue of cueArr) {
                             try {
-                                const vc = new VTTCue(cue.startTime, cue.endTime, cue.text);
+                                const _cs = cue.startTime - _off, _ce = cue.endTime - _off;
+                                if (!(_ce > 0)) continue;
+                                const vc = new VTTCue(Math.max(0, _cs), _ce, cue.text);
                                 // iOS가 default 위치로 그릴 때 화면 밖 잘림 방어 — line:90% (하단)
-                                vc.line = 90;
+                                vc.line = _line;
                                 vc.lineAlign = 'end';
+                                vc.snapToLines = false;   // ★ (2026-09-28) snapToLines=false — 없으면 line 90 이 '위에서 90번째 줄'(기본 snapToLines=true)로 해석되고 lineAlign 'end' 도 무시돼, 화면 밖 줄을 엔진마다 다르게 끌어올려 아이폰 전체화면에서 두 줄 이상이 한 줄보다 위에 나왔다(펜닐 제보). false 면 '자막 상자 아래쪽을 90% 지점에' — 주석의 원래 의도, 줄이 늘면 위로 쌓임.
                                 track.addCue(vc);
                                 added++;
                             } catch(eC) {}
@@ -40873,6 +42169,12 @@ const App = {
                         return added;
                     };
                     video._subInjectCues = _injectCues;  // fullscreen 클릭 핸들러에서 호출
+                    // ★ (2026-09-28) 설정(위치·싱크)이 바뀌면 숨겨 둔 네이티브 트랙의 cue 를 새로 만든다 — 아이폰에서만(네이티브 자막은 아이폰 전체화면에서만 쓰고,
+                    //   PC·안드로이드는 트랙이 disabled 라 cues 가 null → 기존 cue 를 못 지워 설정을 바꿀 때마다 쌓이는(누수) 것을 막는다).
+                    video._subRebuildNativeCues = () => {
+                        if (!_isIOSDevice) return;
+                        try { const tr = video._subTextTrack; if (tr && video._subCues && video._subCues.length) _injectCues(tr, video._subCues); } catch (eRb) {}
+                    };
                     
                     let nativeTrack = null;
                     try {
@@ -40885,6 +42187,13 @@ const App = {
                     // 전체화면 진입 시 네이티브 트랙 활성화 + 커스텀 오버레이 숨김
                     const setTrackMode = (mode) => {
                         try {
+                            // ★ (2026-09-10) 2단계 — 자막 OFF 면 '켜라'는 요청만 무시한다.
+                            //   [왜 여기 한 곳인가] iOS 전체화면 자막은 Safari 가 모드를 덮어쓰는
+                            //   미해결 버그 때문에 0/50/200/500ms 네 시점에 'showing' 을 강제한다.
+                            //   호출부를 각각 고치면 하나만 빠져도 자막이 다시 켜지므로,
+                            //   진입점 한 곳에서만 막는다. 기존 호출 시점·횟수는 그대로 둔다.
+                            //   끄는 요청(hidden/disabled)은 그대로 통과시켜야 OFF 가 실제로 적용된다.
+                            if (mode === 'showing' && video._subEnabled === false) return;
                             for (let t = 0; t < video.textTracks.length; t++) {
                                 video.textTracks[t].mode = mode;
                             }
@@ -40984,6 +42293,11 @@ const App = {
                         try {
                             if (!document.contains(video)) { clearInterval(subTimer); return; }
                             if (overlay._fsHidden) return; // 전체화면 중이면 스킵
+                            // ★ (2026-09-10) 자막 OFF 면 그리지 않는다(1단계 — 일반 재생 경로).
+                            if (video._subEnabled === false) {
+                                if (overlay.style.display !== 'none') { overlay.style.display = 'none'; overlay.innerHTML = ''; }
+                                return;
+                            }
                             const ct = video.currentTime + (video._subSyncOffset || 0);
                             let found = '';
                             for (const cue of cues) {
@@ -41371,6 +42685,7 @@ const App = {
                                     const vc = new VTTCue(cue.startTime, cue.endTime, cue.text);
                                     vc.line = 90;
                                     vc.lineAlign = 'end';
+                                    vc.snapToLines = false;   // ★ (2026-09-28) snapToLines=false — 없으면 line 90 이 '위에서 90번째 줄'(기본 snapToLines=true)로 해석되고 lineAlign 'end' 도 무시돼, 화면 밖 줄을 엔진마다 다르게 끌어올려 아이폰 전체화면에서 두 줄 이상이 한 줄보다 위에 나왔다(펜닐 제보). false 면 '자막 상자 아래쪽을 90% 지점에' — 주석의 원래 의도, 줄이 늘면 위로 쌓임.
                                     _nt.addCue(vc);
                                 } catch(eC) {}
                             }
