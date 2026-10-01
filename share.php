@@ -3169,13 +3169,22 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         player.addEventListener('loadeddata', () => { if (my === gen) checkDims(); }, { once: true });
                         // ★ (2026-10-01) 아이폰(ManagedMediaSource): 버퍼가 차 받기를 멈춘(endstreaming → pauseBuffering) 뒤 받아 둔 범위 밖으로 옮기면
                         //   다시 받으라는 신호가 오지 않아 멈췄다(탐색기 펜닐 로그 11:33). 범위 밖 이동·버퍼 바닥 멈춤 때 지금 위치부터 다시 받게 한다(탐색기와 같음).
-                        const resumeIfNeeded = () => {
+                        const resumeIfNeeded = (ev) => {
+                            const why = (ev && ev.type === 'seeking') ? 'seek' : 'waiting';
                             if (my !== gen || player._directHls !== hls || fell || !started) return;
                             const tt = player.currentTime || 0, b = player.buffered;
                             for (let i = 0; i < b.length; i++) if (tt >= b.start(i) - 0.3 && tt < b.end(i) - 0.5) return;
                             // hls.js 가 실제로 멈춘(STOPPED) 때만 — 받는 중에 부르면 받던 조각을 취소·처음부터 받는다(탐색기와 같음)
                             const sc = hls.streamController;
-                            if (!sc || sc.state !== 'STOPPED') return;
+                            if (!sc) return;
+                            // ★ (2026-10-01) 뒤로 이동 — hls.js 는 앞으로 갈 때만 받는 중인 조각을 취소해, 뒤로 가면 앞쪽 조각을 끝까지 받은 뒤에야
+                            //   새 위치를 요청했다(탐색기와 같은 처리 — 설명은 app.js). 이동(seek)일 때만.
+                            if (why === 'seek' && sc.state === 'FRAG_LOADING') {
+                                const f = sc.fragCurrent, tol = (hls.config && hls.config.maxFragLookUpTolerance) || 0.25;
+                                if (f && f.loader && isFinite(f.start) && tt < f.start - tol) { try { f.abortRequests(); sc.resetLoadingState(); } catch (e) {} }
+                                return;
+                            }
+                            if (sc.state !== 'STOPPED') return;
                             try { hls.resumeBuffering(); } catch (e) {}
                         };
                         if (player._dsResumeFn) { player.removeEventListener('seeking', player._dsResumeFn); player.removeEventListener('waiting', player._dsResumeFn); }
@@ -3641,6 +3650,33 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             
             // 모바일: 터치 시 컨트롤 표시/숨김 토글 (3초 후 자동 숨김)
             if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+                // ★ (2026-10-01) 숨겨진 가운데 버튼(재생·±5초)은 첫 탭에 '보이기만' — 탐색기 App._bindFirstTapGuard 와 같은 처리(설명은 그쪽).
+                //   닿는 순간 숨겨진 상태였는지 아래 기존 터치 처리보다 먼저(캡처) 기억 → 그 탭의 touchend·click 이 가운데 버튼이면 버튼까지 보내지 않고 보이기만.
+                (function (w) {
+                    let hiddenAtStart = false, startAt = 0, hideTimer = null;
+                    w.addEventListener('touchstart', () => {
+                        // 숨김 판단은 사용자가 실제로 본 상태(가운데 버튼의 계산된 투명도) — 넓은 터치 화면은 :hover 로 보일 수 있다(탐색기와 같음)
+                        const ov = w.querySelector('.video-play-overlay');
+                        hiddenAtStart = w.classList.contains('playing') && (!ov || +getComputedStyle(ov).opacity < 0.1);
+                        startAt = Date.now();
+                    }, { capture: true, passive: true });
+                    const guard = (e) => {
+                        if (!hiddenAtStart || Date.now() - startAt > 1000) return;
+                        const b = (e.target && e.target.closest) ? e.target.closest('.video-play-overlay') : null;
+                        if (!b || !w.contains(b)) return;
+                        e.stopPropagation();
+                        if (e.cancelable) e.preventDefault();
+                        if (e.type === 'click') hiddenAtStart = false;
+                        if (!w.classList.contains('show-controls')) {
+                            w.classList.add('show-controls');
+                            clearTimeout(hideTimer);
+                            const shownAt = Date.now();
+                            hideTimer = setTimeout(() => { if (startAt <= shownAt) w.classList.remove('show-controls'); }, 3000);   // 그 사이 다른 터치가 있었으면 기존 처리에 맡김
+                        }
+                    };
+                    w.addEventListener('touchend', guard, true);
+                    w.addEventListener('click', guard, true);
+                })(wrap);
                 let _shareControlsTimer = null;
                 wrap.addEventListener('touchstart', (e) => {
                     if (wrap.classList.contains('playing')) {

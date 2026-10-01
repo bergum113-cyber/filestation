@@ -37809,6 +37809,7 @@ const App = {
                 
                 // 모바일: 터치 시 컨트롤 표시/숨김 토글 (3초 후 자동 숨김)
                 if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
+                    App._bindFirstTapGuard(wrap);   // ★ (2026-10-01) 숨겨진 가운데 버튼은 첫 탭에 보이기만(App._bindFirstTapGuard 설명)
                     let _mobileControlsTimer = null;
                     wrap.addEventListener('touchstart', (e) => {
                         // 전체화면 버튼이나 오디오 셀렉트 터치는 무시
@@ -40039,7 +40040,21 @@ const App = {
                 const sc = hls.streamController;
                 // ★ (2026-10-01) 진단 기록(동작 변경 없음) — 범위 밖일 때 그때의 hls.js 상태. STOPPED 가 아니면 원인이 다르다는 뜻(펜닐 승인)
                 try { window._diagLog && window._diagLog('ds_seek', { why, t: Math.round(t * 10) / 10, state: sc ? sc.state : '(없음)' }); } catch (e) {}
-                if (!sc || sc.state !== 'STOPPED') return;
+                if (!sc) return;
+                // ★ (2026-10-01) 뒤로 이동 — hls.js 1.5.7 onMediaSeeking 은 받는 중인 조각 밖으로 '앞으로' 갈 때만 그 조각을 취소하고(abortRequests·
+                //   resetLoadingState) '뒤로' 갈 때는 취소하지 않아, 앞쪽 위치용 조각(큰 파일은 5~9MB)을 끝까지 받은 뒤에야 새 위치를 요청했다
+                //   (펜닐 제보: 0→20분→30분은 빠른데 30분→25·15분은 느리거나 안 됨, 소스 확인). 같은 조건·같은 두 함수로 뒤로 갈 때도 취소한다.
+                //   이동(seek)일 때만 — 재생 중 버퍼 바닥(waiting)의 받는 조각은 지금 위치용이라 건드리지 않음. 우리 처리가 hls.js 보다 먼저라
+                //   여기서 비우면 hls.js 는 이어서 새 위치를 바로 받는다.
+                if (why === 'seek' && sc.state === 'FRAG_LOADING') {
+                    const f = sc.fragCurrent, tol = (hls.config && hls.config.maxFragLookUpTolerance) || 0.25;
+                    if (f && f.loader && isFinite(f.start) && t < f.start - tol) {
+                        try { f.abortRequests(); sc.resetLoadingState(); } catch (e) {}
+                        try { window._diagLog && window._diagLog('ds_abort', { t: Math.round(t * 10) / 10, fragStart: Math.round(f.start * 10) / 10 }); } catch (e) {}
+                    }
+                    return;
+                }
+                if (sc.state !== 'STOPPED') return;
                 try { hls.resumeBuffering(); } catch (e) {}
                 try { window._diagLog && window._diagLog('ds_resume', { why, t: Math.round(t * 10) / 10 }); } catch (e) {}
             };
@@ -41452,6 +41467,44 @@ const App = {
     //    재생 버튼의 표시 규칙을 그대로 따르게 하기 위함. (마크업 순서상 재생 버튼이 항상 먼저라
     //    기존 querySelector('.video-play-overlay')는 계속 재생 버튼을 가리킨다)
     //  · 여러 번 호출될 수 있으므로 clone 교체로 이전 리스너를 제거한 뒤 다시 건다.
+    // ★ (2026-10-01) 휴대폰 — 재생 중 숨겨진 가운데 버튼(재생·±5초)은 첫 탭에 '보이기만' 하고 실행하지 않는다(펜닐 제보: 안 보이는데 눌림).
+    //   원인: 손가락이 닿는 순간(touchstart) 컨트롤을 보이게 바꿔, 떼는 순간(touchend·click)엔 버튼이 이미 '보이는 상태'라 같은 탭이 실행됐다
+    //   (아이폰 로그 투명도 0 에서 +5초 실행, README 2026-09-27 기록). 탭한 버튼에 :hover 가 남아(아이폰) 숨겨져도 눌리는 경우도 같다.
+    //   방법: 닿는 순간 숨겨진 상태였는지 기존 터치 처리보다 먼저(캡처) 기억 → 그 탭의 touchend·click 이 가운데 버튼으로 가면 버튼까지 보내지 않고
+    //   컨트롤만 보이게(3초 뒤 숨김). 보이는 상태에서 시작한 탭·멈춤 상태는 그대로. 1초 넘게 지난 click(마우스 등)은 해당 없음.
+    //   숨겨진 재생 버튼을 탭해 바로 일시정지하던 원래 동작도 '보이기만'으로 바뀐다(펜닐 승인). 공유 페이지는 share.php 에 같은 처리.
+    _bindFirstTapGuard(wrap) {
+        if (!wrap || wrap._firstTapGuard) return;
+        wrap._firstTapGuard = true;
+        let hiddenAtStart = false, startAt = 0, hideTimer = null;
+        wrap.addEventListener('touchstart', () => {
+            // 숨김 판단은 손가락이 닿기 직전 사용자가 실제로 본 상태(가운데 버튼의 계산된 투명도) — show-controls 로만 판단하면 넓은 터치 화면
+            // (아이패드 가로·터치 노트북, 1024px 초과)에선 PC 규칙(탭 뒤 남는 :hover)으로 버튼이 보이는데도 '숨김'으로 봐 첫 탭이 무시됐다(측정).
+            //   가운데 버튼은 마크업상 재생 버튼이 먼저라 querySelector 가 재생 버튼(±5초도 같은 표시 규칙).
+            const ov = wrap.querySelector('.video-play-overlay');
+            hiddenAtStart = wrap.classList.contains('playing') && (!ov || +getComputedStyle(ov).opacity < 0.1);
+            startAt = Date.now();
+        }, { capture: true, passive: true });
+        const guard = (e) => {
+            if (!hiddenAtStart || Date.now() - startAt > 1000) return;
+            const b = (e.target && e.target.closest) ? e.target.closest('.video-play-overlay') : null;
+            if (!b || !wrap.contains(b)) return;
+            e.stopPropagation();
+            if (e.cancelable) e.preventDefault();          // touchend 에서 막으면 뒤따르는 click 도 생기지 않는다
+            if (e.type === 'click') hiddenAtStart = false;
+            if (!wrap.classList.contains('show-controls')) {
+                wrap.classList.add('show-controls');
+                clearTimeout(hideTimer);
+                const shownAt = Date.now();
+                // 3초 뒤 숨김 — 그 사이 다른 터치가 있었으면 기존 터치 처리(보이기/숨기기·자체 3초)에 맡긴다(먼저 숨겨 버리지 않게)
+                hideTimer = setTimeout(() => { if (startAt <= shownAt) wrap.classList.remove('show-controls'); }, 3000);
+            }
+            try { window._diagLog && window._diagLog('first_tap_show', { type: e.type, btn: b.classList.contains('video-seek-btn') ? 'seek' : 'play' }); } catch (x) {}
+        };
+        wrap.addEventListener('touchend', guard, true);
+        wrap.addEventListener('click', guard, true);
+    },
+
     _bindVideoSeekButtons() {
         const video = document.querySelector('#preview-content .preview-video');
         if (!video) return;

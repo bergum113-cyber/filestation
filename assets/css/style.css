@@ -4348,7 +4348,9 @@ body.board-mode #transfer-progress {
 .video-player-wrap.fs-idle:fullscreen .video-fullscreen-btn,
 .video-player-wrap.fs-idle:fullscreen .video-play-overlay {
     opacity: 0 !important;
-    pointer-events: none;
+    /* ★ (2026-10-01) !important — 없으면 뒤쪽 '.playing:hover … pointer-events: auto'(4425·4835행)가 이겨 전체화면에서 마우스가
+       영상 위에 있는 동안 숨겨진 가운데 버튼(재생·±5초)이 눌렸다(펜닐 제보, 실제 크롬 측정). 공유(share.php 723행)와 같게. */
+    pointer-events: none !important;
     transition: opacity 0.3s;
 }
 
