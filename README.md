@@ -727,6 +727,26 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 #### v5.8.5 (2026-10-01) ⭐ 현재
 
+- **[진단] 빠른 시작 탐색 멈춤 원인 확정용 기록 2가지 — 동작 변경 없음 (2026-10-01, 펜닐 승인)**
+  - **왜**: 아래 '다시 받기'는 "멈췄을 때 hls.js 가 STOPPED(아이폰 endstreaming → pauseBuffering)였다"는 **추론**(요청 0건 + 소스)에 기댄다. 다른 상태였다면 조건 때문에 다시 받기가 실행되지 않고 이유도 남지 않으므로, 다음 로그 한 번으로 확정할 수 있게 기록.
+  - **추가(app.js +17줄)**: ①`ds_seek` {why, t, state} — 받아 둔 범위 밖 이동·멈춤 때, 상태 조건을 보기 전에 그때의 hls.js 상태. ②`ds_mms` {ev, t, bufEnd, state} — 아이폰 ManagedMediaSource 의 `endstreaming`/`startstreaming` 신호. hls.js 공개 이벤트 `MEDIA_ATTACHED`(1.5.7 이 `{media, mediaSource}` 를 넘김 — 소스 확인)로 받은 mediaSource 에 기록만 붙임, PC 는 신호가 없어 기록 없음. 둘 다 진단 로그를 켰을 때(`window._hlsDiag`)만.
+  - **읽는 법**: `ds_mms endstreaming`(버퍼 끝이 큼) → 멀리 이동 → `ds_seek state:"STOPPED"` → `ds_resume` → `direct_stream` 요청이면 진단·수정 맞음. `ds_seek` 의 state 가 STOPPED 가 아니면 원인이 다른 것(그 상태로 다시 진단).
+  - **검증(실제 Chromium, 실제 app.js `_startDirectStream`, 아이폰 신호 흉내)**: endstreaming → `ds_mms {ev:endstreaming,t:3.5,bufEnd:34.6,state:STOPPED}` · 범위 안 이동 기록 없음 · 범위 밖 이동: IDLE 이면 `ds_seek`(IDLE)만·다시 받기 0, STOPPED 면 `ds_seek` → `ds_resume`·다시 받기 1 · startstreaming 기록. 다시 받기 동작 A~G 일곱 경우 기록 추가 전과 같음. app.js 문법 통과.
+
+- **[수정] 위 '다시 받기'를 hls.js 가 실제로 멈춘(STOPPED) 때만 — 받던 조각 취소 방지 (2026-10-01, 재검토에서 발견, 펜닐 승인)**
+  - **문제(바로 아래 항목에서 추가한 코드)**: `resumeBuffering()` = `startLoad(-1)` 인데 hls.js 1.5.7 의 `startLoad` 는 `stopLoad()` 부터 해 **받던 조각을 취소**하고 처음부터 받는다(소스 확인). 재생 중 버퍼가 바닥나 `waiting` 이 날 때는 대개 다음 조각을 받는 중이라, 느린 회선에서 멈춤이 오히려 길어질 수 있었다. `waiting` 은 PC 에서도 나므로 아래 항목의 'PC 는 영향 없음'은 틀린 설명이었다(정정).
+  - **수정(app.js +4줄, share.php +3줄 — 추가만)**: 받아 둔 범위 밖이어도 `hls.streamController.state === 'STOPPED'`(endstreaming 의 pauseBuffering 상태)일 때만 다시 받기. 받는 중·대기(IDLE)·값 없음이면 아무것도 안 함(hls.js 에 맡김). PC 는 재생 중 STOPPED 가 되지 않아 이제 실제로 영향 없음. 번들 hls.js 1.5.7 고정이라 내부 값 사용, 상태 문자열 `"STOPPED"` 소스에서 확인.
+  - **함께 확인(오진단 정정)**: `startLoad(-1)` 이 기억한 위치(lastCurrentTime)를 써 옛 위치부터 받지 않을까 의심 → 받을 위치는 `getLoadPosition()` 이 영상 정보 수신 뒤엔 `media.currentTime` 을 쓰고 `startLoad(-1)` 은 그 상태를 지우지 않아 새 위치부터 받음(문제 없음).
+  - **검증(실제 Chromium — 실제 app.js / 실제 share.php, 수정 전 코드와 나란히, 받아 둔 범위 0~34.6초)**: 다시 받기 횟수(전 → 후) — 받는 중 범위 밖 이동 1→0 · 받는 중 버퍼 끝 waiting 1→0 · 대기(IDLE) 범위 밖 이동 1→0 · **멈춤 범위 밖 이동 1→1** · **멈춤 버퍼 끝 waiting 1→1** · 멈춤 범위 안 이동 0→0 · 상태 값 없음 1→0. 탐색기·공유 같음. PHP 33개·app.js 문법 통과.
+
+- **[수정] 아이폰 일반재생(빠른 시작)에서 먼 위치로 탐색하면 멈추던 문제 (2026-10-01, 펜닐 로그 11:33)**
+  - **증상**: 같은 아이폰·빠른 시작인데 어떤 mp4 는 탐색이 되고(E09) 어떤 mp4 는 안 됨(Cowboy Bebop Movie). 파일 크기와 무관.
+  - **로그**: Cowboy — 재생 3.5초에 버퍼 34.6초 → 1006.9초로 이동 → 15초 넘게 위치 1006.9·버퍼 끝 34.6 그대로, **조각 요청(direct_stream) 0건**, 오류 없음. E09 — 이동할 때마다 버퍼가 4초 미만이었고 정상.
+  - **원인(번들 hls.js 1.5.7 소스로 확인)**: 아이폰은 ManagedMediaSource 를 쓰는데, 버퍼가 차면 브라우저가 `endstreaming` 을 보내고 hls.js 는 `pauseBuffering()`(= 조각 받는 장치 `stopLoad()`)로 멈춘다. 다시 받는 건 `startstreaming` → `resumeBuffering()`(= `startLoad(-1)`)뿐인데, 받아 둔 범위 밖으로 옮긴 뒤 그 신호가 오지 않아 요청 없이 멈췄다. 버퍼가 거의 빈 상태에서 옮기면 멈춤 신호가 나오기 전이라 정상이었다.
+  - **수정(app.js `_startDirectStream`, share.php `_shareFastNative` — 추가만)**: 빠른 시작 hls 에 `seeking`·`waiting` 처리 — 지금 위치가 받아 둔 범위 밖이면 `hls.resumeBuffering()` 로 지금 위치부터 다시 받게 함(범위 안이면 그대로). 버퍼가 차면 브라우저가 다시 멈춤 신호를 보내 종전 흐름. 다시 붙일 때(음성 전환) 이전 처리를 떼어 중복 없음. 트랜스코딩으로 바뀐 뒤엔 동작 안 함. PC 는 이 신호가 없어 영향 없음. 탐색기는 `ds_resume`(이유·위치) 진단 기록.
+  - **검증(실제 Chromium — 실제 app.js `_startDirectStream` / 실제 share.php 페이지, hls.js 자리에 다시 받기 횟수를 세는 가짜, 받아 둔 범위 0~34.6초로 꾸밈)**: 수정 전 — 범위 밖 이동·버퍼 끝 멈춤 모두 0회(로그와 같은 멈춤). 수정 후 — 범위 안 이동 0 · 범위 밖 이동(1006.9초) 1 · 버퍼 끝(34.5초) 멈춤 1 · 음성 전환 뒤 이동은 새 hls 만 1(이전 0) · 트랜스코딩 뒤 0. 탐색기·공유 같음. PHP 33개·app.js 문법 통과.
+  - **한계**: 아이폰의 멈춤/다시 받기 신호는 이 환경에서 만들 수 없어 실기기 확인 필요(로그에 `ds_resume` 이 찍히고 이어서 `direct_stream` 요청이 나가야 함). 작업 환경 초기화로 기존 회귀 시험 도구(452개)가 없어져 이번엔 돌리지 못함.
+
 - **[버전] 5.8.4 → 5.8.5 (2026-10-01, 펜닐 지시 "버전 올려줘")** — 2026-09-03~09-30 동안 v5.8.4 로 재패키징하며 쌓은 변경(동영상 스킨·음악 플레이어·공유 페이지·진단 로그·일반재생 빠른 시작(원본 스트리밍 방식 — 음성 여러 개·HEVC 포함) 등, 아래 v5.8.4 항목)을 새 버전으로 배포.
   - 갱신: `config.php` `APP_VERSION` 5.8.4 → 5.8.5, 상단 `@version` 주석(5.8.3b 로 정체돼 있던 것 — "수정 시 함께 업데이트" 규칙) → 5.8.5, README 현재 버전 표기(제목·배지·현재 버전·최종 업데이트) 및 지난 버전 올림 때 옛 값으로 남아 있던 현재 표기(설치 예시 `FileStation_v5.8.2d.zip` → 실제 배포 이름 `FileStation_v5_8_5.zip`, 설정 예시 `APP_VERSION '5.8.1j'`, 꼬리말 `v5.8.2d`). 지난 버전 이력(각 섹션의 캐시 무효화·업그레이드 기록)은 그대로.
   - 참고: `?v=APP_VERSION` 캐시버스팅 자산(studio 등)은 버전이 바뀌어 첫 열기 1회 다시 받는다(종전과 같음). app.js 등 `md5_file` 해시 자산은 영향 없음.

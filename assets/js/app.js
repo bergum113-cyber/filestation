@@ -40026,6 +40026,42 @@ const App = {
             });
             video.addEventListener('loadedmetadata', () => { if (fellBack) return; started = true; markReady(); afterReady(); }, { once: true });
             video.addEventListener('loadeddata', checkVideoDims, { once: true });
+            // ★ (2026-10-01) 아이폰(ManagedMediaSource): 버퍼가 차면 브라우저가 endstreaming 을 보내 hls.js 가 받기를 멈추는데(pauseBuffering → stopLoad),
+            //   그 상태로 받아 둔 범위 밖으로 옮기면 startstreaming 이 오지 않아 조각을 하나도 요청하지 않고 멈췄다(펜닐 로그 11:33 — 버퍼 34.6초 뒤
+            //   1006.9초로 이동, 요청 0건. 버퍼가 거의 빌 때 옮긴 영상은 정상). 받아 둔 범위 밖으로 옮기거나 버퍼가 바닥나 멈추면 지금 위치부터 다시 받게 한다
+            //   (resumeBuffering = startLoad(-1)). 차면 브라우저가 다시 멈춤 신호를 보내 종전 흐름으로. PC 는 이 신호가 없어 영향 없음.
+            const resumeIfNeeded = (why) => {
+                if (video._hlsInstance !== hls || fellBack || !started) return;
+                const t = video.currentTime || 0, b = video.buffered;
+                for (let i = 0; i < b.length; i++) if (t >= b.start(i) - 0.3 && t < b.end(i) - 0.5) return;   // 받아 둔 범위 안이면 그대로
+                // hls.js 가 실제로 멈춘(STOPPED — endstreaming 의 pauseBuffering) 때만. 받는 중에 부르면 resumeBuffering → startLoad 가
+                //   stopLoad 부터 해 받던 조각을 취소·처음부터 받는다(1.5.7 소스 확인 — 느린 회선 waiting 때 멈춤이 길어짐, PC 포함). 값이 없으면 안 함.
+                const sc = hls.streamController;
+                // ★ (2026-10-01) 진단 기록(동작 변경 없음) — 범위 밖일 때 그때의 hls.js 상태. STOPPED 가 아니면 원인이 다르다는 뜻(펜닐 승인)
+                try { window._diagLog && window._diagLog('ds_seek', { why, t: Math.round(t * 10) / 10, state: sc ? sc.state : '(없음)' }); } catch (e) {}
+                if (!sc || sc.state !== 'STOPPED') return;
+                try { hls.resumeBuffering(); } catch (e) {}
+                try { window._diagLog && window._diagLog('ds_resume', { why, t: Math.round(t * 10) / 10 }); } catch (e) {}
+            };
+            if (video._dsResumeFns) { video.removeEventListener('seeking', video._dsResumeFns[0]); video.removeEventListener('waiting', video._dsResumeFns[1]); }   // 다시 붙일 때 이전 것 떼기
+            video._dsResumeFns = [() => resumeIfNeeded('seek'), () => resumeIfNeeded('waiting')];
+            video.addEventListener('seeking', video._dsResumeFns[0]);
+            video.addEventListener('waiting', video._dsResumeFns[1]);
+            // ★ (2026-10-01) 진단 기록(동작 변경 없음) — 아이폰(ManagedMediaSource)의 받기 멈춤(endstreaming)/재개(startstreaming) 신호.
+            //   hls.js 공개 이벤트 MEDIA_ATTACHED 가 넘겨주는 mediaSource 에 기록만 붙인다(신호가 없는 PC 는 아무것도 안 남음).
+            if (Hls.Events && Hls.Events.MEDIA_ATTACHED) hls.on(Hls.Events.MEDIA_ATTACHED, (ev, d) => {
+                const ms = d && d.mediaSource;
+                if (!ms || typeof ms.addEventListener !== 'function') return;
+                const rec = (e) => {
+                    if (video._hlsInstance !== hls) return;
+                    const t = video.currentTime || 0, b = video.buffered; let be = 0;
+                    for (let i = 0; i < b.length; i++) if (t >= b.start(i) - 0.3 && t <= b.end(i)) be = b.end(i);
+                    const sc = hls.streamController;
+                    try { window._diagLog && window._diagLog('ds_mms', { ev: e.type, t: Math.round(t * 10) / 10, bufEnd: Math.round(be * 10) / 10, state: sc ? sc.state : '(없음)' }); } catch (x) {}
+                };
+                ms.addEventListener('startstreaming', rec);
+                ms.addEventListener('endstreaming', rec);
+            });
             hls.loadSource(url);
             hls.attachMedia(video);
         } else if (video.canPlayType('application/vnd.apple.mpegurl')) {   // hls.js 를 못 쓰는 브라우저 — 자체 HLS

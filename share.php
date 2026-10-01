@@ -3167,6 +3167,21 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         });
                         player.addEventListener('loadedmetadata', () => { if (my !== gen) return; started = true; afterReady(); }, { once: true });
                         player.addEventListener('loadeddata', () => { if (my === gen) checkDims(); }, { once: true });
+                        // ★ (2026-10-01) 아이폰(ManagedMediaSource): 버퍼가 차 받기를 멈춘(endstreaming → pauseBuffering) 뒤 받아 둔 범위 밖으로 옮기면
+                        //   다시 받으라는 신호가 오지 않아 멈췄다(탐색기 펜닐 로그 11:33). 범위 밖 이동·버퍼 바닥 멈춤 때 지금 위치부터 다시 받게 한다(탐색기와 같음).
+                        const resumeIfNeeded = () => {
+                            if (my !== gen || player._directHls !== hls || fell || !started) return;
+                            const tt = player.currentTime || 0, b = player.buffered;
+                            for (let i = 0; i < b.length; i++) if (tt >= b.start(i) - 0.3 && tt < b.end(i) - 0.5) return;
+                            // hls.js 가 실제로 멈춘(STOPPED) 때만 — 받는 중에 부르면 받던 조각을 취소·처음부터 받는다(탐색기와 같음)
+                            const sc = hls.streamController;
+                            if (!sc || sc.state !== 'STOPPED') return;
+                            try { hls.resumeBuffering(); } catch (e) {}
+                        };
+                        if (player._dsResumeFn) { player.removeEventListener('seeking', player._dsResumeFn); player.removeEventListener('waiting', player._dsResumeFn); }
+                        player._dsResumeFn = resumeIfNeeded;
+                        player.addEventListener('seeking', resumeIfNeeded);
+                        player.addEventListener('waiting', resumeIfNeeded);
                         hls.loadSource(url);
                         hls.attachMedia(player);
                     } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
