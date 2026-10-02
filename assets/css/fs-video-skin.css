@@ -76,8 +76,36 @@
 .fsvs-played { position: absolute; left: 0; top: 0; height: 100%; border-radius: 2px; background: var(--fsvs-accent); }
 .fsvs-thumb { position: absolute; top: 50%; width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 6px; background: #FFFFFF; transition: transform .1s ease; }
 .fsvs-prog:hover .fsvs-thumb { transform: scale(1.2); }
+/* ★ (2026-10-02) 재생바 미리보기(장면 + 시간) — 재생바 위에 띄운다. 누르기에 영향 없게 pointer-events:none.
+   재생바(.fsvs-prog)를 기준점으로 쓰기 위해 position:relative 를 새 규칙으로 더한다(안의 .fsvs-track 은 원래 relative 라 영향 없음). */
+.fsvs-prog { position: relative; }
+.fsvs-seekprev {
+    position: absolute; bottom: calc(100% + 8px); left: 0; transform: translateX(-50%);
+    display: none; flex-direction: column; align-items: center; gap: 2px;
+    width: clamp(96px, 30%, 160px); padding: 3px; box-sizing: border-box;
+    background: rgba(18, 18, 18, 0.92); border: 1px solid rgba(255,255,255,0.18); border-radius: 6px;
+    pointer-events: none; z-index: 6;
+}
+.fsvs-seekprev.on { display: flex; }
+.fsvs-seekprev img { display: block; width: 100%; height: auto; max-height: 120px; object-fit: contain; border-radius: 4px; background: #000; }
+.fsvs-seekprev img[hidden] { display: none; }
+.fsvs-seekprev-t { color: #FFFFFF; font-size: 12px; font-weight: 600; line-height: 1.5; font-variant-numeric: tabular-nums; }
 
 .fsvs-row { display: flex; align-items: center; gap: 2px; min-height: 40px; }
+/* ★ (2026-10-02) 터치 화면 — 재생바 누르는 영역을 넓히고 버튼 줄과 간격(펜닐 제보: 손가락으로 재생바를 좌우로 끌다가 버튼이 눌림).
+   재생바 누르는 영역이 14px 이고 바로 아래(간격 0) 40px 버튼 줄이라 손가락이 버튼에 걸렸다. 막대 두께는 그대로, 짚는 범위만 26px + 아래 6px 간격.
+   마우스(PC)는 그대로. 막대 높이를 쓰는 곳(자막 올림 등)은 JS 가 실제 높이를 재서 쓴다.
+   틀 높이가 210px 이상일 때만(.fsvs-roomy — 스킨 JS syncRoomy): 가로로 긴 영화를 휴대폰 세로로 볼 때(틀 약 162px) 가운데 버튼이 막대에 가리지 않게. */
+@media (pointer: coarse) {
+    .fsvs-roomy .fsvs-prog { height: 26px; margin-bottom: 6px; }
+}
+/* ★ (2026-10-02) 하단 막대·재생바 미리보기에서 글자 선택·길게 누르기 메뉴 막기(펜닐 제보: 휴대폰에서 재생바를 꾹 눌러 끌면 선택하기가 됨 — 아이폰 선택 손잡이).
+   막대 안은 버튼·시간·음량 막대뿐이라 막아도 잃는 기능이 없다. 재생바 끌기는 위 touch-action:none 그대로. */
+.fsvs-bar, .fsvs-seekprev {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+}
 .fsvs-row .fsvs-play { width: 40px; height: 40px; border-radius: 20px; background: rgba(255,255,255,0.1); }
 .fsvs-volrange { pointer-events: auto; width: 88px; accent-color: #FFFFFF; margin: 0 6px 0 2px; }
 .fsvs-time { margin-left: 10px; font-size: 13px; color: var(--fsvs-muted); white-space: nowrap; }

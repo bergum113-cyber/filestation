@@ -383,6 +383,8 @@ $rateLimitExclude = [
     'index_sync', 'index_stats', 'index_lookup', 'index_rebuild_stream',
     // 썸네일 (파일 목록에서 대량 요청)
     'thumbnail',
+    'video_frame',   // ★ (2026-10-02) 재생바 미리보기 장면 — 마우스 이동·끌기로 연달아 요청(썸네일과 같은 이유)
+    'video_frames',  // ★ (2026-10-02) 재생바 미리보기 장면 묶음(미리 받기 — 영상당 최대 150장을 20장씩)
     // 오디오 커버 (플레이리스트 각 트랙당 1회씩 요청)
     'audio_cover',
     // 오디오 가사 (LRC > USLT > TXT 우선순위)
@@ -480,6 +482,8 @@ $csrfExclude = [
     'audio_durations', 'media_info',
     // 썸네일 (GET 요청)
     'thumbnail',
+    'video_frame',   // ★ (2026-10-02) 재생바 미리보기 장면(GET, 이미지 출력 — 썸네일과 같음)
+    'video_frames',  // ★ (2026-10-02) 재생바 미리보기 장면 묶음(GET, 캐시만 만들고 결과 JSON — 상태를 바꾸는 요청이 아님)
     // 오디오 커버 (GET 요청, ID3v2 APIC 추출)
     'audio_cover',
     // 오디오 가사 (GET 요청, LRC > USLT > TXT)
@@ -6528,6 +6532,41 @@ try {
             );
             _sessionDebugLog('STEP:thumb_generate_done');
             break;
+
+        // ★ (2026-10-02) 재생바 미리보기 장면(펜닐 지시) — 목록 썸네일과 같은 순서: 로그인 → 세션 닫기 → 썸네일 사용 설정 → 폴더 권한.
+        case 'video_frame':
+            $auth->requireLogin();
+            session_write_close();
+            $vfSettings = loadSiteSettings();
+            if (isset($vfSettings['thumbnail_enabled']) && $vfSettings['thumbnail_enabled'] === false) { header('X-Frame-Error: disabled'); http_response_code(404); exit; }
+            restore_error_handler();
+            set_error_handler(function($errno, $errstr) { return true; });   // 이미지 출력 — 경고가 본문에 섞이지 않게(썸네일과 같음)
+            $vfPath = (string)($_GET['path'] ?? '');
+            $vfDir = dirname($vfPath);
+            if ($vfDir === '.') $vfDir = '';
+            if (!$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $vfDir ?: $vfPath)) { header('X-Frame-Error: perm'); http_response_code(403); exit; }
+            $fileManager->videoFrame((int)($_GET['storage_id'] ?? 0), $vfPath, (float)($_GET['t'] ?? 0), !empty($_GET['a']));   // a=1: 짧은 영상 정확 탐색(화면이 정함)
+            break;
+
+        // ★ (2026-10-02) 재생바 미리보기 장면 묶음(펜닐 승인) — 한 장(video_frame)과 같은 순서: 로그인 → 세션 닫기 → 썸네일 사용 설정 → 폴더 권한.
+        //   ts=초,초,…(최대 20개) 의 장면을 ffmpeg 1번으로 캐시에 만들고 결과 JSON(FileManager::videoFramesFile 설명).
+        case 'video_frames':
+            $auth->requireLogin();
+            session_write_close();
+            $vfsSettings = loadSiteSettings();
+            if (isset($vfsSettings['thumbnail_enabled']) && $vfsSettings['thumbnail_enabled'] === false) {
+                http_response_code(404); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['error' => 'disabled']); exit;
+            }
+            restore_error_handler();
+            set_error_handler(function($errno, $errstr) { return true; });   // JSON 출력 — 경고가 본문에 섞이지 않게
+            $vfsPath = (string)($_GET['path'] ?? '');
+            $vfsDir = dirname($vfsPath);
+            if ($vfsDir === '.') $vfsDir = '';
+            if (!$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $vfsDir ?: $vfsPath)) {
+                http_response_code(403); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['error' => 'perm']); exit;
+            }
+            $fileManager->videoFrames((int)($_GET['storage_id'] ?? 0), $vfsPath, (string)($_GET['ts'] ?? ''), !empty($_GET['a']));
+            break;
         
         case 'audio_cover':
             // MP3 파일의 ID3v2 APIC 프레임에서 커버 이미지 추출
@@ -11298,6 +11337,23 @@ try {
                         }
                     }
                 }
+                // ★ (2026-10-02) 재생바 미리보기 장면 캐시(seek/, FileManager::videoFrameFile) — audio/ 와 같은 방식. .slot 잠금 파일은 남긴다.
+                $seekCacheDir = $cacheDir . DIRECTORY_SEPARATOR . 'seek';
+                if (is_dir($seekCacheDir) && !is_link($seekCacheDir)) {
+                    $seekFiles = @scandir($seekCacheDir);
+                    if ($seekFiles !== false) {
+                        foreach ($seekFiles as $f) {
+                            if ($f === '.' || $f === '..' || strpos($f, '.slot') === 0) continue;
+                            $filePath = $seekCacheDir . DIRECTORY_SEPARATOR . $f;
+                            if (is_file($filePath) && !is_link($filePath)) {
+                                $fsize = @filesize($filePath);
+                                if ($fsize !== false) $freedBytes += $fsize;
+                                @unlink($filePath);
+                                $count++;
+                            }
+                        }
+                    }
+                }
             }
             $result = [
                 'success' => true,
@@ -11483,6 +11539,21 @@ try {
                                     $cacheSize += $fsize;
                                     $cacheCount++;
                                 }
+                            }
+                        }
+                    }
+                }
+                // ★ (2026-10-02) 재생바 미리보기 장면 캐시(seek/) — clear_thumbcache 와 같은 범위(.slot 잠금 파일 제외)
+                $seekCacheDir = $cacheDir . DIRECTORY_SEPARATOR . 'seek';
+                if (is_dir($seekCacheDir) && !is_link($seekCacheDir)) {
+                    $seekFiles = @scandir($seekCacheDir);
+                    if ($seekFiles !== false) {
+                        foreach ($seekFiles as $f) {
+                            if ($f === '.' || $f === '..' || strpos($f, '.slot') === 0) continue;
+                            $filePath = $seekCacheDir . DIRECTORY_SEPARATOR . $f;
+                            if (is_file($filePath) && !is_link($filePath) && substr($f, -4) === '.jpg') {
+                                $fsize = @filesize($filePath);
+                                if ($fsize !== false) { $cacheSize += $fsize; $cacheCount++; }
                             }
                         }
                     }

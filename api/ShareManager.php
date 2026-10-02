@@ -601,6 +601,7 @@ class ShareManager {
             // ★ HLS 액션은 즉시 처리 (is_dir/ZIP 분기 우회 — 폴더 경로라도 hlsShareStream가 세션으로 처리)
             require_once __DIR__ . '/FileManager.php';
             $fileManager = new FileManager();
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // ★ (2026-10-02) FileManager 생성자의 new Auth() 가 세션을 다시 열어 요청 내내 잠갔다(transcode=1 대체 재생은 영상 끝까지) — 같은 시청자의 다른 요청이 기다림. 세션 내용은 안 쓰고 session_id() 는 닫아도 같음(확인)
             $fileManager->hlsShareStream($fullPath);
             exit;
         } elseif ($isFolderStream && $subFile !== null && $subFile !== '') {
@@ -658,6 +659,7 @@ class ShareManager {
         if ($isStream && isset($_GET['hls'])) {
             require_once __DIR__ . '/FileManager.php';
             $fileManager = new FileManager();
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // ★ (2026-10-02) FileManager 생성자의 new Auth() 가 세션을 다시 열어 요청 내내 잠갔다(transcode=1 대체 재생은 영상 끝까지) — 같은 시청자의 다른 요청이 기다림. 세션 내용은 안 쓰고 session_id() 는 닫아도 같음(확인)
             $fileManager->hlsShareStream($fullPath);
             exit;
         }
@@ -666,6 +668,7 @@ class ShareManager {
         if ($isStream && isset($_GET['transcode'])) {
             require_once __DIR__ . '/FileManager.php';
             $fileManager = new FileManager();
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // ★ (2026-10-02) FileManager 생성자의 new Auth() 가 세션을 다시 열어 요청 내내 잠갔다(transcode=1 대체 재생은 영상 끝까지) — 같은 시청자의 다른 요청이 기다림. 세션 내용은 안 쓰고 session_id() 는 닫아도 같음(확인)
             $fileManager->transcodeShareStream($fullPath);
             exit;
         }
@@ -678,9 +681,30 @@ class ShareManager {
             if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
             require_once __DIR__ . '/FileManager.php';
             $fileManager = new FileManager();
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // ★ (2026-10-02) FileManager 생성자의 new Auth() 가 세션을 다시 열어 ffmpeg 작업 내내 잠갔다 — 같은 시청자의 다른 요청(장면·조각)이 기다렸음
             $segBase = 'share.php?t=' . rawurlencode($token) . '&download=1&stream=1'
                      . (($subFile !== null && $subFile !== '') ? '&file=' . rawurlencode($subFile) : '') . '&ds=segment';
             $fileManager->directStreamFile($fullPath, $segBase);
+            exit;
+        }
+
+        // ★ (2026-10-02) 재생바 미리보기 장면 — 빠른 시작과 같은 조건(위 공유 검증 모두 통과 + 스트리밍 공유 + stream=1). 다운로드 횟수 안 늘림.
+        if ($isStream && isset($_GET['vf'])) {
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+            require_once __DIR__ . '/FileManager.php';
+            $fileManager = new FileManager();
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // ★ (2026-10-02) FileManager 생성자의 new Auth() 가 세션을 다시 열어 ffmpeg 작업 내내 잠갔다 — 같은 시청자의 다른 요청(장면·조각)이 기다렸음
+            $fileManager->videoFrameFile($fullPath, (float)$_GET['vf'], !empty($_GET['a']));   // a=1: 짧은 영상 정확 탐색(화면이 정함)
+            exit;
+        }
+
+        // ★ (2026-10-02) 재생바 미리보기 장면 묶음 — 한 장(vf)과 같은 조건(공유 검증 모두 통과 + 스트리밍 공유 + stream=1). 다운로드 횟수 안 늘림.
+        if ($isStream && isset($_GET['vfs'])) {
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+            require_once __DIR__ . '/FileManager.php';
+            $fileManager = new FileManager();
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // ★ (2026-10-02) FileManager 생성자의 new Auth() 가 세션을 다시 열어 ffmpeg 작업 내내 잠갔다 — 같은 시청자의 다른 요청(장면·조각)이 기다렸음
+            $fileManager->videoFramesFile($fullPath, (string)$_GET['vfs'], !empty($_GET['a']));
             exit;
         }
         

@@ -2504,6 +2504,291 @@ class FileManager {
     }
     
     // 썸네일 이미지 전송 (출력 버퍼 정리 + 헤더 재설정)
+    /**
+     * ★ (2026-10-02) 재생바 미리보기 장면 — 탐색기용(펜닐 지시). 저장소 경로 확인·폴더 밖 차단 후 공용 videoFrameFile 로.
+     *   api.php 'video_frame' 에서 로그인·썸네일 사용 설정·폴더 권한을 먼저 확인한다(목록 썸네일과 같은 순서).
+     */
+    public function videoFrame(int $storageId, string $relativePath, float $t, bool $accurate = false): void {
+        // ★ (2026-10-02) 실패 사유 헤더 X-Frame-Error(진단용 — 응답 코드·내용은 그대로). 화면 진단 로그가 첫 실패 때 읽는다.
+        $basePath = $this->storage->getRealPath($storageId);
+        if (!$basePath) { header('X-Frame-Error: nostorage'); http_response_code(404); exit; }
+        $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relativePath);
+        if (!$this->isPathSafe($basePath, $fullPath) || !is_file($fullPath)) { header('X-Frame-Error: nofile'); http_response_code(404); exit; }
+        $this->videoFrameFile($fullPath, $t, $accurate);
+    }
+
+    /**
+     * ★ (2026-10-02) 재생바 미리보기 장면 — 공용(검증된 경로만 받는다: 탐색기 videoFrame / 공유 downloadShare 'vf').
+     *   시각은 1초 단위로 내림(간격은 화면이 정함 — 2026-10-02 10초 고정에서 변경) → 폭 160px JPEG. 캐시 data/thumbcache/seek/(키: 경로|수정시각|크기|시각), 실패는 24시간 재시도 안 함
+     *   (목록 썸네일 generateVideoThumbnail 과 같은 방식·같은 ffmpeg 빠른 옵션). 원본 파일에서 뽑으므로 재생 방식(일반·빠른 시작·
+     *   트랜스코딩)과 무관 — 어느 위치를 보여줄지는 화면(스킨)이 '그 위치로 실제 이동할 수 있을 때만'으로 정한다.
+     *   영상 끝을 넘은 시각 등으로 장면이 없으면 404(화면은 그림만 숨김).
+     */
+    public function videoFrameFile(string $fullPath, float $t, bool $accurate = false): void {
+        $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
+        if (!in_array($ext, self::FRAME_VIDEO_EXTS, true) || !is_file($fullPath)) { header('X-Frame-Error: ext'); http_response_code(404); exit; }
+        if (!is_finite($t) || $t < 0) $t = 0;
+        $sec = (int)floor($t);   // ★ (2026-10-02) 1초 단위(간격은 화면이 영상 길이에 맞춰 정함 — 예전 10초 고정)
+        if ($sec > 360000) { http_response_code(404); exit; }   // 100시간 넘는 값은 받지 않음
+
+        // ★ (2026-10-02) 캐시 위치·장면 결정 규칙(키프레임 맞춤·짧은 영상 정확 탐색·캐시 이름)·작업 자리는 묶음 요청(videoFramesFile)과 같은 함수를 쓴다
+        //   — 같은 시각은 어느 경로로 만들어도 같은 캐시 파일(frameCacheDir·frameTarget·frameSlot).
+        $cacheDir = $this->frameCacheDir();
+        if ($cacheDir === null) { header('X-Frame-Error: nocache'); http_response_code(404); exit; }
+        $tg = $this->frameTarget($fullPath, $ext, $sec, $accurate, $cacheDir);
+        $cachePath = $tg['cache'];
+        if (is_file($cachePath)) $this->sendThumbnail($cachePath);   // sendThumbnail 은 보낸 뒤 exit(0바이트면 지우고 404)
+        $failMarker = $tg['fail'];
+        if (is_file($failMarker) && (time() - @filemtime($failMarker)) < 86400) { header('X-Frame-Error: failmark'); http_response_code(404); exit; }
+
+        $ffmpeg = $this->findFfmpeg();
+        if (!$ffmpeg) { header('X-Frame-Error: noffmpeg'); http_response_code(404); exit; }
+        $slot = $this->frameSlot($cacheDir);   // 동시 작업 최대 2개(frameSlot 설명)
+        if ($slot === null) { header('Retry-After: 1'); header('X-Frame-Error: busy'); http_response_code(503); exit; }
+        $src = $fullPath;
+        if (PHP_OS_FAMILY === 'Windows') { $short = $this->getWindowsShortPath($fullPath); if ($short) $src = $short; }   // 한글 경로
+        $tmpPath = $cachePath . '.' . getmypid() . '.' . mt_rand(1000, 9999) . '.tmp.jpg';
+        $cmd = escapeshellarg($ffmpeg) . ' -hide_banner -loglevel error -nostdin' . self::frameInputArgs($tg) . ' -i ' . $this->escapeShellPath($src)
+             . ' -frames:v 1 -vf "scale=160:-2:flags=fast_bilinear" -q:v 5 ' . $this->escapeShellPath($tmpPath) . ' -y 2>&1';
+        $out = [];
+        @exec($cmd, $out, $ret);
+        if ($ret !== 0 || !is_file($tmpPath) || (int)@filesize($tmpPath) < 200) {
+            @unlink($tmpPath);
+            @file_put_contents($failMarker, date('Y-m-d H:i:s') . ' ' . implode(' ', array_slice($out, -2)));
+            header('X-Frame-Error: ffmpeg ret=' . (int)$ret . ' ' . self::frameErrMsg($out, [$fullPath, $src, $tmpPath]));   // ffmpeg 마지막 오류 줄(경로 지움·ASCII 만)
+            http_response_code(404); exit;
+        }
+        if (!@rename($tmpPath, $cachePath)) {   // 같은 시각을 동시에 만든 다른 요청이 먼저 저장했으면(Windows 는 덮어쓰기 실패) 그쪽을 쓴다
+            if (!is_file($cachePath)) @copy($tmpPath, $cachePath);
+            @unlink($tmpPath);                  // 임시 파일은 어느 경우든 지운다(보낸 뒤 exit 하므로 먼저)
+        }
+        $this->sendThumbnail($cachePath);       // 그래도 없으면 sendThumbnail 이 404
+    }
+
+    /** ★ (2026-10-02) 재생바 미리보기가 받는 동영상 확장자(한 장·묶음 공용) */
+    private const FRAME_VIDEO_EXTS = ['mp4', 'm4v', 'mkv', 'webm', 'mov', 'avi', 'wmv', 'flv', 'ts', 'm2ts', 'mts', 'mpg', 'mpeg', '3gp', 'ogv'];
+
+    /** ★ (2026-10-02) 재생바 미리보기 장면 캐시 폴더(data/thumbcache/seek) — 없으면 만들고, 못 쓰면 null */
+    private function frameCacheDir(): ?string {
+        $cacheDir = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'data' . DIRECTORY_SEPARATOR . 'thumbcache' . DIRECTORY_SEPARATOR . 'seek';
+        if (!is_dir($cacheDir)) @mkdir($cacheDir, 0755, true);
+        return (is_dir($cacheDir) && is_writable($cacheDir)) ? $cacheDir : null;
+    }
+
+    /**
+     * ★ (2026-10-02) 재생바 미리보기 장면 결정 규칙(한 장·묶음 공용 — 같은 시각은 같은 캐시 파일). 반환 ['cache','fail','ss','acc'].
+     *   키프레임 맞춤(펜닐 승인) — 장면은 '그 시각 바로 앞 키프레임'이라 키프레임 간격보다 촘촘한 요청은 같은 장면을 따로 만들고 따로 캐시했다.
+     *   mp4 계열이고 APCu 가 있으면 빠른 시작과 **같은 키·같은 값**의 키프레임 목록(Mp4KeyIndex, 1시간)으로 바로 앞 키프레임 시각을 찾아 그 시각으로
+     *   캐시(보이는 장면은 그대로). APCu 없음·mp4 아님·목록 못 읽음이면 1초 단위(요청마다 목차를 읽지 않게 — 목차는 수 MB~수십 MB).
+     *   짧은 영상 정확 탐색(펜닐 제보: 8초 영상 — 키프레임이 맨 앞 하나뿐이라 어디를 가리켜도 첫 장면): 화면이 10분 이하 영상에 a=1 을 붙이면
+     *   키프레임이 1초 이내일 때만 그 키프레임 장면, 아니면 정확 탐색(키프레임부터 그 시각까지 푼다), 캐시는 'a초' 로 따로.
+     */
+    private function frameTarget(string $fullPath, string $ext, int $sec, bool $accurate, string $cacheDir): array {
+        $seekT = (float)$sec; $tag = (string)$sec; $snapped = false;
+        if (in_array($ext, ['mp4', 'm4v', 'mov'], true) && function_exists('apcu_fetch') && (!function_exists('apcu_enabled') || @apcu_enabled())) {
+            $st = @stat($fullPath);
+            $ik = 'fs_ds_' . md5($fullPath . '|' . ($st['size'] ?? 0) . '|' . ($st['mtime'] ?? 0) . '|v2');   // directStreamFile 과 같은 키
+            $hit = false; $idx = @apcu_fetch($ik, $hit);
+            if (!$hit || !is_array($idx)) {
+                require_once __DIR__ . '/Mp4KeyIndex.php';
+                $idx = Mp4KeyIndex::read($fullPath);
+                if (is_array($idx)) @apcu_store($ik, $idx, 3600);   // directStreamFile 과 같은 값·같은 보관 시간
+            }
+            $kp = (is_array($idx) && !empty($idx['keyPts']) && is_array($idx['keyPts'])) ? $idx['keyPts'] : null;
+            if ($kp) {
+                $lo = 0; $hi = count($kp) - 1; $best = -1;
+                while ($lo <= $hi) { $mid = ($lo + $hi) >> 1; if ($kp[$mid] <= $sec + 0.001) { $best = $mid; $lo = $mid + 1; } else { $hi = $mid - 1; } }
+                if ($best < 0) $best = 0;
+                $keyT = (float)$kp[$best];
+                if (is_finite($keyT) && $keyT >= 0 && (!$accurate || ($sec - $keyT) <= 1.0)) { $seekT = $keyT; $tag = 'k' . sprintf('%.3f', $keyT); $snapped = true; }
+            }
+        }
+        $acc = $accurate && !$snapped;
+        if ($acc) $tag = 'a' . $sec;
+        $cachePath = $cacheDir . DIRECTORY_SEPARATOR . md5($fullPath . '|' . @filemtime($fullPath) . '|' . @filesize($fullPath) . '|' . $tag . '|160k') . '.jpg';   // k: 키프레임 방식, $tag: 초·맞춘 키프레임 시각·a초
+        // 키프레임 시각에 맞췄으면 그 키프레임이 확실히 잡히게 0.01초 뒤(-noaccurate_seek 는 그 시각 이하 키프레임으로 감 — 반올림으로 바로 앞 것이 잡히지 않게)
+        return ['cache' => $cachePath, 'fail' => $cachePath . '.fail', 'ss' => $snapped ? sprintf('%.3f', $seekT + 0.01) : (string)$sec, 'acc' => $acc];
+    }
+
+    /**
+     * ★ (2026-10-02) ffmpeg 입력 앞 옵션(한 장·묶음 공용). 키프레임만(-noaccurate_seek -skip_frame nokey): 그 시각 바로 앞 키프레임 화면 —
+     *   정확 탐색은 키프레임부터 그 시각까지 풀어야 해 키프레임 간격 10초 1080p 실측 H.264 0.67초 · HEVC 10비트 2.34초 → 0.08초 · 0.14초(1코어).
+     *   정확 탐색(acc)이면 키프레임 전용 옵션을 뺀다.
+     */
+    private static function frameInputArgs(array $tg): string {
+        return ($tg['acc'] ? '' : ' -noaccurate_seek -skip_frame nokey') . ' -ss ' . $tg['ss'] . ' -analyzeduration 1000000 -probesize 1000000 -an -sn -dn';
+    }
+
+    /**
+     * ★ (2026-10-02) 동시 작업 최대 2개(한 장·묶음 공용 — 묶음 하나 = 자리 하나). 마우스를 천천히 움직이거나 여러 탭·사용자가 동시에 요청해도
+     *   ffmpeg 가 쌓이지 않게(트랜스코딩과 CPU 를 나눠 쓰므로). 자리가 없으면 null(호출한 쪽이 503). 잠금은 요청이 끝나면(exit) 풀린다.
+     */
+    private function frameSlot(string $cacheDir) {
+        for ($i = 0; $i < 2; $i++) {
+            $fh = @fopen($cacheDir . DIRECTORY_SEPARATOR . '.slot' . $i, 'c');
+            if ($fh && @flock($fh, LOCK_EX | LOCK_NB)) return $fh;
+            if ($fh) @fclose($fh);
+        }
+        return null;
+    }
+
+    /**
+     * ★ (2026-10-02) 재생바 미리보기 장면 묶음 만들기 — 탐색기용(펜닐 승인: 미리 받기가 서버 PC 에서 장당 약 0.7초 — 대부분 장면마다 반복되는
+     *   PHP 요청 처리·ffmpeg 실행 비용). 저장소 경로 확인·폴더 밖 차단 후 공용 videoFramesFile 로. api.php 'video_frames' 에서 로그인·썸네일 사용 설정·
+     *   폴더 권한을 먼저 확인한다(한 장과 같은 순서).
+     */
+    public function videoFrames(int $storageId, string $relativePath, string $ts, bool $accurate = false): void {
+        $basePath = $this->storage->getRealPath($storageId);
+        if (!$basePath) { self::framesJson(['error' => 'nostorage'], 404); }
+        $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relativePath);
+        if (!$this->isPathSafe($basePath, $fullPath) || !is_file($fullPath)) { self::framesJson(['error' => 'nofile'], 404); }
+        $this->videoFramesFile($fullPath, $ts, $accurate);
+    }
+
+    /**
+     * ★ (2026-10-02) 재생바 미리보기 장면 묶음 — 공용(검증된 경로만: 탐색기 videoFrames / 공유 downloadShare 'vfs').
+     *   ts: 쉼표로 나눈 초 목록(최대 20개, 0~100시간). 캐시에 없는 장면만 **ffmpeg 1번**(입력마다 그 시각으로 이동 · 출력마다 한 장)으로 만들어
+     *   한 장 요청과 **같은 캐시 파일**에 저장(frameTarget). 결과 JSON {ok, fail, fallback, left, made, ms}:
+     *     ok       — 캐시에 있음(이제 한 장 요청이 캐시에서 바로)  · fail — 실패 표시(24시간)
+     *     fallback — ffmpeg 가 통째로 실패(입력 하나라도 못 열면 전체 실패) → 실패로 표시하지 않고 화면이 한 장씩 다시(장면별로 정확히 처리)
+     *     left     — Windows 명령 줄 길이 제한(약 8,000자) 때문에 이번에 못 넣은 시각 → 화면이 다시 요청 · busy(503) — 작업 자리 없음
+     *   실측(10분 1080p, 키프레임 10초, 20장): ffmpeg 20번 1.44초 → 1번 0.90초, 그림은 20장 모두 바이트까지 같음.
+     */
+    public function videoFramesFile(string $fullPath, string $ts, bool $accurate = false): void {
+        $t0 = microtime(true);
+        $res = ['ok' => [], 'fail' => [], 'fallback' => [], 'left' => [], 'made' => 0];
+        $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
+        if (!in_array($ext, self::FRAME_VIDEO_EXTS, true) || !is_file($fullPath)) { self::framesJson(['error' => 'ext'], 404); }
+        $secs = [];
+        foreach (explode(',', $ts) as $p) {
+            $p = trim($p);
+            if ($p === '' || !is_numeric($p)) continue;
+            $f = (float)$p;
+            if (!is_finite($f) || $f < 0 || $f > 360000) continue;
+            $secs[(int)floor($f)] = true;
+            if (count($secs) >= 20) break;
+        }
+        $secs = array_keys($secs);
+        $cacheDir = $this->frameCacheDir();
+        if ($cacheDir === null) { self::framesJson(['error' => 'nocache'], 404); }
+        $groups = [];   // 같은 캐시 파일(키프레임 맞춤으로 합쳐진 시각들)은 한 번만 만든다
+        foreach ($secs as $sec) {
+            $tg = $this->frameTarget($fullPath, $ext, $sec, $accurate, $cacheDir);
+            if (is_file($tg['cache']) && (int)@filesize($tg['cache']) > 0) { $res['ok'][] = $sec; continue; }
+            if (is_file($tg['fail']) && (time() - @filemtime($tg['fail'])) < 86400) { $res['fail'][] = $sec; continue; }
+            if (!isset($groups[$tg['cache']])) $groups[$tg['cache']] = ['tg' => $tg, 'secs' => []];
+            $groups[$tg['cache']]['secs'][] = $sec;
+        }
+        if (!$groups) { $res['ms'] = (int)round((microtime(true) - $t0) * 1000); self::framesJson($res); }
+        $ffmpeg = $this->findFfmpeg();
+        if (!$ffmpeg) { foreach ($groups as $g) foreach ($g['secs'] as $s) $res['fail'][] = $s; $res['error'] = 'noffmpeg'; self::framesJson($res); }
+        $slot = $this->frameSlot($cacheDir);
+        if ($slot === null) {
+            foreach ($groups as $g) foreach ($g['secs'] as $s) $res['left'][] = $s;
+            $res['busy'] = true; header('Retry-After: 1'); self::framesJson($res, 503);
+        }
+        $src = $fullPath;
+        if (PHP_OS_FAMILY === 'Windows') { $short = $this->getWindowsShortPath($fullPath); if ($short) $src = $short; }   // 한글 경로
+        // ★ (2026-10-02) 메모리·스레드·시간 제한(재검토 실측, 펜닐 승인) — 입력 20개를 ffmpeg 하나에 넣으면 디코더가 입력마다 생겨
+        //   HEVC 10비트 1080p 20장: 최대 메모리 1,210MB(한 장 110MB)·코어 8개 가정 2,027MB·스레드 201개 → 4K 면 수 GB(작업 자리 2개면 두 배).
+        //   ①ffmpeg 한 번에 넣는 입력 수를 화소로 제한(1080p 4장분 — 1080p 이하 4·1440p 2·4K 1, 크기 모르면 2)하고 요청 안에서 차례로 실행
+        //   ②입력마다 -threads 1(목록 썸네일과 같음 — 코어가 많은 서버에서 스레드 폭증 방지) ③약 10초가 지나면 나머지는 left
+        //   (Windows PHP 의 max_execution_time 은 실제 경과 시간 — 도중에 끝나 임시 파일이 남지 않게). 시간 제한은 120초로 다시 잡는다(무제한이면 그대로).
+        if ((int)ini_get('max_execution_time') > 0) @set_time_limit(120);
+        $dims = $this->frameDims($fullPath, $src, $ffmpeg);
+        $perProc = $dims ? max(1, min(4, (int)floor(4 * 1920 * 1080 / max(1, $dims[0] * $dims[1])))) : 2;
+        $res['per'] = $perProc;
+        $head = escapeshellarg($ffmpeg) . ' -hide_banner -loglevel error -nostdin';
+        $srcArg = $this->escapeShellPath($src);
+        $deadline = $t0 + 10.0;
+        $list = array_values($groups);
+        for ($gi = 0; $gi < count($list); ) {
+            if ($gi > 0 && microtime(true) > $deadline) {   // 시간 상한 — 나머지는 다음 요청에서
+                for (; $gi < count($list); $gi++) foreach ($list[$gi]['secs'] as $s) $res['left'][] = $s;
+                break;
+            }
+            $inputs = ''; $outputs = ''; $used = []; $n = 0;
+            while ($gi < count($list) && $n < $perProc) {
+                $g = $list[$gi];
+                $tmp = $cacheDir . DIRECTORY_SEPARATOR . 'b' . getmypid() . '_' . mt_rand(1000, 9999) . '_' . $n . '.tmp.jpg';
+                $in = ' -threads 1' . self::frameInputArgs($g['tg']) . ' -i ' . $srcArg;
+                $o = ' -map ' . $n . ':v:0 -frames:v 1 -vf "scale=160:-2:flags=fast_bilinear" -q:v 5 ' . $this->escapeShellPath($tmp);
+                // Windows 명령 줄 한도(cmd.exe 8,191자) 아래로 — 넘으면 이번 실행엔 넣지 않고 다음 실행으로(한 실행의 첫 장은 항상 넣음)
+                if ($n > 0 && strlen($head) + strlen($inputs) + strlen($in) + strlen($outputs) + strlen($o) + 16 > 7000) break;
+                $inputs .= $in; $outputs .= $o; $used[] = ['g' => $g, 'tmp' => $tmp]; $n++; $gi++;
+            }
+            $out = [];
+            @exec($head . $inputs . $outputs . ' -y 2>&1', $out, $ret);
+            if ($ret !== 0) {   // 이 실행만 통째로 실패 — 실패 표시 없이 한 장씩(장면별로 정확히)
+                foreach ($used as $u) { @unlink($u['tmp']); foreach ($u['g']['secs'] as $s) $res['fallback'][] = $s; }
+                if (!isset($res['err'])) $res['err'] = 'ffmpeg ret=' . (int)$ret . ' ' . self::frameErrMsg($out, [$fullPath, $src, $cacheDir]);
+                continue;
+            }
+            foreach ($used as $u) {
+                $cp = $u['g']['tg']['cache'];
+                if (is_file($u['tmp']) && (int)@filesize($u['tmp']) >= 200) {
+                    if (!@rename($u['tmp'], $cp)) { if (!is_file($cp)) @copy($u['tmp'], $cp); @unlink($u['tmp']); }
+                    foreach ($u['g']['secs'] as $s) $res['ok'][] = $s;
+                    $res['made']++;
+                } else {
+                    @unlink($u['tmp']);
+                    @file_put_contents($u['g']['tg']['fail'], date('Y-m-d H:i:s') . ' batch: no frame');   // 영상 끝을 넘은 시각 등 — 한 장과 같게 24시간
+                    foreach ($u['g']['secs'] as $s) $res['fail'][] = $s;
+                }
+            }
+        }
+        $res['ms'] = (int)round((microtime(true) - $t0) * 1000);
+        self::framesJson($res);
+    }
+
+    /**
+     * ★ (2026-10-02) 영상 크기 [가로, 세로] — 묶음에서 ffmpeg 한 번에 넣을 입력 수를 정하려고(메모리). 영상 정보 확인(getMediaInfo)과 같은 'ffmpeg -i'
+     *   출력에서 Video 줄의 가로x세로만 읽는다. APCu 가 있으면 1시간 보관(키: 경로|크기|수정시각). 못 읽으면 null(호출한 쪽이 2장으로).
+     */
+    private function frameDims(string $fullPath, string $src, string $ffmpeg): ?array {
+        $useApcu = function_exists('apcu_fetch') && (!function_exists('apcu_enabled') || @apcu_enabled());
+        $st = @stat($fullPath);
+        $ck = 'fs_vfdim_' . md5($fullPath . '|' . ($st['size'] ?? 0) . '|' . ($st['mtime'] ?? 0));
+        if ($useApcu) { $hit = false; $v = @apcu_fetch($ck, $hit); if ($hit && is_array($v) && count($v) === 2) return $v; }
+        $out = [];
+        @exec(escapeshellarg($ffmpeg) . ' -hide_banner -nostdin -i ' . $this->escapeShellPath($src) . ' 2>&1', $out);
+        $dims = null;
+        foreach ($out as $line) {
+            if (stripos($line, 'Video:') !== false && preg_match('/Video:.*?\b(\d{2,5})x(\d{2,5})\b/', $line, $m)) { $dims = [(int)$m[1], (int)$m[2]]; break; }
+        }
+        if ($dims && ($dims[0] < 16 || $dims[1] < 16)) $dims = null;
+        if ($useApcu && $dims) @apcu_store($ck, $dims, 3600);
+        return $dims;
+    }
+
+    /** ★ (2026-10-02) 묶음 응답(JSON) 보내고 끝 */
+    private static function framesJson(array $res, int $code = 200): void {
+        http_response_code($code);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo json_encode($res);
+        exit;
+    }
+
+    /**
+     * ★ (2026-10-02) 진단 사유 헤더용 ffmpeg 오류 문장 — 서버 경로를 지운다(펜닐 승인). 공유 링크는 로그인 없이 볼 수 있는데, 예전 ffmpeg(4.x~5.x)는
+     *   '파일경로: Invalid data found …' 처럼 마지막 줄에 경로를 찍어 응답 헤더로 서버 경로가 보일 수 있었다(이 환경 최신판은 경로 없음 — 재현 안 됨).
+     *   ①넘겨받은 경로(원본·짧은 경로·임시 파일 — \ / 바꾼 꼴 포함) → <file> ②남은 Windows(C:\… C:/…)·유닉스(/a/b…) 경로 모양 → <path>
+     *   ③그다음 ASCII 외 문자 ? (한글 경로는 ①②에서 먼저 지워짐), 120자. 오류 종류(Invalid data found 등)는 남아 진단엔 지장 없다.
+     */
+    private static function frameErrMsg(array $out, array $paths): string {
+        $msg = (string)implode(' ', array_slice($out, -1));
+        foreach ($paths as $pp) {
+            $pp = (string)$pp;
+            if ($pp === '') continue;
+            $msg = str_replace([$pp, str_replace('\\', '/', $pp), str_replace('/', '\\', $pp)], '<file>', $msg);
+        }
+        $msg = preg_replace('~[A-Za-z]:[\\\\/][^\s:\'"]*~u', '<path>', $msg) ?? $msg;              // Windows 경로
+        $msg = preg_replace('~(?<![\w<])/[^\s:\'"/]+/[^\s:\'"]*~u', '<path>', $msg) ?? $msg;       // 유닉스 경로(슬래시 2개 이상)
+        $msg = preg_replace('/[^\x20-\x7E]/', '?', $msg) ?? '';                                     // 줄바꿈 등 제어 문자·ASCII 외 → ?
+        return substr($msg, 0, 120);
+    }
+
     private function sendThumbnail(string $cachePath): void {
         // 0바이트 파일 방어 (디스크 가득 참 등으로 쓰기 실패한 경우)
         $fsize = @filesize($cachePath);

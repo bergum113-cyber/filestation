@@ -207,6 +207,52 @@
             } catch (x) {}
         }, true);
     });
+    // ★ (2026-10-02) 진단 기록(동작 변경 없음) — 재생 위치가 누구 때문에 바뀌었는지(펜닐 제보: 아이폰 빠른 시작에서 뒤로 옮긴 뒤 잠시 재생하다
+    //   옮기기 직전 위치로 되돌아감 — 08:21 로그 2422.6 → 2686.54, 기존 기록으론 사파리 내부·hls.js·우리 코드 중 어디인지 못 가름).
+    //   ①v_set_time: 영상 currentTime 쓰기를 그대로 통과시키며 바꾸기 전·후 위치와 부른 곳(함수·파일:줄 2~3단계, 서버 주소 지움)을 남긴다.
+    //     페이지를 열 때 진단이 켜져 있을 때만 설치(꺼져 있으면 아무것도 바꾸지 않음), 0.05초 미만 변화는 빼고 페이지당 300번까지.
+    //   ②v_seeking·v_seeked: 이동 시작·끝의 위치. → v_seeking 앞에 v_set_time 이 없으면 사파리 내부 동작, 부른 곳이 hls…min.js 면 hls.js,
+    //     fs-video-skin.js·app.js 면 우리 코드.
+    try {
+        if (window._hlsDiag && typeof HTMLMediaElement !== 'undefined' && !HTMLMediaElement.prototype.__fsSeekDiag) {
+            const _ctd = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+            if (_ctd && typeof _ctd.get === 'function' && typeof _ctd.set === 'function') {
+                let _stN = 0;
+                const _caller = () => {
+                    try {
+                        return String(new Error().stack || '').split('\n').slice(3, 6)
+                            .map((x) => x.trim().replace(/^at\s+/, '').replace(/https?:\/\/[^\s)@]*\/([^/\s)?@]+)(?:\?[^\s):@]*)?:(\d+):\d+/g, '$1:$2'))
+                            .filter(Boolean).join(' < ').slice(0, 220);
+                    } catch (e) { return ''; }
+                };
+                Object.defineProperty(HTMLMediaElement.prototype, 'currentTime', {
+                    configurable: true, enumerable: _ctd.enumerable,
+                    get() { return _ctd.get.call(this); },
+                    set(v) {
+                        try {
+                            if (window._hlsDiag && this.tagName === 'VIDEO' && _stN < 300) {
+                                const from = +_ctd.get.call(this) || 0, to = +v;
+                                if (isFinite(to) && Math.abs(to - from) >= 0.05) {
+                                    _stN++;
+                                    window._diagLog && window._diagLog('v_set_time', { from: +from.toFixed(2), to: +to.toFixed(2), by: _caller() });
+                                }
+                            }
+                        } catch (e) {}
+                        _ctd.set.call(this, v);
+                    }
+                });
+                HTMLMediaElement.prototype.__fsSeekDiag = true;
+            }
+        }
+    } catch (e) {}
+    ['seeking', 'seeked'].forEach((_ev) => {
+        document.addEventListener(_ev, (e) => {
+            if (!window._hlsDiag || !e.target || e.target.tagName !== 'VIDEO') return;
+            const v = e.target;
+            let be = 0; try { be = v.buffered.length ? +v.buffered.end(v.buffered.length - 1).toFixed(2) : 0; } catch (x) {}
+            try { window._diagLog && window._diagLog('v_' + _ev, { t: +(v.currentTime || 0).toFixed(2), rs: v.readyState, paused: v.paused, bufEnd: be, hls: !!v._hlsInstance }); } catch (x) {}
+        }, true);
+    });
     // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 플레이어를 누른 순간: 손가락 아래 요소·'준비 전' 여부·가운데 버튼이 눌릴 수 있는지.
     //   가운데 버튼이 '준비 전'(pointer-events:none)이면 누름이 버튼이 아닌 영상·감싸개로 간다 — 그 차이를 기록으로 가른다.
     ['touchend', 'click'].forEach((_ev) => {
@@ -41768,6 +41814,20 @@ const App = {
         const byId = (id) => document.getElementById(id);
         const shown = (b) => !!(b && b.style.display !== 'none');
         return {
+            // ★ (2026-10-02) 재생바 미리보기 장면 주소(스킨 fsvs-seekprev). 빠른 시작과 같은 저장소·경로(_mediaInfoStorageId/_mediaInfoPath, 영상을 열 때 저장).
+            //   지금 미리보기 항목과 경로가 다르거나(남은 값) 보관함(암호화 — 서버가 원본을 못 읽음)이면 null → 미리보기를 띄우지 않음.
+            frameUrl: (sec) => {
+                const it = App._currentPreviewItem;
+                if (!it || it._vaultBlobUrl || !App._mediaInfoPath || it.path !== App._mediaInfoPath || App._mediaInfoStorageId == null) return null;
+                return `api.php?action=video_frame&storage_id=${App._mediaInfoStorageId}&path=${encodeURIComponent(App._mediaInfoPath)}&t=${Math.max(0, Math.floor(sec || 0))}`;
+            },
+            // ★ (2026-10-02) 재생바 미리보기 장면 묶음 주소(스킨 묶음 미리 받기 — 서버가 ffmpeg 1번으로 최대 20장을 캐시에). 조건은 frameUrl 과 같다.
+            framesUrl: (secs) => {
+                const it = App._currentPreviewItem;
+                if (!it || it._vaultBlobUrl || !App._mediaInfoPath || it.path !== App._mediaInfoPath || App._mediaInfoStorageId == null) return null;
+                const ts = (Array.isArray(secs) ? secs : []).map((x) => Math.max(0, Math.floor(x || 0))).join(',');
+                return `api.php?action=video_frames&storage_id=${App._mediaInfoStorageId}&path=${encodeURIComponent(App._mediaInfoPath)}&ts=${ts}`;
+            },
             // ★ (2026-09-23) 스트리밍 판별.
             //   대부분의 변환 경로는 data-transcode-base 를 붙이지만 '대용량 → 스트리밍' 경로(App._startTranscode 직접 호출)는
             //   붙이지 않고, 아이폰은 그 경로에서 HLS 주소를 video.src 에 직접 넣어 _hlsInstance 도 없다 → 주소로도 판별.

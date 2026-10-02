@@ -206,6 +206,196 @@
         const endDrag = (e) => { if (!dragging) return; dragging = false; commit(ratioAt(e.clientX)); render(); };
         on(prog, 'pointerup', endDrag);
         on(prog, 'pointercancel', () => { dragging = false; render(); });
+        // ★ (2026-10-02) 재생바 미리보기(펜닐 지시) — PC 는 마우스를 재생바 위에서 움직일 때, 휴대폰은 끄는 동안 그 위치의 작은 장면과 시간을 띄운다.
+        //   · 그 위치로 **실제 이동할 수 있을 때만**: 스트리밍(트랜스코딩)이면 seekAbs 와 같은 범위(이 세션에서 변환된 끝까지) — 갈 수 없는 곳의
+        //     장면을 보여주면 이동되는 것처럼 보여서. 빠른 시작·일반 재생은 전체.
+        //   · 장면은 ctx.frameUrl(초) — 원본에서 뽑은 그림(서버 videoFrameFile, 10초 단위 캐시). 지원 안 하면(보관함 등) null → 아예 띄우지 않음.
+        //   · 시간은 바로, 그림은 0.15초 멈췄을 때 10초 단위로 요청(끌기 중 요청이 쏟아지지 않게). 그림을 못 받으면 그림만 숨김.
+        //   · 위 진행바 처리는 그대로 두고 별도로 붙인다(먼저 등록된 위 처리가 dragRatio 를 먼저 갱신). 상자는 pointer-events:none 이라 누르기에 영향 없음.
+        const sp = el('div', 'fsvs-seekprev');
+        const spImg = document.createElement('img');
+        spImg.alt = ''; spImg.draggable = false; spImg.decoding = 'async'; spImg.hidden = true;
+        const spTime = el('span', 'fsvs-seekprev-t');
+        sp.append(spImg, spTime);
+        prog.append(sp);
+        let spOn = false;
+        // ★ (2026-10-02) 미리 받기 + 가까운 장면 먼저(펜닐 제보: 끌고 멈춰야 바뀜 — 장면을 그 자리에서 만들어 0.1~0.5초 늦게 따라와서).
+        //   · 받는 일은 보이지 않는 로더 하나만(동시 1개 — img.src 를 바꾸면 브라우저 요청은 취소돼도 서버 ffmpeg 는 끝까지 돌아 쌓인다;
+        //     서버도 동시 2개, videoFrameFile). 받은 장면은 spDone(구간 → 주소)에 두고, 보이는 그림은 거기서 꺼내 바꿔 즉시 나온다(브라우저에 이미 있음).
+        //   · 우선순위: 사용자가 지금 보는 구간(spWant) → 미리 받기(spQueue). 미리 받기는 처음 보일 때 영상 전체에 고르게 최대 60구간,
+        //     몇 장만 받아도 재생바 전체에 가까운 장면이 생기게 처음·가운데·1/4·3/4 … 순서(비트 반전). 트랜스코딩에서 아직 못 가는 구간은 건너뜀.
+        //   · 표시: 그 구간 장면이 있으면 그것, 없으면 받은 것 중 가장 가까운 장면을 바로 — 새 장면이 올 때마다 더 가까운 것으로 바꾼다.
+        //   · 실패·바쁨(503): 0.3초 쉬고 다음. 미리 받기에서 실패한 구간은 다시 안 함(사용자가 그 자리로 들어오면 한 번 다시 요청).
+        const spLoader = new Image();
+        spLoader.decoding = 'async';
+        const spDone = new Map(), spFailed = new Set();
+        // ★ (2026-10-02) 진단 기록(동작 변경 없음) — 앱의 window._diagLog 가 있을 때만(탐색기 ?hlsdiag=1). 안 뜨는 이유는 이유별 1번,
+        //   받기 성공은 처음 3장, 실패는 처음 5번 — 첫 실패 땐 같은 주소를 한 번 더 받아 서버 사유(응답 코드·X-Frame-Error)를 남긴다.
+        const spDiag = (data) => { try { if (typeof window._diagLog === 'function') window._diagLog('seekprev', data); } catch (e) {} };
+        const spDiagOff = new Set(); let spDiagOk = 0, spDiagFail = 0, spDiagShown = false, spReqAt = 0;
+        let spLoadingKey = null, spWant = null, spShownKey = null, spCurKey = null, spQueue = null, spQueueDur = 0;
+        let spDead = false, spRetryTimer = null;
+        // ★ (2026-10-02) 묶음 미리 받기(펜닐 승인 — 서버 PC 에서 장당 약 0.7초, 대부분 장면마다 반복되는 PHP 요청·ffmpeg 실행 비용).
+        //   미리 받기 목록에서 20개씩 ctx.framesUrl 로 보내 서버가 ffmpeg 1번으로 캐시에 만든다(FileManager::videoFramesFile). 결과:
+        //   ok → spReady(서버 캐시에 있음 — 보이지 않는 로더가 캐시에서 바로) · fail → 다시 안 함 · fallback → spSingle(한 장씩) ·
+        //   left → 목록 앞으로(다음 묶음) · busy(503) → 1초 쉬고(10번 연속이면 5초). 묶음을 지원 안 하면(ctx.framesUrl 없음) 종전 한 장씩.
+        //   한 사람이 동시에 쓰는 서버 자리는 최대 2(묶음 1 + 사용자 위치 1) — 캐시에서 받는 것은 자리를 안 쓴다.
+        const spReady = [], spSingle = [];
+        let spBatchBusy = false, spBatchTimer = null, spBusyRun = 0, spDiagBatch = 0;
+        const spDisplay = (key) => {
+            const u = spDone.get(key);
+            if (!u) return;
+            if (spShownKey !== key) { spImg.src = u; spShownKey = key; }
+            spImg.hidden = false;
+        };
+        const spNearest = (key) => {
+            let best = null, bd = Infinity;
+            for (const k of spDone.keys()) { const dd = Math.abs(k - key); if (dd < bd) { bd = dd; best = k; } }
+            return best;
+        };
+        const spRefresh = () => {   // 지금 위치에 맞는(없으면 가장 가까운) 장면으로
+            if (!spOn || spCurKey === null) return;
+            if (spDone.has(spCurKey)) spDisplay(spCurKey);
+            else { const n = spNearest(spCurKey); if (n !== null) spDisplay(n); }
+        };
+        const spBuildQueue = (d, step) => {
+            // ★ (2026-10-02) 최대 60 → 150장(mpv 미리보기 스크립트 기본값 thumbnail_count=150 — 펜닐 지시로 조사)
+            const n = Math.max(1, Math.min(150, Math.ceil(d / step)));
+            const keys = [];
+            for (let i = 0; i < n; i++) { const k = Math.floor(((i + 0.5) * d / n) / step) * step; if (keys[keys.length - 1] !== k) keys.push(k); }
+            let bits = 0; while ((1 << bits) < keys.length) bits++;
+            const rev = (i) => { let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); return r; };
+            spQueue = keys.map((k, i) => [rev(i), k]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+            spQueueDur = Math.round(d);
+        };
+        const spPump = () => {   // 쉬는 중이면 다음 것을 받는다 — 사용자가 보는 구간 → 묶음으로 준비된 것 → 한 장씩 할 것 → (묶음 미지원이면) 미리 받기
+            if (spDead || spLoadingKey !== null) return;
+            let key = null;
+            if (spWant !== null && !spDone.has(spWant)) { key = spWant; }
+            spWant = null;
+            while (key === null && spReady.length) { const k = spReady.shift(); if (!spDone.has(k)) key = k; }
+            while (key === null && spSingle.length) { const k = spSingle.shift(); if (!spDone.has(k) && !spFailed.has(k) && canSeekTo(k)) key = k; }
+            while (key === null && !framesUrl([0]) && spQueue && spQueue.length) {
+                const k = spQueue.shift();
+                if (!spDone.has(k) && !spFailed.has(k) && canSeekTo(k)) key = k;
+            }
+            if (key === null) return;
+            const u = frameUrl(key);
+            if (!u) return;
+            spLoadingKey = key; spReqAt = Date.now();
+            spLoader.src = u;
+        };
+        on(spLoader, 'load', () => {
+            const key = spLoadingKey; spLoadingKey = null;
+            if (key !== null) { spDone.set(key, spLoader.src); spRefresh(); }
+            if (spDiagOk < 3) { spDiagOk++; spDiag({ ev: 'load', key, ms: Date.now() - spReqAt, w: spLoader.naturalWidth }); }
+            spPump();
+        });
+        on(spLoader, 'error', () => {
+            const key = spLoadingKey; spLoadingKey = null;
+            if (key !== null) spFailed.add(key);
+            if (spDiagFail < 5) {
+                spDiagFail++;
+                const u = spLoader.src, ms = Date.now() - spReqAt, first = spDiagFail === 1;
+                if (first && typeof fetch === 'function' && typeof window._diagLog === 'function') {   // 첫 실패만 — 서버 사유 읽기(진단 로그가 켜졌을 때만)
+                    fetch(u, { credentials: 'same-origin', cache: 'no-store' })
+                        .then((r) => spDiag({ ev: 'fail', key, ms, status: r.status, reason: r.headers.get('X-Frame-Error') || '' }))
+                        .catch((e) => spDiag({ ev: 'fail', key, ms, status: 'fetch_error', reason: String(e && e.message || e).slice(0, 80) }));
+                } else spDiag({ ev: 'fail', key, ms });
+            }
+            if (spRetryTimer) clearTimeout(spRetryTimer);
+            spRetryTimer = setTimeout(() => { spRetryTimer = null; spPump(); }, 300);   // 바쁨(503)일 수 있어 잠깐 쉬고 다음
+        });
+        const spBatchPump = () => {   // 묶음 미리 받기 — 하나씩(응답이 오면 다음)
+            if (spDead || spBatchBusy || !spQueue || !framesUrl([0])) return;
+            const keys = [];
+            while (keys.length < 20 && spQueue.length) {
+                const k = spQueue.shift();
+                if (!spDone.has(k) && !spFailed.has(k) && canSeekTo(k) && spReady.indexOf(k) < 0 && spSingle.indexOf(k) < 0) keys.push(k);
+            }
+            if (!keys.length) return;
+            const u = framesUrl(keys);
+            if (!u || typeof fetch !== 'function') { spSingle.push(...keys); spPump(); return; }
+            spBatchBusy = true;
+            const at = Date.now();
+            let busy = false;
+            fetch(u, { credentials: 'same-origin', cache: 'no-store' })
+                .then((r) => { busy = r.status === 503; return r.json(); })
+                .then((j) => {
+                    if (spDead) return;
+                    const arr = (x) => (Array.isArray(x) ? x.map(Number).filter((v) => isFinite(v)) : []);
+                    const ok = arr(j.ok), fail = arr(j.fail), fb = arr(j.fallback), left = arr(j.left);
+                    ok.forEach((x) => { if (!spDone.has(x)) spReady.push(x); });
+                    fail.forEach((x) => spFailed.add(x));
+                    spSingle.push(...fb);
+                    if (left.length) spQueue.unshift(...left);
+                    const seen = new Set([...ok, ...fail, ...fb, ...left]);
+                    keys.forEach((x) => { if (!seen.has(x)) spSingle.push(x); });   // 응답에 빠진 것은 한 장씩
+                    busy = busy || !!j.busy;
+                    if (spDiagBatch < 10) { spDiagBatch++; spDiag({ ev: 'batch', n: keys.length, ok: ok.length, fail: fail.length, fb: fb.length, left: left.length, made: j.made | 0, ms: j.ms | 0, rtt: Date.now() - at, busy }); }
+                })
+                .catch(() => { if (!spDead) spSingle.push(...keys); })   // 응답이 이상하면 한 장씩
+                .then(() => {
+                    spBatchBusy = false;
+                    if (spDead) return;
+                    spBusyRun = busy ? spBusyRun + 1 : 0;
+                    spPump();
+                    spBatchTimer = setTimeout(() => { spBatchTimer = null; spBatchPump(); }, busy ? (spBusyRun >= 10 ? 5000 : 1000) : 0);
+                });
+        };
+        cleanups.push(() => { spDead = true; if (spRetryTimer) clearTimeout(spRetryTimer); spRetryTimer = null; if (spBatchTimer) clearTimeout(spBatchTimer); spBatchTimer = null; try { spLoader.removeAttribute('src'); } catch (e) {} });
+        const spHide = () => {
+            if (spOn) { sp.classList.remove('on'); spOn = false; }
+        };
+        const canSeekTo = (tt) => {
+            if (!isStreaming()) return true;
+            const off = offset(), end = relEnd();
+            return end > 0.6 && tt >= off && tt <= off + end - 0.5;
+        };
+        // ★ (2026-10-02) 10분 이하 영상은 a=1(서버 정확 탐색 — 짧은 영상은 키프레임이 드물어 키프레임 장면만으론 첫 장면만 나올 수 있음, 펜닐 제보 8초 영상).
+        //   spAcc 는 spShow 가 영상 길이로 정한다. 탐색기·공유 주소는 모두 '?…' 형태라 뒤에 붙인다.
+        let spAcc = false;
+        const frameUrl = (sec) => { try { const u = (typeof ctx.frameUrl === 'function') ? ctx.frameUrl(sec) : null; return u ? (spAcc ? u + '&a=1' : u) : null; } catch (e) { return null; } };
+        const framesUrl = (secs) => { try { const u = (typeof ctx.framesUrl === 'function') ? ctx.framesUrl(secs) : null; return u ? (spAcc ? u + '&a=1' : u) : null; } catch (e) { return null; } };
+        const spOff = (why, extra) => { if (!spDiagOff.has(why)) { spDiagOff.add(why); spDiag(Object.assign({ ev: 'off', why }, extra || {})); } spHide(); };
+        const spShow = (ratio, clientX) => {
+            if (!frameUrl(0)) return spOff('no_url');
+            const d = total();
+            if (!(d > 0)) return spOff('no_dur', { d: d });
+            const tt = Math.min(ratio * d, Math.max(0, d - 0.5));
+            if (!canSeekTo(tt)) return spOff('cant_seek', { tt: Math.round(tt * 10) / 10, off: Math.round(offset() * 10) / 10, end: Math.round(relEnd() * 10) / 10 });
+            spTime.textContent = fmt(tt);
+            if (!spOn) { sp.classList.add('on'); spOn = true; }
+            const pr = prog.getBoundingClientRect(), w = sp.offsetWidth || 0;
+            let x = clientX - pr.left;
+            if (w && pr.width > w) x = Math.max(w / 2, Math.min(pr.width - w / 2, x));   // 재생바 밖으로 넘치지 않게
+            sp.style.left = x + 'px';
+            // ★ (2026-10-02) 구간 간격을 영상 길이에 맞춤 — 5분 이하 2초 · 30분 이하 5초 · 그 이상 10초(펜닐 제보: 장면이 몇 개 안 나옴, 3분 영상이 10초 간격이면 18장).
+            //   장면은 그 시각 바로 앞 키프레임이라 키프레임 간격보다 촘촘하면 같은 장면이 이어 나올 수 있다(서버 videoFrameFile).
+            // ★ (2026-10-02) 2분 이하 1초 추가(유튜브 방식을 따른 스크립트: 0~2분 1초·2~5분 2초·5~15분 5초·그 이상 10초)
+            const step = d <= 120 ? 1 : (d <= 300 ? 2 : (d <= 1800 ? 5 : 10));
+            spAcc = d <= 600;
+            const key = Math.floor(tt / step) * step;
+            if (spQueue === null || spQueueDur !== Math.round(d)) spBuildQueue(d, step);   // 처음 보일 때(길이가 바뀌면 다시) 미리 받기 목록
+            if (!spDiagShown) { spDiagShown = true; spDiag({ ev: 'show', d: Math.round(d * 10) / 10, step, queue: spQueue ? spQueue.length : 0, stream: !!isStreaming() }); }
+            const entered = key !== spCurKey;
+            spCurKey = key;
+            spRefresh();   // 있으면 그 장면, 없으면 가장 가까운 장면을 바로
+            // 그 구간 장면이 없고 받는 중도 아니면 — 새로 들어왔을 때만 요청(같은 구간 안에서 움직일 때마다 다시 요청하지 않게)
+            if (entered && !spDone.has(key) && spLoadingKey !== key) spWant = key;
+            spPump();
+            spBatchPump();   // 묶음 미리 받기(지원할 때) — 이미 진행 중이면 그대로
+        };
+        on(spImg, 'error', () => { spImg.hidden = true; spShownKey = null; });
+        on(prog, 'pointerdown', (e) => { if (dragging) spShow(dragRatio, e.clientX); });
+        on(prog, 'pointermove', (e) => {
+            if (dragging) spShow(dragRatio, e.clientX);
+            else if (e.pointerType === 'mouse') spShow(ratioAt(e.clientX), e.clientX);
+        });
+        on(prog, 'pointerup', (e) => { if (e.pointerType !== 'mouse') spHide(); });   // 마우스는 계속 위에 있으면 유지(벗어나면 아래에서 숨김)
+        on(prog, 'pointercancel', spHide);
+        on(prog, 'pointerleave', () => { if (!dragging) spHide(); });
+        cleanups.push(spHide);
         // ★ (2026-09-23) 방향키는 여기서 처리하지 않는다. 탐색기·공유 모두 문서 전체에서 이미 ←/→ ±5초를
         //   처리하고(이동 표시도 보여줌), 여기서도 처리하면 진행바에 초점이 있을 때 ±10초로 두 번 이동했다.
 
@@ -299,7 +489,14 @@
         }
         // ★ (2026-09-26) 화면 크기·전체화면이 바뀌면 render() 도 부른다 — 자막 올림 값(--fsvs-sub-raise)이 배치에 따라 달라지게 된 뒤,
         //   멈춘 채 휴대폰을 돌리면(timeupdate 없음) 돌리기 전 값이 남아 조작 줄이 자막을 가릴 수 있었다(재검토에서 발견).
-        const refit = () => { if (!menu.hidden) fitMenu(); render(); };
+        // ★ (2026-10-02) 플레이어 틀 높이가 충분할 때만 터치 화면에서 넓은 재생바·버튼 줄 간격(CSS .fsvs-roomy) — 가로로 긴 영화를 휴대폰
+        //   세로 화면으로 보면 틀이 약 162px 라 막대가 높아지면 가운데 재생·±5초 버튼 아래 23px 가 막대에 가렸다(실측). 가운데 버튼 아래끝 ≈
+        //   틀 높이/2 + 28px 라 막대 76px 와 안 겹치려면 208px, 미리보기 상자가 위로 안 넘치려면 194px → 여유 두고 210px 이상. 막대는 틀 위에
+        //   겹쳐 떠 있어(absolute) 틀 크기를 바꾸지 않으므로 되먹임 없음. 창 크기·전체 화면·틀 크기 변화(refit)마다 다시 정한다.
+        const syncRoomy = () => { try { wrap.classList.toggle('fsvs-roomy', (wrap.clientHeight || 0) >= 210); } catch (e) {} };
+        cleanups.push(() => { try { wrap.classList.remove('fsvs-roomy'); } catch (e) {} });
+        const refit = () => { syncRoomy(); if (!menu.hidden) fitMenu(); render(); };
+        syncRoomy();
         on(window, 'resize', refit);
         on(document, 'fullscreenchange', refit);
         on(document, 'webkitfullscreenchange', refit);
@@ -584,9 +781,13 @@
                 }
             } catch (e) {}
             wrap.style.setProperty('--fsvs-sub-raise', _raise + 'px');
-            bPlay.innerHTML = paused ? ICON.play : ICON.pause;
+            // ★ (2026-10-02) 아이콘이 바뀔 때만 다시 그린다(펜닐 제보: 버튼을 몇 번 눌러야 동작). 매번 innerHTML 을 바꾸면 누르는 순간과 떼는 순간 사이에
+            //   누른 아이콘(SVG)이 문서에서 사라져 브라우저가 click 을 보내지 않았다 — render 는 재생 중 초당 4번 이상(실측: 누르는 동안 갱신되면 5번 중 0번 동작).
+            const _playIco = paused ? ICON.play : ICON.pause;
+            if (bPlay._fsvsIco !== _playIco) { bPlay._fsvsIco = _playIco; bPlay.innerHTML = _playIco; }
             bPlay.setAttribute('aria-label', paused ? T('play', '재생') : T('pause', '일시정지'));
-            bVol.innerHTML = (video.muted || video.volume === 0) ? ICON.mute : ICON.vol;
+            const _volIco = (video.muted || video.volume === 0) ? ICON.mute : ICON.vol;
+            if (bVol._fsvsIco !== _volIco) { bVol._fsvsIco = _volIco; bVol.innerHTML = _volIco; }   // 위와 같은 이유
             if (document.activeElement !== vol) vol.value = String(video.muted ? 0 : video.volume);
 
             const rate = video.playbackRate || 1;

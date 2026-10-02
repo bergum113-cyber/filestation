@@ -1599,7 +1599,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
-                <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" style="min-height:220px;background:#111;">
+                <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" style="min-height:220px;background:#111;">
                 </video>
                 <div class="play-overlay" id="play-overlay">
                     <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
@@ -1628,7 +1628,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
-                <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>"<?php if (!empty($fastNative)): ?> data-direct-url="<?= htmlspecialchars($streamUrl . '&ds=playlist') ?>" data-native-src="<?= htmlspecialchars($streamUrl) ?>" data-direct-codec="<?= htmlspecialchars((string)($videoCodec ?? '')) ?>" data-audio-count="<?= (int)($_shareAudioCount ?? 0) ?>"<?php endif; ?>>
+                <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>"<?php if (!empty($fastNative)): ?> data-direct-url="<?= htmlspecialchars($streamUrl . '&ds=playlist') ?>" data-native-src="<?= htmlspecialchars($streamUrl) ?>" data-direct-codec="<?= htmlspecialchars((string)($videoCodec ?? '')) ?>" data-audio-count="<?= (int)($_shareAudioCount ?? 0) ?>"<?php endif; ?>>
                     <?php if (empty($fastNative)): ?><source src="<?= htmlspecialchars($streamUrl) ?>" type="video/mp4"><?php endif; ?>
                 </video>
                 <div class="video-play-overlay" id="share-play-pause">
@@ -4813,6 +4813,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 };
             };
             const ctx = {
+                // ★ (2026-10-02) 재생바 미리보기 장면 주소(스킨 fsvs-seekprev) — 영상 태그의 data-frame-url(스트리밍 주소 + &vf=). 서버는 공유 검증을 모두 거친다.
+                frameUrl: (sec) => (player.dataset.frameUrl ? player.dataset.frameUrl + Math.max(0, Math.floor(sec || 0)) : null),
+                // ★ (2026-10-02) 재생바 미리보기 장면 묶음 주소 — 영상 태그의 data-frames-url(스트리밍 주소 + &vfs=). 서버는 공유 검증을 모두 거친다.
+                framesUrl: (secs) => (player.dataset.framesUrl ? player.dataset.framesUrl + (Array.isArray(secs) ? secs : []).map((x) => Math.max(0, Math.floor(x || 0))).join(',') : null),
                 nativeAudio: () => ((isStreaming() && !player._directOn) ? null : fsvsNativeAudio()),   // ★ (2026-09-30) 빠른 시작 중에도
                 isStreaming,
                 timeOffset: () => player._qualitySeekOffset || 0,
