@@ -2382,6 +2382,8 @@
     "transcoding": "Transcoding video.",
     "realtime_streaming": "Live Streaming",
     "native_playback": "Native Playback",
+    "vp_resumed": "Resuming from {time}",
+    "vp_restart": "Start over",
     "audio_track": "Audio",
     "quality_label": "Quality",
     "quality_original": "Original",

@@ -97,7 +97,18 @@
    마우스(PC)는 그대로. 막대 높이를 쓰는 곳(자막 올림 등)은 JS 가 실제 높이를 재서 쓴다.
    틀 높이가 210px 이상일 때만(.fsvs-roomy — 스킨 JS syncRoomy): 가로로 긴 영화를 휴대폰 세로로 볼 때(틀 약 162px) 가운데 버튼이 막대에 가리지 않게. */
 @media (pointer: coarse) {
-    .fsvs-roomy .fsvs-prog { height: 26px; margin-bottom: 6px; }
+    /* ★ (2026-10-04) 유튜브 간격으로 다듬음(펜닐 요청 — 전: 26px·간격 6px 로 막대→버튼 17px, 유튜브 약 9px 의 두 배). 누르는 영역을 막대 위쪽으로 넓히고
+       아래는 좁힘: 위 14·아래 5px(위 여백 9px 로 막대를 내림), 막대→버튼 10px, 누르는 영역 끝→버튼 5px. */
+    .fsvs-roomy .fsvs-prog { box-sizing: border-box; height: 23px; padding: 9px 8px 0; margin-bottom: 5px; }
+}
+/* ★ (2026-10-04) PC(마우스) 재생바·버튼 간격 — 유튜브처럼(펜닐 요청: 사진 측정 막대→버튼 약 9px). 전에는 누르는 영역이 막대 위·아래 5px 씩이라
+   버튼 2px 앞까지 내려와, 막대를 노리고 살짝 아래를 누르면 버튼이 눌렸다. 누르는 영역을 막대 위쪽으로 넓히고 아래는 좁힘: 위 10·아래 4px
+   (위 여백 6px 로 막대를 내림), 막대→버튼 10px, 누르는 영역 끝→버튼 6px. 휴대폰 낮은 플레이어(가로로 긴 영화를 세로로)는 위 규칙 없이 종전 그대로.
+   조건은 '터치(굵은 포인터) 기기가 아니면' — (pointer: fine) 은 마우스가 없다고 보고하는 기기(TV 브라우저·화면 없는 크롬)에서 빠져서.
+   플레이어 높이 210px 이상(.fsvs-roomy)일 때만 — 낮은 플레이어(창을 좁게·가로로 긴 영화)는 막대가 8px 높아진 만큼 가운데 재생·±5초 버튼이
+   더 가리고 미리보기가 더 넘쳐서(재검토 실측: 162px 겹침 5 → 13px, 140px 넘침 13 → 21px) 종전 배치 그대로. */
+@media not all and (pointer: coarse) {
+    .fsvs-roomy .fsvs-prog { box-sizing: border-box; height: 18px; padding: 6px 8px 0; margin-bottom: 4px; }
 }
 /* ★ (2026-10-02) 하단 막대·재생바 미리보기에서 글자 선택·길게 누르기 메뉴 막기(펜닐 제보: 휴대폰에서 재생바를 꾹 눌러 끌면 선택하기가 됨 — 아이폰 선택 손잡이).
    막대 안은 버튼·시간·음량 막대뿐이라 막아도 잃는 기능이 없다. 재생바 끌기는 위 touch-action:none 그대로. */
@@ -313,3 +324,21 @@ body.fsvs-active #player-wrap .stream-badge { max-width: calc(100% - 20px); whit
 body.fsvs-active .video-player-wrap .video-stream-badge.fsvs-badge-error { white-space: normal !important; overflow: visible !important; text-overflow: clip !important; max-width: calc(100% - 12px) !important; }
 body.fsvs-active #player-wrap .stream-badge.fsvs-badge-error { white-space: normal; overflow: visible; text-overflow: clip; max-width: calc(100% - 20px); }
 
+
+/* ★ (2026-10-04) 동영상 이어 보기 알림(탐색기·공유 공용) — '…부터 이어서 재생 · [처음부터]', 6초. 하단 막대 바로 위 왼쪽(막대 높이는 스킨이 잰 값). */
+.fs-vp-toast {
+    position: absolute; left: 12px; bottom: calc(var(--fsvs-bar-h, 56px) + 10px); z-index: 30;
+    display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px);
+    padding: 7px 8px 7px 12px; border-radius: 8px;
+    background: rgba(18, 20, 30, .86); color: #fff; font-size: 13px; line-height: 1.3;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .35); pointer-events: auto;
+    -webkit-user-select: none; user-select: none; animation: fsVpIn .2s ease;
+}
+.fs-vp-toast span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fs-vp-toast button {
+    flex: none; border: 0; border-radius: 6px; padding: 5px 10px; cursor: pointer;
+    background: rgba(255, 255, 255, .16); color: #fff; font: inherit; font-weight: 600;
+}
+.fs-vp-toast button:hover { background: rgba(255, 255, 255, .26); }
+@keyframes fsVpIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .fs-vp-toast { animation: none; } }

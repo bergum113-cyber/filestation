@@ -2377,6 +2377,8 @@
     "transcoding": "동영상 변환 중...",
     "realtime_streaming": "실시간 스트리밍",
     "native_playback": "일반 재생",
+    "vp_resumed": "{time}부터 이어서 재생",
+    "vp_restart": "처음부터",
     "audio_track": "오디오",
     "quality_label": "화질",
     "quality_original": "원본",

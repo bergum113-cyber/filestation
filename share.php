@@ -2088,6 +2088,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             // info 요청 (HLS/MMS 시작 후 — _shareHlsSession이 설정된 후 실행)
             setTimeout(() => _fetchShareInfo(), 2000);
             
+            try { if (typeof window._shareVpTc === 'function') window._shareVpTc(false); } catch (e) {}   // ★ (2026-10-04) 이어 보기 — 변환 시작 위치(아래 모듈)
             const hlsStartUrl = player.dataset.hlsUrl;
             const transcodeUrl = player.dataset.transcodeUrl;
             
@@ -3515,6 +3516,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 // ★ 이 경로는 startTranscode()를 타지 않는다. 네이티브로 시작해 A-B 버튼이
                 //   렌더된 상태이므로 여기서도 꺼줘야 변환·HLS에서 구간 반복이 남지 않는다.
                 try { if (typeof window._shareAbHide === 'function') window._shareAbHide(); } catch (e) {}
+                try { if (typeof window._shareVpTc === 'function') window._shareVpTc(true); } catch (e) {}   // ★ (2026-10-04) 이어 보기 — 일반 재생 실패로 넘어올 때도 그 위치부터
                 const hlsUrl = player.dataset.hlsUrl;
                 const transcodeUrl = player.dataset.transcodeUrl;
                 if (!hlsUrl && !transcodeUrl) return;
@@ -5072,5 +5074,124 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
     })();
     </script>
     <?php endif; ?>
+<script nonce="<?= $cspNonce ?>">
+// ★ (2026-10-04) 동영상 이어 보기 — 공유(로그인 없음 → 이 브라우저에만, localStorage 'fs_vp:토큰', 펜닐 승인).
+//   탐색기와 같은 유튜브 방식: 묻지 않고 저장 위치 그대로에서 이어 재생(★ 2026-10-04 5초 앞 → 그대로) + '…부터 이어서 재생 · [처음부터]' 6초. 기준도 서버와 같다(1분 미만 안 함 — ★ 2026-10-04 5분 → 1분 ·
+//   5초 전이면 지움(★ 2026-10-04 '5% 와 3분 중 짧은 쪽' → 10초 → 5초) · 90% 넘으면 다 봄으로 지움). 같은 파일인지는 저장 때 길이와 지금 길이(2초 안)로 본다. 공유 기록은 200개까지.
+//   트랜스코딩: 시작 함수 두 곳(재생 버튼·일반 재생 실패 대체)이 window._shareVpTc 를 불러 HLS·변환 주소에 seek 와 위치 보정값을 넣는다
+//   (음성 변경으로 넘어온 fs_seek 처럼 이미 위치가 있으면 그대로). 일반 재생·빠른 시작: 영상 정보가 준비되면 이동(변환이 시작됐으면 안 함).
+//   [처음부터]: 일반 재생은 0초로, 트랜스코딩은 '이번엔 이어 보기 안 함' 표시를 남기고 페이지를 다시 연다.
+//   저장: 10초마다 · 일시정지 · 끝 · 페이지 떠남. 이어 보기가 적용되기 전이거나 재생하지 않았으면 저장하지 않는다(기존 위치가 지워지지 않게).
+(function () {
+    const player = document.getElementById('stream-player');
+    if (!player) return;
+    let ls = null;
+    try { ls = window.localStorage; ls.getItem('fs_vp:probe'); } catch (e) { return; }
+    let tok = '', sub = '';
+    try { const _q = new URLSearchParams(location.search); tok = _q.get('t') || ''; sub = _q.get('file') || ''; } catch (e) {}
+    if (!tok) return;
+    // ★ (2026-10-04) 폴더 공유는 같은 토큰에 &file= 로 여러 영상 — 파일마다 따로(재검토 실측: 같은 길이 영상끼리 다른 영상 위치에서 시작). 단일 파일 공유는 종전 이름 그대로.
+    const _id = tok + (sub ? '|' + sub : '');
+    const KEY = 'fs_vp:' + _id, SKIP = 'fs_vp_skip:' + _id;
+    const st = { consumed: false, tc: false, seekT0: 0, played: false, last: null, sentPos: null, sentAt: 0 };
+    try { if (sessionStorage.getItem(SKIP)) { st.consumed = true; sessionStorage.removeItem(SKIP); } } catch (e) {}
+    const read = () => { try { const o = JSON.parse(ls.getItem(KEY) || 'null'); return (o && o.pos > 0 && o.dur > 0) ? o : null; } catch (e) { return null; } };
+    const fmt = (sec) => { sec = Math.max(0, Math.floor(sec || 0)); const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60; return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(x).padStart(2, '0'); };
+    const T_RES = <?= json_encode(__('vp_resumed', '{time}부터 이어서 재생'), JSON_UNESCAPED_UNICODE) ?>;
+    const T_RST = <?= json_encode(__('vp_restart', '처음부터'), JSON_UNESCAPED_UNICODE) ?>;
+    const diag = (d) => { try { if (typeof window._diagLog === 'function') window._diagLog('vp', d); } catch (e) {} };
+    const toast = (t0, mode) => {
+        try {
+            const wrap = document.getElementById('player-wrap') || player.parentElement;
+            if (!wrap) return;
+            const old = wrap.querySelector('.fs-vp-toast'); if (old) old.remove();
+            const el = document.createElement('div'); el.className = 'fs-vp-toast'; el.setAttribute('role', 'status');
+            const span = document.createElement('span'); span.textContent = T_RES.replace('{time}', fmt(t0));
+            const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = T_RST;
+            const stop = (e) => { e.stopPropagation(); };
+            ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'click', 'dblclick'].forEach((ev) => el.addEventListener(ev, stop));
+            btn.addEventListener('click', (e) => {
+                e.preventDefault(); el.remove(); diag({ ev: 'restart', mode });
+                if (mode === 'tc') { try { sessionStorage.setItem(SKIP, '1'); } catch (x) {} location.reload(); }
+                else { try { player.currentTime = 0; } catch (x) {} }
+            });
+            el.append(span, btn); wrap.appendChild(el);
+            setTimeout(() => { try { el.remove(); } catch (x) {} }, 6000);
+        } catch (e) {}
+    };
+    const take = (curDur) => {
+        if (st.consumed) return 0;
+        st.consumed = true;
+        const o = read(); if (!o) return 0;
+        if (curDur > 0 && Math.abs(curDur - o.dur) > 2) return 0;   // 길이가 다르면 다른 파일
+        const t0 = Math.max(0, o.pos);
+        return t0 < 1 ? 0 : t0;   // ★ (2026-10-04) 1초 미만이면 처음부터(알림 없음) — 5~6초에서 끈 영상이 '0:00부터 이어서 재생' 으로 보였다
+    };
+    // 트랜스코딩 시작 위치 — fallback: 일반 재생이 실패해 넘어올 때(이미 이어 보기로 옮겼으면 지금 위치부터)
+    window._shareVpTc = (fallback) => {
+        try {
+            if (st.tc) return;
+            st.tc = true;
+            if (/[?&]seek=/.test(player.dataset.hlsUrl || '') || (player._qualitySeekOffset || 0) > 0) { st.consumed = true; return; }
+            let t0 = 0;
+            if (!st.consumed) t0 = take(0);
+            else if (fallback && st.seekT0 > 0) t0 = Math.max(st.seekT0, Number(player.currentTime) || 0);
+            if (!(t0 > 0)) return;
+            const add = (u) => (u ? String(u).replace(/&seek=[^&]*/g, '') + '&seek=' + t0.toFixed(2) : u);
+            if (player.dataset.hlsUrl) player.dataset.hlsUrl = add(player.dataset.hlsUrl);
+            if (player.dataset.transcodeUrl) player.dataset.transcodeUrl = add(player.dataset.transcodeUrl);
+            player._qualitySeekOffset = t0;
+            toast(t0, 'tc'); diag({ ev: 'apply', mode: 'tc', t0: +t0.toFixed(1) });
+        } catch (e) {}
+    };
+    const applyNative = () => {
+        try {
+            if (st.consumed || st.tc) return;
+            if ((player._qualitySeekOffset || 0) > 0 || (player.currentTime || 0) > 3) { st.consumed = true; return; }
+            const d = Number(player.duration);
+            const t0 = take(isFinite(d) ? d : 0);
+            if (t0 > 0) { try { player.currentTime = t0; } catch (e) {} st.seekT0 = t0; toast(t0, 'seek'); diag({ ev: 'apply', mode: 'seek', t0: +t0.toFixed(1) }); }
+        } catch (e) {}
+    };
+    player.addEventListener('loadedmetadata', applyNative);
+    // ★ (2026-10-04) 이 모듈은 페이지 끝에서 실행되는데, 일반 재생(preload=metadata)은 그보다 먼저 영상 정보가 준비돼 이벤트를 놓쳤다
+    //   (실측: loadedmetadata 118ms · 모듈 228ms, readyState 4) — 이미 준비돼 있으면 바로 한 번(한 번만은 consumed 가 막음).
+    if (player.readyState >= 1) applyNative();
+    const note = (ended) => {
+        try {
+            const off = Number(player._qualitySeekOffset) || 0;
+            const pos = off + (Number(player.currentTime) || 0);
+            let dur = Number(player._knownDuration) || 0;
+            if (!(dur > 0)) { const d = Number(player.duration); if (isFinite(d) && d > 0) dur = d + (st.tc ? off : 0); }
+            if (dur > 0) st.last = { pos: ended ? dur : Math.min(pos, dur), dur };
+        } catch (e) {}
+    };
+    const prune = () => {
+        try {
+            const items = [];
+            for (let i = 0; i < ls.length; i++) { const k = ls.key(i); if (k && k.indexOf('fs_vp:') === 0) { let at = 0; try { at = (JSON.parse(ls.getItem(k)) || {}).at || 0; } catch (x) {} items.push([k, at]); } }
+            if (items.length > 200) { items.sort((a, b) => a[1] - b[1]); items.slice(0, items.length - 200).forEach((x) => ls.removeItem(x[0])); }
+        } catch (e) {}
+    };
+    const save = (why) => {
+        try {
+            if (!st.played || !st.last || !st.consumed) return;
+            const pos = st.last.pos, dur = st.last.dur;
+            if (why !== 'ended' && st.sentPos != null && Math.abs(pos - st.sentPos) < 2) return;
+            st.sentPos = pos; st.sentAt = Date.now();
+            const keep = dur >= 60 && pos >= 5 && pos < 0.9 * dur;
+            if (keep) { ls.setItem(KEY, JSON.stringify({ pos: Math.round(pos * 10) / 10, dur: Math.round(dur * 10) / 10, at: Date.now() })); prune(); }
+            else ls.removeItem(KEY);
+            diag({ ev: 'save', why, pos: +pos.toFixed(1), dur: +dur.toFixed(1), keep });
+        } catch (e) {}
+    };
+    player.addEventListener('playing', () => { st.played = true; if (!st.consumed && !st.tc) st.consumed = true; });
+    player.addEventListener('timeupdate', () => { if (!st.played) return; note(); if (!player.paused && Date.now() - st.sentAt >= 10000) save('tick'); });
+    player.addEventListener('pause', () => { if (st.played) { note(); save('pause'); } });
+    player.addEventListener('ended', () => { if (st.played) { note(true); save('ended'); } });
+    window.addEventListener('pagehide', () => { if (st.played) { note(); save('unload'); } });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && st.played) { note(); save('hidden'); } });
+})();
+</script>
 </body>
 </html>

@@ -365,6 +365,7 @@ $rateLimitExclude = [
     'board_unread_count', 'board_post_view',
     'share_count', 'shares', 'share_check', 'notice_active',
     'user_preferences_get', 'pending_users_count', 'qos_user',
+    'video_progress_get',   // ★ (2026-10-04) 동영상 이어 보기 위치 조회 — 영상을 열 때마다(다음·이전으로 넘길 때 연달아)
     // 사용자/관리 조회 (읽기 전용)
     'users', 'roles', 'sessions', 'server_stats', 'system_info',
     // 로그/통계 조회
@@ -13533,6 +13534,66 @@ try {
             $result = ['success' => true];
             break;
         
+        // ★ (2026-10-04) 동영상 이어 보기(유튜브 방식, 펜닐 승인) — 사용자별 재생 위치(JsonDB 'video_progress', 사용자당 500개).
+        //   기준(Plex·젤리핀·Kodi 조사): 1분 미만 영상은 저장 안 함(★ 2026-10-04 5분 → 1분, 펜닐 — 유튜브는 짧은 영상도 저장) · 5초 전이면 기록 지움(아직 안 봄 — ★ 2026-10-04 '5% 와 3분 중 짧은 쪽' → 10초 → 5초, 펜닐: 40분 영상은 2분 전에 끄면 저장 안 됐음) ·
+        //   90% 넘으면 다 봄(기록 지움). 파일 크기가 다르면 다른 파일로 보고 이어 보지 않음. 보관함 파일은 화면이 보내지 않음.
+        //   기록은 경로를 열쇠로 쓸 뿐 파일을 읽지 않으므로 폴더 권한 확인은 하지 않는다(남의 기록은 user_id 로 분리).
+        case 'video_progress_get':
+            $auth->requireLogin();
+            $vpUser = $_SESSION['user_id'];
+            session_write_close();
+            $vpSid = (int)($input['storage_id'] ?? 0);
+            $vpPath = (string)($input['path'] ?? '');
+            $vpSize = (int)($input['size'] ?? 0);
+            $result = ['success' => true, 'pos' => 0, 'dur' => 0];
+            if ($vpPath !== '' && strlen($vpPath) <= 2000) {
+                $vpRows = $db->findAll('video_progress', ['user_id' => $vpUser, 'storage_id' => $vpSid, 'path' => $vpPath]);
+                if ($vpRows) {
+                    $vpRow = end($vpRows);
+                    if ($vpSize <= 0 || (int)($vpRow['size'] ?? 0) === $vpSize) {
+                        $result['pos'] = (float)($vpRow['pos'] ?? 0);
+                        $result['dur'] = (float)($vpRow['dur'] ?? 0);
+                    }
+                }
+            }
+            break;
+
+        case 'video_progress_set':
+            $auth->requireLogin();
+            $vpUser = $_SESSION['user_id'];
+            session_write_close();
+            $vpSid = (int)($input['storage_id'] ?? 0);
+            $vpPath = (string)($input['path'] ?? '');
+            $vpSize = max(0, (int)($input['size'] ?? 0));
+            $vpPos = (float)($input['pos'] ?? 0);
+            $vpDur = (float)($input['dur'] ?? 0);
+            if ($vpPath === '' || strlen($vpPath) > 2000 || !is_finite($vpPos) || !is_finite($vpDur) || $vpDur <= 0 || $vpDur > 360000 || $vpPos < 0) {
+                $result = ['success' => false, 'error' => 'invalid'];
+                break;
+            }
+            $vpPos = min($vpPos, $vpDur);
+            $vpKeep = ($vpDur >= 60) && ($vpPos >= 5) && ($vpPos < 0.9 * $vpDur);
+            $db->atomicUpdate('video_progress', function($data) use ($vpUser, $vpSid, $vpPath, $vpSize, $vpPos, $vpDur, $vpKeep) {
+                $data = array_values(array_filter($data, function($r) use ($vpUser, $vpSid, $vpPath) {
+                    return !(((int)($r['user_id'] ?? 0) === (int)$vpUser) && ((int)($r['storage_id'] ?? 0) === $vpSid) && (($r['path'] ?? '') === $vpPath));
+                }));
+                if ($vpKeep) {
+                    $maxId = empty($data) ? 0 : max(array_map(function($r) { return (int)($r['id'] ?? 0); }, $data));
+                    $data[] = ['id' => $maxId + 1, 'user_id' => $vpUser, 'storage_id' => $vpSid, 'path' => $vpPath, 'size' => $vpSize,
+                               'pos' => round($vpPos, 1), 'dur' => round($vpDur, 1), 'updated_at' => date('Y-m-d H:i:s')];
+                }
+                // 사용자당 500개 — 넘으면 오래된(updated_at) 것부터
+                $mine = array_keys(array_filter($data, function($r) use ($vpUser) { return (int)($r['user_id'] ?? 0) === (int)$vpUser; }));
+                if (count($mine) > 500) {
+                    usort($mine, function($x, $y) use ($data) { return strcmp((string)($data[$x]['updated_at'] ?? ''), (string)($data[$y]['updated_at'] ?? '')); });
+                    foreach (array_slice($mine, 0, count($mine) - 500) as $ix) unset($data[$ix]);
+                    $data = array_values($data);
+                }
+                return $data;
+            });
+            $result = ['success' => true, 'saved' => $vpKeep];
+            break;
+
         // 최근 파일 배치 추가 (여러 파일 한번에)
         case 'recent_files_add_batch':
             $auth->requireLogin();

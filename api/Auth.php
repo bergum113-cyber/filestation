@@ -677,6 +677,13 @@ class Auth {
             return ($r['user_id'] ?? 0) !== $userId;
         });
         $this->db->save('recent_files', array_values($recentFiles));
+
+        // 9-1. ★ (2026-10-04) 동영상 이어 보기 기록 삭제
+        $vpRows = $this->db->load('video_progress');
+        $vpRows = array_filter($vpRows, function($r) use ($userId) {
+            return ($r['user_id'] ?? 0) !== $userId;
+        });
+        $this->db->save('video_progress', array_values($vpRows));
         
         // 10. 공유 링크 삭제 (해당 사용자가 만든 공유)
         $shares = $this->db->load('shares');

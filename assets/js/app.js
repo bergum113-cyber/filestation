@@ -36502,6 +36502,8 @@ const App = {
                     content = videoInnerHtml;
                 }
                 
+                // ★ (2026-10-04) 이어 보기 — 저장 위치를 미리 요청(보관함 제외). 트랜스코딩 시작(아래 0.1초 뒤)보다 먼저.
+                if (!item._vaultBlobUrl) this._vpBegin(item, storageId); else this._vp = null;
                 // 트랜스코딩 비디오: 스트리밍 시작
                 if (needsTranscode) {
                     // 이전 타이머 취소
@@ -38248,6 +38250,32 @@ const App = {
         const transcodeAbort = new AbortController();
         window._transcodeAbort = transcodeAbort;
         const aborted = () => transcodeAbort.signal.aborted;
+        // ★ (2026-10-04) 이어 보기 — 이 영상을 처음 트랜스코딩으로 시작할 때만(seek 가 이미 있는 화질·음성 변경·[처음부터]는 그대로).
+        //   저장 위치를 최대 0.8초 기다려 seek 를 붙이고 위치 보정값(_qualitySeekOffset)을 맞춘다 — 화질·음성 변경과 같은 방식이라 어느 재생 경로
+        //   (HLS·일반 스트림·아이폰 재시도)로 가도 같은 위치. data-transcode-base 엔 넣지 않아 화질·음성을 바꿀 때 seek 가 겹치지 않는다.
+        try {
+            const _vp = this._vp;
+            if (_vp && _vp.path === path && (!_vp.consumed || (Number(video._vpPending) || 0) > 0) && !/[?&]seek=/.test(String(transcodeBaseUrl || ''))) {
+                if (!_vp.ready) await this._vpWait(800);
+                if (aborted()) { try { window._diagLog && window._diagLog('tc_exit', { why: 'aborted_vp_wait' }); } catch (x) {} return; }
+                let _vpT = this._vpTake(path);
+                _vp.consumed = true;   // 늦게 와도 트랜스코딩 화면엔 적용하지 않는다(_vpLateApply 제외)
+                const _vpCarry = !(_vpT > 0) && (Number(video._vpPending) || 0) > 0;   // 빠른 시작이 이어 보기로 시작했다가 트랜스코딩으로 넘어온 경우
+                if (_vpCarry) _vpT = Number(video._vpPending);
+                video._vpPending = 0;
+                if (_vpT > 0 && _vpCarry) {
+                    transcodeBaseUrl = transcodeBaseUrl + '&seek=' + _vpT.toFixed(2);
+                    video._qualitySeekOffset = _vpT;
+                    try { window._diagLog && window._diagLog('vp', { ev: 'apply', mode: 'tc_carry', t0: +_vpT.toFixed(1) }); } catch (x) {}
+                } else if (_vpT > 0) {
+                    const _vpBase0 = transcodeBaseUrl;
+                    transcodeBaseUrl = transcodeBaseUrl + '&seek=' + _vpT.toFixed(2);
+                    video._qualitySeekOffset = _vpT;
+                    this._vpShowToast(video, _vpT, { mode: 'tc', base: _vpBase0, storageId, path });
+                    try { window._diagLog && window._diagLog('vp', { ev: 'apply', mode: 'tc', t0: +_vpT.toFixed(1) }); } catch (x) {}
+                }
+            }
+        } catch (e) {}
         // ★ (2026-09-30) 시작 즉시 ⚙ 재생방식을 '트랜스코딩'으로 맞춘다 — 종전엔 트랜스코딩 정보 응답(또는 5초 시간 초과) 뒤에야 맞춰, 느린 회선에서
         //   트랜스코딩으로 정해진 뒤 약 5초 동안 '일반재생'이 보였다(펜닐 로그 ui_state). 뒤에서 부르는 _buildQualitySelectUI(…, false) 가 하는
         //   같은 일을 먼저 할 뿐(_showNativeBtn 이 거짓이면 셀렉트 없음 그대로). 이중 호출 방지로 막힌 호출은 위에서 이미 빠짐.
@@ -39982,9 +40010,20 @@ const App = {
         if (!video) return;
         const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
         // ★ (2026-09-30) opt: { audio: 음성 번호(0부터), start: 시작 위치(초), play: 이어서 재생 } — 음성 전환(_directSwitchAudio)이 다시 부를 때
+        const _vpFirst = !opt || (opt.start == null && opt.audio == null);   // ★ (2026-10-04) 이어 보기 — 처음 시작일 때만(음성 변경 등은 제외)
         opt = opt || {};
         const audioIdx = Math.max(0, parseInt(opt.audio, 10) || 0);
-        const startAt = Math.max(0, Number(opt.start) || 0);
+        let startAt = Math.max(0, Number(opt.start) || 0);
+        if (_vpFirst) {
+            const _vpT = App._vpTake(path);
+            if (_vpT > 0) {
+                startAt = _vpT;
+                // 빠른 시작이 실패해 일반 재생·트랜스코딩으로 넘어가도 이 위치에서(_vpInstall 의 loadedmetadata · _startTranscode). 제대로 재생되면 지움.
+                if (video) video._vpPending = _vpT;
+                if (video) App._vpShowToast(video, _vpT, { mode: 'seek' });
+                try { window._diagLog && window._diagLog('vp', { ev: 'apply', mode: 'direct', t0: +_vpT.toFixed(1) }); } catch (x) {}
+            }
+        }
         const url = 'api.php?action=direct_stream&ds=playlist&storage_id=' + encodeURIComponent(storageId) + '&path=' + encodeURIComponent(path) + '&a=' + audioIdx;
         if (video._hlsInstance) { try { video._hlsInstance.destroy(); } catch (e) {} video._hlsInstance = null; }   // 다시 붙일 때 이전 것 정리
         video._dsCtx = { storageId, path, info, badgeParent, fileSize };
@@ -41809,6 +41848,188 @@ const App = {
 
     // 껍데기가 '대신 눌러줄' 기존 조작부. 기능을 새로 만들지 않고 기존 버튼/셀렉트를 호출하므로
     // 그동안의 수정(구간 반복 스트리밍 숨김, 자막 On/Off 의 iOS 게이트 등)이 그대로 유지된다.
+    // ═══ ★ (2026-10-04) 동영상 이어 보기(유튜브 방식, 펜닐 승인) ═══════════════════════════════════════════════════════
+    // 보다 만 영상을 열면 묻지 않고 저장된 위치에서 바로 이어 재생하고, 플레이어 아래에 '…부터 이어서 재생 · [처음부터]' 를 6초 보인다.
+    // 위치는 사용자별 서버 저장(api video_progress_get/set) — 기준은 서버가 판단(Plex·젤리핀·Kodi 조사: 1분 미만 안 함(★ 2026-10-04 5분 → 1분) · 5초 전(★ 2026-10-04 '5% 와 3분 중 짧은 쪽' → 10초 → 5초)
+    //   전이면 지움 · 90% 넘으면 다 봄으로 지움, 파일 크기가 다르면 다른 파일). 이어 볼 땐 저장 위치 그대로에서 시작(★ 2026-10-04 펜닐 — 전엔 Plex
+    //   방식으로 5초 앞이었음: 10초에 끄면 5초부터). 보관함 파일은 하지 않는다.
+    // 시작: 빠른 시작 = _startDirectStream 의 startPosition · 트랜스코딩 = _startTranscode 입구에서 seek(화질·음성 변경과 같은 방식, 최대 0.8초 기다림)
+    //   · 일반 재생(빠른 시작이 위치를 못 받았을 때 포함) = 영상 정보가 준비되면(loadedmetadata) 이동.
+    // 저장: 재생 중 30초마다 · 일시정지 · 끝 · 다른 영상으로 넘김(3초 안) · 페이지 떠남(sendBeacon). 이어 보기가 적용되기 전이거나 실제로 재생하지
+    //   않았으면 저장하지 않는다 — 열었다가 바로 닫으면 기존 위치가 지워지지 않게(젤리핀에 실제로 있던 버그).
+    _vpBegin(item, storageId) {
+        try {
+            this._vpInstall();
+            const vp = { sid: Number(storageId) || 0, path: String((item && item.path) || ''), size: Number(item && item.size) || 0, ready: false, pos: 0, dur: 0, consumed: false, waiters: [] };
+            this._vp = vp;
+            if (!vp.path) { vp.ready = true; vp.consumed = true; return; }
+            Promise.resolve().then(() => this.api('video_progress_get', { storage_id: vp.sid, path: vp.path, size: vp.size }, 'GET')).then((r) => {
+                if (r && r.success) { vp.pos = Number(r.pos) || 0; vp.dur = Number(r.dur) || 0; }
+            }).catch(() => {}).then(() => {
+                vp.ready = true;
+                vp.waiters.splice(0).forEach((f) => { try { f(); } catch (e) {} });
+                try { window._diagLog && window._diagLog('vp', { ev: 'get', pos: vp.pos, dur: vp.dur }); } catch (e) {}
+                if (this._vp === vp) this._vpLateApply();
+            });
+        } catch (e) {}
+    },
+    _vpWait(ms) {
+        const vp = this._vp;
+        if (!vp || vp.ready) return Promise.resolve();
+        return new Promise((res) => { const tm = setTimeout(res, ms); vp.waiters.push(() => { clearTimeout(tm); res(); }); });
+    },
+    // 이어 볼 시작 위치(초) — 한 번만. 저장 위치 그대로(★ 2026-10-04 5초 앞 → 그대로). 아직 모르면 0(늦게 오면 _vpLateApply).
+    _vpTake(path) {
+        const vp = this._vp;
+        if (!vp || vp.path !== path || vp.consumed || !vp.ready) return 0;
+        vp.consumed = true;
+        if (!(vp.pos > 0)) return 0;
+        const t0 = Math.max(0, vp.pos);
+        // ★ (2026-10-04) 시작 위치가 1초 미만이면 처음부터(알림 없음) — 저장이 5초부터라 5~6초에서 끈 영상이 0.x초에서 '0:00부터 이어서 재생' 으로 보였다(실측)
+        if (t0 < 1) return 0;
+        try { window._diagLog && window._diagLog('vp', { ev: 'take', pos: vp.pos, t0: +t0.toFixed(1) }); } catch (e) {}
+        return t0;
+    },
+    // 위치가 늦게 왔거나 일반 재생일 때 — 영상 정보가 준비된 뒤 그 위치로 옮긴다(트랜스코딩은 _startTranscode 가 맡으므로 제외).
+    _vpLateApply(video) {
+        try {
+            const vp = this._vp;
+            if (!vp || !vp.ready || vp.consumed || !(vp.pos > 0)) return;
+            const v = video || document.querySelector('#preview-content .preview-video');
+            if (!v || !v.isConnected || v !== document.querySelector('#preview-content .preview-video')) return;
+            if (!this._currentPreviewItem || this._currentPreviewItem.path !== vp.path) return;
+            if (v.getAttribute('data-transcode-base')) return;
+            if (!(v.readyState >= 1)) return;   // 영상 정보 전 — loadedmetadata 때 다시
+            if ((v.currentTime || 0) > 3) { vp.consumed = true; return; }   // 이미 옮겼거나 보는 중 — 그대로 둔다
+            const t0 = this._vpTake(vp.path);
+            if (t0 > 0) {
+                try { v.currentTime = t0; } catch (e) {}
+                this._vpShowToast(v, t0, { mode: 'seek' });
+                try { window._diagLog && window._diagLog('vp', { ev: 'apply', mode: 'late', t0: +t0.toFixed(1) }); } catch (e) {}
+            }
+        } catch (e) {}
+    },
+    _vpFmt(sec) {
+        sec = Math.max(0, Math.floor(sec || 0));
+        const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s2 = sec % 60;
+        return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(s2).padStart(2, '0');
+    },
+    _vpShowToast(video, t0, opt) {
+        try {
+            const wrap = video && video.closest ? (video.closest('.video-player-wrap') || video.parentElement) : null;
+            if (!wrap) return;
+            const old = wrap.querySelector('.fs-vp-toast'); if (old) old.remove();
+            const el = document.createElement('div');
+            el.className = 'fs-vp-toast';
+            el.setAttribute('role', 'status');
+            const span = document.createElement('span');
+            span.textContent = t('vp_resumed', '{time}부터 이어서 재생').replace('{time}', this._vpFmt(t0));
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.textContent = t('vp_restart', '처음부터');
+            const stop = (e) => { e.stopPropagation(); };
+            ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'click', 'dblclick'].forEach((ev) => el.addEventListener(ev, stop));
+            btn.addEventListener('click', (e) => { e.preventDefault(); el.remove(); this._vpRestart(video, opt || {}); });
+            el.append(span, btn);
+            wrap.appendChild(el);
+            setTimeout(() => { try { el.remove(); } catch (e) {} }, 6000);
+        } catch (e) {}
+    },
+    // [처음부터] — 트랜스코딩은 화질 변경과 같은 순서로 0초부터 다시 변환, 그 밖엔 0초로 이동.
+    _vpRestart(video, opt) {
+        try {
+            try { window._diagLog && window._diagLog('vp', { ev: 'restart', mode: opt.mode || '' }); } catch (e) {}
+            if (opt.mode === 'tc' && opt.base && video && video.isConnected) {
+                const wasPaused = video.paused;
+                video.setAttribute('data-transcode-base', opt.base);
+                video._qualitySeekOffset = 0;
+                try { video.pause(); } catch (e) {}
+                while (video.firstChild) video.removeChild(video.firstChild);
+                video.removeAttribute('src');
+                try { video.load(); } catch (e) {}
+                video._pendingResumeAfterQuality = !wasPaused;
+                window._lastStartTranscodeUrl = null;
+                window._lastStartTranscodeTime = 0;
+                window._hlsStarting = false;
+                window._hlsSwRetried = false;
+                this._startTranscode(opt.base, opt.storageId, opt.path);
+            } else if (video) {
+                try { video.currentTime = 0; } catch (e) {}
+            }
+        } catch (e) {}
+    },
+    _vpInstall() {
+        if (this._vpInstalled) return;
+        this._vpInstalled = true;
+        const isPv = (v) => !!(v && v.tagName === 'VIDEO' && v.classList && v.classList.contains('preview-video'));
+        document.addEventListener('loadedmetadata', (e) => {
+            const v = e.target; if (!isPv(v)) return;
+            const vp = this._vp;
+            // 이 영상 요소가 어느 파일인지 — 새 영상이 담길 때 지금 미리보기 파일로(넘긴 뒤의 옛 요소는 제 것 그대로)
+            if (vp && this._currentPreviewItem && this._currentPreviewItem.path === vp.path && v === document.querySelector('#preview-content .preview-video')) {
+                v._vpId = { sid: vp.sid, path: vp.path, size: vp.size };
+            }
+            // 빠른 시작이 이어 보기 위치로 시작했다가 일반 재생으로 되돌아온 경우 — 그 위치로(hls.js·트랜스코딩이 붙어 있으면 그쪽이 맡음)
+            const _pend = Number(v._vpPending) || 0;
+            if (_pend > 0 && !v._hlsInstance && !v.getAttribute('data-transcode-base') && !v.dataset.transcodeBase) {
+                v._vpPending = 0;
+                if ((v.currentTime || 0) < 3) {
+                    try { v.currentTime = _pend; } catch (x) {}
+                    try { window._diagLog && window._diagLog('vp', { ev: 'apply', mode: 'native_carry', t0: +_pend.toFixed(1) }); } catch (x) {}
+                }
+            }
+            this._vpLateApply(v);
+        }, true);
+        document.addEventListener('playing', (e) => { const v = e.target; if (isPv(v) && v._vpId) { v._vpPlayed = true; this._vpLastVideo = v; } }, true);
+        document.addEventListener('timeupdate', (e) => {
+            const v = e.target;
+            if (isPv(v) && v._vpPending && (v.currentTime || 0) > 3) v._vpPending = 0;   // 이어 보기 위치에서 제대로 재생 중 — 넘어갈 때 쓸 값 지움
+            if (!isPv(v) || !v._vpId || !v._vpPlayed) return;
+            this._vpNote(v);
+            if (!v.paused && Date.now() - (v._vpSentAt || 0) >= 30000) this._vpSave(v, 'tick');
+        }, true);
+        document.addEventListener('pause', (e) => { const v = e.target; if (isPv(v) && v._vpId && v._vpPlayed) { this._vpNote(v); this._vpSave(v, 'pause'); } }, true);
+        document.addEventListener('ended', (e) => { const v = e.target; if (isPv(v) && v._vpId && v._vpPlayed) { this._vpNote(v, true); this._vpSave(v, 'ended'); } }, true);
+        setInterval(() => {   // 다른 영상으로 넘김·미리보기 닫기 — 3초 안에 마지막 위치 저장
+            const v = this._vpLastVideo;
+            if (v && (!v.isConnected || v !== document.querySelector('#preview-content .preview-video'))) { this._vpLastVideo = null; this._vpSave(v, 'leave'); }
+        }, 3000);
+        const flush = () => { const v = this._vpLastVideo; if (v && v.isConnected) { this._vpNote(v); this._vpSave(v, 'unload', true); } };
+        window.addEventListener('pagehide', flush);
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush(); });
+    },
+    _vpNote(v, ended) {
+        try {
+            const off = Number(v._qualitySeekOffset) || 0;
+            const pos = off + (Number(v.currentTime) || 0);
+            let dur = Number(v._knownDuration) || 0;
+            if (!(dur > 0)) { const d = Number(v.duration); if (isFinite(d) && d > 0) dur = d + (v.getAttribute('data-transcode-base') ? off : 0); }
+            if (pos >= 0 && dur > 0) v._vpLast = { pos: ended ? dur : Math.min(pos, dur), dur };
+        } catch (e) {}
+    },
+    _vpSave(v, why, beacon) {
+        try {
+            const id = v._vpId, last = v._vpLast;
+            if (!id || !last || !v._vpPlayed) return;
+            const vp = this._vp;
+            // 같은 파일의 이어 보기가 아직 적용 전이면 저장하지 않는다(기존 위치가 지워지지 않게)
+            if (vp && vp.path === id.path && vp.sid === id.sid && (!vp.ready || (!vp.consumed && vp.pos > 0))) return;
+            if (why !== 'ended' && Math.abs(last.pos - (v._vpSentPos == null ? -99 : v._vpSentPos)) < 2) return;
+            v._vpSentPos = last.pos;
+            v._vpSentAt = Date.now();
+            const data = { storage_id: id.sid, path: id.path, size: id.size, pos: last.pos.toFixed(1), dur: last.dur.toFixed(1) };
+            if (beacon && navigator.sendBeacon) {
+                const fd = new FormData();
+                Object.keys(data).forEach((k) => fd.append(k, data[k]));
+                fd.append('csrf_token', this.csrfToken || window.CSRF_TOKEN || '');
+                navigator.sendBeacon('api.php?action=video_progress_set', fd);
+            } else {
+                Promise.resolve().then(() => this.api('video_progress_set', data, 'POST')).catch(() => {});
+            }
+            try { window._diagLog && window._diagLog('vp', { ev: 'save', why, pos: +last.pos.toFixed(1), dur: +last.dur.toFixed(1) }); } catch (e) {}
+        } catch (e) {}
+    },
+
     _videoSkinCtx(video) {
         const inPreview = (sel) => document.querySelector('#preview-content ' + sel);
         const byId = (id) => document.getElementById(id);
