@@ -151,6 +151,24 @@
         //   겹침이 생겼다(펜닐 확인). 재생/일시정지는 조작 줄의 버튼과 기존 가운데 버튼으로 한다.
         root.append(menu, bar);
         wrap.appendChild(root);
+        // ★ (2026-10-05) 음량 표시(유튜브처럼, 펜닐 요청) — 키보드로 음량을 바꾸면 위쪽 가운데에 아이콘 + 퍼센트를 1초.
+        //   음량 막대(입력칸)를 키보드로 움직이면 스킨이 직접, ↑↓ 키 처리(탐색기·공유)는 FSVideoSkin.showVolume(wrap) 으로 부른다.
+        //   마우스로 막대를 끌 때는 막대가 보이므로 띄우지 않는다(유튜브와 같음).
+        const volOsd = el('div', 'fsvs-volosd');
+        volOsd.setAttribute('aria-hidden', 'true');
+        root.appendChild(volOsd);
+        let volOsdTimer = null, volKbdAt = 0;
+        const showVolOsd = () => {
+            const v = video.muted ? 0 : (Number(video.volume) || 0);
+            volOsd.innerHTML = v > 0 ? ICON.vol : ICON.mute;
+            const pct = document.createElement('span');
+            pct.textContent = Math.round(v * 100) + '%';
+            volOsd.appendChild(pct);
+            volOsd.classList.add('on');
+            if (volOsdTimer) clearTimeout(volOsdTimer);
+            volOsdTimer = setTimeout(() => { volOsdTimer = null; volOsd.classList.remove('on'); }, 1000);
+        };
+        cleanups.push(() => { if (volOsdTimer) clearTimeout(volOsdTimer); volOsdTimer = null; });
         wrap.classList.add('fsvs-on');
         document.body.classList.add('fsvs-active');
 
@@ -162,6 +180,8 @@
         on(bPlay, 'click', togglePlay);
         on(bVol, 'click', () => { video.muted = !video.muted; });
         on(vol, 'input', () => { video.volume = parseFloat(vol.value); if (video.volume > 0 && video.muted) video.muted = false; });
+        on(vol, 'keydown', () => { volKbdAt = Date.now(); });                              // ★ (2026-10-05) 키보드로 막대를 움직였는지
+        on(vol, 'input', () => { if (Date.now() - volKbdAt < 600) showVolOsd(); });       // 키보드면 음량 표시(마우스로 끌 땐 안 띄움)
 
         // ── 시간축 ★ (2026-09-23) 스트리밍 지원 ─────────────────────────────────
         //   트랜스코딩·HLS 는 서버가 변환하면서 조각을 붙이므로 브라우저가 아는 길이가 늘어나거나 무한대이고,
@@ -892,6 +912,7 @@
 
         const api = {
             video, wrap,
+            showVolume: showVolOsd,   // ★ (2026-10-05) 음량 표시 — FSVideoSkin.showVolume(wrap)
             destroy() {
                 cleanups.splice(0).reverse().forEach((f) => { try { f(); } catch (e) {} });
                 try { root.remove(); } catch (e) {}
@@ -910,5 +931,7 @@
         return api;
     }
 
-    window.FSVideoSkin = { attach, detach, version: '1' };
+    // ★ (2026-10-05) 음량 표시 — 탐색기·공유의 ↑↓ 키 처리가 부른다(스킨이 붙어 있을 때만)
+    function showVolume(wrap) { try { if (wrap && wrap._fsvs && typeof wrap._fsvs.showVolume === 'function') wrap._fsvs.showVolume(); } catch (e) {} }
+    window.FSVideoSkin = { attach, detach, showVolume, version: '1' };
 })();

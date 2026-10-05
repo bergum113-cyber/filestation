@@ -2215,6 +2215,9 @@
 .fap.fap .fap-controls > .fap-volume:focus-within .fap-vol-bar,
 .fap.fap .fap-controls > .fap-volume:hover::before,
 .fap.fap .fap-controls > .fap-volume:focus-within::before { transition: opacity 0.12s ease 0s, visibility 0s linear 0s; }
+/* ★ (2026-10-05) 키보드(↑↓)로 음량을 바꿀 때 팝업 잠깐 보이기(.fap-vol-kbd, _showVolumeToast 가 1.2초 붙임) — 마우스를 올렸을 때와 같게(펜닐 제보). */
+.fap.fap .fap-controls > .fap-volume.fap-vol-kbd .fap-vol-bar,
+.fap.fap .fap-controls > .fap-volume.fap-vol-kbd::before { opacity: 1; visibility: visible; transition: opacity 0.12s ease 0s, visibility 0s linear 0s; }
 /* ★ (2026-09-26) 곡을 넘길 때 재생 줄이 좌우로 흔들리던 문제(펜닐 제보, 실제 Chromium 17~42px 재현) — 가사 버튼은 곡을 넘길 때마다 숨겼다가
    (_loadLyrics, style.display='none') 가사를 찾으면 다시 보이는데, 가운데 정렬 줄이라 버튼이 생기고 사라질 때마다 나머지가 밀렸다.
    가사를 확인하는 곡에선 숨겨진 가사 버튼도 자리를 남긴다(보이지 않고 눌리지 않음). 가사 기능이 없는 곡(.fap-lyrics-na)은 종전처럼 자리까지 사라짐.

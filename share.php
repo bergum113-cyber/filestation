@@ -3950,6 +3950,21 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     return;
                 }
                 
+                // ★ (2026-10-05) ↑/↓: 음량 5퍼센트(유튜브처럼, 펜닐 요청) — 위쪽 가운데에 음량 표시(스킨). 음량 막대(입력칸)에 포커스가 있으면 위에서 이미
+                //   무시돼 브라우저 기본(1퍼센트)이 맡고 스킨이 표시. 위로 올리면 음소거 풀림. 아이폰·아이패드는 브라우저가 음량 변경을 막아 건너뜀(음악과 같은 규칙).
+                if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                    const _vv = player;
+                    if (_vv) {
+                        e.preventDefault();
+                        const _ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+                        if (!_ios) {
+                            _vv.volume = Math.max(0, Math.min(1, Math.round(((Number(_vv.volume) || 0) + (e.key === 'ArrowUp' ? 0.05 : -0.05)) * 100) / 100));
+                            if (e.key === 'ArrowUp' && _vv.muted) _vv.muted = false;
+                            try { if (window.FSVideoSkin && typeof window.FSVideoSkin.showVolume === 'function') window.FSVideoSkin.showVolume(_vv.closest('.fsvs-on')); } catch (x) {}
+                        }
+                    }
+                    return;
+                }
                 // Space: 재생/일시정지
                 if (e.key === ' ' || e.code === 'Space') {
                     if (player.paused || player.ended) {

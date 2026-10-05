@@ -2273,6 +2273,14 @@ class FSAudioPlayer {
         this._volToastTimer = setTimeout(() => {
             if (!this._destroyed && toast) toast.classList.remove('show');
         }, 1200);
+        // ★ (2026-10-05) 키보드(↑↓)로 바꿀 때도 음량 팝업을 잠깐 띄운다(펜닐 제보) — 알림이 팝업 안에 있는데 팝업은 마우스를 올려야 보여서,
+        //   마우스를 대지 않고 키보드로만 조정하면 알림도 함께 숨겨졌다. CSS .fap-vol-kbd 가 마우스를 올렸을 때와 같게 보이게 함.
+        const _vw = this.$.volBar.closest('.fap-volume');
+        if (_vw) {
+            _vw.classList.add('fap-vol-kbd');
+            if (this._volKbdTimer) clearTimeout(this._volKbdTimer);
+            this._volKbdTimer = setTimeout(() => { if (!this._destroyed) _vw.classList.remove('fap-vol-kbd'); }, 1200);
+        }
     }
     
     // ★ 볼륨 영구 저장 (localStorage) — 플레이어 껐다 켜도 유지

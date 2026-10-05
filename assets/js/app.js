@@ -3141,6 +3141,14 @@ class FSAudioPlayer {
         this._volToastTimer = setTimeout(() => {
             if (!this._destroyed && toast) toast.classList.remove('show');
         }, 1200);
+        // ★ (2026-10-05) 키보드(↑↓)로 바꿀 때도 음량 팝업을 잠깐 띄운다(펜닐 제보) — 알림이 팝업 안에 있는데 팝업은 마우스를 올려야 보여서,
+        //   마우스를 대지 않고 키보드로만 조정하면 알림도 함께 숨겨졌다. CSS .fap-vol-kbd 가 마우스를 올렸을 때와 같게 보이게 함.
+        const _vw = this.$.volBar.closest('.fap-volume');
+        if (_vw) {
+            _vw.classList.add('fap-vol-kbd');
+            if (this._volKbdTimer) clearTimeout(this._volKbdTimer);
+            this._volKbdTimer = setTimeout(() => { if (!this._destroyed) _vw.classList.remove('fap-vol-kbd'); }, 1200);
+        }
     }
     
     // ★ 볼륨 영구 저장 (localStorage) — 플레이어 껐다 켜도 유지
@@ -38200,6 +38208,21 @@ const App = {
                             }
                             e.preventDefault();
                         }
+                    }
+                    // ★ (2026-10-05) ↑/↓: 음량 5퍼센트(유튜브처럼, 펜닐 요청) — 위쪽 가운데에 음량 표시(스킨). 음량 막대(입력칸)에 포커스가 있으면 위에서 이미
+                    //   무시돼 브라우저 기본(1퍼센트)이 맡고 스킨이 표시. 위로 올리면 음소거 풀림. 아이폰·아이패드는 브라우저가 음량 변경을 막아 건너뜀(음악과 같은 규칙).
+                    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                        const _vv = document.querySelector('#preview-content .preview-video');
+                        if (_vv) {
+                            e.preventDefault();
+                            const _ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+                            if (!_ios) {
+                                _vv.volume = Math.max(0, Math.min(1, Math.round(((Number(_vv.volume) || 0) + (e.key === 'ArrowUp' ? 0.05 : -0.05)) * 100) / 100));
+                                if (e.key === 'ArrowUp' && _vv.muted) _vv.muted = false;
+                                try { if (window.FSVideoSkin && typeof window.FSVideoSkin.showVolume === 'function') window.FSVideoSkin.showVolume(_vv.closest('.fsvs-on')); } catch (x) {}
+                            }
+                        }
+                        return;
                     }
                     // 스페이스바 재생/일시정지
                     if (e.key === ' ' || e.code === 'Space') {

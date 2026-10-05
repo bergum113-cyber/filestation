@@ -342,3 +342,15 @@ body.fsvs-active #player-wrap .stream-badge.fsvs-badge-error { white-space: norm
 .fs-vp-toast button:hover { background: rgba(255, 255, 255, .26); }
 @keyframes fsVpIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .fs-vp-toast { animation: none; } }
+
+/* ★ (2026-10-05) 음량 표시(유튜브처럼, 펜닐 요청) — 키보드로 음량을 바꾸면 위쪽 가운데에 아이콘 + 퍼센트 1초(fs-video-skin.js showVolOsd). */
+.fsvs-volosd {
+    position: absolute; top: 10%; left: 50%; transform: translate(-50%, -4px); z-index: 25;
+    display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 8px;
+    background: rgba(0, 0, 0, .62); color: #fff; font-size: 15px; font-weight: 600; line-height: 1;
+    font-variant-numeric: tabular-nums; pointer-events: none; opacity: 0;
+    transition: opacity .15s ease, transform .15s ease; -webkit-user-select: none; user-select: none;
+}
+.fsvs-volosd.on { opacity: 1; transform: translate(-50%, 0); }
+.fsvs-volosd svg { width: 20px; height: 20px; flex: none; }
+@media (prefers-reduced-motion: reduce) { .fsvs-volosd { transition: none; } }
