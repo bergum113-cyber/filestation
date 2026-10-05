@@ -16865,3 +16865,10 @@ body.video-pseudo-fs {
 .share-file-name.share-file-name-link { cursor: pointer; }
 .share-file-name.share-file-name-link:hover, .share-file-name.share-file-name-link:focus-visible { text-decoration: underline; }
 
+
+/* ★ (2026-10-05) 미리보기 모달 틀의 포커스 테두리 끄기(펜닐 제보: 키보드 스페이스로 재생하면 동영상·음악 모달 테두리가 검정으로 보임).
+   원인: app.js 가 재생·일시정지·위치 이동 때마다 ESC·화살표·스페이스 처리를 위해 모달 틀(#modal-preview, tabindex=-1)로 포커스를 옮기는데,
+   직전 조작이 키보드면 크롬이 :focus-visible 로 기본 포커스 테두리(outline:auto)를 그림(마우스면 안 그림). 포커스 옮기기는 그대로 두고 모달 틀
+   전체의 테두리만 끔 — 모달 안 버튼·입력칸의 포커스 표시는 그대로. */
+#modal-preview:focus,
+#modal-preview:focus-visible { outline: none; }
