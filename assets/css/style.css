@@ -16875,3 +16875,8 @@ body.video-pseudo-fs {
    전체의 테두리만 끔 — 모달 안 버튼·입력칸의 포커스 표시는 그대로. */
 #modal-preview:focus,
 #modal-preview:focus-visible { outline: none; }
+
+/* ★ (2026-10-06) 확인 창 틀의 포커스 테두리 끄기 — 확인 창이 열리면 포커스를 틀(#modal-confirm, tabindex=-1)로 옮기는데
+   (app.js showConfirmModal), 틀 전체 테두리는 쓸모가 없어 끈다. 안쪽 버튼(Tab 으로 이동)의 포커스 표시는 그대로. */
+#modal-confirm:focus,
+#modal-confirm:focus-visible { outline: none; }

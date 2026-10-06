@@ -34137,6 +34137,7 @@ const App = {
                 button.textContent = btn.text;
                 button.onclick = () => {
                     hideConfirmModal();
+                    this._confirmRestoreFocus();   // ★ (2026-10-06) resolve 전에 — 2단계 확인이 이어질 때 다음 창이 올바른 '연 버튼'을 본다
                     this.confirmModalResolve = null;
                     this.confirmModalReject = null;
                     // window 캡처 단계에 등록했으므로 동일하게 제거
@@ -34179,10 +34180,36 @@ const App = {
             // 키보드 이벤트 등록 (window + 캡처 단계 = 가장 먼저 실행)
             window.addEventListener('keydown', this.confirmModalKeyHandler, true);
             
+            // ★ (2026-10-06) 포커스 — 확인 창이 떠 있는 동안 포커스가 뒤쪽 '연 버튼'에 남아, 마우스로 열고 Space·Enter 로 진행하면
+            //   창이 닫힌 뒤 그 버튼에 크롬 포커스 테두리가 생겼다(펜닐 제보: 내 휴지통 '비우기'). 반대로 키보드(Tab → Space/Enter)로
+            //   연 사람에게는 그 테두리가 '지금 위치'라 필요하다(WAI-ARIA 대화 상자: 닫으면 연 요소로 포커스 복귀).
+            //   → 열 때 연 버튼이 키보드 포커스 상태(:focus-visible)였는지 기억하고, 포커스는 확인 창 틀로 옮긴다(실행 버튼에 바로
+            //   주지 않음 — Enter·Space 는 위 키 처리가 맡음). 닫을 때 키보드로 연 경우만 연 버튼으로 돌려준다(_confirmRestoreFocus).
+            {
+                const opener = document.activeElement;
+                let keyboardOpened = false;
+                try { keyboardOpened = !!(opener && opener !== document.body && opener.matches(':focus-visible')); } catch (e) { keyboardOpened = false; }
+                this._confirmFocus = { el: (opener && opener !== document.body && !confirmModal.contains(opener)) ? opener : null, restore: keyboardOpened };
+            }
+
             // 모달 표시
             confirmOverlay.style.display = 'flex';
             confirmModal.style.display = 'flex';
+            if (!confirmModal.hasAttribute('tabindex')) confirmModal.setAttribute('tabindex', '-1');
+            try { confirmModal.focus({ preventScroll: true }); } catch (e) {}
         });
+    },
+
+    // ★ (2026-10-06) 확인 창이 닫힐 때 포커스 정리 — 키보드로 연 경우만 연 버튼으로 돌려주고(테두리로 위치 표시),
+    //   마우스로 연 경우는 돌려주지 않고 확인 창 안에 남은 포커스를 뗀다(테두리 없음). 연 버튼이 사라졌거나 숨겨졌으면 돌려주지 않는다.
+    _confirmRestoreFocus() {
+        const f = this._confirmFocus; this._confirmFocus = null;
+        const confirmModal = document.getElementById('modal-confirm');
+        const active = document.activeElement;
+        if (f && f.restore && f.el && f.el.isConnected && f.el.getClientRects().length > 0) {
+            try { f.el.focus({ preventScroll: true }); return; } catch (e) {}
+        }
+        if (active && confirmModal && confirmModal.contains(active)) { try { active.blur(); } catch (e) {} }
     },
     
     // 확인 모달 취소 (X 버튼 또는 ESC)
@@ -34207,6 +34234,7 @@ const App = {
                 modalOverlay.appendChild(confirmModal);
             }
         }
+        this._confirmRestoreFocus();   // ★ (2026-10-06) 키보드로 연 경우만 연 버튼으로 포커스 복귀
     },
     
     // 간편 확인 모달 (confirm 대체)
