@@ -13368,8 +13368,12 @@ const App = {
         }
         const sections = res.sections || {};
         const keys = Object.keys(sections);
-        if (!res.supported || keys.length === 0) {
-            this.alert(t('exif_none', '이 이미지에는 EXIF 정보가 없습니다. (JPEG/TIFF 만 지원)'), t('exif_title', 'EXIF 정보'));
+        // ★ (2026-10-07) EXIF 가 없는 이미지(스크린샷·그림판·웹 저장 그림, GIF·BMP)도 윈도우 [자세히]처럼 '이미지' 기본 정보
+        //   (크기·해상도·비트 수준)를 보여 준다(펜닐 요청). 서버가 has_exif=false 와 details(이미지 묶음)를 준다.
+        const noExif = res.has_exif === false;
+        const hasDet = Array.isArray(res.details) && res.details.length > 0;
+        if (!res.supported || (noExif ? !hasDet : keys.length === 0)) {
+            this.alert(t('exif_none', '이 이미지에는 EXIF 정보가 없습니다. (JPEG·TIFF·PNG·WebP·HEIC 지원)'), t('exif_title', 'EXIF 정보'));   // ★ (2026-10-07) 지원 형식 안내 갱신
             return;
         }
         // ★ (2026-08-25) 요약을 위에, 전체 태그는 접어서 아래에 둔다.
@@ -13378,6 +13382,7 @@ const App = {
         const summary = res.summary || {};
         const sKeys = Object.keys(summary);
         let html = '<div style="max-height:60vh;overflow:auto;font-size:12px;">';
+        if (noExif) html += '<div style="margin-bottom:8px;color:#888;">' + this.escapeHtml(t('exif_none_basic', '이 이미지에는 EXIF 정보가 없습니다. 파일 자체의 기본 정보만 표시합니다.')) + '</div>';
 
         if (sKeys.length) {
             html += '<table style="width:100%;border-collapse:collapse;margin-bottom:10px;">';
@@ -13397,26 +13402,362 @@ const App = {
             html += '</table>';
         }
 
-        html += '<details style="margin-top:4px;">'
-             + '<summary style="cursor:pointer;color:#2196F3;">' + t('exif_all', '전체 태그 보기') + '</summary>'
-             + '<div style="margin-top:6px;">';
-        keys.forEach(sec => {
+        // ★ (2026-10-07) 전체 태그 보기 → 윈도우 [속성 → 자세히] 처럼 묶음별·사람이 읽는 값(펜닐 요청).
+        //   서버가 details(설명·원본·이미지·카메라·고급 사진·GPS)를 만들어 준다. details 가 없는 응답(구버전 서버)은 종전 원시 표.
+        const det = Array.isArray(res.details) ? res.details : null;
+        if (!det || det.length) {
+            // EXIF 가 없으면 접지 않고 '이미지' 묶음을 바로 보여 준다
+            html += noExif ? '<div>' : ('<details style="margin-top:4px;">'
+                 + '<summary style="cursor:pointer;color:#2196F3;">' + t('exif_all', '전체 태그 보기') + '</summary>'
+                 + '<div style="margin-top:6px;">');
+            if (det) {
+                det.forEach(g => {
+                    if (!g || !Array.isArray(g.rows)) return;
+                    html += '<div style="margin-bottom:10px;">'
+                         + '<div style="font-weight:600;margin-bottom:4px;color:#888;border-bottom:1px solid rgba(128,128,128,0.25);padding-bottom:2px;">' + this.escapeHtml(g.title) + '</div>'
+                         + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;">';   // 묶음마다 항목 칸 너비를 같게
+                    g.rows.forEach(r => {
+                        let v = this.escapeHtml(r.v);
+                        if (r.map) v += ' <a href="https://www.google.com/maps?q=' + encodeURIComponent(r.map) + '" target="_blank" rel="noopener">' + t('exif_map', '지도') + ' ↗</a>';
+                        html += '<tr>'
+                             + '<td style="padding:2px 8px 2px 0;color:#666;vertical-align:top;width:9em;">' + this.escapeHtml(r.k) + '</td>'
+                             + '<td style="padding:2px 0;word-break:break-all;">' + v + '</td></tr>';
+                    });
+                    html += '</table></div>';
+                });
+            } else {
+            keys.forEach(sec => {
+                html += '<div style="margin-bottom:10px;">'
+                     + '<div style="font-weight:600;margin-bottom:4px;color:#888;">' + this.escapeHtml(sec) + '</div>'
+                     + '<table style="width:100%;border-collapse:collapse;">';
+                Object.keys(sections[sec]).forEach(k => {
+                    html += '<tr>'
+                         + '<td style="padding:2px 8px 2px 0;color:#666;white-space:nowrap;vertical-align:top;">'
+                         + this.escapeHtml(k) + '</td>'
+                         + '<td style="padding:2px 0;word-break:break-all;">'
+                         + this.escapeHtml(sections[sec][k]) + '</td></tr>';
+                });
+                html += '</table></div>';
+            });
+            }
+            html += noExif ? '</div>' : '</div></details>';
+        }
+        html += '</div>';
+        // ★ (2026-10-07) [🧹 개인정보 삭제] — 지원 형식 · 보관함/원격 아님 · (지금 폴더의 파일이면) 쓰기 권한 · 잠기지 않음.
+        //   다른 저장소에서 연 미리보기(검색 결과 등)는 서버가 권한·잠금을 다시 확인한다.
+        const exPath = this.currentPreviewPath;
+        const exExt = (exPath.split('.').pop() || '').toLowerCase();
+        const exSt = (this.storages || []).find(s => s.id == sid);
+        const exRemote = !!exSt && !['home', 'shared', 'local'].includes(exSt.storage_type);
+        const exSame = sid == this.currentStorage;
+        const canStrip = this._exifStripExts.includes(exExt) && !(this.vault && this.vault.isVaultView) && !exRemote
+            && (!exSame || (!!(this.currentPermissions && this.currentPermissions.can_write) && !this.isFileLocked(exPath)));
+        // ★ showConfirmModal 은 message 를 그대로 HTML 로 넣는다. Enter·Space 는 마지막 버튼(확인 = 닫기)이다.
+        const btns = [{ text: t('confirm'), value: true, class: 'btn-primary' }];
+        if (canStrip) btns.unshift({ text: t('exif_strip_btn', '🧹 개인정보 삭제'), value: 'strip', class: 'btn-warning' });
+        let pick = null;
+        try {
+            pick = await this.showConfirmModal({ title: t('exif_title', 'EXIF 정보'), content: '<div style="font-size: 14px;">' + html + '</div>', buttons: btns });
+        } catch (e) { pick = null; }
+        if (pick === 'strip' && this.currentPreviewPath === exPath) this._imgStripExif(sid, exPath);
+    },
+
+    // ★ (2026-10-07) EXIF 개인정보 삭제 — 뷰어 EXIF 창의 [🧹 개인정보 삭제] · ⚡작업/우클릭 [EXIF 개인정보 삭제](일괄).
+    //   서버(image_exif_strip)가 허용 목록 방식으로 위치·날짜·일련번호·이름·설명·편집 프로그램·썸네일·XMP·IPTC 를 지우고
+    //   카메라 제조사·모델·렌즈·촬영 설정·방향·색 프로필은 남긴다. 그림 데이터는 그대로 복사한다(화질 변화 없음).
+    _exifStripExts: ['jpg', 'jpeg', 'jpe', 'png', 'webp', 'heic', 'heif'],
+
+    _exifStripConfirm(count, skipped = 0) {
+        const head = count > 1
+            ? tf('exif_strip_q_n', { count }, `사진 ${count}개에서 개인정보만 지웁니다.`)
+            : t('exif_strip_q', '이 사진에서 개인정보만 지웁니다.');
+        const li = 'margin:2px 0;';
+        const content = '<div style="font-size:14px;line-height:1.55;">'
+            + '<p style="margin:0 0 10px;font-weight:500;">' + this.escapeHtml(head) + '</p>'
+            + (skipped > 0 ? '<p style="margin:0 0 10px;color:#888;font-size:13px;">' + this.escapeHtml(tf('exif_strip_skip_n', { count: skipped }, `폴더·다른 형식 ${skipped}개는 건너뜁니다.`)) + '</p>' : '')
+            + '<div style="font-size:13px;margin-bottom:8px;"><b style="color:#d9534f;">' + this.escapeHtml(t('exif_strip_rm_h', '지우는 것')) + '</b>'
+            + '<ul style="margin:4px 0 0 18px;padding:0;">'
+            + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm1', '위치(GPS 좌표·고도·방향)')) + '</li>'
+            + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm2', '찍은·수정한 날짜와 시간, 시간대')) + '</li>'
+            + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm3', '카메라·렌즈 일련번호, 소유자 이름, 이미지 ID')) + '</li>'
+            + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm4', '만든 이·저작권·제목·설명·메모·태그')) + '</li>'
+            + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm5', '편집 프로그램·컴퓨터 이름, 제조사 전용 정보(MakerNote)')) + '</li>'
+            + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm6', '내장 썸네일(원본 사진이 남아 있을 수 있음), IPTC·주석, XMP 안의 위치·작성자·날짜 등')) + '</li>'
+            + '</ul></div>'
+            + '<div style="font-size:13px;margin-bottom:8px;"><b style="color:#5cb85c;">' + this.escapeHtml(t('exif_strip_keep_h', '남기는 것')) + '</b>'
+            + '<div style="margin:4px 0 0 4px;color:#666;">' + this.escapeHtml(t('exif_strip_keep', '카메라 제조사·모델, 렌즈 모델, 촬영 설정(조리개·셔터·ISO·초점 거리·플래시 등), 방향, 해상도, 색 프로필, 별점, HDR 표시 정보')) + '</div>'
+            + '<div style="margin:4px 0 0 4px;color:#888;font-size:12px;">' + this.escapeHtml(t('exif_strip_keep2', '사진 뒤에 붙은 동영상(모션 포토)·제조사 추가 데이터는 지우지 않습니다(지우면 동영상이 사라짐).')) + '</div></div>'
+            + '<p style="margin:8px 0 0;color:#888;font-size:12px;">' + this.escapeHtml(t('exif_strip_note', '그림(화질)은 바뀌지 않습니다. 원본 파일이 바뀌고 수정한 날짜가 지금으로 바뀝니다. 버전 관리가 켜져 있으면 이전 버전에서 되돌릴 수 있습니다.')) + '</p>'
+            + '</div>';
+        return this.showConfirmModal({
+            title: t('exif_strip_title', '🧹 EXIF 개인정보 삭제'),
+            content,
+            buttons: [
+                { text: t('cancel'), value: false, class: 'btn-secondary' },
+                { text: t('exif_strip_do', '삭제'), value: true, class: 'btn-warning' }
+            ]
+        }).catch(() => false);
+    },
+
+    // list: [{sid, path}] → 같은 순서의 결과 배열. 저장소별로 10개씩 나눠 보낸다(서버 한도 20).
+    async _exifStripRequest(list, onProgress) {
+        const results = new Array(list.length);
+        const groups = new Map();
+        list.forEach((it, i) => {
+            const k = String(it.sid);
+            if (!groups.has(k)) groups.set(k, []);
+            groups.get(k).push(i);
+        });
+        let done = 0;
+        for (const [sid, idxs] of groups) {
+            for (let c = 0; c < idxs.length; c += 10) {
+                const chunk = idxs.slice(c, c + 10);
+                let res = null;
+                try {
+                    res = await this.api('image_exif_strip', { storage_id: parseInt(sid, 10), paths: chunk.map(i => list[i].path) }, 'POST', null, 0, 180000);
+                } catch (e) { res = null; }
+                const items = (res && res.success && Array.isArray(res.items)) ? res.items : null;
+                chunk.forEach((i, j) => {
+                    const r = items && items[j] && items[j].path === list[i].path ? items[j] : null;
+                    results[i] = r || { success: false, status: 'error', error: (res && res.error) || t('exif_strip_net', '서버 응답이 없습니다.') };
+                });
+                done += chunk.length;
+                if (onProgress) onProgress(done, list.length);
+                if (res && res.session_expired) {   // 세션이 끊기면 나머지는 보내지 않는다
+                    for (let k = 0; k < results.length; k++) if (!results[k]) results[k] = { success: false, status: 'error', error: res.error };
+                    return results;
+                }
+            }
+        }
+        return results;
+    },
+
+    // 뷰어 EXIF 창에서 — 지금 보고 있는 사진 한 장
+    async _imgStripExif(sid, path) {
+        if (this._exifStripRunning) { this.toast(t('exif_strip_busy', '이미 처리 중입니다.'), 'info'); return; }
+        if (!(await this._exifStripConfirm(1))) return;
+        this._exifStripRunning = true;
+        let r;
+        try {
+            r = (await this._exifStripRequest([{ sid, path }]))[0];
+        } finally {
+            this._exifStripRunning = false;
+        }
+        if (r.status === 'stripped') {
+            this._exifStripDirty = true;   // 목록의 크기·수정 날짜는 미리보기를 닫을 때 새로 읽는다
+            this.toast(t('exif_strip_done1', 'EXIF 개인정보를 삭제했습니다.') + (r.backup ? ' ' + t('exif_strip_backup', '(이전 버전 저장됨)') : '')
+                + (r.trailer > 0 ? ' ' + t('exif_strip_trailer1', '— 사진 뒤 추가 데이터(동영상 등)는 그대로 둠') : ''), 'success', r.trailer > 0 ? 6000 : 3000);
+            const mp = document.getElementById('modal-preview');
+            if (this.currentPreviewPath === path && mp && mp.style.display !== 'none') this._imgShowExif();
+        } else if (r.status === 'clean') {
+            this.toast(t('exif_strip_clean1', '지울 개인정보가 없습니다.'), 'info');
+        } else {
+            this.toast(r.error || t('exif_strip_failed', '처리하지 못했습니다'), 'error', 5000);
+        }
+    },
+
+    // ⚡작업 · 우클릭 — 선택한 사진 일괄
+    async stripExifSelected(item) {
+        if (this._exifStripRunning) { this.toast(t('exif_strip_busy', '이미 처리 중입니다.'), 'info'); return; }
+        if (this.vault && this.vault.isVaultView) { this.toast(t('exif_strip_vault', '보관함 안의 파일은 지원하지 않습니다.'), 'error'); return; }
+        let items = this.getSelectedOrCheckedItems();
+        if ((!items || !items.length) && item) items = [item];
+        items = items || [];
+        const extOf = n => ((n || '').split('.').pop() || '').toLowerCase();
+        const targets = items.filter(it => it && !it.isDir && this._exifStripExts.includes(extOf(it.name)));
+        if (!targets.length) { this.toast(t('exif_strip_format', 'JPEG·PNG·WebP·HEIC 만 지원합니다.'), 'error'); return; }
+        if (!(await this._exifStripConfirm(targets.length, items.length - targets.length))) return;
+
+        this._exifStripRunning = true;
+        let results;
+        try {
+            const total = targets.length;
+            this.toast(tf('exif_strip_prog', { done: 0, total }, `EXIF 개인정보 삭제 중… 0/${total}`), 'info', 600000);
+            results = await this._exifStripRequest(
+                targets.map(it => ({ sid: it.storageId || this.currentStorage, path: it.path })),
+                (done) => this.toastUpdate(tf('exif_strip_prog', { done, total }, `EXIF 개인정보 삭제 중… ${done}/${total}`), 'info', 600000)
+            );
+        } finally {
+            this._exifStripRunning = false;
+        }
+        const cnt = { stripped: 0, clean: 0, unsupported: 0, locked: 0, error: 0 };
+        let backup = 0, trailer = 0;
+        const bad = [];
+        results.forEach((r, i) => {
+            const st = Object.prototype.hasOwnProperty.call(cnt, r.status) ? r.status : 'error';
+            cnt[st]++;
+            if (st === 'stripped' && r.backup) backup++;
+            if (st === 'stripped' && r.trailer > 0) trailer++;
+            if (st === 'unsupported' || st === 'locked' || st === 'error') bad.push({ name: targets[i].name, msg: r.error || '' });
+        });
+        const parts = [];
+        if (cnt.stripped) parts.push(tf('exif_strip_r_ok', { count: cnt.stripped }, `삭제 ${cnt.stripped}`));
+        if (cnt.clean) parts.push(tf('exif_strip_r_clean', { count: cnt.clean }, `개인정보 없음 ${cnt.clean}`));
+        if (cnt.unsupported) parts.push(tf('exif_strip_r_unsup', { count: cnt.unsupported }, `지원 안 함 ${cnt.unsupported}`));
+        if (cnt.locked) parts.push(tf('exif_strip_r_locked', { count: cnt.locked }, `잠김 ${cnt.locked}`));
+        if (cnt.error) parts.push(tf('exif_strip_r_err', { count: cnt.error }, `실패 ${cnt.error}`));
+        let summary = parts.join(' · ');
+        if (backup) summary += ' ' + t('exif_strip_backup', '(이전 버전 저장됨)');
+        if (trailer) summary += ' ' + tf('exif_strip_r_trailer', { count: trailer }, `— ${trailer}개는 사진 뒤 추가 데이터(동영상 등)를 그대로 둠`);
+        if (cnt.stripped && !this.isSearchMode && !(this.vault && this.vault.isVaultView)) this.loadFiles();
+        if (bad.length) {
+            const list = bad.slice(0, 50).map(b => '<div style="padding:4px 8px;margin:3px 0;background:rgba(0,0,0,0.04);border-radius:4px;word-break:break-all;font-size:12px;">'
+                + this.escapeHtml(b.name) + (b.msg ? ' <span style="color:#d9534f;">— ' + this.escapeHtml(b.msg) + '</span>' : '') + '</div>').join('')
+                + (bad.length > 50 ? '<div style="color:#888;font-size:12px;">… +' + (bad.length - 50) + '</div>' : '');
+            this.toast(summary, cnt.stripped ? 'success' : 'error', 4000);
+            this.alert('<div style="margin-bottom:8px;">' + this.escapeHtml(summary) + '</div><div style="max-height:300px;overflow:auto;">' + list + '</div>', t('exif_strip_title', '🧹 EXIF 개인정보 삭제'));
+        } else {
+            this.toast(summary, cnt.stripped ? 'success' : 'info', 4000);
+        }
+    },
+
+    // ★ (2026-10-07) 동영상 정보 — 플레이어 ⓘ(스킨 조작 줄)·I 키·상세 정보 창 (펜닐 요청: 팟플레이어·MediaInfo 처럼).
+    //   서버(media_detail)가 ffprobe 로 읽은 묶음(일반·비디오·오디오·자막·챕터)을 만들어 주고, 여기서는 그리기만 한다.
+    //   '재생 상태'(지금 재생 방식·실제 화면 해상도·버퍼·끊긴 프레임)는 브라우저 영상 요소에서 1초마다 읽는다.
+    //   파일 안 글자(제목·태그·챕터 이름)는 모두 escapeHtml 로 넣는다.
+    _infoGroupsHtml(groups) {
+        let html = '';
+        (Array.isArray(groups) ? groups : []).forEach(g => {
+            if (!g || !Array.isArray(g.rows) || !g.rows.length) return;
             html += '<div style="margin-bottom:10px;">'
-                 + '<div style="font-weight:600;margin-bottom:4px;color:#888;">' + this.escapeHtml(sec) + '</div>'
-                 + '<table style="width:100%;border-collapse:collapse;">';
-            Object.keys(sections[sec]).forEach(k => {
-                html += '<tr>'
-                     + '<td style="padding:2px 8px 2px 0;color:#666;white-space:nowrap;vertical-align:top;">'
-                     + this.escapeHtml(k) + '</td>'
-                     + '<td style="padding:2px 0;word-break:break-all;">'
-                     + this.escapeHtml(sections[sec][k]) + '</td></tr>';
+                 + '<div style="font-weight:600;margin-bottom:4px;color:#888;border-bottom:1px solid rgba(128,128,128,0.25);padding-bottom:2px;">' + this.escapeHtml(g.title) + '</div>'
+                 + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;">';
+            g.rows.forEach(r => {
+                let v = this.escapeHtml(r.v);
+                if (r.map) v += ' <a href="https://www.google.com/maps?q=' + encodeURIComponent(r.map) + '" target="_blank" rel="noopener">' + t('exif_map', '지도') + ' ↗</a>';
+                html += '<tr><td style="padding:2px 8px 2px 0;color:#666;vertical-align:top;width:9em;">' + this.escapeHtml(r.k) + '</td>'
+                     + '<td style="padding:2px 0;word-break:break-all;">' + v + '</td></tr>';
             });
             html += '</table></div>';
         });
-        html += '</div></details></div>';
-        // ★ alert(message, title) — **인자는 2개**다(3번째 인자는 존재하지 않음, 감사에서 확인).
-        //   내부에서 message 를 그대로 HTML 로 삽입하므로 위에서 만든 표가 그대로 렌더된다.
-        this.alert(html, t('exif_title', 'EXIF 정보'));
+        return html;
+    },
+
+    _infoGroupsText(groups) {
+        const out = [];
+        (Array.isArray(groups) ? groups : []).forEach(g => {
+            if (!g || !Array.isArray(g.rows) || !g.rows.length) return;
+            out.push('[' + g.title + ']');
+            g.rows.forEach(r => out.push(r.k + ' : ' + r.v));
+            out.push('');
+        });
+        return out.join('\n');
+    },
+
+    // 재생 상태(브라우저 쪽) — 열려 있는 동안 1초마다 다시 읽는다
+    _videoLiveRows(video) {
+        const rows = [];
+        if (!video) return rows;
+        const fmtT = (s) => { if (!isFinite(s) || s < 0) return '-'; s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(x).padStart(2, '0'); };
+        let streaming = false;
+        try { streaming = !!(this._videoSkinCtx(video).isStreaming()); } catch (e) {}
+        const badge = document.querySelector('#preview-content .video-stream-badge');
+        const badgeTxt = badge ? (badge.textContent || '').trim() : '';
+        rows.push({ k: t('vi_play_mode', '재생 방식'), v: (streaming ? t('vi_mode_stream', '스트리밍(서버 변환)') : t('vi_mode_native', '일반재생(원본)')) + (badgeTxt ? ' — ' + badgeTxt : '') });
+        if (video.videoWidth) rows.push({ k: t('vi_decoded', '받는 화면 해상도'), v: video.videoWidth + ' × ' + video.videoHeight });
+        const dpr = window.devicePixelRatio || 1;
+        if (video.clientWidth) rows.push({ k: t('vi_shown', '표시 크기'), v: Math.round(video.clientWidth * dpr) + ' × ' + Math.round(video.clientHeight * dpr) + (dpr !== 1 ? ' (' + video.clientWidth + ' × ' + video.clientHeight + ' CSS px)' : '') });
+        const off = streaming ? (video._qualitySeekOffset || 0) : 0;
+        const dur = streaming ? (video._knownDuration || video.duration) : video.duration;
+        rows.push({ k: t('vi_position', '재생 위치'), v: fmtT(video.currentTime + off) + ' / ' + fmtT(dur) });
+        try {
+            let ahead = 0; const b = video.buffered;
+            for (let i = 0; i < b.length; i++) if (b.start(i) <= video.currentTime + 0.5 && b.end(i) > video.currentTime) ahead = Math.max(ahead, b.end(i) - video.currentTime);
+            rows.push({ k: t('vi_buffer', '미리 받은 양'), v: ahead.toFixed(1) + t('exif_s_sec', '초') });
+        } catch (e) {}
+        try {
+            if (typeof video.getVideoPlaybackQuality === 'function') {
+                const q = video.getVideoPlaybackQuality();
+                if (q && q.totalVideoFrames) rows.push({ k: t('vi_dropped', '끊긴 프레임'), v: q.droppedVideoFrames + ' / ' + q.totalVideoFrames + ' (' + (q.droppedVideoFrames * 100 / q.totalVideoFrames).toFixed(2) + '%)' });
+            }
+        } catch (e) {}
+        rows.push({ k: t('playback_speed', '재생 속도'), v: (video.playbackRate || 1) + 'x' });
+        rows.push({ k: t('volume', '음량'), v: video.muted ? t('mute', '음소거') : Math.round((video.volume || 0) * 100) + '%' });
+        return rows;
+    },
+
+    // 동영상 정보 창이 지금 화면에 떠 있는지 — 확인 창은 닫아도 내용(#vi-live)을 지우지 않으므로 '보이는지'까지 본다.
+    _videoInfoShown() {
+        const el = document.getElementById('vi-live');
+        const m = document.getElementById('modal-confirm');
+        return !!(el && m && m.contains(el) && getComputedStyle(m).display !== 'none');
+    },
+
+    async showVideoInfo() {
+        // 이미 이 창이 떠 있으면 무시. 같은 영상을 읽는 중이어도 무시.
+        //   [검토 반영] 종전엔 '열림' 표시 하나로 막아, 다른 확인 창이 이 창을 덮어 결과가 끝나지 않으면 표시가 남아 ⓘ·I 가 계속 안 먹혔다.
+        if (this._videoInfoShown()) return;
+        const item = this._currentPreviewItem;
+        const video = document.querySelector('#preview-content .preview-video');
+        if (!item || !video) return;
+        if (this._videoInfoLoading === item) return;
+        // [검토 반영] 전체화면이면 먼저 나온다 — 확인 창은 문서 본문에 붙어 전체화면(영상 틀) 위로 보이지 않고, 안 보이는 창이
+        //   Space·Enter 를 가져갔다. 진짜 전체화면은 exitFullscreen, 아이폰식 가짜 전체화면은 기존 전체화면 버튼으로 되돌린다.
+        try {
+            if (document.fullscreenElement || document.webkitFullscreenElement) {
+                await (document.exitFullscreen ? document.exitFullscreen() : document.webkitExitFullscreen());
+            }
+            const pw = video.closest('.video-player-wrap');
+            if (pw && pw.classList.contains('pseudo-fullscreen')) { const fb = pw.querySelector('.video-fullscreen-btn'); if (fb) fb.click(); }
+        } catch (e) {}
+        const path = this.currentPreviewPath || item.path;
+        const sid = this.currentPreviewStorageId || item.storageId || this.currentStorage;
+        const isVault = !!item._vaultBlobUrl;
+        let res = null;
+        if (!isVault) {
+            const loadingText = t('vi_loading', '동영상 정보를 읽는 중…');
+            this._videoInfoLoading = item;
+            this.toast(loadingText, 'info', 30000);
+            try { res = await this.api('media_detail', { storage_id: sid, path }, 'GET', null, 0, 45000); } catch (e) { res = null; }
+            if (this._videoInfoLoading === item) this._videoInfoLoading = null;
+            try { const tEl = document.getElementById('toast'); if (tEl && tEl.textContent === loadingText) $('#toast').removeClass('show'); } catch (e) {}   // 우리 알림일 때만 지움
+        }
+        // 기다리는 사이 다른 영상으로 넘어갔거나 미리보기를 닫았으면 띄우지 않는다
+        const v2 = document.querySelector('#preview-content .preview-video');
+        if (this._currentPreviewItem !== item || !v2 || this._videoInfoShown()) return;
+        let note = '';
+        let groups = [];
+        if (isVault) note = t('vi_vault', '보관함(암호화) 파일은 서버가 원본을 읽을 수 없어 재생 상태만 표시합니다.');
+        else if (!res || !res.success) note = (res && res.error) || t('vi_unreadable', '동영상 정보를 읽지 못했습니다(손상되었거나 지원하지 않는 형식).');
+        else if (!res.supported) note = res.note === 'remote storage' ? t('vi_remote', '원격 저장소의 파일은 파일 정보를 읽을 수 없어 재생 상태만 표시합니다.') : t('vi_unreadable', '동영상 정보를 읽지 못했습니다(손상되었거나 지원하지 않는 형식).');
+        else { groups = res.groups || []; if (res.note) note = res.note; }
+        const liveTitle = t('vi_live', '재생 상태');
+        const html = '<div style="max-height:60vh;overflow:auto;font-size:12px;" id="vi-scroll">'
+            + (note ? '<div style="margin-bottom:8px;color:#888;">' + this.escapeHtml(note) + '</div>' : '')
+            + this._infoGroupsHtml(groups)
+            + '<div id="vi-live">' + this._infoGroupsHtml([{ title: liveTitle, rows: this._videoLiveRows(v2) }]) + '</div>'
+            + '</div>';
+        const timer = setInterval(() => {
+            const box = document.getElementById('vi-live');
+            const vv = document.querySelector('#preview-content .preview-video');
+            if (!box || !this._videoInfoShown()) { clearInterval(timer); return; }   // 닫혔거나 다른 창이 덮음
+            // [검토 반영] 창이 열린 채 다음 영상으로 자동으로 넘어가면 위 정보(이전 영상)와 재생 상태(새 영상)가 섞이므로 멈추고 알린다.
+            if (!vv || this._currentPreviewItem !== item) {
+                box.innerHTML = '<div style="color:#888;">' + this.escapeHtml(t('vi_moved', '다른 영상으로 넘어가 재생 상태 갱신을 멈췄습니다.')) + '</div>';
+                clearInterval(timer); return;
+            }
+            box.innerHTML = this._infoGroupsHtml([{ title: liveTitle, rows: this._videoLiveRows(vv) }]);
+        }, 1000);
+        const buttons = [{ text: t('confirm'), value: true, class: 'btn-primary' }];
+        if (groups.length) buttons.unshift({ text: t('vi_copy', '텍스트 복사'), value: 'copy', class: 'btn-secondary' });
+        let pick = null;
+        try {
+            pick = await this.showConfirmModal({ title: t('vi_dlg_title', '동영상 정보') + ' — ' + (item.name || ''), content: '<div style="font-size:14px;">' + html + '</div>', buttons });
+        } catch (e) { pick = null; }
+        clearInterval(timer);
+        if (pick === 'copy') {
+            const text = (item.name || '') + '\n\n' + this._infoGroupsText(groups);
+            let ok = false;
+            try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; } } catch (e) { ok = false; }
+            if (!ok) {
+                try {
+                    const ta = document.createElement('textarea');
+                    ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;left:-9999px;top:0;';
+                    document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove();
+                } catch (e) { ok = false; }
+            }
+            this.toast(ok ? t('vi_copied', '동영상 정보를 복사했습니다.') : t('vi_copy_fail', '복사하지 못했습니다.'), ok ? 'success' : 'error');
+        }
     },
 
     _imgFullscreen() {
@@ -13927,6 +14268,8 @@ const App = {
                 'extract': hasExtractable && !!perms.can_write && !isLocked && !inVault && !isRemote,
                 'compress': hasSelection && !!perms.can_write && !inVault && !isRemote,
                 'convert-h264': selectedItems.some(it => !it.isDir && this.getFileType(it.name) === 'video' && !_nativeVideoExts.includes((it.name || '').split('.').pop().toLowerCase())) && !!perms.can_write && !isLocked && !inVault && !isRemote,
+                // ★ (2026-10-07) EXIF 개인정보 삭제 — 선택에 지원 사진이 하나라도 있으면(일괄). 한 장만 골랐는데 잠겼으면 숨김.
+                'exif-strip': selectedItems.some(it => !it.isDir && this._exifStripExts.includes((it.name || '').split('.').pop().toLowerCase())) && !!perms.can_write && !(selectedItems.length === 1 && isLocked) && !inVault && !isRemote,
                 'convert-to-vault': !isFile && !!perms.can_write && firstItem && !firstItem.isVault && this.currentStorage == this.homeStorageId && !inVault && !(firstItem._plain && this.vault.currentVaultPath),
                 'new-folder': false,
                 'new-vault-folder': false,
@@ -14146,6 +14489,7 @@ const App = {
             'extract': hasExtractable && !!perms.can_write && !isLocked && !isRemote,
             'compress': items.length > 0 && !!perms.can_write && !isRemote,
             'convert-h264': items.some(it => !it.isDir && this.getFileType(it.name) === 'video' && !_nativeVideoExts2.includes((it.name || '').split('.').pop().toLowerCase())) && !!perms.can_write && !isLocked && !isRemote,
+            'exif-strip': items.some(it => !it.isDir && this._exifStripExts.includes((it.name || '').split('.').pop().toLowerCase())) && !!perms.can_write && !(items.length === 1 && isLocked) && !isRemote && !(this.vault && this.vault.isVaultView),   // ★ (2026-10-07)
             'convert-to-vault': !isFile && !!perms.can_write && firstItem && this.currentStorage == this.homeStorageId && !(this.vault && this.vault.isVaultView) && (() => {
                 // ★ (2026-08-15) 위와 같은 이유로 CSS.escape 사용
             const el = document.querySelector(`.file-item[data-path="${CSS.escape(firstItem.path)}"]`);
@@ -14387,6 +14731,9 @@ const App = {
                 break;
             case 'convert-h264':
                 this.convertToH264(item);
+                break;
+            case 'exif-strip':   // ★ (2026-10-07) EXIF 개인정보 삭제(일괄)
+                this.stripExifSelected(item);
                 break;
             case 'convert-to-vault':
                 if (this.currentStorage != this.homeStorageId) {
@@ -27465,6 +27812,7 @@ const App = {
             'extract': t('act_extract', '📦 압축 해제 (ZIP)'),
             'compress': t('act_compress','🗜️ 압축 (ZIP)'),
             'restore': t('action_restore', '↩️ 복원'),
+            'exif_strip': t('act_exif_strip', '🧹 EXIF 개인정보 삭제'),
             'login': t('act_login','🔐 로그인'),
             'logout': t('act_logout','🔓 로그아웃'),
             'login_fail': t('action_login_fail', '⚠️ 로그인 실패'),
@@ -33638,6 +33986,12 @@ const App = {
         
         // ★ 탭 제목 복원 — keepOpen(트랙 전환 중)일 때는 유지해야 다음 곡 제목이 바로 덮인다
         if (id === 'modal-preview' && !_keepOpen) this._restoreDocTitle();
+        // ★ (2026-10-07) 뷰어에서 EXIF 개인정보를 지웠으면 닫을 때 목록을 새로 읽는다(크기·수정 날짜). 열려 있는 동안은
+        //   목록을 건드리지 않는다 — 미리보기의 이전/다음 순서가 바뀌지 않게.
+        if (id === 'modal-preview' && !_keepOpen && this._exifStripDirty) {
+            this._exifStripDirty = false;
+            setTimeout(() => { if (!this.isSearchMode && !(this.vault && this.vault.isVaultView)) this.loadFiles(); }, 0);
+        }
         
         // 미리보기 모달이면 미디어 정지 및 정리
         if (id === 'modal-preview') {
@@ -33742,8 +34096,12 @@ const App = {
                 this._viewerInstance = null;
             }
             // 이미지 키보드 핸들러 제거
+            // ★ (2026-10-07) 미리보기 본문(.modal-body)에 붙인 것도 함께 뗀다(펜닐 제보) — 종전엔 문서 쪽만 떼서 본문 쪽이 남아,
+            //   다음에 동영상을 열고 영상·조작 줄 버튼에 포커스가 있을 때 ←/→ 를 누르면 예전 이미지로 넘어갔다. 여러 번 열면 쌓여 한 번에 여러 장 건너뜀.
             if (this._imgKeyHandler) {
                 document.removeEventListener('keydown', this._imgKeyHandler);
+                const _mbK = document.querySelector('#modal-preview .modal-body');
+                if (_mbK) _mbK.removeEventListener('keydown', this._imgKeyHandler);
                 this._imgKeyHandler = null;
             }
             if (this._initViewerTimer) { clearTimeout(this._initViewerTimer); this._initViewerTimer = null; }
@@ -34936,8 +35294,28 @@ const App = {
             html += `</table></div>`;
         }
         
+        // ★ (2026-10-07) 동영상이면 아래에 '동영상 정보'(일반·비디오·오디오·자막·챕터) — 서버 응답을 기다리지 않고 창을 먼저 띄운 뒤 채운다.
+        const _isVid = !info.is_dir && this.getFileType(info.name || item.name || '') === 'video';
+        if (_isVid) html += `<div class="exif-section" id="di-video"><h4>${t('vi_section', '🎬 동영상 정보')}</h4><div style="font-size:12px;color:#888;">${t('vi_loading', '동영상 정보를 읽는 중…')}</div></div>`;
         $('#detailed-info-content').html(html);
         this.showModal('modal-detailed-info');
+        if (_isVid) {
+            const token = (this._diVideoToken = (this._diVideoToken || 0) + 1);
+            this.api('media_detail', { storage_id: storageId, path: item.path }, 'GET', null, 0, 45000).catch(() => null).then((r) => {
+                if (token !== this._diVideoToken) return;            // 그 사이 다른 항목의 상세 정보를 열었음
+                const box = document.getElementById('di-video');
+                if (!box) return;
+                let body;
+                if (r && r.success && r.supported && Array.isArray(r.groups) && r.groups.length) {
+                    body = (r.note ? '<div style="margin-bottom:6px;color:#888;font-size:12px;">' + this.escapeHtml(r.note) + '</div>' : '') + '<div style="font-size:12px;">' + this._infoGroupsHtml(r.groups) + '</div>';
+                } else {
+                    const msg = (r && r.success && !r.supported && r.note === 'remote storage') ? t('vi_remote_short', '원격 저장소의 파일은 동영상 정보를 읽을 수 없습니다.')
+                        : ((r && r.error) || t('vi_unreadable', '동영상 정보를 읽지 못했습니다(손상되었거나 지원하지 않는 형식).'));
+                    body = '<div style="font-size:12px;color:#888;">' + this.escapeHtml(msg) + '</div>';
+                }
+                box.innerHTML = '<h4>' + t('vi_section', '🎬 동영상 정보') + '</h4>' + body;
+            });
+        }
     },
     
     updatePasswordStrength(password, containerId) {
@@ -36556,6 +36934,7 @@ const App = {
                 if (window._videoDebug) console.warn('[VideoDebug] VIDEO SETUP: file=' + item.name + ', ext=' + ext + ', needsTranscode=' + needsTranscode + ', checkMediaInfo=' + this._checkMediaInfo);
                 this._mediaInfoStorageId = storageId;
                 this._mediaInfoPath = item.path;
+                this._mediaInfoPending = null;   // ★ (2026-10-07) 이전 미리보기의 파일 정보 응답(취소됐을 수 있음)을 이번 영상에 쓰지 않게
                 
                 // ★ needsTranscode 또는 checkMediaInfo 중이면 비디오 삽입 직후 즉시 재생 차단
                 // (HLS init 코드는 media_info 응답 후에야 실행되므로 그 사이 1~2초 구간 뚫림 방지)
@@ -37300,7 +37679,10 @@ const App = {
                 }
                 
                 const _miT0 = performance.now();   // ★ (2026-09-26) 진단 기록용(응답까지 걸린 시간)
-                this.api('media_info', { storage_id: _miStorageId, path: _miPath }, 'GET', this._mediaInfoAbort.signal).then(info => {
+                // ★ (2026-10-07) 응답(약속)을 남겨 둔다 — '코덱 미지원 감지'(loadedmetadata)가 소리만 있는 파일인지 확인할 때 기다릴 수 있게.
+                const _miPromise = this.api('media_info', { storage_id: _miStorageId, path: _miPath }, 'GET', this._mediaInfoAbort.signal);
+                this._mediaInfoPending = { path: _miPath, sid: _miStorageId, p: _miPromise.then((r) => r, () => null) };
+                _miPromise.then(info => {
                     // ★ 디버그: API 응답 시각
                     if (window._mediaInfoTimings) {
                         window._mediaInfoTimings.apiResponse = performance.now();
@@ -37647,12 +38029,17 @@ const App = {
         // 이미지 미리보기: 키보드 단축키
         if (document.querySelector('.preview-image-wrap')) {
             // 기존 핸들러 제거 (연속 열기 시 중복 방지)
+            // ★ (2026-10-07) 본문(.modal-body) 쪽도 뗀다 — 아래에서 두 곳에 붙이므로 두 곳 모두(종전엔 문서 쪽만 떼서 본문 쪽이 쌓였다).
             if (this._imgKeyHandler) {
                 document.removeEventListener('keydown', this._imgKeyHandler);
+                const _mbK = document.querySelector('#modal-preview .modal-body');
+                if (_mbK) _mbK.removeEventListener('keydown', this._imgKeyHandler);
                 this._imgKeyHandler = null;
             }
             this._imgKeyHandler = (e) => {
                 if (!$('#modal-preview').is(':visible')) return;
+                // ★ (2026-10-07) 지금 미리보기가 이미지일 때만 — 같은 창에 동영상·음악 등이 떠 있으면 아무것도 하지 않는다(그쪽 키 처리에 맡김).
+                if (!document.querySelector('#preview-content .preview-image-wrap')) return;
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
                 // 안전장치: Viewer가 죽어있으면 재초기화
@@ -37735,26 +38122,58 @@ const App = {
                     // ★ (2026-09-30) 원본 스트리밍(App._directActive) 중엔 건너뜀 — 아이폰(hls.js)은 loadedmetadata 때 첫 화면을 아직 안 풀어 폭·높이가
                     //   0 이라 멀쩡한 H.264 를 '코덱 미지원'으로 보고 트랜스코딩으로 넘겼다(펜닐 로그 17:36 — ds_start 뒤 loadedmetadata 에서 전환).
                     //   원본 스트리밍은 _startDirectStream 이 첫 화면 준비(loadeddata) 뒤 다시 확인한다. 일반재생은 종전 그대로.
+                    // ★ (2026-10-07) 소리만 있는 파일(영상 트랙 없음 — 서버 파일 정보 video_codec 이 비고 audio_codec 만 있음)은 화면 폭·높이가
+                    //   원래 0 이라 이 감지에 걸려 트랜스코딩으로 넘어갔다 → 이어 보기 위치가 안 맞고(0초부터) 자막도 가운데에 떴다(재검토에서 발견).
+                    //   파일 정보가 이미 왔으면 바로, 아직이면 최대 3초 기다려 소리만이면 일반 재생을 그대로 둔다. 그 밖(HEVC 등)은 종전 그대로 전환.
                     if (vid.videoWidth === 0 && vid.videoHeight === 0 && !vid.dataset.transcodeBase && !App._directActive) {
-                        const isKo3 = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
-                        const badge = wrap.querySelector('.video-stream-badge');
-                        if (badge) {
-                            badge.className = 'video-stream-badge';
-                            badge.innerHTML = '⏳ ' + (isKo3 ? '코덱 미지원 → 트랜스코딩 전환 중...' : 'Unsupported codec → switching to transcode...');
-                        }
-                        // 네이티브 재생 중단
-                        vid.pause();
-                        vid.removeAttribute('src');
-                        vid.querySelectorAll('source').forEach(s => s.remove());
-                        vid.load();
-                        // 트랜스코딩으로 전환
-                        const _storageId = App.currentPreviewStorageId || App.currentStorage;
-                        const _path = App.currentPreviewPath;
-                        const _transcodeUrl = `api.php?action=transcode&storage_id=${_storageId}&path=${encodeURIComponent(_path)}`;
-                        vid.dataset.transcodeBase = _transcodeUrl;
-                        setTimeout(() => {
-                            App._startTranscode(_transcodeUrl, _storageId, _path);
-                        }, 200);
+                        // 종전 전환 동작(내용 그대로) — 바로 또는 파일 정보를 기다린 뒤 부른다
+                        const _codecFallback = () => {
+                            const isKo3 = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+                            const badge = wrap.querySelector('.video-stream-badge');
+                            if (badge) {
+                                badge.className = 'video-stream-badge';
+                                badge.innerHTML = '⏳ ' + (isKo3 ? '코덱 미지원 → 트랜스코딩 전환 중...' : 'Unsupported codec → switching to transcode...');
+                            }
+                            // 네이티브 재생 중단
+                            vid.pause();
+                            vid.removeAttribute('src');
+                            vid.querySelectorAll('source').forEach(s => s.remove());
+                            vid.load();
+                            // 트랜스코딩으로 전환
+                            const _storageId = App.currentPreviewStorageId || App.currentStorage;
+                            const _path = App.currentPreviewPath;
+                            const _transcodeUrl = `api.php?action=transcode&storage_id=${_storageId}&path=${encodeURIComponent(_path)}`;
+                            vid.dataset.transcodeBase = _transcodeUrl;
+                            setTimeout(() => {
+                                App._startTranscode(_transcodeUrl, _storageId, _path);
+                            }, 200);
+                        };
+                        const _audioOnly = (i) => !!(i && i.success && !i.video_codec && i.audio_codec);
+                        if (vid._audioOnly) return;
+                        // 파일 정보를 받는 영상인지 — 보관함(암호화)은 받지 않으므로 기다리지 않고 종전처럼 바로 전환
+                        const _curPath = App.currentPreviewPath;
+                        const _curSid = App._mediaInfoStorageId;
+                        const _curItem = App._currentPreviewItem;
+                        const _expectInfo = !!(_curItem && !_curItem._vaultBlobUrl && App._mediaInfoPath === _curPath);
+                        if (!_expectInfo) { _codecFallback(); return; }
+                        // 일반 재생은 영상 정보(loadedmetadata)가 파일 정보 요청보다 먼저 올 수 있어, 요청이 생길 때까지(최대 3초) 기다린 뒤 응답을 본다
+                        const _t0 = Date.now();
+                        const _waitInfo = () => new Promise((res) => {
+                            const tick = () => {
+                                const mp = App._mediaInfoPending;
+                                if (mp && mp.path === _curPath && mp.sid === _curSid) { Promise.race([mp.p, new Promise((r) => setTimeout(() => r(undefined), 3000))]).then(res); return; }
+                                if (Date.now() - _t0 > 3000) { res(undefined); return; }
+                                setTimeout(tick, 100);
+                            };
+                            tick();
+                        });
+                        _waitInfo().then((i) => {
+                            if (_audioOnly(i)) { vid._audioOnly = true; return; }
+                            // 기다리는 사이 상황이 바뀌었으면(영상이 풀림·다른 파일·이미 전환·창 닫힘) 하지 않는다
+                            if (!vid.isConnected || vid.videoWidth > 0 || vid.videoHeight > 0 || vid.dataset.transcodeBase || vid._switchingToTranscode || App._directActive) return;
+                            if (App.currentPreviewPath !== _curPath) return;
+                            _codecFallback();
+                        });
                         return;
                     }
                     
@@ -38248,6 +38667,17 @@ const App = {
                                 _vv.volume = Math.max(0, Math.min(1, Math.round(((Number(_vv.volume) || 0) + (e.key === 'ArrowUp' ? 0.05 : -0.05)) * 100) / 100));
                                 if (e.key === 'ArrowUp' && _vv.muted) _vv.muted = false;
                                 try { if (window.FSVideoSkin && typeof window.FSVideoSkin.showVolume === 'function') window.FSVideoSkin.showVolume(_vv.closest('.fsvs-on')); } catch (x) {}
+                            }
+                        }
+                        return;
+                    }
+                    // ★ (2026-10-07) I 키: 동영상 정보(한글 입력 상태 'ㅑ' 도 — 물리 키 KeyI 로 판단). 조합키(Ctrl·Alt·Meta)는 브라우저 몫이라 건너뜀.
+                    if (e.code === 'KeyI' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat) {
+                        if (document.querySelector('#preview-content .preview-video') && !App._videoInfoShown()) {
+                            const _co = document.getElementById('confirm-modal-overlay');
+                            if (!_co || _co.style.display === 'none' || getComputedStyle(_co).display === 'none') {
+                                e.preventDefault();
+                                App.showVideoInfo();
                             }
                         }
                         return;
@@ -42081,6 +42511,27 @@ const App = {
         } catch (e) {}
     },
 
+    // ★ (2026-09-23 판별식, 2026-10-07 공용 함수로 분리) 스트리밍(트랜스코딩·HLS) 재생인지 — 스킨 시간 표시와 자막이 같은 기준을 쓴다.
+    //   대부분의 변환 경로는 data-transcode-base 를 붙이지만 '대용량 → 스트리밍' 경로(App._startTranscode 직접 호출)는
+    //   붙이지 않고, 아이폰은 그 경로에서 HLS 주소를 video.src 에 직접 넣어 _hlsInstance 도 없다 → 주소로도 판별.
+    //   MediaSource 폴백(MMS·Pipe)은 blob 주소라 _streamMethod 가 함께 있을 때만 스트리밍으로 본다.
+    //   [오판 방지] 보관함(암호화) 동영상도 blob 주소로 일반 재생하므로 blob 만으로는 판단하지 않는다.
+    _isStreamingVideo(video) {
+        if (!video) return false;
+        const src = video.currentSrc || video.getAttribute('src') || '';
+        return !!(video.dataset.transcodeBase || video._hlsInstance
+            || /[?&]action=(transcode|hls_stream)\b|[?&](transcode|hls)=1\b/.test(src)
+            || (src.indexOf('blob:') === 0 && video._streamMethod));
+    },
+
+    // ★ (2026-10-07) 자막을 찾을 '실제 재생 시각' — 스트리밍은 서버가 중간(이어 보기·화질/음성 변경 위치)부터 변환해 보내므로
+    //   브라우저 시각 0 = 실제 N초(_qualitySeekOffset). 스킨의 시간 표시와 같은 기준(스트리밍일 때만 보정값을 더함).
+    //   [펜닐 제보] 이어 보기에서 자막이 처음 부분 것으로 나왔다 — 자막은 브라우저 시각만 써서 보정값을 빠뜨렸었다.
+    _subMediaTime(video) {
+        const t = Number(video && video.currentTime) || 0;
+        return this._isStreamingVideo(video) ? t + (Number(video._qualitySeekOffset) || 0) : t;
+    },
+
     _videoSkinCtx(video) {
         const inPreview = (sel) => document.querySelector('#preview-content ' + sel);
         const byId = (id) => document.getElementById(id);
@@ -42107,12 +42558,7 @@ const App = {
             //   [오판 방지] 보관함(암호화) 동영상도 blob 주소로 일반 재생하므로 blob 만으로는 판단하지 않는다.
             //   _knownDuration·_streamMethod 는 일반 재생으로 돌아와도 지워지지 않으므로 단독 조건으로 쓰지 않는다
             //   (복귀 시 주소가 일반 주소로 바뀌므로 blob 조건과 묶으면 남아 있어도 영향이 없다).
-            isStreaming: () => {
-                const src = video.currentSrc || video.getAttribute('src') || '';
-                return !!(video.dataset.transcodeBase || video._hlsInstance
-                    || /[?&]action=(transcode|hls_stream)\b|[?&](transcode|hls)=1\b/.test(src)
-                    || (src.indexOf('blob:') === 0 && video._streamMethod));
-            },
+            isStreaming: () => App._isStreamingVideo(video),   // ★ (2026-10-07) 판별식은 _isStreamingVideo 로 옮김(자막도 같은 기준을 쓰게) — 내용 그대로
             timeOffset: () => video._qualitySeekOffset || 0,
             knownDuration: () => video._knownDuration || 0,
             setSpeed: (v) => {
@@ -42144,7 +42590,9 @@ const App = {
             goPrev: () => this._fsVpGo(-1),
             goNext: () => this._fsVpGo(1),
             // ★ (2026-09-24) 일반 재생 중 다국어 음성 — 스트리밍이면 기존 음성 상자가 맡으므로 null
-            nativeAudio: function () { return (this.isStreaming() && !App._directActive) ? null : App._fsvsNativeAudio(video); }   // ★ (2026-09-30) 일반재생 빠른 시작 중에도
+            nativeAudio: function () { return (this.isStreaming() && !App._directActive) ? null : App._fsvsNativeAudio(video); },   // ★ (2026-09-30) 일반재생 빠른 시작 중에도
+            // ★ (2026-10-07) 동영상 정보(ⓘ) — 탐색기에서만(공유 페이지는 이 함수를 주지 않아 버튼이 안 보임)
+            showInfo: () => { App.showVideoInfo(); }
         };
     },
 
@@ -42570,7 +43018,9 @@ const App = {
                     //   처음 불러올 때도 이 함수라 처음부터 반영. 전체화면 진입 코드는 그대로(진입 순간엔 건드리지 않음 — iOS 가 진입 시점 상태를 쓰는 점 주의).
                     const _injectCues = (track, cueArr) => {
                         try { if (track.cues && track.cues.length) { for (const oc of Array.from(track.cues)) { try { track.removeCue(oc); } catch (eR) {} } } } catch (eR2) {}
-                        const _off = video._subSyncOffset || 0;
+                        // ★ (2026-10-07) 스트리밍이면 보정값(_qualitySeekOffset)도 뺀다 — 네이티브 트랙은 브라우저 시각으로 그리므로(넣는 시점 기준,
+                        //   전체화면 진입·설정 변경 때 다시 넣음).
+                        const _off = (video._subSyncOffset || 0) + (App._isStreamingVideo(video) ? (Number(video._qualitySeekOffset) || 0) : 0);
                         const _bt = parseFloat(overlay && overlay.style.getPropertyValue('bottom'));
                         const _line = Math.max(0, Math.min(100, 100 - (isFinite(_bt) ? _bt : 10)));
                         let added = 0;
@@ -42719,7 +43169,15 @@ const App = {
                                 if (overlay.style.display !== 'none') { overlay.style.display = 'none'; overlay.innerHTML = ''; }
                                 return;
                             }
-                            const ct = video.currentTime + (video._subSyncOffset || 0);
+                            // ★ (2026-10-07) 화면(그림)이 아직 없으면 자막을 그리지 않는다(펜닐 제보) — 이어 보기 트랜스코딩은 변환을 준비하는 동안
+                            //   영상 크기가 0 이라 자막 상자가 플레이어 가운데에 떴다(이어 보기 위치의 자막이 곧바로 맞게 나오면서 드러남).
+                            //   영상 크기(videoWidth)는 한 번 정해지면 버퍼링 중에도 유지되므로 재생 중 자막이 깜빡이지 않는다.
+                            //   [재검토] 소리만 있는 파일은 영상 크기가 늘 0 이므로 '재생할 데이터도 없을 때'(readyState < 2)만 숨긴다.
+                            if (!video.videoWidth && video.readyState < 2) {
+                                if (overlay.style.display !== 'none') { overlay.style.display = 'none'; overlay.innerHTML = ''; }
+                                return;
+                            }
+                            const ct = App._subMediaTime(video) + (video._subSyncOffset || 0);   // ★ (2026-10-07) 스트리밍 보정값 포함
                             let found = '';
                             for (const cue of cues) {
                                 if (ct >= cue.startTime && ct <= cue.endTime) {

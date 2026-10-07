@@ -6256,6 +6256,61 @@ try {
             $result = $fileManager->getImageExif($storageId, $path);
             break;
 
+        // ★ (2026-10-07) 사진 EXIF 개인정보 삭제(뷰어 EXIF 창 · ⚡작업 일괄) — 원본 파일을 바꾸는 쓰기 작업.
+        //   POST 만 받는다(CSRF 검사는 POST 공통 처리). 한 번에 최대 20개 — 화면에서 나눠 보낸다.
+        //   파일마다 폴더 쓰기 권한(can_write)을 따로 확인한다(rename 과 같은 기준).
+        case 'image_exif_strip':
+            $auth->requireLogin();
+            if ($method !== 'POST') { $result = ['success' => false, 'error' => __('invalid_request')]; break; }
+            $storageId = (int)($input['storage_id'] ?? 0);
+            $paths = $input['paths'] ?? [];
+            if (!is_array($paths) || !$paths || count($paths) > 20) { $result = ['success' => false, 'error' => __('invalid_request')]; break; }
+            $stInfoEx = $storage->getStorageById($storageId);
+            $items = [];
+            foreach (array_values($paths) as $p) {
+                if (!is_string($p) || $p === '') { $items[] = ['path' => '', 'success' => false, 'status' => 'error', 'error' => __('invalid_request')]; continue; }
+                $pDir = dirname($p); if ($pDir === '.') $pDir = '';
+                if (!$storage->checkFolderPermission($storageId, $pDir ?: $p, 'can_write')) {
+                    $items[] = ['path' => $p, 'success' => false, 'status' => 'error', 'error' => __('no_permission_dot', '권한이 없습니다.')];
+                    continue;
+                }
+                $r = $fileManager->stripImagePrivacy($storageId, $p);
+                if (($r['status'] ?? '') === 'stripped') {
+                    $activityLog->log(ActivityLog::TYPE_EXIF_STRIP, [
+                        'storage_id' => $storageId,
+                        'storage_name' => $stInfoEx['name'] ?? '',
+                        'path' => $p,
+                        'filename' => basename($p),
+                        'size' => $r['size'] ?? 0,
+                        'details' => implode(', ', array_keys($r['removed'] ?? []))
+                    ]);
+                    try {
+                        $fileIndex = FileIndex::getInstance();
+                        if ($fileIndex->isAvailable()) $fileIndex->addFile($storageId, trim(str_replace('\\', '/', $p), '/'), ['size' => $r['size'] ?? 0, 'modified' => $r['modified'] ?? date('Y-m-d H:i:s')]);
+                    } catch (\Throwable $e) { /* 인덱스는 다음 스캔에서 맞춰진다 */ }
+                }
+                $items[] = ['path' => $p] + $r;
+            }
+            $result = ['success' => true, 'items' => $items];
+            break;
+
+        // ★ (2026-10-07) 동영상 자세한 정보(플레이어 ⓘ·상세 정보 창 — 팟플레이어·MediaInfo 처럼, 펜닐 요청).
+        //   권한 검사는 media_info 와 같다(로그인 + 폴더 읽기 권한). 읽기만 하므로 GET. ffprobe 는 함수 안에서 20초 제한.
+        case 'media_detail':
+            $auth->requireLogin();
+            session_write_close();
+            $storageId = (int)($_GET['storage_id'] ?? 0);
+            $path = $_GET['path'] ?? '';
+            $mdDir = dirname($path);
+            if ($mdDir === '.') $mdDir = '';
+            if (!$storage->checkFolderPermission($storageId, $mdDir ?: $path)) {
+                $result = ['success' => false, 'error' => 'No permission'];
+                break;
+            }
+            @set_time_limit(60);
+            $result = $fileManager->getVideoDetails($storageId, $path);
+            break;
+
         case 'media_info':
             // 동영상 코덱 정보 조회 (네이티브 재생 가능 여부 판단용)
             $auth->requireLogin();

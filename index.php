@@ -669,6 +669,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                     <div class="action-option" data-action="extract">📦 <?php echo $currentLang === 'en' ? 'Extract' : '압축 해제'; ?></div>
                                     <div class="action-option" data-action="compress">🗜️ <?php echo $currentLang === 'en' ? 'Compress (ZIP)' : '압축 (ZIP)'; ?></div>
                                     <div class="action-option" data-action="convert-h264">🎬 <?php echo $currentLang === 'en' ? 'Convert to H264/MP4' : 'H264/MP4로 변환'; ?></div>
+                                    <div class="action-option" data-action="exif-strip">🧹 <?php echo $currentLang === 'en' ? 'Remove EXIF Privacy Info' : 'EXIF 개인정보 삭제'; ?></div>
                                     <div class="action-option" data-action="convert-to-vault">🔒 <?php echo $currentLang === 'en' ? 'Encrypt This Folder' : '이 폴더 암호화'; ?></div>
                                     <div class="action-divider"></div>
                                     <div class="action-option" data-action="rename">✏️ <?php _e('rename'); ?></div>
@@ -3515,6 +3516,7 @@ while ($true) {
                                     <option value="extract"><?php echo $currentLang === 'en' ? '📦 Extract (ZIP)' : '📦 압축 해제 (ZIP)'; ?></option>
                                     <option value="compress"><?php echo $currentLang === 'en' ? '🗜️ Compress (ZIP)' : '🗜️ 압축 (ZIP)'; ?></option>
                                     <option value="restore"><?php echo $currentLang === 'en' ? '↩️ Restore' : '↩️ 복원'; ?></option>
+                                    <option value="exif_strip"><?php echo $currentLang === 'en' ? '🧹 EXIF Privacy Removed' : '🧹 EXIF 개인정보 삭제'; ?></option>
                                     <option value="login"><?php echo $currentLang === 'en' ? '🔐 Login' : '🔐 로그인'; ?></option>
                                     <option value="logout"><?php echo $currentLang === 'en' ? '🔓 Logout' : '🔓 로그아웃'; ?></option>
                                     <option value="login_fail"><?php echo $currentLang === 'en' ? '⚠️ Login Failed' : '⚠️ 로그인 실패'; ?></option>
@@ -5671,6 +5673,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <li data-action="extract">📦 <?php echo $currentLang === 'en' ? 'Extract (ZIP)' : '압축 해제 (ZIP)'; ?></li>
                 <li data-action="compress">🗜️ <?php echo $currentLang === 'en' ? 'Compress (ZIP)' : '압축 (ZIP)'; ?></li>
                 <li data-action="convert-h264">🎬 <?php echo $currentLang === 'en' ? 'Convert to H264/MP4' : 'H264/MP4로 변환'; ?></li>
+                <li data-action="exif-strip">🧹 <?php echo $currentLang === 'en' ? 'Remove EXIF Privacy Info' : 'EXIF 개인정보 삭제'; ?></li>
                 <li data-action="convert-to-vault">🔒 <?php echo $currentLang === 'en' ? 'Encrypt This Folder' : '이 폴더 암호화'; ?></li>
                 <li class="divider"></li>
                 <li data-action="rename">✏️ <?php _e('rename'); ?></li>

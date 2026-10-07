@@ -4454,7 +4454,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         //   (시작 0 미만은 0, 끝 0 이하는 넣지 않음). 전체화면 진입 코드는 그대로(진입 순간엔 건드리지 않음).
         const _shareInjectCues = (track, cueArr) => {
             try { if (track.cues && track.cues.length) { for (const oc of Array.from(track.cues)) { try { track.removeCue(oc); } catch (eR) {} } } } catch (eR2) {}
-            const _off = subSyncOffset || 0;
+            const _off = (subSyncOffset || 0) + (Number(player._qualitySeekOffset) || 0);   // ★ (2026-10-07) 스트리밍 보정값도(네이티브 트랙은 브라우저 시각 기준)
             const _line = Math.max(0, Math.min(100, 100 - (isFinite(subBottom) ? subBottom : 10)));
             let added = 0;
             for (const c of cueArr) {
@@ -4602,7 +4602,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 return;
             }
             if (_iosSubActive) return; // iOS 전체화면 중엔 네이티브 track이 처리
-            const t = player.currentTime + subSyncOffset;
+            // ★ (2026-10-07) 화면(그림)이 아직 없으면(변환 준비·재생 전) 자막을 그리지 않는다 — 탐색기와 같은 기준(펜닐 제보: 이어 보기 준비 중
+            //   자막이 먼저 떠 있었음). 영상 크기는 한 번 정해지면 버퍼링 중에도 유지돼 재생 중엔 깜빡이지 않는다.
+            //   소리만 있는 파일은 영상 크기가 늘 0 이므로 재생할 데이터도 없을 때(readyState < 2)만 숨긴다.
+            if (!player.videoWidth && player.readyState < 2) { if (subOverlay.innerHTML !== '') subOverlay.innerHTML = ''; return; }
+            // ★ (2026-10-07) 스트리밍(트랜스코딩)은 서버가 중간(이어 보기·화질/음성 변경 위치)부터 변환해 보내므로 브라우저 시각 0 = 실제 N초
+            //   (_qualitySeekOffset — 일반 재생으로 돌아오면 0). 이어 보기 위치 기록(note)과 같은 기준으로 더한다(펜닐 제보: 이어 보기에서 자막 어긋남).
+            const t = player.currentTime + (Number(player._qualitySeekOffset) || 0) + subSyncOffset;
             let found = '';
             for (const cue of subCues) {
                 if (t >= cue.start && t <= cue.end) {

@@ -9863,6 +9863,1338 @@ class FileManager {
     /**
      * 동영상 코덱/해상도 정보 조회 (네이티브 재생 가능 여부 판단)
      */
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ★ (2026-10-07) PNG·WebP·HEIC/HEIF 의 EXIF 읽기 (펜닐 요청)
+    //   PHP exif_read_data 는 JPEG·TIFF 만 읽는다(HEIF 는 PHP 8.5 부터). 그런데 PNG(eXIf 청크 — 2017 PNG 규격 추가,
+    //   ImageMagick 은 'Raw profile type exif' 글자 청크)·WebP(EXIF 청크)·HEIC/HEIF(아이폰 기본 — meta 상자의 Exif 항목)도
+    //   EXIF 를 담고, 그 내용은 **TIFF 구조 그대로**다. 그래서 파일에서 그 조각만 꺼내 메모리 스트림으로 exif_read_data 에
+    //   넘긴다(PHP 7.2+ 는 스트림을 받음 — 임시 파일 없음). PHP 8.5 의 HEIF 지원은 쓰지 않는다(8.3·8.5 동작을 같게,
+    //   PHP 쪽 HEIF 해석 코드는 최근 넘침 버그가 여러 번 고쳐졌다).
+    //   [보안] 파일 안의 길이·위치 값은 믿지 않는다 — 모든 읽기를 파일 크기 안으로 검사하고, 상한을 둔다:
+    //   EXIF 조각 1MB · HEIF meta 상자 16MB · 압축 글자 청크는 풀린 크기 상한(압축 폭탄 방지) · 반복 횟수 상한.
+    //   꺼낸 조각은 TIFF 머리(II*\0 / MM\0*)가 맞을 때만 넘긴다. 파일 전체를 읽지 않고 필요한 곳만 fseek 로 읽는다.
+    // ─────────────────────────────────────────────────────────────────────────────
+    private const EXIF_BLOB_MAX = 1048576;          // 꺼낸 EXIF(TIFF) 최대 1MB (JPEG APP1 은 64KB 가 한계)
+    private const EXIF_HEIF_META_MAX = 16777216;    // HEIF meta 상자 최대 16MB (보통 수 KB~수백 KB)
+
+    /**
+     * 이미지 파일의 EXIF 를 exif_read_data 와 같은 모양으로 읽는다(JPEG·TIFF·PNG·WebP·HEIC/HEIF).
+     * 형식은 **확장자가 아니라 파일 앞부분**으로 판단한다(확장자만 바뀐 JPEG 도 바르게 읽음).
+     * @return array|false
+     */
+    private function readImageExif(string $path, ?string $requiredSections = null, bool $asArrays = true) {
+        if (!function_exists('exif_read_data') || !is_file($path)) return false;
+        $fh = @fopen($path, 'rb');
+        if (!$fh) return false;
+        $head = (string)fread($fh, 16);
+        fclose($fh);
+        $kind = $this->sniffImageKind($head);
+        if ($kind === 'jpeg' || $kind === 'tiff') {
+            return @exif_read_data($path, $requiredSections, $asArrays, false);
+        }
+        if ($kind === null) return false;
+
+        $tiff = $this->extractEmbeddedExif($path, $kind);
+        if ($tiff === null) return false;
+        $mem = fopen('php://memory', 'w+b');
+        if (!$mem) return false;
+        try {
+            fwrite($mem, $tiff);
+            rewind($mem);
+            $data = @exif_read_data($mem, $requiredSections, $asArrays, false);
+        } finally {
+            fclose($mem);
+        }
+        if (!is_array($data)) return false;
+
+        // 스트림으로 읽으면 FILE 은 꺼낸 조각 기준(이름 없음·image/tiff·날짜 0)이라 실제 파일 값으로 바꾼다.
+        $mime = ['png' => 'image/png', 'webp' => 'image/webp', 'heif' => 'image/heif'][$kind];
+        if ($kind === 'heif' && preg_match('/^heic$/i', pathinfo($path, PATHINFO_EXTENSION))) $mime = 'image/heic';
+        $fileSec = ['FileName' => basename($path), 'FileDateTime' => (int)@filemtime($path), 'FileSize' => (int)@filesize($path), 'MimeType' => $mime];
+        // COMPUTED 의 IsColor·html 은 꺼낸 조각(그림 없음) 기준이라 뺀다. 크기는 실제 그림에서 읽을 수 있으면 그것으로.
+        $dim = ($kind === 'png' || $kind === 'webp') ? @getimagesize($path) : false;
+        if ($asArrays) {
+            $data['FILE'] = $fileSec + ['SectionsFound' => $data['FILE']['SectionsFound'] ?? ''];
+            if (isset($data['COMPUTED']) && is_array($data['COMPUTED'])) {
+                unset($data['COMPUTED']['IsColor'], $data['COMPUTED']['html']);
+                if (is_array($dim) && $dim[0] > 0 && $dim[1] > 0) { $data['COMPUTED']['Width'] = (int)$dim[0]; $data['COMPUTED']['Height'] = (int)$dim[1]; }
+            }
+        } else {
+            unset($data['FileType'], $data['IsColor'], $data['html']);
+            $data = $fileSec + $data;
+            if (is_array($dim) && $dim[0] > 0 && $dim[1] > 0) { $data['Width'] = (int)$dim[0]; $data['Height'] = (int)$dim[1]; }
+        }
+        return $data;
+    }
+
+    /** 파일 앞 16바이트로 형식 판단: jpeg·tiff·png·webp·heif 또는 null */
+    private function sniffImageKind(string $h): ?string {
+        if (strlen($h) < 12) return null;
+        if (strncmp($h, "\xFF\xD8\xFF", 3) === 0) return 'jpeg';
+        if (strncmp($h, "II*\x00", 4) === 0 || strncmp($h, "MM\x00*", 4) === 0) return 'tiff';
+        if (strncmp($h, "\x89PNG\r\n\x1A\n", 8) === 0) return 'png';
+        if (strncmp($h, 'RIFF', 4) === 0 && substr($h, 8, 4) === 'WEBP') return 'webp';
+        if (substr($h, 4, 4) === 'ftyp') return 'heif';   // 브랜드는 extractHeifExif 에서 확인
+        return null;
+    }
+
+    /** 형식별로 EXIF(TIFF) 조각을 꺼낸다. 없거나 이상하면 null. */
+    private function extractEmbeddedExif(string $path, string $kind): ?string {
+        $size = @filesize($path);
+        if (!is_int($size) || $size < 16) return null;
+        $fh = @fopen($path, 'rb');
+        if (!$fh) return null;
+        try {
+            if ($kind === 'png') $blob = $this->extractPngExif($fh, $size);
+            elseif ($kind === 'webp') $blob = $this->extractWebpExif($fh, $size);
+            elseif ($kind === 'heif') $blob = $this->extractHeifExif($fh, $size);
+            else $blob = null;
+        } catch (\Throwable $e) {
+            $blob = null;
+        } finally {
+            fclose($fh);
+        }
+        return $blob === null ? null : $this->normalizeTiffBlob($blob);
+    }
+
+    /** 앞의 "Exif\0\0" 를 떼고, TIFF 머리·크기를 확인한다. */
+    private function normalizeTiffBlob(string $b): ?string {
+        if (strncmp($b, "Exif\x00\x00", 6) === 0) $b = substr($b, 6);
+        $n = strlen($b);
+        if ($n < 8 || $n > self::EXIF_BLOB_MAX) return null;
+        if (strncmp($b, "II*\x00", 4) !== 0 && strncmp($b, "MM\x00*", 4) !== 0) return null;
+        return $b;
+    }
+
+    /** 정확히 $len 바이트를 $off 에서 읽는다(파일 크기 안일 때만). */
+    private function exifReadAt($fh, int $size, int $off, int $len): ?string {
+        if ($off < 0 || $len < 0 || $off > $size || $len > $size - $off) return null;
+        if ($len === 0) return '';
+        if (fseek($fh, $off) !== 0) return null;
+        $s = '';
+        while (strlen($s) < $len) {
+            $chunk = fread($fh, $len - strlen($s));
+            if ($chunk === false || $chunk === '') return null;
+            $s .= $chunk;
+        }
+        return $s;
+    }
+
+    /**
+     * PNG: 표준 eXIf 청크를 우선, 없으면 ImageMagick 의 'Raw profile type exif'(또는 APP1) 글자 청크(tEXt·zTXt·iTXt).
+     * 청크 길이를 믿지 않고 파일 크기 안인지 확인하며 끝(IEND)까지 걷는다(eXIf 는 IDAT 뒤에 와도 규격상 허용).
+     */
+    private function extractPngExif($fh, int $size): ?string {
+        $pos = 8; $fallback = null;
+        for ($i = 0; $i < 200000 && $pos + 12 <= $size; $i++) {
+            $h = $this->exifReadAt($fh, $size, $pos, 8);
+            if ($h === null) return $fallback;
+            $len = unpack('N', substr($h, 0, 4))[1];
+            $type = substr($h, 4, 4);
+            if ($len > $size - $pos - 12) return $fallback;          // 잘린·거짓 길이
+            if ($type === 'eXIf') {
+                if ($len < 8 || $len > self::EXIF_BLOB_MAX) return $fallback;
+                $d = $this->exifReadAt($fh, $size, $pos + 8, $len);
+                return $d ?? $fallback;
+            }
+            if ($fallback === null && ($type === 'tEXt' || $type === 'zTXt' || $type === 'iTXt') && $len <= 4 * self::EXIF_BLOB_MAX) {
+                $d = $this->exifReadAt($fh, $size, $pos + 8, $len);
+                if ($d !== null) $fallback = $this->parsePngRawProfile($type, $d);
+            }
+            if ($type === 'IEND') break;
+            $pos += 12 + $len;
+        }
+        return $fallback;
+    }
+
+    /** ImageMagick 'Raw profile type exif|APP1' 글자 청크 → EXIF 조각. 압축은 풀린 크기 상한을 두고 푼다. */
+    private function parsePngRawProfile(string $type, string $d): ?string {
+        $nul = strpos($d, "\x00");
+        if ($nul === false || $nul > 79) return null;
+        $kw = substr($d, 0, $nul);
+        if ($kw !== 'Raw profile type exif' && $kw !== 'Raw profile type APP1') return null;
+        $rest = substr($d, $nul + 1);
+        $limit = 2 * self::EXIF_BLOB_MAX + 4096;                     // 16진 글자라 두 배 + 머리
+        if ($type === 'zTXt') {
+            if ($rest === '' || ord($rest[0]) !== 0) return null;   // 압축 방식 0(zlib)만
+            $text = function_exists('gzuncompress') ? @gzuncompress(substr($rest, 1), $limit) : false;
+        } elseif ($type === 'iTXt') {
+            if (strlen($rest) < 2) return null;
+            $comp = ord($rest[0]); $meth = ord($rest[1]); $r = substr($rest, 2);
+            $p1 = strpos($r, "\x00"); if ($p1 === false) return null;    // 언어
+            $p2 = strpos($r, "\x00", $p1 + 1); if ($p2 === false) return null;   // 번역 키워드
+            $body = substr($r, $p2 + 1);
+            $text = $comp ? (($meth === 0 && function_exists('gzuncompress')) ? @gzuncompress($body, $limit) : false) : $body;
+        } else {
+            $text = $rest;
+        }
+        if (!is_string($text) || $text === '' || strlen($text) > $limit) return null;
+        // "\n이름\n   길이\n16진...\n"
+        if (!preg_match('/^\s*[A-Za-z0-9]+\s*\n\s*(\d{1,9})\s*\n(.*)$/s', $text, $m)) return null;
+        $declared = (int)$m[1];
+        $hex = preg_replace('/\s+/', '', $m[2]);
+        if ($declared <= 0 || $declared > self::EXIF_BLOB_MAX || strlen($hex) < 2 * $declared || !ctype_xdigit($hex)) return null;
+        $bin = hex2bin(substr($hex, 0, 2 * $declared));
+        if ($bin === false) return null;
+        if (strncmp($bin, "Exif\x00\x00", 6) === 0) return $bin;
+        // APP1 형태(일부는 앞에 마커가 붙음)에서 Exif 머리를 앞쪽에서 찾는다.
+        $p = strpos(substr($bin, 0, 16), "Exif\x00\x00");
+        return $p === false ? $bin : substr($bin, $p);
+    }
+
+    /** WebP(RIFF): EXIF 청크. 청크 크기는 홀수면 1바이트 덧붙임. RIFF 크기·파일 크기 둘 다 넘지 않게. */
+    private function extractWebpExif($fh, int $size): ?string {
+        $h = $this->exifReadAt($fh, $size, 0, 12);
+        if ($h === null || strncmp($h, 'RIFF', 4) !== 0 || substr($h, 8, 4) !== 'WEBP') return null;
+        $end = min($size, 8 + unpack('V', substr($h, 4, 4))[1]);
+        $pos = 12;
+        for ($i = 0; $i < 10000 && $pos + 8 <= $end; $i++) {
+            $c = $this->exifReadAt($fh, $size, $pos, 8);
+            if ($c === null) return null;
+            $fourcc = substr($c, 0, 4);
+            $len = unpack('V', substr($c, 4, 4))[1];
+            if ($len > $end - $pos - 8) return null;
+            if ($fourcc === 'EXIF') {
+                if ($len < 8 || $len > self::EXIF_BLOB_MAX + 6) return null;
+                return $this->exifReadAt($fh, $size, $pos + 8, $len);
+            }
+            $pos += 8 + $len + ($len & 1);
+        }
+        return null;
+    }
+
+    /** 큰 끝(big-endian) 부호 없는 정수 n 바이트(0·1·2·4·8) — 범위 밖이면 예외. */
+    private function heifUint(string $s, int $off, int $n): int {
+        if ($n === 0) return 0;
+        if ($off < 0 || $n < 0 || $off + $n > strlen($s)) throw new \RuntimeException('heif: out of range');
+        switch ($n) {
+            case 1: return ord($s[$off]);
+            case 2: return unpack('n', substr($s, $off, 2))[1];
+            case 4: return unpack('N', substr($s, $off, 4))[1];
+            case 8:
+                if (PHP_INT_SIZE < 8) throw new \RuntimeException('heif: 64-bit');
+                $v = unpack('J', substr($s, $off, 8))[1];
+                if ($v < 0) throw new \RuntimeException('heif: too large');
+                return $v;
+        }
+        throw new \RuntimeException('heif: bad size');
+    }
+
+    /** 상자 머리 읽기(문자열 안): [type, 머리 길이, 전체 길이] — 전체 길이는 $end 를 넘지 않음. */
+    private function heifBox(string $s, int $off, int $end): ?array {
+        if ($off + 8 > $end) return null;
+        $sz = $this->heifUint($s, $off, 4); $type = substr($s, $off + 4, 4); $hdr = 8;
+        if ($sz === 1) { if ($off + 16 > $end) return null; $sz = $this->heifUint($s, $off + 8, 8); $hdr = 16; }
+        elseif ($sz === 0) { $sz = $end - $off; }
+        if ($sz < $hdr || $sz > $end - $off) return null;
+        return [$type, $hdr, $sz];
+    }
+
+    /**
+     * HEIC/HEIF(ISOBMFF): 최상위 meta 상자 → iinf 에서 형식 'Exif' 항목 → iloc 에서 그 위치(파일 또는 idat) → 데이터.
+     * Exif 항목 데이터 = 4바이트 'TIFF 머리까지 거리' + (보통 "Exif\0\0") + TIFF.
+     */
+    private function extractHeifExif($fh, int $size): ?string {
+        // ftyp 와 브랜드 확인
+        $f = $this->exifReadAt($fh, $size, 0, 16);
+        if ($f === null || substr($f, 4, 4) !== 'ftyp') return null;
+        $ftypLen = unpack('N', substr($f, 0, 4))[1];
+        if ($ftypLen < 16 || $ftypLen > 4096 || $ftypLen > $size) return null;
+        $ftyp = $this->exifReadAt($fh, $size, 0, $ftypLen);
+        if ($ftyp === null) return null;
+        $brands = [substr($ftyp, 8, 4)];
+        for ($p = 16; $p + 4 <= $ftypLen; $p += 4) $brands[] = substr($ftyp, $p, 4);
+        $ok = ['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs', 'mif1', 'mif2', 'msf1'];
+        if (!array_intersect($brands, $ok)) return null;
+
+        // 최상위 상자에서 meta 찾기
+        $pos = 0; $meta = null;
+        for ($i = 0; $i < 1000 && $pos + 8 <= $size; $i++) {
+            $h = $this->exifReadAt($fh, $size, $pos, min(16, $size - $pos));
+            if ($h === null || strlen($h) < 8) return null;
+            $sz = unpack('N', substr($h, 0, 4))[1]; $type = substr($h, 4, 4); $hdr = 8;
+            if ($sz === 1) { if (strlen($h) < 16) return null; $sz = $this->heifUint($h, 8, 8); $hdr = 16; }
+            elseif ($sz === 0) { $sz = $size - $pos; }
+            if ($sz < $hdr || $sz > $size - $pos) return null;
+            if ($type === 'meta') {
+                if ($sz > self::EXIF_HEIF_META_MAX) return null;
+                $meta = $this->exifReadAt($fh, $size, $pos + $hdr, $sz - $hdr);
+                break;
+            }
+            $pos += $sz;
+        }
+        if ($meta === null || strlen($meta) < 4) return null;
+
+        // meta 는 FullBox(4바이트 버전·플래그) → 안쪽 상자들
+        $mEnd = strlen($meta); $p = 4;
+        $iinf = null; $iloc = null; $idat = null;
+        for ($i = 0; $i < 10000 && $p + 8 <= $mEnd; $i++) {
+            $b = $this->heifBox($meta, $p, $mEnd);
+            if ($b === null) break;
+            [$type, $hdr, $sz] = $b;
+            if ($type === 'iinf') $iinf = [$p + $hdr, $p + $sz];
+            elseif ($type === 'iloc') $iloc = [$p + $hdr, $p + $sz];
+            elseif ($type === 'idat') $idat = [$p + $hdr, $p + $sz];
+            $p += $sz;
+        }
+        if ($iinf === null || $iloc === null) return null;
+
+        // iinf: 형식이 'Exif' 인 항목 번호
+        [$a, $e] = $iinf;
+        $ver = $this->heifUint($meta, $a, 1); $a += 4;
+        $cnt = $this->heifUint($meta, $a, $ver === 0 ? 2 : 4); $a += ($ver === 0 ? 2 : 4);
+        $exifIds = [];
+        for ($i = 0; $i < $cnt && $i < 100000 && $a + 8 <= $e; $i++) {
+            $b = $this->heifBox($meta, $a, $e);
+            if ($b === null) break;
+            [$type, $hdr, $sz] = $b;
+            if ($type === 'infe') {
+                $q = $a + $hdr; $iv = $this->heifUint($meta, $q, 1); $q += 4;
+                if ($iv >= 2) {
+                    $id = $this->heifUint($meta, $q, $iv === 2 ? 2 : 4); $q += ($iv === 2 ? 2 : 4);
+                    $q += 2;                                                    // item_protection_index
+                    if ($q + 4 <= $a + $sz && substr($meta, $q, 4) === 'Exif') $exifIds[] = $id;
+                }
+            }
+            $a += $sz;
+        }
+        if (!$exifIds) return null;
+
+        // iloc: 그 항목의 위치
+        [$a, $e] = $iloc;
+        $ver = $this->heifUint($meta, $a, 1); $a += 4;
+        if ($ver > 2) return null;
+        $b1 = $this->heifUint($meta, $a, 1); $b2 = $this->heifUint($meta, $a + 1, 1); $a += 2;
+        $offSz = $b1 >> 4; $lenSz = $b1 & 15; $baseSz = $b2 >> 4; $idxSz = ($ver === 1 || $ver === 2) ? ($b2 & 15) : 0;
+        foreach ([$offSz, $lenSz, $baseSz, $idxSz] as $n) if (!in_array($n, [0, 4, 8], true)) return null;
+        $cnt = $this->heifUint($meta, $a, $ver < 2 ? 2 : 4); $a += ($ver < 2 ? 2 : 4);
+        for ($i = 0; $i < $cnt && $i < 100000; $i++) {
+            $id = $this->heifUint($meta, $a, $ver < 2 ? 2 : 4); $a += ($ver < 2 ? 2 : 4);
+            $method = 0;
+            if ($ver === 1 || $ver === 2) { $method = $this->heifUint($meta, $a, 2) & 15; $a += 2; }
+            $a += 2;                                                            // data_reference_index
+            $base = $this->heifUint($meta, $a, $baseSz); $a += $baseSz;
+            $ec = $this->heifUint($meta, $a, 2); $a += 2;
+            $extents = [];
+            for ($k = 0; $k < $ec && $k < 10000; $k++) {
+                $a += $idxSz;                                                   // extent_index
+                $eo = $this->heifUint($meta, $a, $offSz); $a += $offSz;
+                $el = $this->heifUint($meta, $a, $lenSz); $a += $lenSz;
+                $extents[] = [$eo, $el];
+            }
+            if ($a > $e) return null;
+            if (!in_array($id, $exifIds, true)) continue;
+            if (!$extents || ($method !== 0 && $method !== 1)) return null;    // 2(항목 참조)는 지원 안 함
+            $data = '';
+            foreach ($extents as [$eo, $el]) {
+                if ($el === 0 || $el > self::EXIF_BLOB_MAX + 4096 - strlen($data)) return null;
+                if ($method === 0) {
+                    if ($base > PHP_INT_MAX - $eo) return null;
+                    $chunk = $this->exifReadAt($fh, $size, $base + $eo, $el);
+                } else {
+                    if ($idat === null) return null;
+                    $s0 = $idat[0] + $base + $eo;
+                    if ($base + $eo > $idat[1] - $idat[0] || $el > $idat[1] - $s0) return null;
+                    $chunk = substr($meta, $s0, $el);
+                }
+                if ($chunk === null) return null;
+                $data .= $chunk;
+            }
+            // 4바이트 TIFF 머리까지 거리 → TIFF. 거리가 틀린 파일이 있어 가까운 후보도 본다.
+            if (strlen($data) < 12) return null;
+            $skip = $this->heifUint($data, 0, 4);
+            $cands = [];
+            if ($skip <= strlen($data) - 12) $cands[] = 4 + $skip;
+            array_push($cands, 4, 10, 0);
+            foreach ($cands as $c) {
+                $t = substr($data, $c);
+                if (strncmp($t, "Exif\x00\x00", 6) === 0) $t = substr($t, 6);
+                if (strncmp($t, "II*\x00", 4) === 0 || strncmp($t, "MM\x00*", 4) === 0) return $t;
+            }
+            return null;
+        }
+        return null;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ★ (2026-10-07) 사진의 EXIF 개인정보 삭제 (펜닐 요청 — 미리보기 EXIF 창 버튼 + ⚡ 작업 메뉴 일괄)
+    //   [무엇을 지우나 — 조사 근거] 사진 메타데이터 개인정보 안내(위치·시각·기기 고유번호·작성자/설명·소프트웨어·
+    //   편집 전 내장 썸네일이 위험, 노출·조리개·ISO·초점거리·측광·플래시는 위험 낮음)와 윈도우 '속성 및 개인 정보 제거',
+    //   아이폰 공유 '위치' 끄기를 따랐다. **허용 목록 방식** — 아래 태그만 남기고 나머지(위치 GPS 전체, 촬영·수정 시각과
+    //   시간대·1/1000초, 기기·렌즈 일련번호, 소유자 이름, 작성자·저작권·설명·사용자 주석·윈도우 제목/태그/주석,
+    //   소프트웨어·기기 이름, 고유 이미지 ID, 제조사 전용 데이터(MakerNote), 내장 썸네일, 그 밖의 알 수 없는 태그)는 지운다.
+    //   IPTC·JPEG 주석·PNG 글자 청크도 지운다(작성자·위치·편집 기록이 들어갈 수 있음). XMP 는 HDR 게인맵·컨테이너·
+    //   모션 포토·별점 이름공간만 남겨 다시 만든다(exifFilterXmp — 남길 것이 없으면 통째로 뺀다). 남기는 것: 방향(지우면
+    //   세로 사진이 눕는다)·해상도·카메라 제조사/모델과 렌즈 모델(제품 종류일 뿐 사람을 특정하지 않음)·촬영 설정·색 공간·
+    //   호환성 표시(R98/R03)·별점. 사진 뒤에 붙은 모션 포토 동영상·제조사 트레일러는 지우지 않고 알려 준다(exifJpegTrailer).
+    //   [화질] 사진 데이터는 다시 압축하지 않고 그대로 복사 — 바뀌는 것은 메타데이터 부분뿐(아래 검증에서 그림 데이터 해시 비교).
+    //   [안전] 같은 폴더 임시 파일에 만들고 → 검증(형식·크기·그림 데이터 해시·위치/시각 없음) → 버전 관리가 켜져 있으면
+    //   이전 버전 백업 → 원본 자리로 교체. 실패하면 원본은 그대로. 잠긴 파일·보관함·원격 저장소·TIFF 는 하지 않는다.
+    // ─────────────────────────────────────────────────────────────────────────────
+    //   IFD0: 제조사·모델·방향·해상도·단위·YCbCr 배치, 색 해석용 기술 태그(백색점·원색 좌표·YCbCr 계수/표본화·흑백 기준),
+    //   별점(Rating·RatingPercent — 개인 식별 정보 아님, 윈도우 '등급').
+    private const EXIF_KEEP_IFD0 = [0x010F, 0x0110, 0x0112, 0x011A, 0x011B, 0x0128, 0x0213,
+        0x013E, 0x013F, 0x0211, 0x0212, 0x0214, 0x4746, 0x4749];
+    private const EXIF_KEEP_EXIF = [
+        0x829A, 0x829D, 0x8822, 0x8827, 0x8830, 0x8832, 0x9000, 0x9101, 0x9102, 0x9201, 0x9202, 0x9203, 0x9204,
+        0x9205, 0x9206, 0x9207, 0x9208, 0x9209, 0x920A, 0xA000, 0xA001, 0xA002, 0xA003, 0xA20E, 0xA20F, 0xA210,
+        0xA217, 0xA300, 0xA301, 0xA401, 0xA402, 0xA403, 0xA404, 0xA405, 0xA406, 0xA407, 0xA408, 0xA409, 0xA40A,
+        0xA40C, 0xA432, 0xA433, 0xA434, 0xA460, 0xA500,
+        0x8831, 0x8833, 0x8834, 0x8835, 0x9214, 0xA214, 0xA215, 0xA461, 0xA462,   // 감도 세부·피사체 영역(화면 안 좌표)·노출 지수·합성 사진 정보
+    ];
+    private const EXIF_EMPTY_TIFF_MM = "MM\x00*\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00";   // 항목 0개인 빈 TIFF(14바이트)
+
+    /** 지운 태그를 사람이 알아볼 묶음으로 */
+    private function exifPrivacyCategory(int $tag): string {
+        if (in_array($tag, [0x0132, 0x9003, 0x9004, 0x9010, 0x9011, 0x9012, 0x9290, 0x9291, 0x9292], true)) return 'datetime';
+        if (in_array($tag, [0xA420, 0xA430, 0xA431, 0xA435], true)) return 'device_id';
+        if (in_array($tag, [0x010D, 0x010E, 0x013B, 0x8298, 0x9286, 0x9C9B, 0x9C9C, 0x9C9D, 0x9C9E, 0x9C9F], true)) return 'author';
+        if (in_array($tag, [0x000B, 0x0131, 0x013C], true)) return 'software';
+        if ($tag === 0x927C) return 'makernote';
+        return 'other';
+    }
+
+    /**
+     * EXIF(TIFF) 에서 허용 목록 태그만 남긴 새 TIFF 를 만든다(같은 바이트 순서).
+     * @return array|null ['tiff' => 새 TIFF('' = 남길 것 없음), 'removed' => [묶음 => 개수], 'changed' => bool] / 해석 불가면 null
+     */
+    private function exifFilterTiff(string $t): ?array {
+        $n = strlen($t);
+        if ($n < 8 || $n > self::EXIF_BLOB_MAX) return null;
+        $bo = substr($t, 0, 2);
+        if ($bo === 'II') $le = true; elseif ($bo === 'MM') $le = false; else return null;
+        $u16 = function (int $o) use ($t, $n, $le): int { if ($o < 0 || $o + 2 > $n) throw new \RuntimeException('tiff'); return unpack($le ? 'v' : 'n', substr($t, $o, 2))[1]; };
+        $u32 = function (int $o) use ($t, $n, $le): int { if ($o < 0 || $o + 4 > $n) throw new \RuntimeException('tiff'); return unpack($le ? 'V' : 'N', substr($t, $o, 4))[1]; };
+        $sizes = [1 => 1, 2 => 1, 3 => 2, 4 => 4, 5 => 8, 6 => 1, 7 => 1, 8 => 2, 9 => 4, 10 => 8, 11 => 4, 12 => 8, 13 => 4];
+        $readIfd = function (int $off) use ($t, $n, $u16, $u32, $sizes): array {
+            if ($off < 8 || $off + 2 > $n) throw new \RuntimeException('tiff ifd');
+            $cnt = $u16($off);
+            if ($cnt > 1000 || $off + 2 + 12 * $cnt > $n) throw new \RuntimeException('tiff ifd count');
+            $entries = [];
+            for ($i = 0; $i < $cnt; $i++) {
+                $e = $off + 2 + 12 * $i;
+                $tag = $u16($e); $type = $u16($e + 2); $count = $u32($e + 4);
+                $sz = $sizes[$type] ?? 0;
+                if ($sz === 0 || $count > intdiv(0x7FFFFFFF, $sz)) { $entries[$tag] = null; continue; }
+                $total = $sz * $count;
+                if ($total <= 4) {
+                    $bytes = substr($t, $e + 8, $total);
+                } else {
+                    $vo = $u32($e + 8);
+                    if ($vo > $n || $total > $n - $vo) { $entries[$tag] = null; continue; }
+                    $bytes = substr($t, $vo, $total);
+                }
+                $entries[$tag] = [$type, $count, $bytes];
+            }
+            $np = $off + 2 + 12 * $cnt;
+            return [$entries, ($np + 4 <= $n) ? $u32($np) : 0];
+        };
+        try {
+            if ($u16(2) !== 42) return null;
+            $ifd0Off = $u32(4);
+            [$e0, $next0] = $readIfd($ifd0Off);
+            $removed = [];
+            $add = function (string $cat) use (&$removed) { $removed[$cat] = ($removed[$cat] ?? 0) + 1; };
+            $ex = [];
+            if (isset($e0[0x8769]) && $e0[0x8769] !== null && strlen($e0[0x8769][2]) === 4) {
+                $exOff = unpack($le ? 'V' : 'N', $e0[0x8769][2])[1];
+                if ($exOff !== $ifd0Off) [$ex] = $readIfd($exOff);
+            }
+            // 호환성(Interop) IFD — 'R98'/'R03'(sRGB/Adobe RGB 표시)만 남긴다. 개인정보 아님. 읽지 못하면 그냥 뺀다.
+            $keepIop = [];
+            if (isset($ex[0xA005]) && $ex[0xA005] !== null && strlen($ex[0xA005][2]) === 4) {
+                try {
+                    $iopOff = unpack($le ? 'V' : 'N', $ex[0xA005][2])[1];
+                    if ($iopOff !== $ifd0Off) {
+                        [$iop] = $readIfd($iopOff);
+                        foreach ([0x0001, 0x0002] as $tg) if (isset($iop[$tg]) && $iop[$tg] !== null) $keepIop[$tg] = $iop[$tg];
+                    }
+                } catch (\Throwable $e) { $keepIop = []; }
+            }
+            if (array_key_exists(0x8825, $e0)) $add('gps');
+            if ($next0 !== 0) $add('thumbnail');
+            $keep0 = []; $keepEx = [];
+            foreach ($e0 as $tag => $v) {
+                if ($tag === 0x8769 || $tag === 0x8825) continue;
+                if ($v !== null && in_array($tag, self::EXIF_KEEP_IFD0, true)) $keep0[$tag] = $v; else $add($this->exifPrivacyCategory($tag));
+            }
+            foreach ($ex as $tag => $v) {
+                if ($tag === 0xA005) continue;                                   // 호환 정보 포인터 — 아래에서 새 위치로 다시 넣는다
+                if ($v !== null && in_array($tag, self::EXIF_KEEP_EXIF, true)) $keepEx[$tag] = $v; else $add($this->exifPrivacyCategory($tag));
+            }
+        } catch (\Throwable $e) {
+            return null;
+        }
+        $changed = (bool)$removed;
+        if (!$changed) return ['tiff' => $t, 'removed' => [], 'changed' => false];
+
+        // 새 TIFF 만들기: 머리 8 + IFD0 + (Exif IFD) + 값 영역(2바이트 정렬)
+        $p16 = function (int $v) use ($le): string { return pack($le ? 'v' : 'n', $v); };
+        $p32 = function (int $v) use ($le): string { return pack($le ? 'V' : 'N', $v); };
+        if ($keepEx && $keepIop) $keepEx[0xA005] = [4, 1, null];                // 호환성 IFD 포인터(값은 아래에서)
+        $hasEx = (bool)$keepEx;
+        $hasIop = $hasEx && $keepIop;
+        if ($hasEx) $keep0[0x8769] = [4, 1, null];
+        if (!$keep0) return ['tiff' => '', 'removed' => $removed, 'changed' => true];
+        ksort($keep0); ksort($keepEx); ksort($keepIop);
+        $ifd0Size = 2 + 12 * count($keep0) + 4;
+        $exOff = 8 + $ifd0Size;
+        $exSize = $hasEx ? 2 + 12 * count($keepEx) + 4 : 0;
+        $iopOff = $exOff + $exSize;
+        $iopSize = $hasIop ? 2 + 12 * count($keepIop) + 4 : 0;
+        $dataBase = $iopOff + $iopSize;
+        $data = '';
+        $ptr = [0x8769 => $exOff, 0xA005 => $iopOff];
+        $emit = function (array $entries) use ($p16, $p32, $ptr, $dataBase, &$data): string {
+            $s = $p16(count($entries));
+            foreach ($entries as $tag => [$type, $count, $bytes]) {
+                if ($bytes === null) { $s .= $p16($tag) . $p16(4) . $p32(1) . $p32($ptr[$tag]); continue; }   // Exif·호환성 IFD 포인터
+                if (strlen($bytes) <= 4) {
+                    $val = str_pad($bytes, 4, "\x00");
+                } else {
+                    $val = $p32($dataBase + strlen($data));
+                    $data .= $bytes;
+                    if (strlen($data) % 2) $data .= "\x00";
+                }
+                $s .= $p16($tag) . $p16($type) . $p32($count) . $val;
+            }
+            return $s . $p32(0);
+        };
+        $out = ($le ? "II*\x00" : "MM\x00*") . $p32(8) . $emit($keep0);
+        if ($hasEx) $out .= $emit($keepEx);
+        if ($hasIop) $out .= $emit($keepIop);
+        $out .= $data;
+        return ['tiff' => $out, 'removed' => $removed, 'changed' => true];
+    }
+
+    // XMP 에서 남기는 이름공간 — 화면 표시에 필요한 HDR 게인맵·컨테이너(보조 이미지 목록)·모션 포토 정보뿐.
+    //   위치(exif:GPS*)·작성자(dc:creator)·날짜(xmp:CreateDate, photoshop:DateCreated)·도시·편집 기록 등은 모두 빠진다.
+    private const XMP_KEEP_NS = [
+        'http://ns.adobe.com/hdr-gain-map/1.0/',           // hdrgm (Ultra HDR · Adobe 게인맵)
+        'http://ns.apple.com/HDRGainMap/1.0/',             // 애플 HDR 게인맵
+        'http://ns.google.com/photos/1.0/container/',      // Container (보조 이미지 목록)
+        'http://ns.google.com/photos/1.0/container/item/', // Item
+    ];
+    private const XMP_RDF_NS = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';   // rdf:about·Seq·li 등 구조
+    // 이름공간 전체가 아니라 속성 하나만 남기는 것 — 별점(윈도우·라이트룸 '등급')
+    //   GCamera 는 이름공간 전체가 아니라 모션 포토 위치 값만(HdrPlusMakernote — 제조사 데이터, BurstID — 고유 ID 는 뺀다).
+    private const XMP_KEEP_PROPS = [
+        'http://ns.adobe.com/xap/1.0/' => ['Rating'],
+        'http://ns.microsoft.com/photo/1.0/' => ['Rating'],
+        'http://ns.google.com/photos/1.0/camera/' => ['MotionPhoto', 'MotionPhotoVersion', 'MotionPhotoPresentationTimestampUs',
+            'MicroVideo', 'MicroVideoVersion', 'MicroVideoOffset', 'MicroVideoPresentationTimestampUs'],
+    ];
+    private const XMP_EMPTY_HEAD = '<?xpacket begin="" id="W5M0MpCehiHzreSzNTczkc9d"?><x:xmpmeta xmlns:x="adobe:ns:meta/"></x:xmpmeta>';
+    private const XMP_END = '<?xpacket end="w"?>';
+
+    /**
+     * ★ (2026-10-07) XMP 개인정보 걸러내기 — rdf:Description 의 속성·하위 요소 중 XMP_KEEP_NS 이름공간만 남긴다.
+     * @return array ['xml' => 새 XMP 패킷('' = 남길 것 없음 → 통째로 빼도 됨), 'changed' => bool]
+     *   해석할 수 없거나 DTD/엔티티가 있으면 ['xml' => '', 'changed' => true] (개인정보 우선 — 통째로 뺀다).
+     */
+    private function exifFilterXmp(string $x): array {
+        $drop = ['xml' => '', 'changed' => true];
+        $x = trim(preg_replace('/<\?xpacket[^>]*\?>/', '', str_replace("\x00", '', $x)));
+        if ($x === '' ) return ['xml' => '', 'changed' => false];
+        if (strlen($x) > 4 * 1048576 || stripos($x, '<!DOCTYPE') !== false || stripos($x, '<!ENTITY') !== false) return $drop;
+        if (strncmp($x, "\xEF\xBB\xBF", 3) === 0) $x = substr($x, 3);
+        $prev = libxml_use_internal_errors(true);
+        try {
+            $doc = new \DOMDocument();
+            if (!@$doc->loadXML($x, LIBXML_NONET | LIBXML_COMPACT) || !$doc->documentElement) return $drop;
+            $xp = new \DOMXPath($doc);
+            $xp->registerNamespace('rdf', 'http://www.w3.org/1999/02/22-rdf-syntax-ns#');
+            $descs = $xp->query('//rdf:Description');
+            if (!$descs) return $drop;
+            $changed = false; $kept = 0;
+            $rdfNs = self::XMP_RDF_NS;
+            $ok = function ($node) use ($rdfNs): bool {
+                $ns = (string)$node->namespaceURI;
+                if ($ns === $rdfNs) return false;
+                return in_array($ns, self::XMP_KEEP_NS, true) || in_array((string)$node->localName, self::XMP_KEEP_PROPS[$ns] ?? [], true);
+            };
+            // 남긴 속성 안쪽(예: Container:Directory > rdf:Seq > rdf:li > Container:Item)도 같은 기준으로 — rdf 구조 요소와
+            //   xml:lang 은 그대로 두고, 허용되지 않은 이름공간의 속성·요소는 뺀다.
+            $clean = function (\DOMElement $el) use (&$clean, $ok, $rdfNs, &$changed): void {
+                $rmA = [];
+                foreach ($el->attributes as $a) {
+                    $ns = (string)$a->namespaceURI;
+                    if ($ns === $rdfNs || $ns === 'http://www.w3.org/XML/1998/namespace') continue;
+                    if (!$ok($a)) $rmA[] = $a;
+                }
+                foreach ($rmA as $a) { $el->removeAttributeNode($a); $changed = true; }
+                $rmC = [];
+                foreach ($el->childNodes as $c) {
+                    if (!($c instanceof \DOMElement)) continue;
+                    if ((string)$c->namespaceURI === $rdfNs || $ok($c)) $clean($c); else $rmC[] = $c;
+                }
+                foreach ($rmC as $c) { $el->removeChild($c); $changed = true; }
+            };
+            foreach ($descs as $d) {
+                if (!($d instanceof \DOMElement)) continue;
+                $rmA = [];
+                foreach ($d->attributes as $a) {
+                    if ((string)$a->namespaceURI === $rdfNs) continue;              // rdf:about 등 구조는 그대로
+                    if ($ok($a)) $kept++; else $rmA[] = $a;
+                }
+                foreach ($rmA as $a) { $d->removeAttributeNode($a); $changed = true; }
+                $rmC = [];
+                foreach ($d->childNodes as $c) {
+                    if ($c instanceof \DOMElement) { if ($ok($c)) { $kept++; $clean($c); } else $rmC[] = $c; }
+                }
+                foreach ($rmC as $c) { $d->removeChild($c); $changed = true; }
+            }
+            // rdf:Description 밖에 다른 요소가 있으면(드묾) 그것도 뺀다 — rdf:RDF 의 자식은 Description 만.
+            foreach ($xp->query('//rdf:RDF/*') as $c) {
+                if (!($c instanceof \DOMElement) || $c->namespaceURI !== $rdfNs || $c->localName !== 'Description') { $c->parentNode->removeChild($c); $changed = true; }
+            }
+            if (!$changed) return ['xml' => '', 'changed' => false];
+            if ($kept === 0) return $drop;
+            $body = $doc->saveXML($doc->documentElement);
+            if (!is_string($body) || $body === '') return $drop;
+            return ['xml' => "<?xpacket begin=\"\xEF\xBB\xBF\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>" . $body . self::XMP_END, 'changed' => true];
+        } catch (\Throwable $e) {
+            return $drop;
+        } finally {
+            libxml_clear_errors();
+            libxml_use_internal_errors($prev);
+        }
+    }
+
+    /** 같은 길이로 덮어쓸 XMP 패킷 만들기(공백으로 채움). 걸러낸 XMP 가 더 길면 빈 XMP, 그것도 안 들어가면 공백. */
+    private function exifXmpSameLength(string $filtered, int $len): string {
+        $endLen = strlen(self::XMP_END);
+        if ($filtered !== '' && strlen($filtered) <= $len) {
+            $body = substr($filtered, 0, strlen($filtered) - $endLen);
+            return $body . str_repeat(' ', $len - strlen($filtered)) . self::XMP_END;
+        }
+        $min = strlen(self::XMP_EMPTY_HEAD) + $endLen;
+        return $len >= $min ? self::XMP_EMPTY_HEAD . str_repeat(' ', $len - $min) . self::XMP_END : str_repeat(' ', $len);
+    }
+
+    private function mergeRemoved(array &$into, array $add): void {
+        foreach ($add as $k => $v) $into[$k] = ($into[$k] ?? 0) + $v;
+    }
+
+    /** $in 의 [$off, $off+$len) 을 $out 으로 그대로 복사(스트림, 메모리 적게). */
+    private function exifCopyRange($in, $out, int $off, int $len): bool {
+        if ($len === 0) return true;
+        if (fseek($in, $off) !== 0) return false;
+        return stream_copy_to_stream($in, $out, $len) === $len;
+    }
+
+    /**
+     * JPEG: 머리 부분(SOS 앞) 세그먼트 중 EXIF·XMP 는 허용 목록으로 다시 만들고, 확장 XMP·IPTC(APP13)·주석(COM)은 뺀다.
+     * 그림 데이터(SOS 부터 끝까지)는 그대로 복사. MPF(아이폰·삼성의 보조 이미지 — HDR 게인맵 등)가 있으면
+     * 보조 이미지 위치·주 이미지 크기 값을 줄어든 만큼 고치고, 보조 이미지 안의 EXIF 는 같은 길이로 제자리에서 덮어쓴다.
+     * XMP 는 HDR 표시(hdrgm·Container)·모션 포토·별점 속성만 남긴다 — 예전처럼 통째로 남기면 XMP 안의 위치·작성자가 남는다.
+     */
+    private function exifStripJpeg(string $src, string $dst): array {
+        $size = filesize($src);
+        $in = fopen($src, 'rb');
+        if (!$in) return ['ok' => false, 'error' => 'open'];
+        $out = null;
+        try {
+            if ($this->exifReadAt($in, $size, 0, 2) !== "\xFF\xD8") return ['ok' => false, 'error' => 'not jpeg'];
+            $segs = []; $pos = 2; $headerEnd = null;
+            for ($i = 0; $i < 2000 && $pos + 2 <= $size; $i++) {
+                $m = $this->exifReadAt($in, $size, $pos, 2);
+                if ($m === null || $m[0] !== "\xFF") return ['ok' => false, 'error' => 'marker'];
+                $mk = ord($m[1]);
+                if ($mk === 0xFF) { $pos++; continue; }                               // 채움 바이트
+                if ($mk === 0xDA || $mk === 0xD9) { $headerEnd = $pos; break; }
+                if ($mk === 0x01 || ($mk >= 0xD0 && $mk <= 0xD7)) { $segs[] = [$mk, $pos, 2, '']; $pos += 2; continue; }
+                $lb = $this->exifReadAt($in, $size, $pos + 2, 2);
+                if ($lb === null) return ['ok' => false, 'error' => 'len'];
+                $len = unpack('n', $lb)[1];
+                if ($len < 2 || $pos + 2 + $len > $size) return ['ok' => false, 'error' => 'len'];
+                $head = '';
+                if (in_array($mk, [0xE1, 0xE2, 0xED, 0xFE], true)) {
+                    $head = $this->exifReadAt($in, $size, $pos + 4, $len - 2);
+                    if ($head === null) return ['ok' => false, 'error' => 'read'];
+                }
+                $segs[] = [$mk, $pos, 2 + $len, $head];
+                $pos += 2 + $len;
+            }
+            if ($headerEnd === null) return ['ok' => false, 'error' => 'no sos'];
+
+            $removed = []; $plan = []; $mpfIdx = null;
+            foreach ($segs as $k => [$mk, $p, $tot, $d]) {
+                $act = 'keep'; $rep = null;
+                if ($mk === 0xE1 && strncmp($d, "Exif\x00\x00", 6) === 0) {
+                    $f = $this->exifFilterTiff(substr($d, 6));
+                    if ($f === null) return ['ok' => false, 'error' => 'exif parse'];
+                    if ($f['changed']) {
+                        $this->mergeRemoved($removed, $f['removed']);
+                        if ($f['tiff'] === '') $act = 'drop';
+                        else { $body = "Exif\x00\x00" . $f['tiff']; $act = 'rep'; $rep = "\xFF\xE1" . pack('n', strlen($body) + 2) . $body; }
+                    }
+                } elseif ($mk === 0xE1 && strncmp($d, "http://ns.adobe.com/xap/1.0/\x00", 29) === 0) {
+                    // XMP: HDR 게인맵·컨테이너·모션 포토·별점만 남기고 다시 만든다(남길 것이 없으면 뺀다).
+                    //   [펜닐 검토 반영] 예전에는 HDR 표시가 있으면 XMP 를 통째로 남겨 XMP 안의 위치·작성자·시각이 남았다.
+                    $xf = $this->exifFilterXmp(substr($d, 29));
+                    if ($xf['changed']) {
+                        $this->mergeRemoved($removed, ['xmp' => 1]);
+                        if ($xf['xml'] === '') $act = 'drop';
+                        else {
+                            $body = "http://ns.adobe.com/xap/1.0/\x00" . $xf['xml'];
+                            if (strlen($body) + 2 > 0xFFFF) $act = 'drop';
+                            else { $act = 'rep'; $rep = "\xFF\xE1" . pack('n', strlen($body) + 2) . $body; }
+                        }
+                    }
+                } elseif ($mk === 0xE1 && strncmp($d, "http://ns.adobe.com/xmp/extension/\x00", 35) === 0) {
+                    $act = 'drop'; $this->mergeRemoved($removed, ['xmp' => 1]);   // 확장 XMP(깊이 지도·원본 사진 등) — HDR 에는 쓰이지 않음
+                } elseif ($mk === 0xED) {
+                    $act = 'drop'; $this->mergeRemoved($removed, ['iptc' => 1]);
+                } elseif ($mk === 0xFE) {
+                    $act = 'drop'; $this->mergeRemoved($removed, ['comment' => 1]);
+                } elseif ($mk === 0xE2 && strncmp($d, "MPF\x00", 4) === 0) {
+                    $mpfIdx = $k;
+                }
+                $plan[$k] = [$act, $rep];
+            }
+
+            // MPF 위치 보정에 필요한 '줄어든 바이트'
+            $deltaTotal = 0; $deltaAfterMpf = 0;
+            foreach ($segs as $k => [$mk, $p, $tot]) {
+                [$act, $rep] = $plan[$k];
+                $d = ($act === 'drop') ? $tot : (($act === 'rep') ? $tot - strlen($rep) : 0);
+                $deltaTotal += $d;
+                if ($mpfIdx !== null && $k > $mpfIdx) $deltaAfterMpf += $d;
+            }
+            if (!$removed) return ['ok' => true, 'changed' => false, 'removed' => []];
+            $trailer = $this->exifJpegTrailer($in, $size, $headerEnd,
+                $mpfIdx !== null ? $this->exifMpfEntries($segs[$mpfIdx][3]) : null, $mpfIdx !== null ? $segs[$mpfIdx][1] + 8 : null);
+
+            $mpf = null;
+            if ($mpfIdx !== null) {
+                $mpf = $this->exifPatchMpf($segs[$mpfIdx][3], $deltaTotal, $deltaAfterMpf);
+                if ($mpf === null) return ['ok' => false, 'error' => 'mpf'];
+                $plan[$mpfIdx] = ['rep', "\xFF\xE2" . pack('n', strlen($mpf['data']) + 2) . $mpf['data']];
+            }
+
+            $out = fopen($dst, 'w+b');
+            if (!$out) return ['ok' => false, 'error' => 'tmp'];
+            fwrite($out, "\xFF\xD8");
+            $newMpfTiff = null;
+            foreach ($segs as $k => [$mk, $p, $tot]) {
+                [$act, $rep] = $plan[$k];
+                if ($act === 'drop') continue;
+                if ($k === $mpfIdx) $newMpfTiff = ftell($out) + 8;          // FF E2 + 길이 2 + "MPF\0"
+                if ($act === 'rep') { fwrite($out, $rep); continue; }
+                if (!$this->exifCopyRange($in, $out, $p, $tot)) return ['ok' => false, 'error' => 'copy'];
+            }
+            $newHeaderEnd = ftell($out);
+            if (!$this->exifCopyRange($in, $out, $headerEnd, $size - $headerEnd)) return ['ok' => false, 'error' => 'copy'];
+            fflush($out);
+
+            // 그림 데이터 해시(주 이미지 SOS 부터, 보조 이미지 앞까지 — 보조 EXIF 덮어쓰기 전에 비교)
+            $scanLen = $size - $headerEnd;
+            if ($mpf !== null && $mpf['firstOffset'] !== null) {
+                $origFirst = $segs[$mpfIdx][1] + 8 + $mpf['firstOffsetOrig'];
+                if ($origFirst > $headerEnd && $origFirst <= $size) $scanLen = $origFirst - $headerEnd;
+            }
+            if ($this->exifHashRange($in, $headerEnd, $scanLen) !== $this->exifHashRange($out, $newHeaderEnd, $scanLen)) {
+                return ['ok' => false, 'error' => 'scan hash'];
+            }
+
+            // 보조 이미지(MPF)의 EXIF — 같은 길이로 제자리에서
+            if ($mpf !== null && $newMpfTiff !== null) {
+                $newSize = $size - $deltaTotal;
+                foreach ($mpf['offsets'] as $off) {
+                    $r = $this->exifStripJpegInPlace($out, $newSize, $newMpfTiff + $off);
+                    if ($r === null) return ['ok' => false, 'error' => 'mpf image'];
+                    $this->mergeRemoved($removed, $r);
+                }
+            }
+            return ['ok' => true, 'changed' => true, 'removed' => $removed, 'trailer' => $trailer];
+        } finally {
+            fclose($in);
+            if ($out) fclose($out);
+        }
+    }
+
+    /** MPF 의 MP 항목 [크기, 위치] 목록(원래 값). 해석 불가면 null. */
+    private function exifMpfEntries(string $d): ?array {
+        $t = substr($d, 4); $n = strlen($t);
+        if ($n < 8) return null;
+        $bo = substr($t, 0, 2);
+        if ($bo === 'II') $le = true; elseif ($bo === 'MM') $le = false; else return null;
+        $f16 = $le ? 'v' : 'n'; $f32 = $le ? 'V' : 'N';
+        $ifd = unpack($f32, substr($t, 4, 4))[1];
+        if ($ifd < 8 || $ifd + 2 > $n) return null;
+        $cnt = unpack($f16, substr($t, $ifd, 2))[1];
+        if ($cnt > 200 || $ifd + 2 + 12 * $cnt > $n) return null;
+        for ($i = 0; $i < $cnt; $i++) {
+            $e = $ifd + 2 + 12 * $i;
+            if (unpack($f16, substr($t, $e, 2))[1] !== 0xB002) continue;
+            $len = unpack($f32, substr($t, $e + 4, 4))[1];
+            $off = $len <= 4 ? $e + 8 : unpack($f32, substr($t, $e + 8, 4))[1];
+            if ($len === 0 || $len % 16 !== 0 || $off + $len > $n) return null;
+            $out = [];
+            for ($o = $off; $o < $off + $len; $o += 16) $out[] = [unpack($f32, substr($t, $o + 4, 4))[1], unpack($f32, substr($t, $o + 8, 4))[1]];
+            return $out;
+        }
+        return null;
+    }
+
+    /**
+     * JPEG 사진(주 이미지 + MPF 보조 이미지) 뒤에 붙은 추가 데이터 크기 — 삼성·구글 모션 포토 동영상, 제조사 트레일러 등.
+     * 지우지는 않고(동영상이 사라지므로) 알려 주기만 한다. 0·FF 로만 된 채움은 추가 데이터로 보지 않는다.
+     */
+    private function exifJpegTrailer($fh, int $size, int $headerEnd, ?array $mpfEntries, ?int $mpfBase): int {
+        $end = null;
+        if ($mpfEntries && $mpfBase !== null) {
+            foreach ($mpfEntries as [$sz, $of]) {
+                $e = $of === 0 ? $sz : $mpfBase + $of + $sz;
+                if ($e > 0 && $e <= $size) $end = max($end ?? 0, $e);
+            }
+        }
+        if ($end === null) {
+            // EOI(FF D9) 찾기 — 그림 데이터 안의 FF 는 항상 00·RST 와 짝이라 처음 나오는 FF D9 가 끝이다.
+            if (fseek($fh, $headerEnd) !== 0) return 0;
+            $pos = $headerEnd; $carry = '';
+            while ($pos < $size) {
+                $c = fread($fh, (int)min(1048576, $size - $pos));
+                if ($c === false || $c === '') return 0;
+                $buf = $carry . $c; $i = strpos($buf, "\xFF\xD9");
+                if ($i !== false) { $end = $pos - strlen($carry) + $i + 2; break; }
+                $pos += strlen($c); $carry = substr($buf, -1);
+            }
+            if ($end === null) return 0;
+        }
+        $rest = $size - $end;
+        if ($rest <= 0) return 0;
+        $peek = $this->exifReadAt($fh, $size, $end, (int)min($rest, 65536));
+        if ($peek === null || (trim($peek, "\x00\xFF") === '' && $rest <= 65536)) return 0;
+        return $rest;
+    }
+
+    /** MPF(APP2 "MPF\0" + TIFF) 의 MP 항목: 주 이미지 크기 -= deltaTotal, 보조 이미지 위치 -= deltaAfter. */
+    private function exifPatchMpf(string $d, int $deltaTotal, int $deltaAfter): ?array {
+        $t = substr($d, 4); $n = strlen($t);
+        if ($n < 8) return null;
+        $bo = substr($t, 0, 2);
+        if ($bo === 'II') $le = true; elseif ($bo === 'MM') $le = false; else return null;
+        $f16 = $le ? 'v' : 'n'; $f32 = $le ? 'V' : 'N';
+        $ifd = unpack($f32, substr($t, 4, 4))[1];
+        if ($ifd < 8 || $ifd + 2 > $n) return null;
+        $cnt = unpack($f16, substr($t, $ifd, 2))[1];
+        if ($cnt > 200 || $ifd + 2 + 12 * $cnt > $n) return null;
+        $entOff = null; $entLen = 0;
+        for ($i = 0; $i < $cnt; $i++) {
+            $e = $ifd + 2 + 12 * $i;
+            if (unpack($f16, substr($t, $e, 2))[1] === 0xB002) {
+                $entLen = unpack($f32, substr($t, $e + 4, 4))[1];
+                $entOff = $entLen <= 4 ? $e + 8 : unpack($f32, substr($t, $e + 8, 4))[1];
+            }
+        }
+        if ($entOff === null || $entLen % 16 !== 0 || $entLen === 0 || $entOff + $entLen > $n) return null;
+        $offsets = []; $first = null; $firstOrig = null;
+        for ($o = $entOff; $o < $entOff + $entLen; $o += 16) {
+            $sz = unpack($f32, substr($t, $o + 4, 4))[1];
+            $of = unpack($f32, substr($t, $o + 8, 4))[1];
+            if ($of === 0) {                                                       // 주 이미지
+                if ($sz < $deltaTotal) return null;
+                $t = substr_replace($t, pack($f32, $sz - $deltaTotal), $o + 4, 4);
+            } else {
+                if ($of < $deltaAfter) return null;
+                $no = $of - $deltaAfter;
+                $t = substr_replace($t, pack($f32, $no), $o + 8, 4);
+                $offsets[] = $no;
+                if ($firstOrig === null || $of < $firstOrig) { $firstOrig = $of; $first = $no; }
+            }
+        }
+        return ['data' => "MPF\x00" . $t, 'offsets' => $offsets, 'firstOffset' => $first, 'firstOffsetOrig' => $firstOrig];
+    }
+
+    /** 열린 파일의 $pos 에 있는 JPEG(보조 이미지) 머리의 EXIF 를 같은 길이로 덮어쓴다. 해석 불가면 null. */
+    private function exifStripJpegInPlace($fh, int $size, int $pos): ?array {
+        if ($this->exifReadAt($fh, $size, $pos, 2) !== "\xFF\xD8") return null;
+        $p = $pos + 2; $removed = [];
+        for ($i = 0; $i < 200 && $p + 4 <= $size; $i++) {
+            $m = $this->exifReadAt($fh, $size, $p, 4);
+            if ($m === null || $m[0] !== "\xFF") return null;
+            $mk = ord($m[1]);
+            if ($mk === 0xDA || $mk === 0xD9) break;
+            $len = unpack('n', substr($m, 2, 2))[1];
+            if ($len < 2 || $p + 2 + $len > $size) return null;
+            if ($mk === 0xE1) {
+                $d = $this->exifReadAt($fh, $size, $p + 4, $len - 2);
+                if ($d !== null && strncmp($d, "Exif\x00\x00", 6) === 0) {
+                    $f = $this->exifFilterTiff(substr($d, 6));
+                    if ($f === null) return null;
+                    if ($f['changed']) {
+                        $tiff = $f['tiff'] === '' ? self::EXIF_EMPTY_TIFF_MM : $f['tiff'];
+                        if (strlen($tiff) > strlen($d) - 6) $tiff = self::EXIF_EMPTY_TIFF_MM;
+                        $new = str_pad("Exif\x00\x00" . $tiff, strlen($d), "\x00");
+                        if (fseek($fh, $p + 4) !== 0 || fwrite($fh, $new) !== strlen($new)) return null;
+                        $this->mergeRemoved($removed, $f['removed']);
+                    }
+                } elseif ($d !== null && strncmp($d, "http://ns.adobe.com/xap/1.0/\x00", 29) === 0) {
+                    // 보조 이미지의 XMP(게인맵 값 등) — 같은 길이로 걸러서 덮어쓴다
+                    $xf = $this->exifFilterXmp(substr($d, 29));
+                    if ($xf['changed']) {
+                        $new = $this->exifXmpSameLength($xf['xml'], strlen($d) - 29);
+                        if (fseek($fh, $p + 4 + 29) !== 0 || fwrite($fh, $new) !== strlen($new)) return null;
+                        $this->mergeRemoved($removed, ['xmp' => 1]);
+                    }
+                }
+            }
+            $p += 2 + $len;
+        }
+        return $removed;
+    }
+
+    private function exifHashRange($fh, int $off, int $len): string {
+        $ctx = hash_init('sha256');
+        if (fseek($fh, $off) !== 0) return 'x' . mt_rand();
+        $left = $len;
+        while ($left > 0) {
+            $c = fread($fh, min(1048576, $left));
+            if ($c === false || $c === '') return 'short' . $left;
+            hash_update($ctx, $c); $left -= strlen($c);
+        }
+        return hash_final($ctx);
+    }
+
+    /** PNG: eXIf 는 허용 목록으로 다시 만들고, 글자 청크(tEXt·zTXt·iTXt — 작성자·주석·XMP 등)와 tIME 은 뺀다. */
+    private function exifStripPng(string $src, string $dst): array {
+        $size = filesize($src);
+        $in = fopen($src, 'rb');
+        if (!$in) return ['ok' => false, 'error' => 'open'];
+        $out = null;
+        try {
+            if ($this->exifReadAt($in, $size, 0, 8) !== "\x89PNG\r\n\x1A\n") return ['ok' => false, 'error' => 'not png'];
+            $chunks = []; $pos = 8; $end = false;
+            for ($i = 0; $i < 500000 && $pos + 12 <= $size; $i++) {
+                $h = $this->exifReadAt($in, $size, $pos, 8);
+                if ($h === null) return ['ok' => false, 'error' => 'chunk'];
+                $len = unpack('N', substr($h, 0, 4))[1]; $type = substr($h, 4, 4);
+                if ($len > $size - $pos - 12) return ['ok' => false, 'error' => 'chunk len'];
+                $chunks[] = [$type, $pos, $len];
+                $pos += 12 + $len;
+                if ($type === 'IEND') { $end = true; break; }
+            }
+            if (!$end) return ['ok' => false, 'error' => 'no IEND'];
+            $removed = []; $plan = [];
+            foreach ($chunks as $k => [$type, $p, $len]) {
+                $act = 'keep'; $rep = null;
+                if ($type === 'tEXt' || $type === 'zTXt' || $type === 'iTXt') { $act = 'drop'; $this->mergeRemoved($removed, ['text' => 1]); }
+                elseif ($type === 'tIME') { $act = 'drop'; $this->mergeRemoved($removed, ['datetime' => 1]); }
+                elseif ($type === 'eXIf') {
+                    if ($len > self::EXIF_BLOB_MAX + 6) return ['ok' => false, 'error' => 'exif size'];
+                    $d = $this->exifReadAt($in, $size, $p + 8, $len);
+                    if ($d === null) return ['ok' => false, 'error' => 'read'];
+                    if (strncmp($d, "Exif\x00\x00", 6) === 0) $d = substr($d, 6);
+                    $f = $this->exifFilterTiff($d);
+                    if ($f === null) return ['ok' => false, 'error' => 'exif parse'];
+                    if ($f['changed']) {
+                        $this->mergeRemoved($removed, $f['removed']);
+                        if ($f['tiff'] === '') $act = 'drop';
+                        else { $act = 'rep'; $rep = pack('N', strlen($f['tiff'])) . 'eXIf' . $f['tiff'] . pack('N', crc32('eXIf' . $f['tiff'])); }
+                    }
+                }
+                $plan[$k] = [$act, $rep];
+            }
+            if (!$removed) return ['ok' => true, 'changed' => false, 'removed' => []];
+            $out = fopen($dst, 'w+b');
+            if (!$out) return ['ok' => false, 'error' => 'tmp'];
+            fwrite($out, "\x89PNG\r\n\x1A\n");
+            foreach ($chunks as $k => [$type, $p, $len]) {
+                [$act, $rep] = $plan[$k];
+                if ($act === 'drop') continue;
+                if ($act === 'rep') { fwrite($out, $rep); continue; }
+                if (!$this->exifCopyRange($in, $out, $p, 12 + $len)) return ['ok' => false, 'error' => 'copy'];
+            }
+            fflush($out);
+            return ['ok' => true, 'changed' => true, 'removed' => $removed];
+        } finally {
+            fclose($in);
+            if ($out) fclose($out);
+        }
+    }
+
+    /** WebP(RIFF): EXIF 청크는 허용 목록으로 다시 만들고(없으면 뺌), XMP 청크는 뺀다. VP8X 표시와 RIFF 크기를 고친다. */
+    private function exifStripWebp(string $src, string $dst): array {
+        $size = filesize($src);
+        $in = fopen($src, 'rb');
+        if (!$in) return ['ok' => false, 'error' => 'open'];
+        $out = null;
+        try {
+            $h = $this->exifReadAt($in, $size, 0, 12);
+            if ($h === null || strncmp($h, 'RIFF', 4) !== 0 || substr($h, 8, 4) !== 'WEBP') return ['ok' => false, 'error' => 'not webp'];
+            $riffEnd = 8 + unpack('V', substr($h, 4, 4))[1];
+            if ($riffEnd > $size) return ['ok' => false, 'error' => 'riff size'];
+            $chunks = []; $pos = 12;
+            for ($i = 0; $i < 100000 && $pos + 8 <= $riffEnd; $i++) {
+                $c = $this->exifReadAt($in, $size, $pos, 8);
+                if ($c === null) return ['ok' => false, 'error' => 'chunk'];
+                $fourcc = substr($c, 0, 4); $len = unpack('V', substr($c, 4, 4))[1];
+                $tot = 8 + $len + ($len & 1);
+                if ($len > $riffEnd - $pos - 8 || $tot > $riffEnd - $pos + ($len & 1)) return ['ok' => false, 'error' => 'chunk len'];
+                $chunks[] = [$fourcc, $pos, $len, min($tot, $riffEnd - $pos)];
+                $pos += $tot;
+            }
+            if (!$chunks || $chunks[0][0] !== 'VP8X') {
+                // VP8X 가 없으면 EXIF·XMP 를 담을 수 없다(단순 형식)
+                foreach ($chunks as $c) if ($c[0] === 'EXIF' || $c[0] === 'XMP ') return ['ok' => false, 'error' => 'no vp8x'];
+                return ['ok' => true, 'changed' => false, 'removed' => []];
+            }
+            $removed = []; $plan = []; $hasExif = false;
+            foreach ($chunks as $k => [$fourcc, $p, $len, $tot]) {
+                $act = 'keep'; $rep = null;
+                if ($fourcc === 'XMP ') { $act = 'drop'; $this->mergeRemoved($removed, ['xmp' => 1]); }
+                elseif ($fourcc === 'EXIF') {
+                    if ($len > self::EXIF_BLOB_MAX + 6) return ['ok' => false, 'error' => 'exif size'];
+                    $d = $this->exifReadAt($in, $size, $p + 8, $len);
+                    if ($d === null) return ['ok' => false, 'error' => 'read'];
+                    if (strncmp($d, "Exif\x00\x00", 6) === 0) $d = substr($d, 6);
+                    $f = $this->exifFilterTiff($d);
+                    if ($f === null) return ['ok' => false, 'error' => 'exif parse'];
+                    if ($f['changed']) {
+                        $this->mergeRemoved($removed, $f['removed']);
+                        if ($f['tiff'] === '') $act = 'drop';
+                        else { $act = 'rep'; $l = strlen($f['tiff']); $rep = 'EXIF' . pack('V', $l) . $f['tiff'] . (($l & 1) ? "\x00" : ''); $hasExif = true; }
+                    } else { $hasExif = true; }
+                }
+                $plan[$k] = [$act, $rep];
+            }
+            if (!$removed) return ['ok' => true, 'changed' => false, 'removed' => []];
+            $out = fopen($dst, 'w+b');
+            if (!$out) return ['ok' => false, 'error' => 'tmp'];
+            fwrite($out, 'RIFF' . "\x00\x00\x00\x00" . 'WEBP');
+            foreach ($chunks as $k => [$fourcc, $p, $len, $tot]) {
+                [$act, $rep] = $plan[$k];
+                if ($act === 'drop') continue;
+                if ($act === 'rep') { fwrite($out, $rep); continue; }
+                if ($k === 0) {                                                    // VP8X: EXIF(0x08)·XMP(0x04) 표시 고침
+                    $vp = $this->exifReadAt($in, $size, $p, $tot);
+                    if ($vp === null || $len < 10) return ['ok' => false, 'error' => 'vp8x'];
+                    $flags = ord($vp[8]) & ~0x04;
+                    $flags = $hasExif ? ($flags | 0x08) : ($flags & ~0x08);
+                    $vp[8] = chr($flags);
+                    fwrite($out, $vp);
+                    continue;
+                }
+                if (!$this->exifCopyRange($in, $out, $p, $tot)) return ['ok' => false, 'error' => 'copy'];
+            }
+            $total = ftell($out);
+            if (fseek($out, 4) !== 0) return ['ok' => false, 'error' => 'seek'];
+            fwrite($out, pack('V', $total - 8));
+            fflush($out);
+            return ['ok' => true, 'changed' => true, 'removed' => $removed];
+        } finally {
+            fclose($in);
+            if ($out) fclose($out);
+        }
+    }
+
+    /** WebP·PNG 그림 데이터 해시(메타데이터 청크를 뺀 나머지 청크를 순서대로). */
+    private function exifPixelHash(string $path, string $kind): ?string {
+        $size = filesize($path); $fh = fopen($path, 'rb');
+        if (!$fh) return null;
+        $ctx = hash_init('sha256');
+        try {
+            if ($kind === 'png') {
+                $pos = 8;
+                for ($i = 0; $i < 500000 && $pos + 12 <= $size; $i++) {
+                    $h = $this->exifReadAt($fh, $size, $pos, 8); if ($h === null) return null;
+                    $len = unpack('N', substr($h, 0, 4))[1]; $type = substr($h, 4, 4);
+                    if ($len > $size - $pos - 12) return null;
+                    if (!in_array($type, ['tEXt', 'zTXt', 'iTXt', 'tIME', 'eXIf'], true)) {
+                        fseek($fh, $pos); $left = 12 + $len;
+                        while ($left > 0) { $c = fread($fh, min(1048576, $left)); if ($c === false || $c === '') return null; hash_update($ctx, $c); $left -= strlen($c); }
+                    }
+                    $pos += 12 + $len;
+                    if ($type === 'IEND') break;
+                }
+            } else {
+                $h = $this->exifReadAt($fh, $size, 0, 12); if ($h === null) return null;
+                $end = min($size, 8 + unpack('V', substr($h, 4, 4))[1]); $pos = 12;
+                for ($i = 0; $i < 100000 && $pos + 8 <= $end; $i++) {
+                    $c = $this->exifReadAt($fh, $size, $pos, 8); if ($c === null) return null;
+                    $fourcc = substr($c, 0, 4); $len = unpack('V', substr($c, 4, 4))[1];
+                    if ($len > $end - $pos - 8) return null;
+                    if (!in_array($fourcc, ['VP8X', 'EXIF', 'XMP '], true)) {
+                        fseek($fh, $pos); $left = min(8 + $len + ($len & 1), $end - $pos);
+                        while ($left > 0) { $d = fread($fh, min(1048576, $left)); if ($d === false || $d === '') return null; hash_update($ctx, $d); $left -= strlen($d); }
+                    }
+                    $pos += 8 + $len + ($len & 1);
+                }
+            }
+        } finally { fclose($fh); }
+        return hash_final($ctx);
+    }
+
+    /** HEIF: Exif·XMP 항목의 파일 안 위치(조각 목록)를 찾는다. [ 'exif' => [[off,len],...]|null, 'xmp' => [[...]...] ] / 해석 불가 null */
+    private function heifLocateMeta($fh, int $size): ?array {
+        $f = $this->exifReadAt($fh, $size, 0, 16);
+        if ($f === null || substr($f, 4, 4) !== 'ftyp') return null;
+        $pos = 0; $meta = null; $metaStart = 0;
+        for ($i = 0; $i < 1000 && $pos + 8 <= $size; $i++) {
+            $h = $this->exifReadAt($fh, $size, $pos, min(16, $size - $pos));
+            if ($h === null || strlen($h) < 8) return null;
+            $sz = unpack('N', substr($h, 0, 4))[1]; $type = substr($h, 4, 4); $hdr = 8;
+            if ($sz === 1) { if (strlen($h) < 16) return null; $sz = $this->heifUint($h, 8, 8); $hdr = 16; }
+            elseif ($sz === 0) { $sz = $size - $pos; }
+            if ($sz < $hdr || $sz > $size - $pos) return null;
+            if ($type === 'meta') {
+                if ($sz > self::EXIF_HEIF_META_MAX) return null;
+                $metaStart = $pos + $hdr;
+                $meta = $this->exifReadAt($fh, $size, $metaStart, $sz - $hdr);
+                break;
+            }
+            $pos += $sz;
+        }
+        if ($meta === null || strlen($meta) < 4) return null;
+        $mEnd = strlen($meta); $p = 4; $iinf = null; $iloc = null; $idat = null;
+        for ($i = 0; $i < 10000 && $p + 8 <= $mEnd; $i++) {
+            $b = $this->heifBox($meta, $p, $mEnd); if ($b === null) break;
+            [$type, $hdr, $sz] = $b;
+            if ($type === 'iinf') $iinf = [$p + $hdr, $p + $sz];
+            elseif ($type === 'iloc') $iloc = [$p + $hdr, $p + $sz];
+            elseif ($type === 'idat') $idat = [$p + $hdr, $p + $sz];
+            $p += $sz;
+        }
+        if ($iinf === null || $iloc === null) return null;
+        [$a, $e] = $iinf;
+        $ver = $this->heifUint($meta, $a, 1); $a += 4;
+        $cnt = $this->heifUint($meta, $a, $ver === 0 ? 2 : 4); $a += ($ver === 0 ? 2 : 4);
+        $kind = [];
+        for ($i = 0; $i < $cnt && $i < 100000 && $a + 8 <= $e; $i++) {
+            $b = $this->heifBox($meta, $a, $e); if ($b === null) break;
+            [$type, $hdr, $sz] = $b;
+            if ($type === 'infe') {
+                $q = $a + $hdr; $boxEnd = $a + $sz; $iv = $this->heifUint($meta, $q, 1); $q += 4;
+                if ($iv >= 2) {
+                    $id = $this->heifUint($meta, $q, $iv === 2 ? 2 : 4); $q += ($iv === 2 ? 2 : 4); $q += 2;
+                    $it = ($q + 4 <= $boxEnd) ? substr($meta, $q, 4) : '';
+                    if ($it === 'Exif') $kind[$id] = 'exif';
+                    elseif ($it === 'mime') {
+                        $rest = substr($meta, $q + 4, max(0, $boxEnd - $q - 4));
+                        $parts = explode("\x00", $rest);
+                        if (($parts[1] ?? '') === 'application/rdf+xml') $kind[$id] = 'xmp';
+                    }
+                }
+            }
+            $a += $sz;
+        }
+        $res = ['exif' => [], 'xmp' => []];   // Exif 항목이 여러 개일 수 있다(연속 사진·여러 장 HEIF) — 모두 처리
+        if (!$kind) return $res;
+        [$a, $e] = $iloc;
+        $ver = $this->heifUint($meta, $a, 1); $a += 4;
+        if ($ver > 2) return null;
+        $b1 = $this->heifUint($meta, $a, 1); $b2 = $this->heifUint($meta, $a + 1, 1); $a += 2;
+        $offSz = $b1 >> 4; $lenSz = $b1 & 15; $baseSz = $b2 >> 4; $idxSz = ($ver === 1 || $ver === 2) ? ($b2 & 15) : 0;
+        foreach ([$offSz, $lenSz, $baseSz, $idxSz] as $nn) if (!in_array($nn, [0, 4, 8], true)) return null;
+        $cnt = $this->heifUint($meta, $a, $ver < 2 ? 2 : 4); $a += ($ver < 2 ? 2 : 4);
+        for ($i = 0; $i < $cnt && $i < 100000; $i++) {
+            $id = $this->heifUint($meta, $a, $ver < 2 ? 2 : 4); $a += ($ver < 2 ? 2 : 4);
+            $method = 0;
+            if ($ver === 1 || $ver === 2) { $method = $this->heifUint($meta, $a, 2) & 15; $a += 2; }
+            $a += 2;
+            $base = $this->heifUint($meta, $a, $baseSz); $a += $baseSz;
+            $ec = $this->heifUint($meta, $a, 2); $a += 2;
+            $ext = [];
+            for ($k = 0; $k < $ec && $k < 10000; $k++) {
+                $a += $idxSz;
+                $eo = $this->heifUint($meta, $a, $offSz); $a += $offSz;
+                $el = $this->heifUint($meta, $a, $lenSz); $a += $lenSz;
+                $ext[] = [$eo, $el];
+            }
+            if ($a > $e) return null;
+            if (!isset($kind[$id])) continue;
+            if (!$ext || ($method !== 0 && $method !== 1)) return null;
+            $locs = []; $total = 0;
+            foreach ($ext as [$eo, $el]) {
+                if ($el === 0) return null;
+                if ($method === 0) {
+                    if ($base > PHP_INT_MAX - $eo) return null;
+                    $fo = $base + $eo;
+                } else {
+                    if ($idat === null || $base + $eo > $idat[1] - $idat[0] || $el > $idat[1] - ($idat[0] + $base + $eo)) return null;
+                    $fo = $metaStart + $idat[0] + $base + $eo;
+                }
+                if ($fo > $size || $el > $size - $fo) return null;
+                $locs[] = [$fo, $el]; $total += $el;
+            }
+            if ($total > 16 * 1048576) return null;
+            if ($kind[$id] === 'exif') $res['exif'][] = $locs;
+            else $res['xmp'][] = $locs;
+        }
+        return $res;
+    }
+
+    private function heifReadLocs($fh, int $size, array $locs): ?string {
+        $s = '';
+        foreach ($locs as [$o, $l]) { $c = $this->exifReadAt($fh, $size, $o, $l); if ($c === null) return null; $s .= $c; }
+        return $s;
+    }
+    private function heifWriteLocs($fh, array $locs, string $data): bool {
+        $p = 0;
+        foreach ($locs as [$o, $l]) {
+            if (fseek($fh, $o) !== 0 || fwrite($fh, substr($data, $p, $l)) !== $l) return false;
+            $p += $l;
+        }
+        return $p === strlen($data);
+    }
+
+    /** HEIC/HEIF: 파일 구조는 그대로 두고 Exif 항목은 같은 길이로(허용 목록 TIFF + 0 채움), XMP 항목은 걸러낸 XMP(HDR 게인맵·별점만)로 같은 길이로 덮어쓴다. Exif 항목이 여러 개면 모두. */
+    private function exifStripHeif(string $src, string $dst): array {
+        $size = filesize($src);
+        $in = fopen($src, 'rb');
+        if (!$in) return ['ok' => false, 'error' => 'open'];
+        $out = null;
+        try {
+            try { $loc = $this->heifLocateMeta($in, $size); } catch (\Throwable $e) { $loc = null; }
+            if ($loc === null) return ['ok' => false, 'error' => 'heif parse'];
+            $removed = []; $writes = [];
+            foreach ($loc['exif'] as $exLocs) {
+                $d = $this->heifReadLocs($in, $size, $exLocs);
+                if ($d === null || strlen($d) < 12) return ['ok' => false, 'error' => 'exif read'];
+                $skip = unpack('N', substr($d, 0, 4))[1];
+                $start = null;
+                foreach (array_merge(($skip <= strlen($d) - 12) ? [4 + $skip] : [], [4, 10, 0]) as $c) {
+                    $q = $c; if (substr($d, $q, 6) === "Exif\x00\x00") $q += 6;
+                    $hd = substr($d, $q, 4);
+                    if ($hd === "II*\x00" || $hd === "MM\x00*") { $start = $q; break; }
+                }
+                if ($start === null) return ['ok' => false, 'error' => 'exif header'];
+                $f = $this->exifFilterTiff(substr($d, $start));
+                if ($f === null) return ['ok' => false, 'error' => 'exif parse'];
+                if ($f['changed']) {
+                    $room = strlen($d) - $start;
+                    $tiff = $f['tiff'] === '' ? self::EXIF_EMPTY_TIFF_MM : $f['tiff'];
+                    if (strlen($tiff) > $room) $tiff = self::EXIF_EMPTY_TIFF_MM;
+                    if (strlen($tiff) > $room) return ['ok' => false, 'error' => 'exif room'];
+                    $writes[] = [$exLocs, substr($d, 0, $start) . str_pad($tiff, $room, "\x00")];
+                    $this->mergeRemoved($removed, $f['removed']);
+                }
+            }
+            // XMP 항목: HDR 게인맵(애플 HDRGainMap·hdrgm)·별점만 남기고 같은 길이로 덮어쓴다(아이폰 HDR 표시 유지).
+            foreach ($loc['xmp'] as $locs) {
+                $xd = $this->heifReadLocs($in, $size, $locs);
+                if ($xd === null) return ['ok' => false, 'error' => 'xmp read'];
+                $xf = $this->exifFilterXmp($xd);
+                if (!$xf['changed']) continue;
+                $writes[] = [$locs, $this->exifXmpSameLength($xf['xml'], strlen($xd))];
+                $this->mergeRemoved($removed, ['xmp' => 1]);
+            }
+            if (!$removed) return ['ok' => true, 'changed' => false, 'removed' => []];
+            $out = fopen($dst, 'w+b');
+            if (!$out) return ['ok' => false, 'error' => 'tmp'];
+            if (!$this->exifCopyRange($in, $out, 0, $size)) return ['ok' => false, 'error' => 'copy'];
+            foreach ($writes as [$locs, $data]) if (!$this->heifWriteLocs($out, $locs, $data)) return ['ok' => false, 'error' => 'write'];
+            fflush($out);
+            // 덮어쓴 곳 밖은 원본과 같아야 한다(구조·그림 데이터 그대로)
+            $mask = function ($fh) use ($writes, $size): string {
+                $ctx = hash_init('sha256'); $cuts = [];
+                foreach ($writes as [$locs]) foreach ($locs as $x) $cuts[] = $x;
+                usort($cuts, function ($a, $b) { return $a[0] <=> $b[0]; });
+                $p = 0;
+                foreach ($cuts as [$o, $l]) { if ($o > $p) hash_update($ctx, $this->exifHashRange($fh, $p, $o - $p)); $p = max($p, $o + $l); }
+                if ($p < $size) hash_update($ctx, $this->exifHashRange($fh, $p, $size - $p));
+                return hash_final($ctx);
+            };
+            if (filesize($dst) !== $size || $mask($in) !== $mask($out)) return ['ok' => false, 'error' => 'verify'];
+            return ['ok' => true, 'changed' => true, 'removed' => $removed];
+        } finally {
+            fclose($in);
+            if ($out) fclose($out);
+        }
+    }
+
+    /**
+     * 사진 한 장의 EXIF 개인정보 삭제(원본 교체).
+     * @return array ['success'=>bool, 'status'=>'stripped'|'clean'|'unsupported'|'locked'|'error', 'removed'=>[묶음=>개수], 'backup'=>bool, 'size'=>int, 'error'=>string]
+     */
+    public function stripImagePrivacy(int $storageId, string $relativePath): array {
+        $fail = function (string $status, string $msg) { return ['success' => false, 'status' => $status, 'error' => $msg]; };
+        if ($relativePath === '') return $fail('error', 'Path required');
+        if (!$this->storage->checkPermission($storageId, 'can_read') || !$this->storage->checkPermission($storageId, 'can_write')) {
+            return $fail('error', __('api_err_no_write_perm', '쓰기 권한이 없습니다.'));
+        }
+        $stInfo = $this->storage->getStorageById($storageId);
+        $stType = $stInfo['storage_type'] ?? 'local';
+        if (in_array($stType, self::REMOTE_TYPES) && $stType !== 'smb') {
+            return $fail('unsupported', __('exif_strip_remote', '원격 저장소의 파일은 지원하지 않습니다.'));
+        }
+        $basePath = $this->storage->getRealPath($storageId);
+        if (!$basePath) return $fail('error', 'Storage not found');
+        $localPath = $this->buildPath($basePath, $relativePath);
+        if (!$this->isPathSafe($basePath, $localPath) || !is_file($localPath)) return $fail('error', __('file_not_found', '파일을 찾을 수 없습니다.'));
+        if ($this->isFileLocked($storageId, $relativePath)) return $fail('locked', __('exif_strip_locked', '잠긴 파일입니다.'));
+        // 보관함(암호화 폴더) 안의 파일은 하지 않는다
+        $chk = dirname($localPath);
+        for ($i = 0; $i < 64; $i++) {   // 저장소 루트까지 위로(깊은 폴더도)
+            if (file_exists($chk . DIRECTORY_SEPARATOR . '.vault.json')) return $fail('unsupported', __('exif_strip_vault', '보관함 안의 파일은 지원하지 않습니다.'));
+            $up = dirname($chk);
+            if ($up === $chk || strlen($up) < strlen(rtrim($basePath, '/\\'))) break;
+            $chk = $up;
+        }
+        $ext = strtolower(pathinfo($localPath, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['jpg', 'jpeg', 'jpe', 'png', 'webp', 'heic', 'heif'], true)) {
+            return $fail('unsupported', __('exif_strip_format', 'JPEG·PNG·WebP·HEIC 만 지원합니다.'));
+        }
+        $fh = @fopen($localPath, 'rb');
+        $head = $fh ? (string)fread($fh, 16) : '';
+        if ($fh) fclose($fh);
+        $kind = $this->sniffImageKind($head);
+        if (!in_array($kind, ['jpeg', 'png', 'webp', 'heif'], true)) {
+            return $fail('unsupported', __('exif_strip_format', 'JPEG·PNG·WebP·HEIC 만 지원합니다.'));
+        }
+        $dir = dirname($localPath);
+        if (!is_writable($localPath) || !is_writable($dir)) return $fail('error', __('exif_strip_not_writable', '파일을 쓸 수 없습니다(서버 폴더 권한).'));
+
+        // 서버가 처리 중 강제로 끝나 남은 임시 파일(1시간 지난 것)은 정리한다. 폴더 이름에 glob 특수문자가 있으면 건너뜀.
+        if (strpbrk($dir, '*?[]{}') === false) {
+            foreach ((array)@glob($dir . DIRECTORY_SEPARATOR . '.~exif_*.tmp') as $old) {
+                if (is_string($old) && preg_match('#[\\\\/]\.~exif_[0-9a-f]{12}\.tmp$#', $old) && is_file($old) && (int)@filemtime($old) < time() - 3600) @unlink($old);
+            }
+        }
+        $tmp = $dir . DIRECTORY_SEPARATOR . '.~exif_' . bin2hex(random_bytes(6)) . '.tmp';
+        try {
+            $r = $kind === 'jpeg' ? $this->exifStripJpeg($localPath, $tmp)
+               : ($kind === 'png' ? $this->exifStripPng($localPath, $tmp)
+               : ($kind === 'webp' ? $this->exifStripWebp($localPath, $tmp) : $this->exifStripHeif($localPath, $tmp)));
+            if (empty($r['ok'])) return $fail('error', __('exif_strip_corrupt', '파일이 손상되었거나 구조를 읽을 수 없어 처리하지 않았습니다') . ' (' . ($r['error'] ?? '?') . ')');
+            if (empty($r['changed'])) return ['success' => true, 'status' => 'clean', 'removed' => []];
+
+            // 검증: 같은 형식 · (JPEG·PNG·WebP) 그림 크기 같음 · (PNG·WebP) 그림 데이터 해시 같음 · 위치·촬영 시각 없음
+            clearstatcache();
+            $fh = @fopen($tmp, 'rb'); $h2 = $fh ? (string)fread($fh, 16) : ''; if ($fh) fclose($fh);
+            if ($this->sniffImageKind($h2) !== $kind) return $fail('error', __('exif_strip_failed', '처리하지 못했습니다') . ' (verify kind)');
+            if ($kind !== 'heif') {
+                $a = @getimagesize($localPath); $b = @getimagesize($tmp);
+                if (!is_array($a) || !is_array($b) || $a[0] !== $b[0] || $a[1] !== $b[1]) return $fail('error', __('exif_strip_failed', '처리하지 못했습니다') . ' (verify size)');
+            }
+            if (($kind === 'png' || $kind === 'webp') && $this->exifPixelHash($localPath, $kind) !== $this->exifPixelHash($tmp, $kind)) {
+                return $fail('error', __('exif_strip_failed', '처리하지 못했습니다') . ' (verify data)');
+            }
+            $after = $this->readImageExif($tmp, null, true);
+            if (is_array($after) && (!empty($after['GPS']) || !empty($after['EXIF']['DateTimeOriginal']) || !empty($after['IFD0']['DateTime']))) {
+                return $fail('error', __('exif_strip_failed', '처리하지 못했습니다') . ' (verify exif)');
+            }
+
+            // 이전 버전 백업(버전 관리가 켜져 있을 때만) → 교체
+            $cfg = $this->getRansomwareConfig();
+            $excl = array_map(function ($e) { return ltrim(trim($e), '.'); }, explode(',', strtolower((string)($cfg['version_exclude'] ?? ''))));
+            $backup = !empty($cfg['versioning']) && !in_array($ext, $excl, true);
+            $this->saveFileVersion($localPath, $relativePath, $storageId);
+            $perm = @fileperms($localPath);
+            if ($perm !== false) @chmod($tmp, $perm & 0777);
+            if (!@rename($tmp, $localPath)) return $fail('error', __('exif_strip_replace', '원본을 바꾸지 못했습니다(파일 사용 중일 수 있음).'));
+            clearstatcache();
+            return ['success' => true, 'status' => 'stripped', 'removed' => $r['removed'], 'backup' => $backup, 'trailer' => (int)($r['trailer'] ?? 0),
+                    'size' => (int)@filesize($localPath), 'modified' => date('Y-m-d H:i:s', (int)@filemtime($localPath))];
+        } catch (\Throwable $e) {
+            return $fail('error', __('exif_strip_failed', '처리하지 못했습니다'));
+        } finally {
+            if (is_file($tmp)) @unlink($tmp);
+        }
+    }
+
     /**
      * ★ (2026-08-25) 이미지 EXIF 메타데이터 조회 — 미리보기 모달의 [EXIF] 버튼용.
      *
@@ -9885,9 +11217,12 @@ class FileManager {
             return ['success' => false, 'error' => __('api_err_exif_ext', 'PHP exif 확장이 설치되어 있지 않습니다.')];
         }
 
-        // EXIF 를 가질 수 있는 형식만 시도한다(PNG/GIF/WebP 등은 대상이 아니다).
+        // EXIF 를 가질 수 있는 형식만 시도한다(GIF·BMP 등은 EXIF 를 담는 자리가 없다).
+        // ★ (2026-10-07) PNG·WebP·HEIC/HEIF 추가(펜닐 요청) — 읽기는 readImageExif(형식은 파일 앞부분으로 판단).
+        // ★ (2026-10-07) GIF·BMP·ICO 는 EXIF 가 없지만 윈도우 [자세히]처럼 '이미지' 묶음(크기·해상도·비트 수준)은 보여 준다(펜닐 요청).
         $ext = strtolower(pathinfo($relativePath, PATHINFO_EXTENSION));
-        if (!in_array($ext, ['jpg', 'jpeg', 'jpe', 'tif', 'tiff'], true)) {
+        $basicOnly = in_array($ext, ['gif', 'bmp', 'ico'], true);
+        if (!$basicOnly && !in_array($ext, ['jpg', 'jpeg', 'jpe', 'tif', 'tiff', 'png', 'webp', 'heic', 'heif'], true)) {
             return ['success' => true, 'supported' => false, 'sections' => []];
         }
 
@@ -9909,11 +11244,19 @@ class FileManager {
             return ['success' => false, 'error' => 'File not found'];
         }
 
+        if ($basicOnly) {
+            $details = [];
+            try { $details = $this->buildExifDetails([], $localPath); } catch (\Throwable $e) { $details = []; }
+            return ['success' => true, 'supported' => true, 'has_exif' => false, 'summary' => [], 'sections' => [], 'details' => $details];
+        }
+
         $sections = [];
+        $details = [];
         try {
             // 3번째 인자 true = 섹션별로 나눠서 반환, 4번째 true = 썸네일 바이너리도 읽되 아래에서 제외
-            $data = @exif_read_data($localPath, null, true, false);
+            $data = $this->readImageExif($localPath, null, true);   // ★ (2026-10-07) JPEG·TIFF 는 종전과 같은 exif_read_data
             if (is_array($data)) {
+                $details = $this->buildExifDetails($data, $localPath);   // ★ (2026-10-07) 윈도우식 묶음 보기
                 // ★ (2026-08-25) 전체 태그에서 **볼 이유가 없는 항목**을 걸러낸다(펜닐 지적).
                 //   [기준] ①내부 오프셋·포인터 ②바이너리 덩어리 ③썸네일 부속 정보
                 //          ④다른 항목으로 이미 표현되는 코드값 — 사람이 판단에 쓸 수 없는 것들.
@@ -9977,6 +11320,7 @@ class FileManager {
             }
         } catch (\Throwable $e) {
             $sections = [];
+            $details = [];
         }
 
         // ★ (2026-08-25) 사람이 읽을 수 있는 **요약**을 함께 만든다.
@@ -9985,7 +11329,356 @@ class FileManager {
         //   자주 보는 항목만 변환해 위에 요약으로 두고, 전체는 화면에서 토글로 펼치게 한다.
         $summary = $this->buildExifSummary($sections);
 
-        return ['success' => true, 'supported' => true, 'summary' => $summary, 'sections' => $sections];
+        // ★ (2026-10-07) 실제 EXIF(IFD0·EXIF·GPS·윈도우 XP 태그)가 있는지 — JPEG 는 EXIF 가 없어도 PHP 가 FILE·COMPUTED(크기 등)를
+        //   돌려줘 예전엔 '해상도' 한 줄짜리 창이 떴고, PNG·WebP 는 '없음'이었다(형식마다 달랐음). 이제 EXIF 가 없으면
+        //   요약은 비우고 화면이 'EXIF 없음 + 이미지 기본 정보'로 보여 준다. 기본 정보는 파일 자체에서 읽는다.
+        $hasExif = false;
+        foreach (['IFD0', 'EXIF', 'GPS', 'WINXP'] as $sec) if (!empty($sections[$sec])) { $hasExif = true; break; }
+        if (!$hasExif) {
+            $summary = [];
+            if (!$details) { try { $details = $this->buildExifDetails([], $localPath); } catch (\Throwable $e) { $details = []; } }
+        }
+
+        return ['success' => true, 'supported' => true, 'has_exif' => $hasExif, 'summary' => $summary, 'sections' => $sections, 'details' => $details];
+    }
+
+    /**
+     * ★ (2026-10-07) 그림 파일 자체에 적힌 해상도(DPI)·비트 수준 — EXIF 가 없는 이미지도 윈도우 [자세히]의 '이미지' 묶음처럼
+     *   보여 주려고(펜닐 요청). JPEG 의 JFIF(APP0)·PNG 의 IHDR·pHYs·BMP 머리·WebP 의 VP8/VP8L/VP8X 만 읽는다(앞부분만, 크기 검사).
+     *   적혀 있지 않으면 비운다(윈도우처럼 96 dpi 로 추정해 채우지 않음).
+     * @return array ['xdpi'=>float|null, 'ydpi'=>float|null, 'bits'=>int|null]
+     */
+    private function imageFileProps(string $path): array {
+        $out = ['xdpi' => null, 'ydpi' => null, 'bits' => null];
+        $size = @filesize($path);
+        if (!is_int($size) || $size < 16) return $out;
+        $fh = @fopen($path, 'rb');
+        if (!$fh) return $out;
+        try {
+            $h = $this->exifReadAt($fh, $size, 0, (int)min($size, 64));
+            if ($h === null) return $out;
+            $okDpi = function ($v) { return ($v > 0 && $v < 100000) ? $v : null; };
+            if (strncmp($h, "\xFF\xD8", 2) === 0) {
+                // JPEG: 머리 세그먼트에서 JFIF(APP0) 밀도 — 단위 1=인치, 2=cm. 0(비율만)은 쓰지 않는다.
+                $pos = 2;
+                for ($i = 0; $i < 64 && $pos + 4 <= $size; $i++) {
+                    $m = $this->exifReadAt($fh, $size, $pos, 4);
+                    if ($m === null || $m[0] !== "\xFF") break;
+                    $mk = ord($m[1]);
+                    if ($mk === 0xDA || $mk === 0xD9) break;
+                    $len = unpack('n', substr($m, 2, 2))[1];
+                    if ($len < 2 || $pos + 2 + $len > $size) break;
+                    if ($mk === 0xE0 && $len >= 16) {
+                        $d = $this->exifReadAt($fh, $size, $pos + 4, 12);
+                        if ($d !== null && strncmp($d, "JFIF\x00", 5) === 0) {
+                            $unit = ord($d[7]); $x = unpack('n', substr($d, 8, 2))[1]; $y = unpack('n', substr($d, 10, 2))[1];
+                            if ($unit === 1) { $out['xdpi'] = $okDpi($x); $out['ydpi'] = $okDpi($y); }
+                            elseif ($unit === 2) { $out['xdpi'] = $okDpi($x * 2.54); $out['ydpi'] = $okDpi($y * 2.54); }
+                        }
+                        break;
+                    }
+                    $pos += 2 + $len;
+                }
+            } elseif (strncmp($h, "\x89PNG\r\n\x1A\n", 8) === 0) {
+                // PNG: IHDR(비트 깊이 × 채널 수 — 팔레트는 비트 깊이) · pHYs(단위 1 = 미터당 픽셀)
+                if (substr($h, 12, 4) === 'IHDR' && strlen($h) >= 26) {
+                    $bd = ord($h[24]); $ct = ord($h[25]);
+                    $ch = [0 => 1, 2 => 3, 3 => 1, 4 => 2, 6 => 4][$ct] ?? 0;
+                    if ($ch && in_array($bd, [1, 2, 4, 8, 16], true)) $out['bits'] = $bd * $ch;
+                }
+                $pos = 8;
+                for ($i = 0; $i < 1000 && $pos + 8 <= $size; $i++) {
+                    $c = $this->exifReadAt($fh, $size, $pos, 8);
+                    if ($c === null) break;
+                    $len = unpack('N', substr($c, 0, 4))[1]; $type = substr($c, 4, 4);
+                    if ($type === 'IDAT' || $type === 'IEND' || $len > $size - $pos - 12) break;
+                    if ($type === 'pHYs' && $len === 9) {
+                        $d = $this->exifReadAt($fh, $size, $pos + 8, 9);
+                        if ($d !== null && ord($d[8]) === 1) {
+                            $out['xdpi'] = $okDpi(unpack('N', substr($d, 0, 4))[1] * 0.0254);
+                            $out['ydpi'] = $okDpi(unpack('N', substr($d, 4, 4))[1] * 0.0254);
+                        }
+                        break;
+                    }
+                    $pos += 12 + $len;
+                }
+            } elseif (strncmp($h, 'BM', 2) === 0 && strlen($h) >= 46) {
+                // BMP: 정보 머리(40바이트 이상)의 비트 수·미터당 픽셀
+                $hs = unpack('V', substr($h, 14, 4))[1];
+                if ($hs >= 40) {
+                    $bc = unpack('v', substr($h, 28, 2))[1];
+                    if (in_array($bc, [1, 4, 8, 16, 24, 32], true)) $out['bits'] = $bc;
+                    $x = unpack('V', substr($h, 38, 4))[1]; $y = unpack('V', substr($h, 42, 4))[1];
+                    if ($x > 0 && $x < 0x7FFFFFFF) $out['xdpi'] = $okDpi($x * 0.0254);
+                    if ($y > 0 && $y < 0x7FFFFFFF) $out['ydpi'] = $okDpi($y * 0.0254);
+                }
+            } elseif (strncmp($h, 'RIFF', 4) === 0 && substr($h, 8, 4) === 'WEBP' && strlen($h) >= 30) {
+                // WebP: 손실(VP8) 24, 무손실(VP8L) 알파 비트, 확장(VP8X) 알파 표시(0x10) → 32 / 24
+                $fcc = substr($h, 12, 4);
+                if ($fcc === 'VP8 ') $out['bits'] = 24;
+                elseif ($fcc === 'VP8L' && ord($h[20]) === 0x2F) $out['bits'] = ((ord($h[24]) >> 4) & 1) ? 32 : 24;
+                elseif ($fcc === 'VP8X') $out['bits'] = (ord($h[20]) & 0x10) ? 32 : 24;
+            } elseif (strncmp($h, 'GIF8', 4) === 0 && strlen($h) >= 11) {
+                // GIF: 전역 색상표 크기(비트, 1~8 — 256색이면 8)
+                $f = ord($h[10]);
+                if ($f & 0x80) $out['bits'] = ($f & 7) + 1;
+            }
+        } catch (\Throwable $e) {
+            return ['xdpi' => null, 'ydpi' => null, 'bits' => null];
+        } finally {
+            fclose($fh);
+        }
+        return $out;
+    }
+
+    /**
+     * ★ (2026-10-07) EXIF "전체 태그 보기" — 윈도우 [속성 → 자세히] 처럼 묶음별로, 사람이 읽는 값으로.
+     *
+     * [왜] 종전 전체 태그는 IFD0/EXIF 같은 내부 구역 이름과 `89/50`·`MeteringMode 5` 같은 원시 값을
+     *   그대로 보여 줘 쓸모가 적었다(펜닐 지적). 윈도우·이미지 뷰어가 보여 주는 항목만 골라
+     *   묶음(설명·원본·이미지·카메라·고급 사진·GPS)과 순서를 윈도우와 맞추고, 코드값은 뜻으로 바꾼다.
+     * [입력] readImageExif 원시 결과(섹션별 배열). 값이 없거나 해석할 수 없는 줄은 넣지 않는다.
+     * @return array [['title'=>묶음 이름, 'rows'=>[['k'=>항목, 'v'=>값, ('map'=>"위도,경도")], ...]], ...]
+     */
+    private function buildExifDetails(array $d, string $localPath): array {
+        $ifd0 = is_array($d['IFD0'] ?? null) ? $d['IFD0'] : [];
+        $exif = is_array($d['EXIF'] ?? null) ? $d['EXIF'] : [];
+        $gps  = is_array($d['GPS'] ?? null) ? $d['GPS'] : [];
+        $comp = is_array($d['COMPUTED'] ?? null) ? $d['COMPUTED'] : [];
+        $get = function (array $a, array $keys) {
+            foreach ($keys as $k) if (array_key_exists($k, $a)) return $a[$k];
+            return null;
+        };
+        // 문자열 정리: 끝의 NUL·공백 제거, UTF-8 이 아니면 CP949 로 시도, 길이 제한
+        $str = function ($v) {
+            if (is_array($v)) $v = implode(', ', array_filter(array_map(function ($x) { return is_scalar($x) ? (string)$x : ''; }, $v), 'strlen'));
+            if (!is_scalar($v)) return '';
+            $v = trim(str_replace("\0", ' ', (string)$v));
+            if ($v !== '' && !mb_check_encoding($v, 'UTF-8')) {
+                $c = function_exists('mb_convert_encoding') ? @mb_convert_encoding($v, 'UTF-8', 'CP949') : false;
+                $v = (is_string($c) && mb_check_encoding($c, 'UTF-8')) ? $c : '';
+            }
+            $v = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $v);
+            if (mb_strlen($v) > 300) $v = mb_substr($v, 0, 300) . '…';
+            return $v;
+        };
+        // 윈도우 XP 태그(제목·태그·설명·만든 이·주제)는 UCS-2LE 문자열
+        $xp = function ($v) {
+            if (!is_string($v) || $v === '') return '';
+            if (strlen($v) % 2) $v .= "\0";
+            $u = @mb_convert_encoding($v, 'UTF-8', 'UCS-2LE');
+            if (!is_string($u)) return '';
+            $u = trim(preg_replace('/[\x00-\x1F\x7F]/u', '', $u));
+            return mb_strlen($u) > 300 ? mb_substr($u, 0, 300) . '…' : $u;
+        };
+        $rat = function ($v) {
+            if (is_array($v)) $v = reset($v);
+            if (is_int($v) || is_float($v)) return (float)$v;
+            if (!is_string($v)) return null;
+            $v = trim($v);
+            if (strpos($v, '/') === false) return is_numeric($v) ? (float)$v : null;
+            [$n, $q] = array_pad(explode('/', $v, 2), 2, '1');
+            if (!is_numeric($n) || !is_numeric($q) || (float)$q == 0.0) return null;
+            return (float)$n / (float)$q;
+        };
+        $int = function ($v) { if (is_array($v)) $v = reset($v); return (is_int($v) || (is_string($v) && ctype_digit(trim($v)))) ? (int)$v : null; };
+        // 소수점 아래 0 만 지운다(정수 300 의 끝 0 을 지우지 않게 — 소수 자리 0 이면 그대로)
+        $num = function (float $f, int $dec = 1) { $t = number_format($f, $dec, '.', ''); return strpos($t, '.') === false ? $t : rtrim(rtrim($t, '0'), '.'); };
+        $map = function ($code, array $tbl) use ($int) { $c = $int($code); return ($c !== null && isset($tbl[$c])) ? $tbl[$c] : ''; };
+        $dt = function ($v) use ($str) {
+            $v = $str($v);
+            if (!preg_match('/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/', $v, $m) || $m[1] === '0000') return '';
+            return "$m[1]-$m[2]-$m[3] $m[4]:$m[5]" . (isset($m[6]) && $m[6] !== '' ? ":$m[6]" : '');
+        };
+        $groups = [];
+        $add = function (string $title, array $rows) use (&$groups) {
+            $rows = array_values(array_filter($rows, function ($r) { return isset($r['v']) && $r['v'] !== '' && $r['v'] !== null; }));
+            if ($rows) $groups[] = ['title' => $title, 'rows' => $rows];
+        };
+        $r = function (string $k, $v) { return ['k' => $k, 'v' => (string)$v]; };
+
+        // ── 설명 ──
+        $title = $xp($ifd0['Title'] ?? '') ?: $str($ifd0['ImageDescription'] ?? '');
+        $comment = $xp($ifd0['Comments'] ?? '');
+        if ($comment === '') {
+            $uc = $str($comp['UserComment'] ?? '');
+            $comment = $uc;
+        }
+        $rating = $int($get($ifd0, ['Rating', 'UndefinedTag:0x4746']));
+        $add(__('exif_g_desc', '설명'), [
+            $r(__('exif_d_title', '제목'), $title),
+            $r(__('exif_d_subject', '주제'), $xp($ifd0['Subject'] ?? '')),
+            $r(__('exif_d_rating', '등급'), ($rating !== null && $rating >= 1 && $rating <= 5) ? str_repeat('★', $rating) . str_repeat('☆', 5 - $rating) : ''),
+            $r(__('exif_d_tags', '태그'), $xp($ifd0['Keywords'] ?? '')),
+            $r(__('exif_d_comment', '메모'), $comment),
+        ]);
+
+        // ── 원본 ──
+        $taken = $dt($exif['DateTimeOriginal'] ?? '') ?: $dt($ifd0['DateTime'] ?? '');
+        if ($taken !== '') {
+            $off = $str($get($exif, ['OffsetTimeOriginal', 'UndefinedTag:0x9011']) ?? '');
+            if (preg_match('/^[+-]\d{2}:\d{2}$/', $off)) $taken .= ' (UTC' . $off . ')';
+        }
+        $author = $xp($ifd0['Author'] ?? '') ?: $str($ifd0['Artist'] ?? '');
+        $add(__('exif_g_origin', '원본'), [
+            $r(__('exif_d_author', '만든 이'), $author),
+            $r(__('exif_d_taken', '찍은 날짜'), $taken),
+            $r(__('exif_d_software', '프로그램 이름'), $str($ifd0['Software'] ?? '')),
+            $r(__('exif_d_copyright', '저작권'), $str($ifd0['Copyright'] ?? '')),
+        ]);
+
+        // ── 이미지 ──
+        $gi = @getimagesize($localPath);
+        $w = is_array($gi) && $gi[0] ? (int)$gi[0] : $int($get($exif, ['ExifImageWidth']) ?? $comp['Width'] ?? null);
+        $h = is_array($gi) && $gi[1] ? (int)$gi[1] : $int($get($exif, ['ExifImageLength']) ?? $comp['Height'] ?? null);
+        $unit = $int($ifd0['ResolutionUnit'] ?? null);
+        $resTxt = function ($v) use ($rat, $num, $unit) {
+            $f = $rat($v);
+            if ($f === null || $f <= 0) return '';
+            return $num($f, 2) . ($unit === 3 ? ' ' . __('exif_v_ppcm', '픽셀/cm') : ' dpi');
+        };
+        // ★ (2026-10-07) EXIF 에 해상도가 없으면 그림 파일 자체(JFIF·pHYs·BMP 머리)의 값 — EXIF 없는 이미지도 윈도우처럼
+        $fp = $this->imageFileProps($localPath);
+        $xRes = $resTxt($ifd0['XResolution'] ?? null); $yRes = $resTxt($ifd0['YResolution'] ?? null);
+        if ($xRes === '' && $fp['xdpi'] !== null) $xRes = $num($fp['xdpi'], 0) . ' dpi';
+        if ($yRes === '' && $fp['ydpi'] !== null) $yRes = $num($fp['ydpi'], 0) . ' dpi';
+        $bits = '';
+        // 비트 수준 = 채널당 비트 × 채널 수(JPEG 컬러 8×3=24). PNG·BMP·WebP·GIF 는 파일 머리에서 읽은 값.
+        //   GIF 는 getimagesize 가 채널 3 을 주지만 실제는 색상표 비트라 곱하지 않는다(윈도우도 8).
+        if (is_array($gi) && !empty($gi['bits']) && !empty($gi['channels']) && ($gi[2] ?? 0) !== IMAGETYPE_GIF) {
+            $bits = (string)((int)$gi['bits'] * (int)$gi['channels']);
+        } elseif ($fp['bits'] !== null) {
+            $bits = (string)$fp['bits'];
+        }
+        $px = __('exif_v_px', '픽셀');
+        $add(__('exif_g_image', '이미지'), [
+            $r(__('exif_d_imageid', '이미지 ID'), $str($exif['ImageUniqueID'] ?? '')),
+            $r(__('exif_d_dimensions', '사진 크기'), ($w && $h) ? "$w × $h" : ''),
+            $r(__('exif_d_width', '너비'), $w ? "$w $px" : ''),
+            $r(__('exif_d_height', '높이'), $h ? "$h $px" : ''),
+            $r(__('exif_d_xres', '수평 해상도'), $xRes),
+            $r(__('exif_d_yres', '수직 해상도'), $yRes),
+            $r(__('exif_d_bitdepth', '비트 수준'), $bits),
+            $r(__('exif_d_colorspace', '색 표현'), $map($exif['ColorSpace'] ?? null, [1 => 'sRGB', 2 => 'Adobe RGB', 65535 => __('exif_v_uncal', '보정 안 됨')])),
+            $r(__('exif_d_orientation', '방향'), $map($ifd0['Orientation'] ?? null, [
+                1 => __('exif_v_or1', '기본'), 2 => __('exif_v_or2', '좌우 반전'), 3 => __('exif_v_or3', '180° 회전'),
+                4 => __('exif_v_or4', '상하 반전'), 5 => __('exif_v_or5', '좌우 반전 후 시계 반대 방향 90° 회전'),
+                6 => __('exif_v_or6', '시계 방향 90° 회전'), 7 => __('exif_v_or7', '좌우 반전 후 시계 방향 90° 회전'),
+                8 => __('exif_v_or8', '시계 반대 방향 90° 회전')])),
+        ]);
+
+        // ── 카메라 ──
+        $fn = $rat($exif['FNumber'] ?? null);
+        $et = $rat($exif['ExposureTime'] ?? null);
+        $sec = __('exif_s_sec', '초');
+        $etTxt = '';
+        if ($et !== null && $et > 0) $etTxt = $et < 1 ? ('1/' . (int)round(1 / $et) . $sec) : ($num($et) . $sec);
+        $iso = $int($get($exif, ['ISOSpeedRatings', 'PhotographicSensitivity']));
+        $eb = $rat($exif['ExposureBiasValue'] ?? null);
+        $ebTxt = $eb !== null ? (($eb > 0 ? '+' : '') . $num($eb) . ' EV') : '';
+        $fl = $rat($exif['FocalLength'] ?? null);
+        $ma = $rat($exif['MaxApertureValue'] ?? null);
+        $sd = $exif['SubjectDistance'] ?? null;
+        $sdTxt = '';
+        if (is_string($sd) && preg_match('/^(\d+)\/(\d+)$/', trim($sd), $m)) {
+            if ($m[1] === '4294967295') $sdTxt = __('exif_v_inf', '무한대');
+            elseif ((int)$m[2] > 0 && (int)$m[1] > 0) $sdTxt = $num((int)$m[1] / (int)$m[2], 2) . ' m';
+        }
+        $flash = $int($exif['Flash'] ?? null);
+        $flashTxt = '';
+        if ($flash !== null) {
+            if ($flash & 0x20) $flashTxt = __('exif_v_flash_none', '플래시 기능 없음');
+            else {
+                $parts = [($flash & 1) ? __('exif_v_flash_on', '발광함') : __('exif_v_flash_off', '발광 안 함')];
+                $mode = ($flash >> 3) & 3;
+                if ($mode === 1) $parts[] = __('exif_v_flash_forced', '강제');
+                elseif ($mode === 2) $parts[] = __('exif_v_flash_suppress', '발광 금지');
+                elseif ($mode === 3) $parts[] = __('exif_v_flash_auto', '자동');
+                if ($flash & 0x40) $parts[] = __('exif_v_flash_redeye', '적목 감소');
+                $flashTxt = implode(', ', $parts);
+            }
+        }
+        $fl35 = $int($exif['FocalLengthIn35mmFilm'] ?? null);
+        $add(__('exif_g_camera', '카메라'), [
+            $r(__('exif_d_make', '카메라 제조업체'), $str($ifd0['Make'] ?? '')),
+            $r(__('exif_d_model', '카메라 모델'), $str($ifd0['Model'] ?? '')),
+            $r(__('exif_d_fstop', 'F-스톱'), ($fn !== null && $fn > 0) ? 'f/' . $num($fn) : ''),
+            $r(__('exif_d_exposure', '노출 시간'), $etTxt),
+            $r(__('exif_d_iso', 'ISO 감도'), $iso ? 'ISO-' . $iso : ''),
+            $r(__('exif_d_bias', '노출 보정'), $ebTxt),
+            $r(__('exif_d_focal', '초점 거리'), ($fl !== null && $fl > 0) ? $num($fl) . ' mm' : ''),
+            $r(__('exif_d_maxap', '최대 조리개'), ($ma !== null && $ma >= 0 && $ma < 40) ? 'f/' . $num(pow(2, $ma / 2)) : ''),
+            $r(__('exif_d_metering', '측광 모드'), $map($exif['MeteringMode'] ?? null, [
+                0 => __('exif_v_unknown', '알 수 없음'), 1 => __('exif_v_mm1', '평균'), 2 => __('exif_v_mm2', '중앙 중점 평균'),
+                3 => __('exif_v_mm3', '스폿'), 4 => __('exif_v_mm4', '다중 스폿'), 5 => __('exif_v_mm5', '패턴(평가)'),
+                6 => __('exif_v_mm6', '부분'), 255 => __('exif_v_other', '기타')])),
+            $r(__('exif_d_subjdist', '대상 거리'), $sdTxt),
+            $r(__('exif_d_flash', '플래시 모드'), $flashTxt),
+            $r(__('exif_d_fl35', '35mm 초점 거리'), $fl35 ? $fl35 . ' mm' : ''),
+        ]);
+
+        // ── 고급 사진 ──
+        $nhs = [0 => __('exif_v_normal', '보통'), 1 => __('exif_v_soft', '부드럽게'), 2 => __('exif_v_hard', '강하게')];
+        $bv = $rat($exif['BrightnessValue'] ?? null);
+        $dz = $rat($exif['DigitalZoomRatio'] ?? null);
+        $add(__('exif_g_advanced', '고급 사진'), [
+            $r(__('exif_d_lensmake', '렌즈 제조업체'), $str($get($exif, ['LensMake', 'UndefinedTag:0xA433']) ?? '')),
+            $r(__('exif_d_lensmodel', '렌즈 모델'), $str($get($exif, ['LensModel', 'UndefinedTag:0xA434']) ?? '')),
+            $r(__('exif_d_serial', '카메라 일련 번호'), $str($get($exif, ['BodySerialNumber', 'UndefinedTag:0xA431']) ?? '')),
+            $r(__('exif_d_contrast', '대비'), $map($exif['Contrast'] ?? null, $nhs)),
+            $r(__('exif_d_brightness', '밝기'), $bv !== null ? $num($bv, 2) : ''),
+            $r(__('exif_d_light', '광원'), $map($exif['LightSource'] ?? null, [
+                0 => __('exif_v_unknown', '알 수 없음'), 1 => __('exif_v_ls1', '일광'), 2 => __('exif_v_ls2', '형광등'),
+                3 => __('exif_v_ls3', '텅스텐(백열등)'), 4 => __('exif_v_ls4', '플래시'), 9 => __('exif_v_ls9', '맑은 날'),
+                10 => __('exif_v_ls10', '흐린 날'), 11 => __('exif_v_ls11', '그늘'), 12 => __('exif_v_ls2', '형광등') . ' (D)',
+                13 => __('exif_v_ls2', '형광등') . ' (N)', 14 => __('exif_v_ls2', '형광등') . ' (W)', 15 => __('exif_v_ls2', '형광등') . ' (WW)',
+                16 => __('exif_v_ls2', '형광등') . ' (L)', 17 => __('exif_v_lsstd', '표준 광원') . ' A', 18 => __('exif_v_lsstd', '표준 광원') . ' B',
+                19 => __('exif_v_lsstd', '표준 광원') . ' C', 20 => 'D55', 21 => 'D65', 22 => 'D75', 23 => 'D50',
+                24 => __('exif_v_ls24', 'ISO 스튜디오 텅스텐'), 255 => __('exif_v_other', '기타')])),
+            $r(__('exif_d_program', '노출 프로그램'), $map($exif['ExposureProgram'] ?? null, [
+                1 => __('exif_v_ep1', '수동'), 2 => __('exif_v_ep2', '일반'), 3 => __('exif_v_ep3', '조리개 우선'),
+                4 => __('exif_v_ep4', '셔터 우선'), 5 => __('exif_v_ep5', '창작(피사계 심도 우선)'), 6 => __('exif_v_ep6', '동작(셔터 속도 우선)'),
+                7 => __('exif_v_ep7', '인물 사진'), 8 => __('exif_v_ep8', '풍경 사진')])),
+            $r(__('exif_d_saturation', '채도'), $map($exif['Saturation'] ?? null, [0 => __('exif_v_normal', '보통'), 1 => __('exif_v_low', '낮게'), 2 => __('exif_v_high', '높게')])),
+            $r(__('exif_d_sharpness', '선명도'), $map($exif['Sharpness'] ?? null, $nhs)),
+            $r(__('exif_d_wb', '화이트 밸런스'), $map($exif['WhiteBalance'] ?? null, [0 => __('exif_v_auto', '자동'), 1 => __('exif_v_manual', '수동')])),
+            $r(__('exif_d_zoom', '디지털 확대/축소'), ($dz !== null && $dz > 0) ? $num($dz, 2) . '×' : ''),
+        ]);
+
+        // ── GPS ──
+        $dms = function ($v) use ($rat) {
+            if (is_string($v)) $v = array_map('trim', explode(',', $v));
+            if (!is_array($v) || count($v) < 3) return null;
+            $v = array_values($v);
+            $a = $rat($v[0]); $b = $rat($v[1]); $c = $rat($v[2]);
+            if ($a === null || $b === null || $c === null) return null;
+            return $a + $b / 60 + $c / 3600;
+        };
+        $fmtDms = function (float $x, string $ref) use ($num) {
+            $deg = (int)floor($x); $mf = ($x - $deg) * 60; $mi = (int)floor($mf); $s = ($mf - $mi) * 60;
+            return $deg . '° ' . $mi . '′ ' . $num($s, 2) . '″ ' . $ref;
+        };
+        $rows = [];
+        $lat = $dms($gps['GPSLatitude'] ?? null); $lon = $dms($gps['GPSLongitude'] ?? null);
+        if ($lat !== null && $lon !== null && $lat <= 90 && $lon <= 180) {
+            $latRef = strtoupper($str($gps['GPSLatitudeRef'] ?? 'N')) === 'S' ? 'S' : 'N';
+            $lonRef = strtoupper($str($gps['GPSLongitudeRef'] ?? 'E')) === 'W' ? 'W' : 'E';
+            $rows[] = $r(__('exif_d_lat', '위도'), $fmtDms($lat, $latRef));
+            $rows[] = $r(__('exif_d_lon', '경도'), $fmtDms($lon, $lonRef));
+            $sLat = ($latRef === 'S' ? -$lat : $lat); $sLon = ($lonRef === 'W' ? -$lon : $lon);
+            $coords = number_format($sLat, 6, '.', '') . ', ' . number_format($sLon, 6, '.', '');
+            $rows[] = ['k' => __('exif_d_coords', '좌표'), 'v' => $coords, 'map' => $coords];
+        }
+        $alt = $rat($gps['GPSAltitude'] ?? null);
+        if ($alt !== null) {
+            $below = $int($gps['GPSAltitudeRef'] ?? null) === 1 || (is_string($gps['GPSAltitudeRef'] ?? null) && ($gps['GPSAltitudeRef'] === "\x01"));
+            $rows[] = $r(__('exif_d_alt', '고도'), ($below ? '-' : '') . $num($alt) . ' m');
+        }
+        $dir = $rat($gps['GPSImgDirection'] ?? null);
+        if ($dir !== null && $dir >= 0 && $dir <= 360) $rows[] = $r(__('exif_d_dir', '촬영 방향'), $num($dir) . '°');
+        $add('GPS', $rows);
+
+        return $groups;
     }
 
     /**
@@ -10081,6 +11774,492 @@ class FileManager {
         }
 
         return $out;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // ★ (2026-10-07) 동영상 정보 — 플레이어 ⓘ 버튼·상세 정보 창 (펜닐 요청: 팟플레이어·MediaInfo 처럼)
+    //   [방식] ffprobe 의 JSON(-show_format -show_streams -show_chapters)을 읽어 MediaInfo 와 같은 묶음
+    //   (일반·비디오·오디오·자막·챕터·첨부)으로, 코드값은 사람이 읽는 말로 바꿔 돌려준다. 화면은 그대로 그리기만.
+    //   ffprobe 가 없고 ffmpeg 만 있으면 'ffmpeg -i' 글자 출력에서 간단히(코덱·해상도·fps·비트레이트).
+    //   [안전] 읽기 권한·경로 확인은 getMediaInfo 와 같고, 원격 저장소(FTP·WebDAV·S3)는 하지 않는다(SMB 는 됨).
+    //   외부 프로그램은 시간 제한(20초)·출력 상한(8MB)을 두고 실행한다 — 색인 없는 파일이 오래 걸려도 요청이 묶이지 않게.
+    //   파일 안의 글자(제목·태그)는 그대로 넘기고 화면이 글자로(escape) 넣는다.
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /** ffprobe 실행 파일만 찾는다(없으면 ''). 설정 → ffmpeg 설정 경로 옆 → 패키지 → PATH 순. */
+    private function findFfprobeOnly(): string {
+        $settings = $this->db->load('settings');
+        $ts = $settings['thumbnails'] ?? [];
+        $p = trim((string)($ts['ffprobe_path'] ?? ''));
+        if ($p !== '' && @is_executable($p) && stripos(basename($p), 'ffprobe') !== false) return $p;
+        $m = trim((string)($ts['ffmpeg_path'] ?? ''));
+        if ($m !== '') {
+            $dir = dirname($m);
+            foreach (['ffprobe.exe', 'ffprobe'] as $n) {
+                $c = $dir . DIRECTORY_SEPARATOR . $n;
+                if (@is_file($c) && @is_executable($c)) return $c;
+            }
+        }
+        // ★ (2026-10-07) 자동 찾기(패키지·PATH)는 프로그램을 실행해 봐야 해서 요청마다 하면 느리다(윈도우는 수십~수백 ms) →
+        //   결과를 data/ffprobe_lookup.json 에 잠깐 기억한다(찾음 10분 · 못 찾음 1분 — 새로 설치하면 곧 반영). 설정의 경로를 바꾸면
+        //   열쇠가 달라져 바로 다시 찾는다. 기억한 경로가 사라졌으면(절대 경로인데 파일 없음) 다시 찾는다. 기록 실패는 무시(그냥 매번 찾음).
+        $cacheFile = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/ffprobe_lookup.json';
+        $key = md5($p . '|' . $m . '|' . PHP_OS_FAMILY);
+        $c = @json_decode((string)@file_get_contents($cacheFile), true);
+        if (is_array($c) && ($c['key'] ?? '') === $key && isset($c['bin'], $c['at']) && is_string($c['bin'])) {
+            $age = time() - (int)$c['at'];
+            $ttl = $c['bin'] === '' ? 60 : 600;
+            $stillThere = $c['bin'] === '' || $c['bin'] === 'ffprobe' || @is_file($c['bin']);
+            if ($age >= 0 && $age < $ttl && $stillThere) return $c['bin'];
+        }
+        $found = '';
+        foreach ($this->findVersionedBins('ffprobe') as $cand) {
+            $out = @shell_exec(escapeshellarg($cand) . ' -version 2>&1');
+            if ($out && strpos($out, 'version') !== false) { $found = $cand; break; }
+        }
+        if ($found === '') {
+            $out = @shell_exec('ffprobe -version 2>&1');
+            if ($out && stripos($out, 'ffprobe version') !== false) $found = 'ffprobe';
+        }
+        @file_put_contents($cacheFile, json_encode(['key' => $key, 'bin' => $found, 'at' => time()]), LOCK_EX);
+        return $found;
+    }
+
+    /**
+     * 명령 실행(시간 제한·출력 상한). 출력은 임시 파일로 받는다 — 윈도우는 proc_open 파이프에 stream_select 를
+     * 쓸 수 없어(PHP 문서: false 반환) 파이프 방식으로는 시간 제한을 걸 수 없기 때문. proc_get_status 로 끝났는지 보고,
+     * 시간이 지나면 proc_terminate. proc_open 이 막힌 서버는 shell_exec(제한 없음 — 종전 media_info 와 같음).
+     * 명령은 **배열**(PHP 7.4+)로 넘겨 셸을 거치지 않는다 — 셸(sh·cmd.exe)을 거치면 시간 초과 때 셸만 죽고 ffprobe 는
+     * 계속 돌았다(시험에서 확인). 배열 방식은 인자 따옴표 처리도 PHP 가 해 주고, 윈도우에선 한글 경로도 그대로(CreateProcessW).
+     */
+    private function runCmdLimited(array $argv, int $timeout, int $maxBytes): array {
+        $dis = array_map('trim', explode(',', (string)@ini_get('disable_functions')));
+        if (!function_exists('proc_open') || in_array('proc_open', $dis, true) || !function_exists('proc_get_status')) {
+            return $this->runCmdShellFallback($argv, $maxBytes);
+        }
+        $tmpDir = sys_get_temp_dir();
+        $fo = @tempnam($tmpDir, 'fsvi'); $fe = @tempnam($tmpDir, 'fsve');
+        if (!$fo || !$fe) {   // 임시 폴더를 쓸 수 없으면 종전 방식(shell_exec — 시간 제한 없음)
+            if ($fo) @unlink($fo); if ($fe) @unlink($fe);
+            return $this->runCmdShellFallback($argv, $maxBytes);
+        }
+        $timedOut = false;
+        try {
+            $proc = @proc_open($argv, [0 => ['pipe', 'r'], 1 => ['file', $fo, 'w'], 2 => ['file', $fe, 'w']], $pipes);
+            if (!is_resource($proc)) return ['out' => '', 'err' => '', 'timeout' => false];
+            if (isset($pipes[0])) fclose($pipes[0]);
+            $t0 = microtime(true);
+            while (true) {
+                $stt = @proc_get_status($proc);
+                if (!$stt || empty($stt['running'])) break;
+                clearstatcache(true, $fo);
+                if (microtime(true) - $t0 > $timeout || (int)@filesize($fo) > $maxBytes) { $timedOut = true; @proc_terminate($proc, 9); break; }
+                usleep(30000);
+            }
+            @proc_close($proc);
+            $out = (string)@file_get_contents($fo, false, null, 0, $maxBytes + 1);
+            $err = (string)@file_get_contents($fe, false, null, 0, 262144);
+            if (strlen($out) > $maxBytes) $timedOut = true;
+            return ['out' => $out, 'err' => $err, 'timeout' => $timedOut];
+        } finally {
+            @unlink($fo); @unlink($fe);
+        }
+    }
+
+    /**
+     * 예비 실행(shell_exec) — proc_open 이 막혔거나 임시 폴더를 못 쓸 때만. ★ (2026-10-07) 윈도우의 escapeshellarg 는
+     *   % ! " 를 공백으로 바꿔 **다른 파일 이름**이 되므로, 그런 글자가 든 인자는 실행하지 않고 이유를 돌려준다(엉뚱한 파일을 읽지 않게).
+     */
+    private function runCmdShellFallback(array $argv, int $maxBytes): array {
+        if (PHP_OS_FAMILY === 'Windows') {
+            foreach ($argv as $a) {
+                if (strpbrk((string)$a, '%!"') !== false) return ['out' => '', 'err' => '', 'timeout' => false, 'badname' => true];
+            }
+        }
+        $o = @shell_exec(implode(' ', array_map('escapeshellarg', $argv)) . ' 2>&1');
+        return ['out' => is_string($o) ? substr($o, 0, $maxBytes) : '', 'err' => '', 'timeout' => false];
+    }
+
+    public function getVideoDetails(int $storageId, string $relativePath): array {
+        if ($relativePath === '') return ['success' => false, 'error' => 'Path required'];
+        if (!$this->storage->checkPermission($storageId, 'can_read')) return ['success' => false, 'error' => 'Permission denied'];
+        $ext = strtolower(pathinfo($relativePath, PATHINFO_EXTENSION));
+        if (!in_array($ext, PREVIEW_EXTENSIONS['video'] ?? [], true)) {
+            return ['success' => true, 'supported' => false, 'note' => 'not video'];
+        }
+        $st = $this->storage->getStorageById($storageId);
+        if (!$st) return ['success' => false, 'error' => 'Storage not found'];
+        $stType = $st['storage_type'] ?? 'local';
+        if (in_array($stType, self::REMOTE_TYPES) && $stType !== 'smb') {
+            return ['success' => true, 'supported' => false, 'note' => 'remote storage'];
+        }
+        $basePath = $this->storage->getRealPath($storageId);
+        if (!$basePath) return ['success' => false, 'error' => 'Storage not found'];
+        $fullPath = $this->buildPath($basePath, $relativePath);
+        if (!$this->isPathSafe($basePath, $fullPath) || !is_file($fullPath)) return ['success' => false, 'error' => 'File not found'];
+        $fileSize = (int)@filesize($fullPath);
+
+        $probe = $this->findFfprobeOnly();
+        if ($probe !== '') {
+            // string_validation=ignore — ffprobe 가 UTF-8 이 아닌 글자를 '�' 로 바꿔 버리지 않게(옛 파일의 CP949 제목을 아래에서 살린다)
+            $r = $this->runCmdLimited([$probe, '-v', 'error', '-hide_banner', '-print_format', 'json=string_validation=ignore', '-show_format', '-show_streams', '-show_chapters', '-i', $fullPath], 20, 8 * 1048576);
+            // 옛 AVI·MKV 의 제목 등이 CP949 로 저장돼 있으면 출력이 UTF-8 이 아니어서 JSON 해석이 통째로 실패한다 →
+            //   CP949 로 바꿔 보고(구조 글자는 ASCII 라 안전), 그래도 안 되면 깨진 글자만 대체 문자로.
+            //   글자열 하나씩 본다 — 파일 전체를 바꾸면 이미 UTF-8 인 다른 글자가 깨진다. JSON 의 따옴표·역슬래시는 ASCII 라 바이트로 잘라도 안전.
+            $raw = $r['out'];
+            if ($raw !== '' && !mb_check_encoding($raw, 'UTF-8')) {
+                $fixed = preg_replace_callback('/"((?:[^"\\\\]|\\\\.)*)"/s', function ($m) {
+                    if (mb_check_encoding($m[1], 'UTF-8')) return $m[0];
+                    $cv = @mb_convert_encoding($m[1], 'UTF-8', 'CP949');
+                    if (!is_string($cv) || !mb_check_encoding($cv, 'UTF-8')) $cv = mb_convert_encoding($m[1], 'UTF-8', 'UTF-8');
+                    return '"' . $cv . '"';
+                }, $raw);
+                if (is_string($fixed)) $raw = $fixed;
+            }
+            $j = $r['timeout'] ? null : json_decode($raw, true, 512, JSON_INVALID_UTF8_SUBSTITUTE);
+            if (is_array($j) && (isset($j['format']) || !empty($j['streams']))) {
+                $groups = [];
+                try { $groups = $this->buildVideoGroups($j, $fileSize, $ext); } catch (\Throwable $e) { $groups = []; }
+                if ($groups) return ['success' => true, 'supported' => true, 'tool' => 'ffprobe', 'groups' => $groups];
+            }
+            if ($r['timeout']) return ['success' => false, 'error' => __('vi_timeout', '정보를 읽는 데 너무 오래 걸려 멈췄습니다.')];
+            if (!empty($r['badname'])) return ['success' => false, 'error' => __('vi_badname', '이 서버 설정(proc_open 꺼짐)에서는 파일 이름에 % ! " 가 있으면 읽을 수 없습니다.')];
+        }
+        // ffprobe 가 없거나 읽지 못함 → ffmpeg -i 글자 출력(간단 정보)
+        $bin = $probe === '' ? $this->findProbeBin() : '';
+        if ($bin === '' && $probe === '') return ['success' => false, 'error' => __('vi_no_ffprobe', 'ffprobe(또는 ffmpeg)가 없어 동영상 정보를 읽을 수 없습니다.')];
+        if ($bin === '') return ['success' => false, 'error' => __('vi_unreadable', '동영상 정보를 읽지 못했습니다(손상되었거나 지원하지 않는 형식).')];
+        $r = $this->runCmdLimited([$bin, '-hide_banner', '-i', $fullPath], 20, 1048576);
+        if (!empty($r['badname'])) return ['success' => false, 'error' => __('vi_badname', '이 서버 설정(proc_open 꺼짐)에서는 파일 이름에 % ! " 가 있으면 읽을 수 없습니다.')];
+        $txt = $r['out'] . "\n" . $r['err'];
+        $txt = function_exists('shellOutToUtf8') ? shellOutToUtf8($txt) : $txt;   // api.php 의 공용 도우미(윈도우 CP949 출력)
+        $groups = $this->buildVideoGroupsFromText($txt, $fileSize);
+        if (!$groups) return ['success' => false, 'error' => __('vi_unreadable', '동영상 정보를 읽지 못했습니다(손상되었거나 지원하지 않는 형식).')];
+        return ['success' => true, 'supported' => true, 'tool' => 'ffmpeg', 'groups' => $groups,
+                'note' => __('vi_basic_only', 'ffprobe 가 없어 간단한 정보만 표시합니다(시스템 설정 → 서버 환경에서 ffprobe 경로 지정).')];
+    }
+
+    /** ffprobe JSON → 묶음 [['title'=>..,'rows'=>[['k'=>..,'v'=>..,('map'=>..)],..]],..] */
+    private function buildVideoGroups(array $j, int $fileSize, string $ext): array {
+        $fmt = is_array($j['format'] ?? null) ? $j['format'] : [];
+        $streams = is_array($j['streams'] ?? null) ? $j['streams'] : [];
+        $chapters = is_array($j['chapters'] ?? null) ? $j['chapters'] : [];
+        $str = function ($v): string {
+            if (!is_scalar($v)) return '';
+            $v = trim(str_replace("\0", '', (string)$v));
+            if ($v !== '' && !mb_check_encoding($v, 'UTF-8')) $v = (string)@mb_convert_encoding($v, 'UTF-8', 'CP949');
+            $v = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $v);
+            return mb_strlen($v) > 300 ? mb_substr($v, 0, 300) . '…' : $v;
+        };
+        $tag = function (array $s, array $keys) use ($str): string {
+            $t = is_array($s['tags'] ?? null) ? $s['tags'] : [];
+            $lower = [];
+            foreach ($t as $k => $v) $lower[strtolower((string)$k)] = $v;
+            foreach ($keys as $k) { $v = $lower[strtolower($k)] ?? null; if ($v !== null && $str($v) !== '') return $str($v); }
+            return '';
+        };
+        $num = function (float $f, int $dec = 2): string { $t = number_format($f, $dec, '.', ''); return strpos($t, '.') === false ? $t : rtrim(rtrim($t, '0'), '.'); };
+        $frac = function ($v): ?float {
+            if (!is_string($v) || !preg_match('#^(\d+)/(\d+)$#', $v, $m) || (int)$m[2] === 0) return null;
+            return (int)$m[1] / (int)$m[2];
+        };
+        $dur = function ($sec): string {
+            if (!is_numeric($sec) || $sec < 0) return '';
+            $sec = (float)$sec; $h = (int)floor($sec / 3600); $m = (int)floor(fmod($sec, 3600) / 60); $s = fmod($sec, 60);
+            return sprintf('%02d:%02d:%06.3f', $h, $m, $s);
+        };
+        $kbps = function ($bps) use ($num): string {
+            if (!is_numeric($bps) || (float)$bps <= 0) return '';
+            $k = (float)$bps / 1000;
+            return $k >= 10000 ? $num($k / 1000, 1) . ' Mb/s' : number_format($k, 0) . ' kb/s';
+        };
+        $size = function ($b): string {
+            if (!is_numeric($b) || $b <= 0) return '';
+            return $this->formatSize((int)$b) . ' (' . number_format((int)$b) . ' ' . __('vi_bytes', '바이트') . ')';
+        };
+        $langName = function (string $code) use ($str): string {
+            $c = strtolower($str($code));
+            if ($c === '' || $c === 'und' || $c === 'unk') return '';
+            $map = ['kor' => 'vlang_ko', 'ko' => 'vlang_ko', 'eng' => 'vlang_en', 'en' => 'vlang_en', 'jpn' => 'vlang_ja', 'ja' => 'vlang_ja',
+                    'chi' => 'vlang_zh', 'zho' => 'vlang_zh', 'zh' => 'vlang_zh', 'spa' => 'vlang_es', 'es' => 'vlang_es', 'fre' => 'vlang_fr', 'fra' => 'vlang_fr', 'fr' => 'vlang_fr',
+                    'ger' => 'vlang_de', 'deu' => 'vlang_de', 'de' => 'vlang_de', 'ita' => 'vlang_it', 'it' => 'vlang_it', 'rus' => 'vlang_ru', 'ru' => 'vlang_ru',
+                    'por' => 'vlang_pt', 'pt' => 'vlang_pt', 'tha' => 'vlang_th', 'th' => 'vlang_th', 'vie' => 'vlang_vi', 'vi' => 'vlang_vi'];
+            $def = ['vlang_ko' => '한국어', 'vlang_en' => '영어', 'vlang_ja' => '일본어', 'vlang_zh' => '중국어', 'vlang_es' => '스페인어', 'vlang_fr' => '프랑스어',
+                    'vlang_de' => '독일어', 'vlang_it' => '이탈리아어', 'vlang_ru' => '러시아어', 'vlang_pt' => '포르투갈어', 'vlang_th' => '태국어', 'vlang_vi' => '베트남어'];
+            return isset($map[$c]) ? __($map[$c], $def[$map[$c]]) . ' (' . $c . ')' : $c;
+        };
+        $disp = function (array $s): string {
+            $d = is_array($s['disposition'] ?? null) ? $s['disposition'] : [];
+            $o = [];
+            if (!empty($d['default'])) $o[] = __('vi_default', '기본');
+            if (!empty($d['forced'])) $o[] = __('vi_forced', '강제');
+            if (!empty($d['hearing_impaired'])) $o[] = __('vi_hi', '청각장애인용');
+            if (!empty($d['visual_impaired'])) $o[] = __('vi_vi', '화면 해설');
+            if (!empty($d['comment'])) $o[] = __('vi_comment', '해설');
+            return implode(', ', $o);
+        };
+        $groups = [];
+        $add = function (string $title, array $rows) use (&$groups) {
+            $rows = array_values(array_filter($rows, function ($r) { return isset($r['v']) && $r['v'] !== ''; }));
+            if ($rows) $groups[] = ['title' => $title, 'rows' => $rows];
+        };
+        $r = function (string $k, $v) { return ['k' => $k, 'v' => (string)$v]; };
+
+        // ── 일반 ──
+        $fname = strtolower((string)($fmt['format_name'] ?? ''));
+        $brand = strtolower(trim($tag($fmt, ['major_brand'])));
+        if (strpos($fname, 'mov') !== false || strpos($fname, 'mp4') !== false) {
+            $container = $brand === 'qt' ? 'QuickTime (MOV)' : (strpos($brand, '3g') === 0 ? '3GPP' : ($brand === 'm4v' ? 'MPEG-4 (M4V)' : 'MPEG-4 (MP4)'));
+            if ($brand !== '') $container .= ' — ' . $brand;
+        } elseif (strpos($fname, 'matroska') !== false) {
+            $container = $ext === 'webm' ? 'WebM' : 'Matroska (MKV)';
+        } else {
+            $known = ['mpegts' => 'MPEG-TS', 'avi' => 'AVI', 'asf' => 'ASF (WMV)', 'flv' => 'Flash Video (FLV)', 'mpeg' => 'MPEG-PS', 'rm' => 'RealMedia', 'ogg' => 'Ogg'];
+            $container = $known[$fname] ?? $str($fmt['format_long_name'] ?? $fname);
+        }
+        $cnt = ['video' => 0, 'audio' => 0, 'subtitle' => 0, 'attachment' => 0, 'data' => 0];
+        foreach ($streams as $s) {
+            if (!is_array($s)) continue;
+            $t = (string)($s['codec_type'] ?? '');
+            if ($t === 'video' && !empty($s['disposition']['attached_pic'])) continue;
+            if (isset($cnt[$t])) $cnt[$t]++;
+        }
+        $parts = [];
+        foreach (['video' => __('vi_video', '비디오'), 'audio' => __('vi_audio', '오디오'), 'subtitle' => __('vi_sub', '자막')] as $k => $lb) if ($cnt[$k]) $parts[] = $lb . ' ' . $cnt[$k];
+        if ($chapters) $parts[] = __('vi_chapters', '챕터') . ' ' . count($chapters);
+        $created = $tag($fmt, ['creation_time', 'date', 'com.apple.quicktime.creationdate']);
+        if ($created !== '') {
+            // 연도만('2005')은 그대로 — strtotime 이 '20시 05분'으로 읽어 오늘 날짜가 된다(검토에서 발견).
+            //   MP4 의 0 값(1904-01-01·1970-01-01)은 '없음'이라 비운다. 그 밖엔 서버 시간대로(파일 값은 보통 UTC).
+            if (preg_match('/^(1904|1970)-01-01/', $created)) $created = '';
+            elseif (!preg_match('/^\d{4}$/', $created)) {
+                $ts = strtotime($created);
+                if ($ts !== false && $ts > 86400) $created = date('Y-m-d H:i:s', $ts);
+            }
+        }
+        $make = trim($tag($fmt, ['com.apple.quicktime.make', 'com.android.manufacturer', 'make']) . ' ' . $tag($fmt, ['com.apple.quicktime.model', 'com.android.model', 'model']));
+        $loc = $tag($fmt, ['com.apple.quicktime.location.iso6709', 'location', 'location-eng']);
+        $gRows = [
+            $r(__('vi_container', '형식'), $container),
+            $r(__('vi_filesize', '파일 크기'), $size($fmt['size'] ?? $fileSize)),
+            $r(__('vi_duration', '길이'), $dur($fmt['duration'] ?? null)),
+            $r(__('vi_total_br', '전체 비트레이트'), $kbps($fmt['bit_rate'] ?? null)),
+            $r(__('vi_streams', '구성'), implode(' · ', $parts)),
+            $r(__('vi_title', '제목'), $tag($fmt, ['title'])),
+            $r(__('vi_artist', '아티스트'), $tag($fmt, ['artist', 'author'])),
+            $r(__('vi_desc', '설명'), $tag($fmt, ['description', 'comment', 'synopsis'])),
+            $r(__('vi_created', '만든 날짜'), $created),
+            $r(__('vi_device', '촬영 기기'), $make),
+            $r(__('vi_device_sw', '기기 소프트웨어'), $tag($fmt, ['com.apple.quicktime.software', 'com.android.version'])),
+            $r(__('vi_encoder', '인코딩 프로그램'), $tag($fmt, ['encoder', 'encoded_by', 'writing_application', 'software'])),
+        ];
+        if ($loc !== '' && preg_match('/^([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)?/', $loc, $m)) {
+            $lat = (float)$m[1]; $lon = (float)$m[2];
+            if (abs($lat) <= 90 && abs($lon) <= 180) {
+                $coords = number_format($lat, 6, '.', '') . ', ' . number_format($lon, 6, '.', '');
+                $gRows[] = ['k' => __('vi_location', '촬영 위치'), 'v' => $coords . (isset($m[3]) && $m[3] !== '' ? ' (' . __('exif_d_alt', '고도') . ' ' . $num((float)$m[3], 1) . ' m)' : ''), 'map' => $coords];
+            }
+        }
+        $add(__('vi_general', '일반'), $gRows);
+
+        // ── 스트림별 ──
+        $vNames = ['h264' => 'H.264 (AVC)', 'hevc' => 'H.265 (HEVC)', 'av1' => 'AV1', 'vp9' => 'VP9', 'vp8' => 'VP8', 'mpeg4' => 'MPEG-4 Part 2',
+                   'mpeg2video' => 'MPEG-2', 'mpeg1video' => 'MPEG-1', 'wmv3' => 'WMV 9', 'wmv2' => 'WMV 8', 'vc1' => 'VC-1', 'prores' => 'Apple ProRes',
+                   'mjpeg' => 'Motion JPEG', 'theora' => 'Theora', 'rv40' => 'RealVideo 4', 'rv30' => 'RealVideo 3', 'flv1' => 'Sorenson Spark (FLV)', 'h263' => 'H.263', 'vvc' => 'H.266 (VVC)'];
+        $aNames = ['aac' => 'AAC', 'mp3' => 'MP3', 'mp2' => 'MPEG Audio Layer 2', 'ac3' => 'Dolby Digital (AC-3)', 'eac3' => 'Dolby Digital Plus (E-AC-3)',
+                   'truehd' => 'Dolby TrueHD', 'dts' => 'DTS', 'flac' => 'FLAC', 'opus' => 'Opus', 'vorbis' => 'Vorbis', 'alac' => 'Apple Lossless (ALAC)',
+                   'wmav2' => 'WMA', 'wmapro' => 'WMA Pro', 'cook' => 'RealAudio (Cook)', 'amr_nb' => 'AMR-NB', 'amr_wb' => 'AMR-WB'];
+        $sNames = ['subrip' => 'SRT (SubRip)', 'ass' => 'ASS (Advanced SubStation)', 'ssa' => 'SSA', 'webvtt' => 'WebVTT', 'mov_text' => __('vi_mov_text', 'MP4 텍스트 (tx3g)'),
+                   'hdmv_pgs_subtitle' => __('vi_pgs', 'PGS (블루레이 그림 자막)'), 'dvd_subtitle' => __('vi_vobsub', 'VobSub (DVD 그림 자막)'), 'dvb_subtitle' => 'DVB',
+                   'eia_608' => 'CEA-608', 'text' => __('vi_text', '텍스트'), 'microdvd' => 'MicroDVD', 'subviewer' => 'SubViewer'];
+        $vi = 0; $ai = 0; $si = 0; $di = 0; $att = [];
+        foreach ($streams as $s) {
+            if (!is_array($s)) continue;
+            $type = (string)($s['codec_type'] ?? '');
+            $cn = strtolower((string)($s['codec_name'] ?? ''));
+            $long = $str($s['codec_long_name'] ?? '');
+            $prof = $str($s['profile'] ?? '');
+            $lang = $langName($tag($s, ['language']));
+            $title = $tag($s, ['title', 'handler_name']);
+            if (preg_match('/^(VideoHandler|SoundHandler|SubtitleHandler|Core Media (Video|Audio|Metadata)|ISO Media file produced by Google Inc\.?|DataHandler|TimeCodeHandler)$/i', $title)) $title = '';
+            $sbps = $s['bit_rate'] ?? ($tag($s, ['BPS', 'BPS-eng']) ?: null);
+            if ($type === 'video') {
+                $isPic = !empty($s['disposition']['attached_pic']);
+                $vi += $isPic ? 0 : 1;
+                $codec = ($vNames[$cn] ?? ($long !== '' ? $long : $cn));
+                $lv = (int)($s['level'] ?? 0); $lvTxt = '';
+                if ($lv > 0) {
+                    if ($cn === 'h264') $lvTxt = $num($lv / 10, 1);
+                    elseif ($cn === 'hevc') $lvTxt = $num($lv / 30, 1);
+                }
+                $codecFull = $codec . (($prof !== '' || $lvTxt !== '') ? ' (' . trim($prof . ($lvTxt !== '' ? ($prof !== '' ? ', ' : '') . __('vi_level', '레벨') . ' ' . $lvTxt : '')) . ')' : '');
+                $w = (int)($s['width'] ?? 0); $h = (int)($s['height'] ?? 0);
+                $resTxt = '';
+                if ($w > 0 && $h > 0) {
+                    $short = min($w, $h); $nm = '';
+                    if ($short >= 4320) $nm = '8K'; elseif ($short >= 2160) $nm = '4K UHD'; elseif ($short >= 1440) $nm = 'QHD'; elseif ($short >= 1080) $nm = 'Full HD'; elseif ($short >= 720) $nm = 'HD';
+                    $resTxt = $w . ' × ' . $h . ($nm ? ' (' . $nm . ')' : '');
+                }
+                $dar = (string)($s['display_aspect_ratio'] ?? ''); $sar = (string)($s['sample_aspect_ratio'] ?? '');
+                $darTxt = preg_match('/^[1-9]\d*:[1-9]\d*$/', $dar) ? $dar : '';
+                if ($darTxt !== '' && preg_match('/^(\d+):(\d+)$/', $darTxt, $mm) && (int)$mm[2] > 0) $darTxt .= ' (' . $num((int)$mm[1] / (int)$mm[2], 3) . ')';
+                if (preg_match('/^[1-9]\d*:[1-9]\d*$/', $sar) && $sar !== '1:1') $darTxt .= ($darTxt ? ' · ' : '') . __('vi_sar', '픽셀 비율') . ' ' . $sar;
+                // 회전 — ffprobe 의 Display Matrix 값은 반시계 기준(-90 = 시계 방향 90°, 휴대폰 세로 영상). 옛 'rotate' 태그는 시계 기준.
+                //   MediaInfo 처럼 시계 방향 각도로 보여 준다(검토에서 발견: abs 로 방향이 사라졌었음).
+                $rotCw = null;
+                foreach ((array)($s['side_data_list'] ?? []) as $sd) {
+                    if (is_array($sd) && isset($sd['rotation']) && is_numeric($sd['rotation'])) $rotCw = ((-(int)round((float)$sd['rotation'])) % 360 + 360) % 360;
+                }
+                if ($rotCw === null && is_numeric($tag($s, ['rotate']))) $rotCw = (((int)$tag($s, ['rotate'])) % 360 + 360) % 360;
+                $rot = $rotCw ? $rotCw . '° (' . __('vi_cw', '시계 방향') . ')' : '';
+                $rf = $frac($s['r_frame_rate'] ?? null); $af = $frac($s['avg_frame_rate'] ?? null);
+                $fpsTxt = '';
+                if ($af && $af > 0 && $af < 1000) {
+                    $fpsTxt = $num($af, 3) . ' fps';
+                    if ($rf && $rf > 0 && $rf < 1000 && abs($rf - $af) / $rf > 0.01) $fpsTxt = __('vi_vfr', '가변') . ' — ' . __('vi_avg', '평균') . ' ' . $num($af, 3) . ' fps';
+                    else $fpsTxt .= ' (' . __('vi_cfr', '고정') . ')';
+                } elseif ($rf && $rf > 0 && $rf < 1000) {
+                    $fpsTxt = $num($rf, 3) . ' fps';
+                }
+                $pix = strtolower((string)($s['pix_fmt'] ?? ''));
+                $bits = (int)($s['bits_per_raw_sample'] ?? 0);
+                if (!$bits && preg_match('/p(9|10|12|14|16)(le|be)?$/', $pix, $mm)) $bits = (int)$mm[1];
+                if (!$bits && $pix !== '' && preg_match('/^(yuvj?4\d\dp|nv12|nv21|gray|yuyv422|uyvy422|rgb24|bgr24|rgba|bgra|argb|abgr|gbrp)$/', $pix)) $bits = 8;
+                $chroma = '';
+                if (preg_match('/^yuva?j?(4\d\d)/', $pix, $mm)) $chroma = 'YUV ' . $mm[1][0] . ':' . $mm[1][1] . ':' . $mm[1][2] . (strpos($pix, 'yuva') === 0 ? ' + ' . __('vi_alpha', '알파') : '');
+                elseif (strpos($pix, 'nv12') === 0 || strpos($pix, 'nv21') === 0 || strpos($pix, 'p010') === 0) $chroma = 'YUV 4:2:0';
+                elseif (strpos($pix, 'gray') === 0) $chroma = __('vi_gray', '흑백');
+                elseif ($pix !== '' && preg_match('/rgb|bgr|gbr/', $pix)) $chroma = 'RGB';
+                $colTxt = trim($chroma . ($bits ? ($chroma ? ', ' : '') . $bits . __('vi_bit', '비트') : '') . ($pix !== '' ? ' — ' . $pix : ''), ' —');
+                $rangeMap = ['tv' => __('vi_range_tv', '제한 (Limited)'), 'pc' => __('vi_range_pc', '전체 (Full)')];
+                $primMap = ['bt709' => 'BT.709', 'bt2020' => 'BT.2020', 'smpte170m' => 'BT.601 (NTSC)', 'bt470bg' => 'BT.601 (PAL)', 'smpte432' => 'Display P3', 'smpte431' => 'DCI-P3'];
+                $trcMap = ['bt709' => 'BT.709', 'smpte2084' => 'PQ (SMPTE ST 2084)', 'arib-std-b67' => 'HLG', 'iec61966-2-1' => 'sRGB', 'smpte170m' => 'BT.601', 'bt2020-10' => 'BT.2020 10비트', 'linear' => 'Linear'];
+                $cspMap = ['bt709' => 'BT.709', 'bt470bg' => 'BT.601', 'smpte170m' => 'BT.601', 'bt2020nc' => 'BT.2020 NCL', 'bt2020c' => 'BT.2020 CL', 'rgb' => 'RGB'];   // 행렬 계수
+                $prim = (string)($s['color_primaries'] ?? ''); $trc = (string)($s['color_transfer'] ?? ''); $csp = (string)($s['color_space'] ?? '');
+                $colorSp = trim(($primMap[$prim] ?? ($prim !== '' && $prim !== 'unknown' ? $prim : '')) . (($trc !== '' && $trc !== 'unknown') ? ' / ' . ($trcMap[$trc] ?? $trc) : '') . (($csp !== '' && $csp !== 'unknown' && $csp !== $prim) ? ' / ' . ($cspMap[$csp] ?? $csp) : ''), ' /');
+                // HDR — 돌비 비전·HDR10(+)·HLG
+                $hdr = []; $mast = ''; $cll = '';
+                foreach ((array)($s['side_data_list'] ?? []) as $sd) {
+                    if (!is_array($sd)) continue;
+                    $sdt = (string)($sd['side_data_type'] ?? '');
+                    if (stripos($sdt, 'DOVI') !== false) {
+                        $comp = [1 => 'HDR10', 2 => 'SDR', 4 => 'HLG', 6 => 'HDR10'][(int)($sd['dv_bl_signal_compatibility_id'] ?? 0)] ?? '';
+                        $hdr[] = __('vi_dv', '돌비 비전') . ' (' . __('vi_profile', '프로필') . ' ' . (int)($sd['dv_profile'] ?? 0)
+                            . (isset($sd['dv_bl_signal_compatibility_id']) && (int)$sd['dv_bl_signal_compatibility_id'] > 0 ? '.' . (int)$sd['dv_bl_signal_compatibility_id'] : '')
+                            . ($comp ? ', ' . $comp . ' ' . __('vi_compat', '호환') : '') . ')';
+                    } elseif (stripos($sdt, 'Mastering display') !== false) {
+                        $mx = $frac((string)($sd['max_luminance'] ?? '')); $mn = $frac((string)($sd['min_luminance'] ?? ''));
+                        if ($mx) $mast = __('vi_max', '최대') . ' ' . $num($mx, 0) . ' cd/m²' . ($mn !== null ? ', ' . __('vi_min', '최소') . ' ' . $num($mn, 4) . ' cd/m²' : '');
+                    } elseif (stripos($sdt, 'Content light level') !== false) {
+                        $cll = 'MaxCLL ' . (int)($sd['max_content'] ?? 0) . ' · MaxFALL ' . (int)($sd['max_average'] ?? 0) . ' cd/m²';
+                    } elseif (stripos($sdt, '2094-40') !== false || stripos($sdt, 'HDR10+') !== false) {
+                        $hdr[] = 'HDR10+';
+                    }
+                }
+                if ($trc === 'smpte2084') array_unshift($hdr, 'HDR10');   // HDR10+ 는 HDR10 위에 덧붙는 정보라 함께 표시
+                elseif ($trc === 'arib-std-b67') array_unshift($hdr, 'HLG');
+                $fo = (string)($s['field_order'] ?? '');
+                // field_order: tt·bt = 위 필드가 먼저 표시, bb·tb = 아래 필드가 먼저 표시(FFmpeg 정의 — 두 번째 글자가 표시 순서)
+                $scan = $fo === 'progressive' ? __('vi_progressive', '프로그레시브') : (in_array($fo, ['tt', 'bt'], true) ? __('vi_interlaced_tff', '인터레이스 (위 필드 먼저)') : (in_array($fo, ['bb', 'tb'], true) ? __('vi_interlaced_bff', '인터레이스 (아래 필드 먼저)') : ''));
+                $frames = (string)($s['nb_frames'] ?? '') ?: $tag($s, ['NUMBER_OF_FRAMES', 'NUMBER_OF_FRAMES-eng']);
+                $tagStr = (string)($s['codec_tag_string'] ?? '');
+                $title2 = $isPic ? __('vi_cover', '표지 이미지') : (__('vi_video', '비디오') . ($cnt['video'] > 1 ? ' #' . $vi : ''));
+                $add($title2, [
+                    $r(__('vi_codec', '코덱'), $codecFull),
+                    $r(__('vi_codec_id', '코덱 ID'), (preg_match('/^[\x21-\x7E]{2,4}$/', $tagStr) && strpos($tagStr, '[') === false) ? $tagStr : ''),
+                    $r(__('vi_resolution', '해상도'), $resTxt),
+                    $r(__('vi_dar', '화면 비율'), $darTxt),
+                    $r(__('vi_rotation', '회전'), $rot),
+                    $r(__('vi_fps', '프레임 속도'), $isPic ? '' : $fpsTxt),
+                    $r(__('vi_bitrate', '비트레이트'), $kbps($sbps)),
+                    $r(__('vi_frames', '프레임 수'), ctype_digit($frames) ? number_format((int)$frames) : ''),
+                    $r(__('vi_color', '색 형식'), $colTxt),
+                    $r(__('vi_range', '색 범위'), $rangeMap[(string)($s['color_range'] ?? '')] ?? ''),
+                    $r(__('vi_colorspace', '색 공간'), $colorSp),
+                    $r('HDR', implode(' · ', array_unique($hdr))),
+                    $r(__('vi_mastering', '마스터링 밝기'), $mast),
+                    $r(__('vi_cll', '콘텐츠 밝기'), $cll),
+                    $r(__('vi_scan', '스캔 방식'), $scan),
+                    $r(__('vi_cc', 'CC 자막'), !empty($s['closed_captions']) ? __('vi_cc_yes', '영상 안에 포함') : ''),
+                    $r(__('vi_lang', '언어'), $lang),
+                    $r(__('vi_track_title', '트랙 제목'), $title),
+                    $r(__('vi_flags', '표시'), $disp($s)),
+                    $r(__('vi_stream_enc', '인코더'), $tag($s, ['encoder', 'ENCODER'])),
+                ]);
+            } elseif ($type === 'audio') {
+                $ai++;
+                $codec = $aNames[$cn] ?? ($long !== '' ? $long : $cn);
+                if (strpos($cn, 'pcm_') === 0) $codec = 'PCM (' . strtoupper(substr($cn, 4)) . ')';
+                if ($prof !== '' && $prof !== 'unknown') $codec .= ' — ' . $prof;
+                $ch = (int)($s['channels'] ?? 0); $lay = (string)($s['channel_layout'] ?? '');
+                $layMap = ['mono' => '1.0', 'stereo' => '2.0', '2.1' => '2.1', '3.0' => '3.0', 'quad' => '4.0', '4.0' => '4.0', '5.0' => '5.0', '5.0(side)' => '5.0', '5.1' => '5.1', '5.1(side)' => '5.1', '6.1' => '6.1', '7.1' => '7.1', '7.1(wide)' => '7.1'];
+                $chTxt = $ch > 0 ? $ch . __('vi_ch', '채널') . (isset($layMap[$lay]) ? ' (' . $layMap[$lay] . ')' : ($lay !== '' ? ' (' . $str($lay) . ')' : '')) : '';
+                $sr = (int)($s['sample_rate'] ?? 0);
+                $abits = (int)($s['bits_per_raw_sample'] ?? 0);
+                if (!$abits && strpos($cn, 'pcm_') === 0 && preg_match('/(\d+)/', $cn, $mm)) $abits = (int)$mm[1];
+                $add(__('vi_audio', '오디오') . ' #' . $ai . ($lang !== '' ? ' — ' . $lang : ''), [
+                    $r(__('vi_codec', '코덱'), $codec),
+                    $r(__('vi_channels', '채널'), $chTxt),
+                    $r(__('vi_samplerate', '샘플레이트'), $sr > 0 ? $num($sr / 1000, 1) . ' kHz' : ''),
+                    $r(__('vi_bitdepth', '비트 깊이'), $abits > 0 ? $abits . __('vi_bit', '비트') : ''),
+                    $r(__('vi_bitrate', '비트레이트'), $kbps($sbps)),
+                    $r(__('vi_lang', '언어'), $lang),
+                    $r(__('vi_track_title', '트랙 제목'), $title),
+                    $r(__('vi_flags', '표시'), $disp($s)),
+                ]);
+            } elseif ($type === 'subtitle') {
+                $si++;
+                $add(__('vi_sub', '자막') . ' #' . $si . ($lang !== '' ? ' — ' . $lang : ''), [
+                    $r(__('vi_sub_format', '형식'), $sNames[$cn] ?? ($long !== '' ? $long : $cn)),
+                    $r(__('vi_lang', '언어'), $lang),
+                    $r(__('vi_track_title', '트랙 제목'), $title),
+                    $r(__('vi_flags', '표시'), $disp($s)),
+                ]);
+            } elseif ($type === 'attachment') {
+                $fnm = $tag($s, ['filename']);
+                if ($fnm !== '' && count($att) < 30) $att[] = $fnm;
+            } elseif ($type === 'data') {
+                $di++;
+                $h = $tag($s, ['handler_name']);
+                $add(__('vi_data', '데이터') . ' #' . $di, [
+                    $r(__('vi_sub_format', '형식'), trim(($cn !== '' ? $cn : ($str($s['codec_tag_string'] ?? '') ?: '?')) . ($h !== '' ? ' — ' . $h : ''))),
+                ]);
+            }
+        }
+        if ($cnt['attachment']) {
+            $add(__('vi_attach', '첨부 파일') . ' (' . $cnt['attachment'] . ')', [$r(__('vi_files', '파일'), implode(', ', $att) . ($cnt['attachment'] > count($att) ? ' …' : ''))]);
+        }
+        if ($chapters) {
+            $rows = [];
+            foreach (array_slice($chapters, 0, 200) as $c) {
+                if (!is_array($c)) continue;
+                $rows[] = $r(preg_replace('/\.\d+$/', '', $dur($c['start_time'] ?? 0)), $tag($c, ['title']) ?: '-');
+            }
+            if (count($chapters) > 200) $rows[] = $r('…', '+' . (count($chapters) - 200));
+            $add(__('vi_chapters', '챕터') . ' (' . count($chapters) . ')', $rows);
+        }
+        return $groups;
+    }
+
+    /** ffprobe 가 없을 때 'ffmpeg -i' 글자 출력으로 간단 묶음. */
+    private function buildVideoGroupsFromText(string $txt, int $fileSize): array {
+        if (!preg_match('/Input #0,\s*([^,\r\n]+)/', $txt, $m)) return [];
+        $groups = [];
+        $gen = [['k' => __('vi_container', '형식'), 'v' => trim($m[1])]];
+        if ($fileSize > 0) $gen[] = ['k' => __('vi_filesize', '파일 크기'), 'v' => $this->formatSize($fileSize)];
+        if (preg_match('/Duration:\s*([\d:.]+)/', $txt, $d)) $gen[] = ['k' => __('vi_duration', '길이'), 'v' => $d[1]];
+        if (preg_match('/bitrate:\s*(\d+)\s*kb\/s/', $txt, $b)) $gen[] = ['k' => __('vi_total_br', '전체 비트레이트'), 'v' => number_format((int)$b[1]) . ' kb/s'];
+        $groups[] = ['title' => __('vi_general', '일반'), 'rows' => $gen];
+        $n = ['Video' => 0, 'Audio' => 0, 'Subtitle' => 0];
+        if (preg_match_all('/Stream #\d+:\d+(?:\[[^\]]*\])?(?:\(([a-z]{2,3})\))?[^:]*:\s*(Video|Audio|Subtitle):\s*([^\r\n]+)/', $txt, $ms, PREG_SET_ORDER)) {
+            foreach (array_slice($ms, 0, 50) as $s) {
+                $n[$s[2]]++;
+                $label = ['Video' => __('vi_video', '비디오'), 'Audio' => __('vi_audio', '오디오'), 'Subtitle' => __('vi_sub', '자막')][$s[2]];
+                $v = trim(mb_substr($s[3], 0, 300));
+                $groups[] = ['title' => $label . ' #' . $n[$s[2]] . ($s[1] !== '' ? ' — ' . $s[1] : ''), 'rows' => [['k' => __('vi_info', '정보'), 'v' => $v]]];
+            }
+        }
+        return $groups;
     }
 
     public function getMediaInfo(int $storageId, string $relativePath): array {
@@ -12434,9 +14613,10 @@ class FileManager {
             $info['mime'] = $this->getMimeType($fullPath);
             
             // 이미지 EXIF 정보
-            $imageExts = ['jpg', 'jpeg', 'tiff', 'tif'];
+            // ★ (2026-10-07) PNG·WebP·HEIC/HEIF 추가 — 미리보기 EXIF 와 같은 readImageExif 사용
+            $imageExts = ['jpg', 'jpeg', 'tiff', 'tif', 'png', 'webp', 'heic', 'heif'];
             if (in_array($info['extension'], $imageExts) && function_exists('exif_read_data')) {
-                $exif = @exif_read_data($fullPath, 'ANY_TAG', true);
+                $exif = $this->readImageExif($fullPath, 'ANY_TAG', true);
                 if ($exif) {
                     $info['exif'] = [];
                     

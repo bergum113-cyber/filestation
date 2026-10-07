@@ -26,6 +26,7 @@ class ActivityLog {
     const TYPE_LOGOUT = 'logout';
     const TYPE_LOGIN_FAIL = 'login_fail';
     const TYPE_HACK_ATTEMPT = 'hack_attempt';
+    const TYPE_EXIF_STRIP = 'exif_strip';   // ★ (2026-10-07) 사진 EXIF 개인정보 삭제
     
     public function __construct($db, $auth) {
         $this->db = $db;

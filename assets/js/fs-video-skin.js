@@ -42,6 +42,7 @@
         prev:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M6 5h2v14H6zM20 5.5v13L9.5 12z"/></svg>',
         next:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5.5v13L14.5 12z"/></svg>',
         close: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+        info:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r="0.6" fill="currentColor"/></svg>',
         fs:    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>'
     };
 
@@ -142,10 +143,14 @@
         const bLoop = btn('fsvs-loop', ICON.loop, '');
         const bAb = btn('fsvs-ab', 'A-B', '');
         const bCc = btn('fsvs-cc', 'CC', '');
+        // ★ (2026-10-07) 동영상 정보(ⓘ) — 페이지가 ctx.showInfo 를 줄 때만(탐색기). 공유 페이지는 숨김.
+        const bInfo = btn('fsvs-info', ICON.info, T('vi_dlg_title', '동영상 정보') + ' (I)');
+        const hasInfo = typeof ctx.showInfo === 'function';
+        if (!hasInfo) bInfo.style.display = 'none';
         const bSet = btn('fsvs-set', ICON.gear, T('settings', '설정'));
         const bPip = btn('fsvs-pip', ICON.pip, T('pip', 'PIP 작은 창'));
         const bFs = btn('fsvs-fs', ICON.fs, T('fullscreen', '전체화면'));
-        row.append(bPrev, bPlay, bNext, bVol, vol, time, spacer, bSpeed, bLoop, bAb, bCc, bSet, bPip, bFs);
+        row.append(bPrev, bPlay, bNext, bVol, vol, time, spacer, bSpeed, bLoop, bAb, bCc, bInfo, bSet, bPip, bFs);
         bar.append(prog, row);
         // ★ (2026-09-23) 가운데 재생 버튼은 만들지 않는다 — 기존 플레이어의 가운데 버튼으로 충분하고
         //   겹침이 생겼다(펜닐 확인). 재생/일시정지는 조작 줄의 버튼과 기존 가운데 버튼으로 한다.
@@ -429,6 +434,7 @@
         on(bPip, 'click', () => call(ctx.togglePip));
         on(bFs, 'click', () => call(ctx.toggleFs));
         on(bSpeed, 'click', () => { setMenuOpen(true); buildMenu(); fitMenu(); render(); });
+        on(bInfo, 'click', () => { setMenuOpen(false); render(); try { if (hasInfo) ctx.showInfo(); } catch (e) {} });
         on(bSet, 'click', () => { setMenuOpen(menu.hidden); if (!menu.hidden) { buildMenu(); fitMenu(); } render(); });
 
         // ★ (2026-09-23) 설정 창을 플레이어 안에 **한 번에 다 보이게** 맞춘다 — 스크롤 없이(펜닐 지시).
@@ -577,6 +583,9 @@
             const folded = collapsible.filter((b) => b.classList.contains('fsvs-collapsed'));
             if (folded.length) {
                 const more = section(T('fsvs_more', '더 보기'));
+                if (folded.includes(bInfo)) {
+                    more.append(chip(T('vi_dlg_title', '동영상 정보'), false, () => { setMenuOpen(false); try { ctx.showInfo(); } catch (e) {} }, 'info'));
+                }
                 if (folded.includes(bVol)) {
                     const m = video.muted || video.volume === 0;
                     more.append(chip(m ? T('fsvs_unmute', '소리 켜기') : T('mute', '음소거'), m, () => { video.muted = !video.muted; }, 'mute'));
@@ -662,11 +671,12 @@
         //   옮긴다. 기능은 사라지지 않는다. 재생·이전·다음·시간·CC·⚙·⛶ 는 항상 남는다.
         //   자리가 충분하면 아무것도 접지 않는다. 폭·보이는 버튼·시간 길이가 바뀔 때만 다시 잰다(매 갱신마다 재지 않음).
         // ★ (2026-09-26) 접는 순서를 A-B → 반복 → 볼륨으로 — 볼륨(음소거)을 마지막까지 남긴다(펜닐: 휴대폰 세로에서 볼륨 아이콘이 사라짐).
-        const collapsible = [bAb, bLoop, bVol];
+        // ★ (2026-10-07) 동영상 정보(ⓘ)를 맨 먼저 접는다(⚙ '더 보기'로) — 자주 쓰지 않는 버튼이라 기존 버튼보다 먼저 자리를 내준다.
+        const collapsible = [bInfo, bAb, bLoop, bVol];
         let rowSig = '';
         function fitRow() {
             const W = row.clientWidth || 0;
-            const sig = [W, bPrev.style.display, bAb.style.display, bCc.style.display, bPip.style.display, bSpeed.style.display, time.textContent.length].join('|');
+            const sig = [W, bPrev.style.display, bInfo.style.display, bAb.style.display, bCc.style.display, bPip.style.display, bSpeed.style.display, time.textContent.length].join('|');
             if (sig === rowSig) return;
             rowSig = sig;
             // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 크기별 배치가 맞게 되는지 실제 기기 수치로 확인하기 위해(펜닐 요청).
