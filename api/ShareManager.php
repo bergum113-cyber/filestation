@@ -416,7 +416,7 @@ class ShareManager {
                 if ($basePath) {
                     $folderPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
                     if (is_dir($folderPath)) {
-                        $audioExts = ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma', 'ape', 'alac', 'aiff'];
+                        $audioExts = ['mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'weba'];   // ★ (2026-10-08) 음악은 웹 플레이어가 여는 형식만(펜닐 결정 — wma·ape·alac·aiff 는 브라우저가 재생 못 함)
                         $items = @scandir($folderPath);
                         if ($items !== false) {
                             foreach ($items as $item) {
@@ -728,6 +728,7 @@ class ShareManager {
                 'opus' => 'audio/ogg',           // ★ Opus는 OGG 컨테이너 — 일부 모바일은 audio/opus 인식 못함
                 'wma' => 'audio/x-ms-wma',
                 'oga' => 'audio/ogg',            // ★ 추가 (Vorbis/FLAC in OGG)
+                'm4b' => 'audio/mp4', 'weba' => 'audio/webm',   // ★ (2026-10-08) 웹 플레이어가 여는 형식 추가
                 'aiff' => 'audio/aiff', 'aif' => 'audio/aiff',  // ★ 추가
             ];
             $mime = $mimeMap[$ext] ?? (mime_content_type($fullPath) ?: 'application/octet-stream');
@@ -2802,7 +2803,7 @@ class ShareManager {
         }
         
         // 미디어 확장자 화이트리스트 (audio + video 통합)
-        $audioExts = ['mp3', 'wav', 'flac', 'm4a', 'aac', 'ogg', 'opus', 'wma', 'ape', 'alac', 'aiff'];
+        $audioExts = ['mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'weba'];   // ★ (2026-10-08) 음악은 웹 플레이어가 여는 형식만(펜닐 결정 — wma·ape·alac·aiff 는 브라우저가 재생 못 함)
         $videoExts = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'wmv', 'flv', 'ts', 'm2ts', 'mts', 'mpg', 'mpeg', 'm4v', '3gp'];
         // 주의: 'ogg'는 video share.php에도 있으나 audio로 우선 처리 (대부분 ogg vorbis 음악)
         

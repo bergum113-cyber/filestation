@@ -113,7 +113,8 @@
         //   [결함] CSS 의 두 칸 배치 규칙(display: grid)이 숨김 규칙과 우선순위가 같고 뒤에 있어 이겼다 →
         //   가로모드(폭이 넓어 두 칸)에서 ⚙·✕ 로 닫아도 창이 계속 보였다(펜닐 제보). CSS 에도 !important 를 넣었지만
         //   인라인 스타일은 스타일시트 순서·우선순위와 무관하게 이기므로 이중으로 막는다.
-        const setMenuOpen = (open) => { menu.hidden = !open; menu.style.display = open ? '' : 'none'; };
+        // ★ (2026-10-08) 열려 있는 동안 wrap 에 fsvs-menu-open — 공유 페이지가 설정 창을 플레이어 위로 넘치게 보이도록(overflow) 쓴다
+        const setMenuOpen = (open) => { menu.hidden = !open; menu.style.display = open ? '' : 'none'; wrap.classList.toggle('fsvs-menu-open', !!open); };
         setMenuOpen(false);
         const bar = el('div', 'fsvs-bar');
         const prog = el('div', 'fsvs-prog');
@@ -158,11 +159,11 @@
         wrap.appendChild(root);
         // ★ (2026-10-05) 음량 표시(유튜브처럼, 펜닐 요청) — 키보드로 음량을 바꾸면 위쪽 가운데에 아이콘 + 퍼센트를 1초.
         //   음량 막대(입력칸)를 키보드로 움직이면 스킨이 직접, ↑↓ 키 처리(탐색기·공유)는 FSVideoSkin.showVolume(wrap) 으로 부른다.
-        //   마우스로 막대를 끌 때는 막대가 보이므로 띄우지 않는다(유튜브와 같음).
+        //   ★ (2026-10-08) 마우스·터치로 막대를 움직일 때도 띄운다(펜닐 요청 — 종전엔 키보드만).
         const volOsd = el('div', 'fsvs-volosd');
         volOsd.setAttribute('aria-hidden', 'true');
         root.appendChild(volOsd);
-        let volOsdTimer = null, volKbdAt = 0;
+        let volOsdTimer = null;
         const showVolOsd = () => {
             const v = video.muted ? 0 : (Number(video.volume) || 0);
             volOsd.innerHTML = v > 0 ? ICON.vol : ICON.mute;
@@ -174,6 +175,26 @@
             volOsdTimer = setTimeout(() => { volOsdTimer = null; volOsd.classList.remove('on'); }, 1000);
         };
         cleanups.push(() => { if (volOsdTimer) clearTimeout(volOsdTimer); volOsdTimer = null; });
+        // ★ (2026-10-08) 짧은 알림(자막 있음·자막 켜짐/꺼짐 — 펜닐 요청, 팟플레이어·VLC·mpv 의 OSD 처럼) — 음량 표시와 **같은 자리·같은 상자**를 쓴다.
+        //   나중에 뜬 것이 앞의 것을 바로 바꾼다(타이머도 같이 씀). 글자는 textContent 로만 넣는다(파일 이름 등). 음량 표시 코드는 그대로.
+        //   opt: { icon: 'cc' (CC 표시), off: true (CC 를 꺼짐 모양으로), ms: 표시 시간(0.5~5초, 기본 1.5초) }
+        const showMsgOsd = (text, opt) => {
+            opt = opt || {};
+            volOsd.textContent = '';
+            if (opt.icon === 'cc') {
+                const cc = document.createElement('b');
+                cc.className = 'fsvs-osd-cc' + (opt.off ? ' is-off' : '');
+                cc.textContent = 'CC';
+                volOsd.appendChild(cc);
+            }
+            const sp = document.createElement('span');
+            sp.textContent = String(text == null ? '' : text);
+            volOsd.appendChild(sp);
+            volOsd.classList.add('on', 'fsvs-osd-msg');
+            const ms = Math.max(500, Math.min(5000, Number(opt.ms) || 1500));
+            if (volOsdTimer) clearTimeout(volOsdTimer);
+            volOsdTimer = setTimeout(() => { volOsdTimer = null; volOsd.classList.remove('on'); }, ms);
+        };
         wrap.classList.add('fsvs-on');
         document.body.classList.add('fsvs-active');
 
@@ -185,8 +206,7 @@
         on(bPlay, 'click', togglePlay);
         on(bVol, 'click', () => { video.muted = !video.muted; });
         on(vol, 'input', () => { video.volume = parseFloat(vol.value); if (video.volume > 0 && video.muted) video.muted = false; });
-        on(vol, 'keydown', () => { volKbdAt = Date.now(); });                              // ★ (2026-10-05) 키보드로 막대를 움직였는지
-        on(vol, 'input', () => { if (Date.now() - volKbdAt < 600) showVolOsd(); });       // 키보드면 음량 표시(마우스로 끌 땐 안 띄움)
+        on(vol, 'input', showVolOsd);   // ★ (2026-10-08) 막대를 키보드·마우스·터치 어느 것으로 움직여도 음량 표시(바로 위에서 음량을 바꾼 뒤라 새 값으로 그림)
 
         // ── 시간축 ★ (2026-09-23) 스트리밍 지원 ─────────────────────────────────
         //   트랜스코딩·HLS 는 서버가 변환하면서 조각을 붙이므로 브라우저가 아는 길이가 늘어나거나 무한대이고,
@@ -464,7 +484,7 @@
             menu.style.transform = ''; menu.style.width = ''; menu.style.maxHeight = ''; menu.style.overflowY = '';
             const barH = bar.offsetHeight || 0;
             menu.style.bottom = (barH + 8) + 'px';
-            const availH = (wrap.clientHeight || 0) - barH - 16;
+            let availH = (wrap.clientHeight || 0) - barH - 16;   // ★ (2026-10-08) let — 아래 '플레이어 위 빈 곳' 단계에서 늘릴 수 있게
             const availW = (wrap.clientWidth || 0) - 32;
             if (availH <= 0 || availW <= 0) return;   // 배치 정보를 못 얻으면(숨김 등) 그대로 둔다
             const fits = () => menu.scrollHeight <= availH && menu.scrollWidth <= availW + 1;
@@ -481,8 +501,22 @@
             }
             menu.classList.add('fsvs-compact');
             if (fits()) return;
+            // ★ (2026-10-08) 플레이어 위 빈 곳까지 쓰기(공유 페이지 — ctx.menuRoomAbove, 펜닐 승인) — 공유는 플레이어가 작아(최대 720×405) 음성이 많으면
+            //   설정 창이 플레이어 안에서 스크롤됐다. 페이지가 영상 하나라 플레이어 위(제목·정보)에 겹쳐 펼쳐도 되므로, 줄이거나 스크롤하기 전에
+            //   그 공간(창 위쪽까지 보이는 만큼)을 더해 본다. 휴대폰은 종전대로 아래 판. 탐색기는 이 값을 주지 않아 종전 그대로.
+            const _phoneRoom = Math.min(window.innerWidth || 0, window.innerHeight || 0) < 600;
+            const _extra = (!_phoneRoom && typeof ctx.menuRoomAbove === 'function') ? Math.max(0, Math.floor(Number(ctx.menuRoomAbove()) || 0)) : 0;
+            if (_extra > 0) {
+                const _baseH = availH;
+                availH = _baseH + _extra;
+                if (fits()) return;
+                availH = _baseH;
+            }
             const sc = Math.min(availH / (menu.scrollHeight || 1), availW / (menu.scrollWidth || 1));
-            if (sc >= 0.7) { menu.style.transform = 'scale(' + sc.toFixed(3) + ')'; return; }
+            // ★ (2026-10-08) 휴대폰(창의 짧은 쪽 600px 미만)·터치 화면은 85% 미만으로 줄이지 않고 아래 판으로 — 긴 목록을 넓게 놓은 뒤(아래)
+            //   휴대폰 가로에서 77% 로 줄어 버튼이 약 21px(손가락으로 누르기 어려움)이 되던 것을 막는다. PC·태블릿은 종전 그대로 70%.
+            const _minSc = (Math.min(window.innerWidth || 0, window.innerHeight || 0) < 600 && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 0.85 : 0.7;
+            if (sc >= _minSc) { menu.style.transform = 'scale(' + sc.toFixed(3) + ')'; return; }
             // 휴대폰 판정은 '창의 짧은 쪽 < 600px' — 가로로 돌린 휴대폰(예 844×390)도 휴대폰으로 본다.
             //   ★ 처음엔 '폭 < 600' 으로 써서 가로 화면 휴대폰을 PC 로 판정했다 → 판이 사라져 낮은 플레이어 안 스크롤이 되는
             //   퇴보를 시험(t13, 09-23 가로 화면 판 수정)이 잡았다.
@@ -613,7 +647,7 @@
                 //   항목 글자가 길어('English · EAC3 · 5.1(side)') 한 줄에 하나씩 보이게 한다(fsvs-list).
                 const isAudio = sel.classList.contains('audio-track-select') || sel.id === 'audio-track-picker' || sel.id === 'share-audio-select';
                 const body = section(isAudio ? T('audio_track', '오디오') : (isMode ? T('playback_mode', '재생 방식') : T('quality', '화질')));
-                if (isAudio) body.classList.add('fsvs-list');
+                if (isAudio) { body.classList.add('fsvs-list'); body.parentNode.classList.add('fsvs-sec-wide'); }   // ★ (2026-10-08) 긴 목록은 한 줄을 통째로(CSS)
                 Array.from(sel.options).forEach((o) => body.append(chip(o.textContent, sel.value === o.value, () => {
                     if (sel.value === o.value) return;
                     sel.value = o.value;
@@ -629,7 +663,7 @@
             const na = (!hasAudioSel && ctx.nativeAudio) ? ctx.nativeAudio() : null;
             if (na && Array.isArray(na.tracks) && na.tracks.length >= 2 && typeof na.select === 'function') {
                 const ab = section(T('audio_track', '오디오'));
-                ab.classList.add('fsvs-list');
+                ab.classList.add('fsvs-list'); ab.parentNode.classList.add('fsvs-sec-wide');   // ★ (2026-10-08) 긴 목록은 한 줄을 통째로(CSS)
                 na.tracks.forEach((tk, i) => ab.append(chip(String(tk.label || ('Track ' + (i + 1))), !!tk.on, () => {
                     if (tk.on) return;
                     try { na.select(i); } catch (e) {}
@@ -637,7 +671,19 @@
                 })));
             }
             if (ctx.hasCc && ctx.hasCc()) {
+                // ★ (2026-10-08) 자막 파일 고르기(펜닐 요청) — 페이지가 찾은 자막이 2개 이상일 때만(ctx.subTracks). 파일 이름은 글자 그대로(chip → textContent).
+                const st = ctx.subTracks ? ctx.subTracks() : null;
+                if (st && Array.isArray(st.tracks) && st.tracks.length >= 2 && typeof st.select === 'function') {
+                    const fb = section(T('fsvs_sub_file', '자막 파일'));
+                    fb.classList.add('fsvs-list', 'fsvs-subfiles'); fb.parentNode.classList.add('fsvs-sec-wide');   // ★ (2026-10-08) 한 줄을 통째로(CSS)
+                    st.tracks.forEach((tk, i) => fb.append(chip(String(tk.label || ('#' + (i + 1))), !!tk.on, () => {
+                        if (tk.on) return;
+                        try { st.select(i); } catch (e) {}
+                        setMenuOpen(false);
+                    })));
+                }
                 const sb = section(T('subtitle', '자막'));
+                sb.classList.add('fsvs-subgrid');   // ★ (2026-10-08) 행 이름 칸을 가장 긴 이름에 맞춤(CSS) — 영어 'Position' 이 34px 칸을 넘어 버튼에 겹쳤다
                 // ★ (2026-09-23) 크기·위치에 현재 값을 보여 준다 — 누를 때마다 숫자가 바뀌어 반응이 보인다.
                 //   탐색기·공유 모두 자막 크기·위치를 자막 요소의 인라인 스타일(font-size em · bottom %)에 적용하므로
                 //   그 값을 그대로 읽는다(누른 즉시 기존 핸들러가 바꾼 뒤 메뉴를 다시 그리므로 새 값이 나온다).
@@ -923,10 +969,11 @@
         const api = {
             video, wrap,
             showVolume: showVolOsd,   // ★ (2026-10-05) 음량 표시 — FSVideoSkin.showVolume(wrap)
+            showMessage: showMsgOsd,  // ★ (2026-10-08) 짧은 알림 — FSVideoSkin.showMessage(wrap, 글자, opt)
             destroy() {
                 cleanups.splice(0).reverse().forEach((f) => { try { f(); } catch (e) {} });
                 try { root.remove(); } catch (e) {}
-                wrap.classList.remove('fsvs-on', 'fsvs-idle', 'fsvs-streaming');
+                wrap.classList.remove('fsvs-on', 'fsvs-idle', 'fsvs-streaming', 'fsvs-menu-open');
                 wrap.style.removeProperty('--fsvs-bar-h');
                 wrap.style.removeProperty('--fsvs-sub-raise');
                 if (!document.querySelector('.fsvs-on')) document.body.classList.remove('fsvs-active');
@@ -943,5 +990,7 @@
 
     // ★ (2026-10-05) 음량 표시 — 탐색기·공유의 ↑↓ 키 처리가 부른다(스킨이 붙어 있을 때만)
     function showVolume(wrap) { try { if (wrap && wrap._fsvs && typeof wrap._fsvs.showVolume === 'function') wrap._fsvs.showVolume(); } catch (e) {} }
-    window.FSVideoSkin = { attach, detach, showVolume, version: '1' };
+    // ★ (2026-10-08) 짧은 알림(자막 있음·자막 켜짐/꺼짐) — 음량 표시와 같은 자리. 스킨이 붙어 있을 때만, 아니면 아무것도 안 함.
+    function showMessage(wrap, text, opt) { try { if (wrap && wrap._fsvs && typeof wrap._fsvs.showMessage === 'function') wrap._fsvs.showMessage(text, opt); } catch (e) {} }
+    window.FSVideoSkin = { attach, detach, showVolume, showMessage, version: '1' };
 })();

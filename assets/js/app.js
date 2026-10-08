@@ -1835,6 +1835,23 @@ class FSAudioPlayer {
             this._releaseWakeLock();
             this._stopVisualizer();
             
+            // ★ (2026-10-08) 재생하지 못한 이유를 곡 정보 줄에 알린다 — 종전엔 아무 표시 없이 멈추거나 다음 곡으로 넘어갔다.
+            //   음악은 웹 플레이어(브라우저가 직접 재생)라 기기·브라우저가 못 여는 형식(예: 아이폰의 일부 ogg, 크롬의 ALAC m4a)이나 깨진 파일이면 여기로 온다.
+            //   다음 곡을 불러오면 _updateTrackMeta 가 원래 정보로 되돌린다. 글자는 textContent 로만.
+            try {
+                if (this.$ && this.$.meta) {
+                    const _tr = this.playlist[this.currentIndex];
+                    const _nm = String((_tr && (_tr.fullName || _tr.path || _tr.name)) || '');
+                    const _dot = _nm.lastIndexOf('.');
+                    const _ex = String((_tr && _tr.ext) || ((_dot > 0 && _dot < _nm.length - 1) ? _nm.slice(_dot + 1) : '')).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+                    const _ko = (document.documentElement.lang || '').indexOf('ko') === 0 || String(navigator.language || '').indexOf('ko') === 0;
+                    const _code = a.error ? a.error.code : 0;   // 3 = 디코딩 실패, 4 = 형식 미지원
+                    this.$.meta.textContent = '⚠ ' + (_code === 2
+                        ? (_ko ? '네트워크 오류로 재생하지 못했습니다' : 'Network error — could not play')
+                        : (_ko ? '이 기기(브라우저)에서 재생할 수 없는 파일입니다' : "This device (browser) can't play this file")) + (_ex ? ' (.' + _ex + ')' : '');
+                }
+            } catch (eMeta) {}
+            
             // 연속 에러 제한
             this._errorSkipCount++;
             if (this._errorSkipCount >= 3) {
@@ -20280,7 +20297,7 @@ const App = {
         
         // 공유 유형: 선택 항목들이 공통으로 지원하는 것만 남긴다
         //   폴더 = 다운로드/스트리밍/파일드롭, 미디어 파일 = 다운로드/스트리밍, 그 외 = 다운로드만
-        const mediaExts = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp','mp3','wav','flac','m4a','aac','wma','opus'];
+        const mediaExts = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp','mp3','m4a','m4b','aac','oga','opus','flac','wav','weba'];   // ★ (2026-10-08) 음악은 웹 플레이어가 여는 형식만 스트리밍 공유(wma 빼고 m4b·oga·weba 추가)
         const allDirs = list.every(f => f.is_dir || f.isDir);
         const allStreamable = list.every(f => (f.is_dir || f.isDir) || mediaExts.includes((f.name.split('.').pop() || '').toLowerCase()));
         const g = document.getElementById('share-type-group');
@@ -20344,7 +20361,7 @@ const App = {
         
         // 미디어 파일일 때만 스트리밍 옵션 표시, 폴더일 때 파일드롭 옵션 표시
         const ext = item.name.split('.').pop().toLowerCase();
-        const mediaExts = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp','mp3','wav','flac','m4a','aac','wma','opus'];
+        const mediaExts = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp','mp3','m4a','m4b','aac','oga','opus','flac','wav','weba'];   // ★ (2026-10-08) 음악은 웹 플레이어가 여는 형식만 스트리밍 공유(wma 빼고 m4b·oga·weba 추가)
         const shareTypeGroup = document.getElementById('share-type-group');
         if (shareTypeGroup) {
             const isDir = item.is_dir || item.isDir;
@@ -34146,6 +34163,7 @@ const App = {
                 window._lastStartTranscodeUrl = null;
                 window._lastStartTranscodeTime = 0;
                 if (this._mediaInfoAbort) { this._mediaInfoAbort.abort(); this._mediaInfoAbort = null; }
+                this._subNoticeKey = null;   // ★ (2026-10-08) 미리보기를 닫았다 다시 열면 '자막 있음' 알림을 다시 보여 준다
                 // ★ 자막 wrapper 안의 video까지 모두 포함해서 강력 정리
                 const videos = previewContent.querySelectorAll('video');
                 const audios = previewContent.querySelectorAll('audio');
@@ -35607,7 +35625,7 @@ const App = {
     previewExtensions: {
         image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'],
         video: ['mp4', 'webm', 'mkv', 'avi', 'mov', 'ts', 'mts', 'm2ts', 'wmv', 'flv', 'asf', 'mpg', 'mpeg', 'vob', 'ogv', 'm4v', '3gp', '3g2', 'divx', 'xvid', 'rm', 'rmvb', 'f4v', 'swf', 'tp', 'trp'],
-        audio: ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma', 'opus'],
+        audio: ['mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'weba'],   // ★ (2026-10-08) 음악은 웹 플레이어(브라우저가 직접 재생)라 브라우저가 여는 형식만(펜닐 결정) — wma 등은 미리보기·재생 대상에서 뺌(목록·아이콘엔 그대로)
         document: ['pdf', 'txt', 'md', 'html', 'htm'],
         code: ['php', 'js', 'css', 'json', 'xml', 'xsl', 'sql', 'py', 'java', 'c', 'cc', 'cpp', 'cxx', 'cs', 'h', 'hpp', 'ps1', 'bat', 'cmd', 'vbs', 'sh', 'bash', 'yml', 'yaml', 'ini', 'conf', 'log', 'csv', 'tsv', 'reg', 'inf', 'cfg', 'env', 'properties', 'toml', 'ts', 'tsx', 'jsx', 'vue', 'rb', 'go', 'rs', 'swift', 'kt', 'lua', 'pas', 'asm', 'gradle', 'makefile', 'dockerfile', 'srt', 'vtt', 'ass', 'ssa', 'smi', 'sub', 'nfo', 'cue', 'm3u8', 'lst', 'rpt', '1st', 'text', 'key', 'less', 'scss', 'gitignore', 'htaccess'],
         hwp: ['hwp', 'hwpx'],
@@ -36798,6 +36816,32 @@ const App = {
                         subtitleTracks.push({ name: f.name, path: f.path, ext: fext });
                     }
                 });
+                // ★ (2026-10-08) 고르는 순서 — 이름이 **똑같은** 자막을 먼저(펜닐 승인). 찾는 규칙(같음·앞부분 같음)과 찾은 목록은 그대로, 순서만 바꾼다.
+                //   [원인] 화면엔 목록의 첫 자막만 쓰는데 목록 순서(파일 이름순)대로라 'sub3.webm' 에 'sub3.srt' 가 있어도 앞에 오는 'sub.srt'(앞부분만 같음)를 썼다.
+                //   순위: 0 이름 같음 → 1 영상이름 + 구분자(. - _ 공백 [ ()로 이어짐(예: 영화.ko.srt) → 2 자막이름 + 구분자 = 영상이름(예: 영화.1080p.mkv 에 영화.srt)
+                //   → 3 그 밖의 앞부분 일치(예: sub3 에 sub). 같은 순위끼리는 종전 순서 그대로.
+                {
+                    const _sep = (c) => c === '.' || c === '-' || c === '_' || c === ' ' || c === '[' || c === '(';
+                    const _rank = (t) => {
+                        const b = t.name.substring(0, t.name.lastIndexOf('.')).toLowerCase();
+                        if (b === videoBaseNameLower) return 0;
+                        if (b.startsWith(videoBaseNameLower) && _sep(b.charAt(videoBaseNameLower.length))) return 1;
+                        if (videoBaseNameLower.startsWith(b) && _sep(videoBaseNameLower.charAt(b.length))) return 2;
+                        return 3;
+                    };
+                    // ★ (2026-10-08) 언어(펜닐 결정 1-가·2-가) — ⚙ '자막 파일'에서 고른 언어를 이 브라우저에 기억(fs_sub_lang)해 다음 영상에서도
+                    //   그 언어 자막을 먼저(잘 맞는 자막 — 순위 0~2 — 안에서). 기억이 없거나 그 언어가 없으면 순서대로, 순위가 같으면 한국어 먼저.
+                    let _pref = '';
+                    try { _pref = localStorage.getItem('fs_sub_lang') || ''; } catch (e) { _pref = ''; }
+                    const _ord = subtitleTracks.map((t, i) => {
+                        const r = _rank(t);
+                        const lg = this._subLangOf(t.name, videoBaseNameLower);
+                        return { t, i, r, g: r <= 2 ? 0 : 1, m: (_pref && lg === _pref) ? 0 : 1, ko: lg === 'ko' ? 0 : 1 };
+                    });
+                    _ord.sort((a, b) => (a.g - b.g) || (a.m - b.m) || (a.r - b.r) || (a.ko - b.ko) || (a.i - b.i));
+                    _ord.forEach((o, i) => { subtitleTracks[i] = o.t; });
+                    subtitleTracks._videoBase = videoBaseNameLower;   // ⚙ 에서 고른 자막의 언어를 가릴 때 씀
+                }
                 
                 
                 // 브라우저 네이티브 재생 가능 포맷 (확장자 기반 1차 판단)
@@ -37078,7 +37122,7 @@ const App = {
             case 'audio':
                 document.getElementById('preview-image-zoom-bar').style.display = 'none';
                 // 같은 폴더의 오디오 파일 목록 구성
-                const audioExtsForPlaylist = ['mp3','wav','ogg','flac','m4a','aac','wma','opus'];
+                const audioExtsForPlaylist = ['mp3','m4a','m4b','aac','ogg','oga','opus','flac','wav','weba'];   // ★ (2026-10-08) 음악은 웹 플레이어(브라우저가 직접 재생)라 브라우저가 여는 형식만(펜닐 결정) — wma 등은 미리보기·재생 대상에서 뺌(목록·아이콘엔 그대로)
                 const audioFiles = (this.files || []).filter(f => {
                     if (f.isDir) return false;
                     const fExt = f.name.split('.').pop().toLowerCase();
@@ -38498,7 +38542,7 @@ const App = {
                                         vid._subTextTrack = _t;
                                     }
                                     // cue가 비어있으면 재주입
-                                    if ((!_t.cues || _t.cues.length === 0) && vid._subInjectCues) {
+                                    if ((!_t.cues || _t.cues.length === 0 || (typeof vid._subExpectedOff === 'function' && _t._fsInjOff !== vid._subExpectedOff())) && vid._subInjectCues) {   // ★ (2026-10-08) 보정값이 바뀌었어도
                                         vid._subInjectCues(_t, _cues);
                                     }
                                 }
@@ -42575,6 +42619,12 @@ const App = {
             ccOn: () => video._subEnabled !== false,
             subAct: (name) => { const b = inPreview('.subtitle-controls .sub-' + name); if (b) b.click(); },
             subSync: () => video._subSyncOffset || 0,
+            // ★ (2026-10-08) ⚙ '자막 파일' — 찾은 자막이 2개 이상일 때만 목록(이름·지금 쓰는 것)과 바꾸기
+            subTracks: () => {
+                const L = video._subTrackList;
+                if (!Array.isArray(L) || L.length < 2) return null;
+                return { tracks: L.map((tk, i) => ({ label: tk.name, on: i === video._subTrackIdx })), select: (i) => { App._selectSubTrack(video, i); } };
+            },
             hasPip: () => shown(byId('vec-pip')),
             togglePip: () => { const b = byId('vec-pip'); if (b) b.click(); },
             toggleFs: () => { const b = document.querySelector('.video-player-wrap .video-fullscreen-btn'); if (b) b.click(); },
@@ -42764,13 +42814,22 @@ const App = {
         // 이때 video를 다시 wrapper로 감싸면 "좀비 비디오"가 되어 오디오 계속 재생됨
         const isStillValid = () => {
             if (!video.isConnected) return false;
+            // ★ (2026-10-08) 그사이 다른 영상을 열었으면(showPreview 가 자막 목록을 새로 만듦) 그만둔다 — 0.3초 예약이 남아 있다가
+            //   새 영상에 앞 영상 자막이 붙던 것(빠르게 다음으로 넘길 때). 트랜스코딩 전환 때 다시 부르는 쪽도 지금 목록을 넘기므로 그대로 동작.
+            if (subtitleTracks !== this._savedSubtitleTracks) return false;
             // preview-content 밖으로 이동됐다면 (video-sub-wrapper에 들어간 정상 케이스 제외) abort
             const pc = document.getElementById('preview-content');
             if (!pc || !pc.contains(video)) return false;
             return true;
         };
         
-        for (let i = 0; i < subtitleTracks.length; i++) {
+        // ★ (2026-10-08) 고른 자막 하나만 받는다(⚙ '자막 파일'로 바꾸면 그때 그 파일만 받음 — 종전엔 맞는 자막을 모두 받고 첫 번째만 썼다).
+        //   고른 자막(목록의 _chosen, 없으면 첫 번째)부터 차례로 시도해 처음 읽힌 것을 쓰고 멈춘다(첫 자막이 깨졌으면 다음 것).
+        const _first = (Number.isInteger(subtitleTracks._chosen) && subtitleTracks[subtitleTracks._chosen]) ? subtitleTracks._chosen : 0;
+        const _order = [_first].concat(subtitleTracks.map((_, k) => k).filter((k) => k !== _first));
+        let _shownTried = false;   // 화면 자막을 만들기 시작했으면 도중에 오류가 나도 다음 자막으로 다시 만들지 않는다(겹침 방지)
+        for (let _k = 0; _k < _order.length; _k++) {
+            const i = _order[_k];
             if (!isStillValid()) return;  // 각 자막 처리 전 유효성 체크
             const sub = subtitleTracks[i];
             try {
@@ -42780,84 +42839,21 @@ const App = {
                 if (!response.ok) {
                     continue;
                 }
-                
-                // 인코딩 처리: UTF-16 LE/BE, UTF-8, EUC-KR 자동 감지
                 const buffer = await response.arrayBuffer();
                 if (!isStillValid()) return;  // buffer 읽는 중 cleanup 됐으면 abort
-                let text = '';
-                
-                const bytes = new Uint8Array(buffer);
-                
-                if (bytes[0] === 0xFF && bytes[1] === 0xFE) {
-                    // UTF-16 LE BOM
-                    text = new TextDecoder('utf-16le').decode(buffer);
-                } else if (bytes[0] === 0xFE && bytes[1] === 0xFF) {
-                    // UTF-16 BE BOM
-                    text = new TextDecoder('utf-16be').decode(buffer);
-                } else if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
-                    // UTF-8 BOM
-                    text = new TextDecoder('utf-8').decode(buffer);
-                } else {
-                    // BOM 없음: UTF-8 시도 → 실패 시 EUC-KR
-                    try {
-                        text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
-                    } catch (e) {
-                        text = new TextDecoder('euc-kr').decode(buffer);
-                    }
-                }
-                
-                let vttContent = '';
-                
-                switch (sub.ext) {
-                    case 'vtt':
-                        vttContent = text;
-                        break;
-                    case 'srt':
-                        vttContent = this._srtToVtt(text);
-                        break;
-                    case 'smi':
-                    case 'sami':
-                        vttContent = this._smiToVtt(text);
-                        break;
-                    case 'ass':
-                    case 'ssa':
-                        vttContent = this._assToVtt(text);
-                        break;
-                    default:
-                        continue;
-                }
-                
-                if (!vttContent) {
+                // ★ (2026-10-08) 글자 변환(인코딩 자동 감지)·VTT 변환·cue 만들기는 _subtitleCuesFromBuffer 로 옮김(내용 그대로 — ⚙ 자막 바꾸기도 같이 씀)
+                const cues = this._subtitleCuesFromBuffer(buffer, sub.ext);
+                if (!cues) {
                     continue;
                 }
-                
+                _shownTried = true;
                 
                 // 순수 커스텀 오버레이 자막 (track 엘리먼트 없음)
-                if (i === 0) {
-                    // VTT 파싱하여 cue 배열 생성
-                    const cues = [];
-                    const vttLines = vttContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
-                    let ci = 0;
-                    while (ci < vttLines.length) {
-                        const match = vttLines[ci].match(/(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/);
-                        if (match) {
-                            const parseTime = (s) => {
-                                const p = s.split(':');
-                                return parseInt(p[0])*3600 + parseInt(p[1])*60 + parseFloat(p[2]);
-                            };
-                            const startTime = parseTime(match[1]);
-                            const endTime = parseTime(match[2]);
-                            let text = '';
-                            ci++;
-                            while (ci < vttLines.length && vttLines[ci].trim() !== '') {
-                                if (text) text += '\n';
-                                text += vttLines[ci].trim();
-                                ci++;
-                            }
-                            if (text) cues.push({ startTime, endTime, text });
-                        }
-                        ci++;
-                    }
+                {
+                    // ★ (2026-10-08) ⚙ '자막 파일' 목록·바꾸기용 — 이 영상의 자막 목록·지금 쓰는 번호·저장소
+                    video._subTrackList = subtitleTracks;
+                    video._subTrackIdx = i;
+                    video._subStorageId = storageId;
                     
                     // 커스텀 오버레이 (모달 재생용)
                     let wrapper = video.parentElement;
@@ -42943,6 +42939,11 @@ const App = {
                             if (e) e.stopPropagation();
                             video._subEnabled = (video._subEnabled === false);
                             _applySubEnabled();
+                            // ★ (2026-10-08) 켜짐/꺼짐을 화면에 1초(음량 표시 자리 — 펜닐 요청, VLC·mpv·유튜브처럼). 스킨이 없으면 아무것도 안 함.
+                            try {
+                                const _on = video._subEnabled !== false;
+                                if (window.FSVideoSkin && typeof window.FSVideoSkin.showMessage === 'function') window.FSVideoSkin.showMessage(video.closest('.fsvs-on'), _on ? t('sub_osd_on', '자막 켜짐') : t('sub_osd_off', '자막 꺼짐'), { icon: 'cc', off: !_on, ms: 1000 });
+                            } catch (x) {}
                         };
                         subToggleBtn.onclick = _toggleSub;
                         _applySubEnabled();
@@ -43021,6 +43022,7 @@ const App = {
                         // ★ (2026-10-07) 스트리밍이면 보정값(_qualitySeekOffset)도 뺀다 — 네이티브 트랙은 브라우저 시각으로 그리므로(넣는 시점 기준,
                         //   전체화면 진입·설정 변경 때 다시 넣음).
                         const _off = (video._subSyncOffset || 0) + (App._isStreamingVideo(video) ? (Number(video._qualitySeekOffset) || 0) : 0);
+                        try { track._fsInjOff = _off; } catch (eS) {}   // ★ (2026-10-08) 어떤 보정값으로 넣었는지 — 전체화면 들어갈 때 바뀌었으면 다시 넣는다
                         const _bt = parseFloat(overlay && overlay.style.getPropertyValue('bottom'));
                         const _line = Math.max(0, Math.min(100, 100 - (isFinite(_bt) ? _bt : 10)));
                         let added = 0;
@@ -43040,6 +43042,9 @@ const App = {
                         return added;
                     };
                     video._subInjectCues = _injectCues;  // fullscreen 클릭 핸들러에서 호출
+                    // ★ (2026-10-08) 지금 넣어야 할 보정값(싱크 + 스트리밍이면 위치 보정값) — 전체화면 진입 때 넣어 둔 cue 와 다르면 다시 넣는다(공유와 같음).
+                    //   종전엔 cue 가 비었을 때만 다시 넣어, 같은 영상 요소에서 화질·음성을 바꾸면 아이폰 전체화면 자막이 옛 보정값 기준일 수 있었다.
+                    video._subExpectedOff = () => (video._subSyncOffset || 0) + (App._isStreamingVideo(video) ? (Number(video._qualitySeekOffset) || 0) : 0);
                     // ★ (2026-09-28) 설정(위치·싱크)이 바뀌면 숨겨 둔 네이티브 트랙의 cue 를 새로 만든다 — 아이폰에서만(네이티브 자막은 아이폰 전체화면에서만 쓰고,
                     //   PC·안드로이드는 트랙이 disabled 라 cues 가 null → 기존 cue 를 못 지워 설정을 바꿀 때마다 쌓이는(누수) 것을 막는다).
                     video._subRebuildNativeCues = () => {
@@ -43132,7 +43137,7 @@ const App = {
                                     _t = video.addTextTrack('subtitles', video._subLabel || '자막', 'ko');
                                     video._subTextTrack = _t;
                                 }
-                                if ((!_t.cues || _t.cues.length === 0) && video._subInjectCues) {
+                                if ((!_t.cues || _t.cues.length === 0 || (typeof video._subExpectedOff === 'function' && _t._fsInjOff !== video._subExpectedOff())) && video._subInjectCues) {   // ★ (2026-10-08) 보정값이 바뀌었어도
                                     video._subInjectCues(_t, _cues);
                                 }
                             }
@@ -43179,7 +43184,7 @@ const App = {
                             }
                             const ct = App._subMediaTime(video) + (video._subSyncOffset || 0);   // ★ (2026-10-07) 스트리밍 보정값 포함
                             let found = '';
-                            for (const cue of cues) {
+                            for (const cue of (video._subCues || cues)) {   // ★ (2026-10-08) ⚙ 에서 자막 파일을 바꾸면 video._subCues 가 바뀜
                                 if (ct >= cue.startTime && ct <= cue.endTime) {
                                     found = cue.text;
                                     break;
@@ -43198,10 +43203,172 @@ const App = {
                     
                     video._subTimer = subTimer;
                     video._subOverlay = overlay;
+                    // ★ (2026-10-08) '자막 있음' 알림 — 재생이 시작될 때 한 번(펜닐 요청). 자막 글자가 하나 이상일 때만.
+                    if (cues.length > 0) { try { this._armSubNotice(video, sub.name, storageId); } catch (x) {} }
+                    break;   // ★ (2026-10-08) 하나만 쓴다 — 나머지는 받지 않음
                 }
             } catch (e) {
+                if (_shownTried) break;
             }
         }
+    },
+
+    // ★ (2026-10-08) 자막 이름의 언어(ko·en·ja·zh 등) — 영상 이름 뒤에 붙은 부분(영화.ko.srt 의 'ko')에서 찾는다. 모르면 ''.
+    _subLangOf(name, videoBaseLower) {
+        let b = String(name || '');
+        const dot = b.lastIndexOf('.');
+        b = (dot > 0 ? b.substring(0, dot) : b).toLowerCase();
+        const vb = String(videoBaseLower || '').toLowerCase();
+        if (vb && b.startsWith(vb)) b = b.substring(vb.length);
+        const toks = b.split(/[.\-_ \[\]()]+/).filter(Boolean);
+        const MAP = {
+            ko: ['ko', 'kor', 'kr', 'korean', '한글', '한국어'], en: ['en', 'eng', 'english', '영어', '영문'],
+            ja: ['ja', 'jp', 'jpn', 'japanese', '일본어'], zh: ['zh', 'chi', 'chs', 'cht', 'zho', 'chinese', '중국어'],
+            fr: ['fr', 'fre', 'fra', 'french'], de: ['de', 'ger', 'deu', 'german'], es: ['es', 'spa', 'spanish'],
+            ru: ['ru', 'rus', 'russian'], vi: ['vi', 'vie', 'vietnamese'], th: ['th', 'tha', 'thai'], it: ['it', 'ita', 'italian'], pt: ['pt', 'por', 'portuguese']
+        };
+        for (let k = toks.length - 1; k >= 0; k--) {
+            for (const code in MAP) { if (MAP[code].includes(toks[k])) return code; }
+        }
+        return '';
+    },
+
+    // ★ (2026-10-08) ⚙ '자막 파일'에서 다른 자막으로 바꾸기(펜닐 요청) — 그 파일만 받아 화면 자막(video._subCues)을 바꾼다.
+    //   크기·위치·싱크·켜짐 상태는 그대로. 아이폰 전체화면용 자막도 다시 만든다. 고른 언어를 기억(fs_sub_lang — 언어를 모르는 파일이면 기억을 지움).
+    //   트랜스코딩 전환 등으로 자막을 다시 불러와도 고른 자막을 쓴다(목록의 _chosen). 빠르게 여러 번 누르면 마지막 것만 적용.
+    async _selectSubTrack(video, idx) {
+        const L = video && video._subTrackList;
+        if (!Array.isArray(L) || !L[idx] || idx === video._subTrackIdx) return;
+        const seq = (video._subSwitchSeq = (video._subSwitchSeq || 0) + 1);
+        const sub = L[idx];
+        let cues = null;
+        try {
+            const r = await fetch(`api.php?action=download&storage_id=${video._subStorageId}&path=${encodeURIComponent(sub.path)}&inline=1`);
+            if (r.ok) cues = this._subtitleCuesFromBuffer(await r.arrayBuffer(), sub.ext);
+        } catch (e) { cues = null; }
+        if (seq !== video._subSwitchSeq || !video.isConnected || this._savedSubtitleTracks !== L) return;   // 그사이 다른 선택·다른 영상
+        if (!cues) { this.toast(t('sub_switch_fail', '자막 파일을 읽지 못했습니다.') + ' — ' + sub.name, 'error'); return; }
+        video._subCues = cues;
+        video._subTrackIdx = idx;
+        L._chosen = idx;
+        video._subLabel = sub.label || (t('subtitle', '자막') + ' ' + (idx + 1));
+        try { if (video._subOverlay) video._subOverlay.innerHTML = ''; } catch (e) {}   // 다음 갱신(0.25초)에 새 자막으로
+        try { if (typeof video._subRebuildNativeCues === 'function') video._subRebuildNativeCues(); } catch (e) {}
+        try {
+            const lg = this._subLangOf(sub.name, L._videoBase || '');
+            if (lg) localStorage.setItem('fs_sub_lang', lg); else localStorage.removeItem('fs_sub_lang');
+        } catch (e) {}
+        try {
+            const on = video._subEnabled !== false;
+            if (window.FSVideoSkin && typeof window.FSVideoSkin.showMessage === 'function') window.FSVideoSkin.showMessage(video.closest('.fsvs-on'), (on ? t('sub_osd_found', '자막') : t('sub_osd_found_off', '자막 있음(꺼짐)')) + ': ' + (sub.name || ''), { icon: 'cc', off: !on, ms: 1500 });
+            // 방금 이름을 보여 줬으니 재생 시작 때의 '자막 있음' 알림은 생략(_armSubNotice 와 같은 기억 값)
+            if (this.currentPreviewPath) this._subNoticeKey = String(video._subStorageId == null ? '' : video._subStorageId) + '|' + this.currentPreviewPath;
+        } catch (e) {}
+    },
+
+    // ★ (2026-10-08) 자막 파일 내용(받은 바이트) → cue 배열 — _loadSubtitles 안에 있던 코드를 그대로 옮김(⚙ '자막 파일' 바꾸기도 같이 쓰려고).
+    //   인코딩 자동 감지(UTF-16 LE/BE·UTF-8·EUC-KR) → 형식별 VTT 변환(vtt·srt·smi/sami·ass/ssa) → cue({startTime,endTime,text}) 목록.
+    //   읽을 수 없는 형식·빈 내용이면 null(종전의 continue 와 같음). cue 가 0개여도 빈 배열을 돌려준다(종전과 같음).
+    _subtitleCuesFromBuffer(buffer, ext) {
+        // 인코딩 처리: UTF-16 LE/BE, UTF-8, EUC-KR 자동 감지
+        let text = '';
+        
+        const bytes = new Uint8Array(buffer);
+        
+        if (bytes[0] === 0xFF && bytes[1] === 0xFE) {
+            // UTF-16 LE BOM
+            text = new TextDecoder('utf-16le').decode(buffer);
+        } else if (bytes[0] === 0xFE && bytes[1] === 0xFF) {
+            // UTF-16 BE BOM
+            text = new TextDecoder('utf-16be').decode(buffer);
+        } else if (bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF) {
+            // UTF-8 BOM
+            text = new TextDecoder('utf-8').decode(buffer);
+        } else {
+            // BOM 없음: UTF-8 시도 → 실패 시 EUC-KR
+            try {
+                text = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+            } catch (e) {
+                text = new TextDecoder('euc-kr').decode(buffer);
+            }
+        }
+        
+        let vttContent = '';
+        
+        switch (ext) {
+            case 'vtt':
+                vttContent = text;
+                break;
+            case 'srt':
+                vttContent = this._srtToVtt(text);
+                break;
+            case 'smi':
+            case 'sami':
+                vttContent = this._smiToVtt(text);
+                break;
+            case 'ass':
+            case 'ssa':
+                vttContent = this._assToVtt(text);
+                break;
+            default:
+                return null;
+        }
+        
+        if (!vttContent) {
+            return null;
+        }
+        // VTT 파싱하여 cue 배열 생성
+        const cues = [];
+        const vttLines = vttContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+        let ci = 0;
+        while (ci < vttLines.length) {
+            const match = vttLines[ci].match(/(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/);
+            if (match) {
+                const parseTime = (s) => {
+                    const p = s.split(':');
+                    return parseInt(p[0])*3600 + parseInt(p[1])*60 + parseFloat(p[2]);
+                };
+                const startTime = parseTime(match[1]);
+                const endTime = parseTime(match[2]);
+                let text = '';
+                ci++;
+                while (ci < vttLines.length && vttLines[ci].trim() !== '') {
+                    if (text) text += '\n';
+                    text += vttLines[ci].trim();
+                    ci++;
+                }
+                if (text) cues.push({ startTime, endTime, text });
+            }
+            ci++;
+        }
+        
+        return cues;
+    },
+
+    // ★ (2026-10-08) '자막 있음' 알림(펜닐 요청 — 팟플레이어의 시작 정보·mpv 시작 메시지처럼) — 스킨의 음량 표시 자리에 'CC 자막: 파일 이름' 1.5초.
+    //   ① 재생이 시작될 때(이미 재생 중이면 바로) — 트랜스코딩 준비 중(그림 없음)엔 띄우지 않고 기다린다.
+    //   ② 영상 하나에 한 번 — 트랜스코딩 전환·화질/음성 변경으로 자막을 다시 불러와도(영상 요소가 바뀜) 같은 파일이면 다시 안 띄움.
+    //      다른 영상으로 넘어가거나 미리보기를 닫았다 다시 열면(hideModal 이 비움) 다시 띄움.
+    //   ③ 실제로 띄운 뒤에만 '보였음'으로 적는다 — 준비 중 영상 요소가 바뀌어 첫 요소가 재생되지 않으면 새 요소에서 다시 기다린다.
+    _armSubNotice(video, name, storageId) {
+        const path = this.currentPreviewPath;
+        if (!video || !path || video._subNoticeArmed) return;
+        const key = String(storageId == null ? '' : storageId) + '|' + path;
+        if (this._subNoticeKey === key) return;
+        video._subNoticeArmed = true;
+        const show = () => {
+            if (!video.isConnected || this.currentPreviewPath !== path || this._subNoticeKey === key) return;
+            const wrap = video.closest('.fsvs-on');
+            if (!wrap || !window.FSVideoSkin || typeof window.FSVideoSkin.showMessage !== 'function') return;
+            this._subNoticeKey = key;
+            const on = video._subEnabled !== false;
+            // ★ (2026-10-08) 재생 전에 ⚙ 에서 자막 파일을 바꿨으면 지금 쓰는 자막 이름으로(재검토에서 발견 — 처음 이름이 나오던 것)
+            const _L = video._subTrackList;
+            const _nm = (Array.isArray(_L) && _L[video._subTrackIdx] && _L[video._subTrackIdx].name) || name || '';
+            window.FSVideoSkin.showMessage(wrap, (on ? t('sub_osd_found', '자막') : t('sub_osd_found_off', '자막 있음(꺼짐)')) + ': ' + _nm, { icon: 'cc', off: !on, ms: 1500 });
+        };
+        if (!video.paused && !video.ended && video.readyState >= 3) show();
+        else video.addEventListener('playing', show, { once: true });
     },
     
     // SRT → WebVTT 변환

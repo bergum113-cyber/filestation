@@ -3268,5 +3268,11 @@
     "vi_dlg_title": "Video info",
     "vi_cw": "clockwise",
     "vi_moved": "Moved to another video — playback status updates stopped.",
-    "vi_badname": "With this server setting (proc_open disabled), files whose names contain % ! \" can't be read."
+    "vi_badname": "With this server setting (proc_open disabled), files whose names contain % ! \" can't be read.",
+    "sub_osd_found": "Subtitles",
+    "sub_osd_found_off": "Subtitles available (off)",
+    "sub_osd_on": "Subtitles on",
+    "sub_osd_off": "Subtitles off",
+    "fsvs_sub_file": "Subtitle file",
+    "sub_switch_fail": "Couldn't read the subtitle file."
 }

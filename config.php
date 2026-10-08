@@ -287,7 +287,7 @@ define('THUMB_QUALITY', 80);
 define('PREVIEW_EXTENSIONS', [
     'image' => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'ico', 'tiff', 'tif', 'heic', 'heif'],
     'video' => ['mp4', 'webm', 'mkv', 'avi', 'mov', 'wmv', 'flv', 'ts', 'm2ts', 'mts', 'vob', 'rmvb', '3gp', 'mpg', 'mpeg', 'm4v'],
-    'audio' => ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma', 'opus', 'ape', 'aiff'],
+    'audio' => ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma', 'opus', 'ape', 'aiff', 'oga', 'm4b', 'weba'],   // 파일 종류(아이콘·필터). ★ (2026-10-08) oga·m4b·weba 추가 — 실제 재생 여부는 app.js previewExtensions
     'document' => ['pdf', 'txt', 'md', 'html', 'htm'],
     'code' => ['php', 'js', 'jsx', 'ts', 'tsx', 'css', 'scss', 'json', 'xml', 'sql', 'py', 'java', 'c', 'cpp', 'h', 'hpp', 'go', 'rs', 'sh', 'bat', 'ps1', 'yaml', 'yml', 'ini', 'conf']
 ]);
@@ -346,7 +346,7 @@ define('EMOJI_ICONS', [
     // 음악
     'mp3' => '🎵', 'wav' => '🎵', 'flac' => '🎵', 'aac' => '🎵', 'ogg' => '🎵',
     'm4a' => '🎵', 'wma' => '🎵', 'opus' => '🎵', 'ape' => '🎵', 'alac' => '🎵',
-    'aiff' => '🎵', 'mid' => '🎵', 'midi' => '🎵',
+    'aiff' => '🎵', 'mid' => '🎵', 'midi' => '🎵', 'oga' => '🎵', 'm4b' => '🎵', 'weba' => '🎵',
     // 압축
     'zip' => '📦', 'rar' => '📦', '7z' => '📦', 'tar' => '📦', 'gz' => '📦',
     'xz' => '📦', 'bz2' => '📦', 'lz' => '📦', 'cab' => '📦', 'iso' => '📦',

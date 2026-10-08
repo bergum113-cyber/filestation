@@ -3263,5 +3263,11 @@
     "vi_dlg_title": "동영상 정보",
     "vi_cw": "시계 방향",
     "vi_moved": "다른 영상으로 넘어가 재생 상태 갱신을 멈췄습니다.",
-    "vi_badname": "이 서버 설정(proc_open 꺼짐)에서는 파일 이름에 % ! \" 가 있으면 읽을 수 없습니다."
+    "vi_badname": "이 서버 설정(proc_open 꺼짐)에서는 파일 이름에 % ! \" 가 있으면 읽을 수 없습니다.",
+    "sub_osd_found": "자막",
+    "sub_osd_found_off": "자막 있음(꺼짐)",
+    "sub_osd_on": "자막 켜짐",
+    "sub_osd_off": "자막 꺼짐",
+    "fsvs_sub_file": "자막 파일",
+    "sub_switch_fail": "자막 파일을 읽지 못했습니다."
 }

@@ -12875,7 +12875,7 @@ class FileManager {
         // 대용량 폴더 파싱 시 PHP 타임아웃 방지
         @set_time_limit(60);
         
-        $audioExts = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac', 'wma', 'opus'];
+        $audioExts = ['mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'weba'];   // ★ (2026-10-08) 음악은 웹 플레이어가 여는 형식만(펜닐 결정 — wma·ape·alac·aiff 는 브라우저가 재생 못 함)
         $isRemote = $this->isRemoteStorage($storageId);
         
         // 원격 스토리지: 파일 목록을 어댑터로부터 받아옴 (stat 호출 불가능, 캐시 조회만)
@@ -14394,6 +14394,7 @@ class FileManager {
             'opus' => 'audio/ogg',           // ★ 추가 (Opus는 OGG 컨테이너)
             'wma' => 'audio/x-ms-wma',       // ★ 추가
             'oga' => 'audio/ogg',            // ★ 추가
+            'm4b' => 'audio/mp4', 'weba' => 'audio/webm',   // ★ (2026-10-08) 웹 플레이어가 여는 형식 추가
             'aiff' => 'audio/aiff', 'aif' => 'audio/aiff',  // ★ 추가
             // 문서
             'pdf' => 'application/pdf', 'txt' => 'text/plain', 'html' => 'text/html',

@@ -157,6 +157,13 @@
 .fsvs-menu.fsvs-3col.fsvs-compact { row-gap: 8px; }
 .fsvs-menu.fsvs-3col.fsvs-compact .fsvs-sec + .fsvs-sec { margin-top: 0; }
 .fsvs-menu.fsvs-2col .fsvs-sec + .fsvs-sec { margin-top: 0; }
+/* ★ (2026-10-08) 두 칸·세 칸에서 긴 목록(오디오·자막 파일 — .fsvs-sec-wide)은 한 줄을 통째로 쓰고, 짧은 칸(재생 속도·화질·자막)은 빈자리부터 채운다(dense).
+   [결함, 펜닐 제보 사진] 칸을 들어온 순서대로 한 줄씩 채워, 음성 11개 같은 긴 목록과 같은 줄의 재생 속도·화질 아래가 텅 비고 자막이 그 아래로 밀렸다
+   → 높이가 모자라 창 전체를 70~76% 로 줄여 글자·버튼이 작아졌다. 한 칸(좁은 화면)일 땐 영향 없음. */
+.fsvs-menu.fsvs-2col, .fsvs-menu.fsvs-3col { grid-auto-flow: row dense; }
+.fsvs-menu.fsvs-2col .fsvs-sec-wide, .fsvs-menu.fsvs-3col .fsvs-sec-wide { grid-column: 1 / -1; }
+/* ★ (2026-10-08) 칸 제목·항목은 왼쪽 정렬 — 공유 페이지는 페이지 전체가 가운데 정렬(text-align: center)이라 설정 창 제목이 가운데로 보였다 */
+.fsvs-root .fsvs-menu { text-align: left; }
 /* 맞춤 단계 ③ 촘촘하게 */
 .fsvs-menu.fsvs-compact { padding: 10px 12px; }
 .fsvs-menu.fsvs-compact .fsvs-sectitle { font-size: 12px; margin-bottom: 4px; }
@@ -221,6 +228,12 @@
 .fsvs-rowlabel { font-size: 13px; color: #B9BDD0; }
 .fsvs-val { text-align: center; font-size: 14px; font-weight: 700; }
 .fsvs-subrow .fsvs-chip { min-width: 0; padding: 0 6px; }
+/* ★ (2026-10-08) 자막 칸의 세 행(크기·위치·싱크)을 한 격자로 — 이름 칸 폭을 가장 긴 이름에 맞춘다(최소 34px, 한국어는 종전과 같음).
+   [결함] 행마다 이름 칸이 34px 고정이라 영어 'Position'(약 52px)이 옆 버튼에 겹쳤다. 행(.fsvs-subrow)은 display: contents 로 격자에 그대로 들어가고
+   행 사이 간격은 종전처럼 8px(촘촘 6px). */
+.fsvs-chips.fsvs-subgrid { display: grid; grid-template-columns: minmax(34px, max-content) minmax(0, 1fr) 72px minmax(0, 1fr); gap: 8px; align-items: center; }
+.fsvs-chips.fsvs-subgrid > .fsvs-subrow { display: contents; }
+.fsvs-menu.fsvs-compact .fsvs-chips.fsvs-subgrid { gap: 6px; }
 /* 누른 칩 잠깐 강조 + 모든 버튼 눌림 효과 */
 .fsvs-root .fsvs-chip.is-flash { background: var(--fsvs-on-bg); border-color: var(--fsvs-on-bd); }
 .fsvs-root .fsvs-btn:active { transform: scale(0.96); }
@@ -343,7 +356,7 @@ body.fsvs-active #player-wrap .stream-badge.fsvs-badge-error { white-space: norm
 @keyframes fsVpIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .fs-vp-toast { animation: none; } }
 
-/* ★ (2026-10-05) 음량 표시(유튜브처럼, 펜닐 요청) — 키보드로 음량을 바꾸면 위쪽 가운데에 아이콘 + 퍼센트 1초(fs-video-skin.js showVolOsd). */
+/* ★ (2026-10-05) 음량 표시(유튜브처럼, 펜닐 요청) — 음량을 바꾸면 위쪽 가운데에 아이콘 + 퍼센트 1초(fs-video-skin.js showVolOsd). ★ (2026-10-08) 키보드뿐 아니라 마우스·터치로 막대를 움직여도. */
 .fsvs-volosd {
     position: absolute; top: 10%; left: 50%; transform: translate(-50%, -4px); z-index: 25;
     display: flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 8px;
@@ -354,3 +367,10 @@ body.fsvs-active #player-wrap .stream-badge.fsvs-badge-error { white-space: norm
 .fsvs-volosd.on { opacity: 1; transform: translate(-50%, 0); }
 .fsvs-volosd svg { width: 20px; height: 20px; flex: none; }
 @media (prefers-reduced-motion: reduce) { .fsvs-volosd { transition: none; } }
+/* ★ (2026-10-08) 짧은 알림(자막 있음·자막 켜짐/꺼짐) — 음량 표시 상자를 그대로 쓰고, 긴 파일 이름은 한 줄로 줄여(…) 화면 밖으로 안 나가게. */
+.fsvs-volosd.fsvs-osd-msg { max-width: calc(100% - 24px); box-sizing: border-box; }
+.fsvs-volosd.fsvs-osd-msg span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fsvs-osd-cc { flex: none; font-size: 11px; font-weight: 700; line-height: 1; letter-spacing: .5px; padding: 3px 4px; border: 1.5px solid currentColor; border-radius: 3px; }
+.fsvs-osd-cc.is-off { opacity: .55; text-decoration: line-through; }
+/* ★ (2026-10-08) ⚙ '자막 파일' 목록 — 긴 파일 이름(띄어쓰기 없는 것 포함)이 칸 밖으로 안 나가게 줄바꿈 */
+.fsvs-root .fsvs-chips.fsvs-subfiles .fsvs-chip { overflow-wrap: anywhere; word-break: break-all; }

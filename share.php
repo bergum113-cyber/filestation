@@ -388,6 +388,10 @@ if (!headers_sent()) {
         .toast.error { background: #dc3545; }
         .toast.info { background: #17a2b8; }
         .player-wrap { margin-bottom: 15px; border-radius: 12px; overflow: hidden; background: #000; position: relative; }
+        /* ★ (2026-10-08) ⚙ 설정 창이 열려 있는 동안만 플레이어 밖(위)으로 넘쳐 보이게 — 음성이 많으면 플레이어 위 빈 곳까지 펼친다(fs-video-skin menuRoomAbove).
+           모서리는 영상에 둥글기를 줘 그대로 보이게. 전체화면은 원래 overflow: visible. */
+        .player-wrap.fsvs-menu-open { overflow: visible; }
+        .player-wrap.fsvs-menu-open > video { border-radius: 12px; }
         .player-wrap video { width: 100%; max-height: 70vh; display: block; }
         /* FSAudioPlayer 사용으로 다크 배경 (메인 .preview-audio-wrap 패턴 동일) */
         .player-wrap.audio-wrap {
@@ -1209,7 +1213,7 @@ if (!headers_sent()) {
             <?php
                 $ext = strtolower(pathinfo($share['filename'], PATHINFO_EXTENSION));
                 $videoExts = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp'];
-                $audioExts = ['mp3','wav','ogg','flac','m4a','aac','wma','opus'];
+                $audioExts = ['mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'weba'];   // ★ (2026-10-08) 음악은 웹 플레이어가 여는 형식만(펜닐 결정 — wma·ape·alac·aiff 는 브라우저가 재생 못 함)
                 $isVideo = in_array($ext, $videoExts);
                 $isAudio = in_array($ext, $audioExts);
                 
@@ -1494,6 +1498,24 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                             ];
                                         }
                                     }
+                                }
+                                // ★ (2026-10-08) 고르는 순서 — 이름이 똑같은 자막을 먼저(탐색기와 같은 순위, 펜닐 승인). 화면엔 첫 자막만 쓰는데
+                                //   폴더 순서대로라 'sub3.webm' 에 'sub3.srt' 가 있어도 'sub.srt'(앞부분만 같음)를 썼다. 찾는 규칙·찾은 목록은 그대로, 순서만.
+                                if (count($autoSubtitles) > 1) {
+                                    $isSep = function ($c) { return $c === '.' || $c === '-' || $c === '_' || $c === ' ' || $c === '[' || $c === '('; };
+                                    $vbLen = strlen($videoBase);
+                                    $subRank = function ($name) use ($videoBase, $vbLen, $isSep) {
+                                        $b = strtolower(pathinfo($name, PATHINFO_FILENAME));
+                                        if ($b === $videoBase) return 0;
+                                        if (strpos($b, $videoBase) === 0 && $isSep(substr($b, $vbLen, 1))) return 1;
+                                        if ($b !== '' && strpos($videoBase, $b) === 0 && $isSep(substr($videoBase, strlen($b), 1))) return 2;
+                                        return 3;
+                                    };
+                                    $_subOrd = [];
+                                    foreach ($autoSubtitles as $_subIdx => $_subItem) $_subOrd[] = [$subRank($_subItem['name']), $_subIdx, $_subItem];
+                                    usort($_subOrd, function ($a, $b) { return ($a[0] <=> $b[0]) ?: ($a[1] <=> $b[1]); });
+                                    $autoSubtitles = array_map(function ($o) { $o[2]['rank'] = $o[0]; return $o[2]; }, $_subOrd);   // ★ (2026-10-08) 순위도 넘김 — 브라우저가 기억한 언어로 다시 고를 때 씀
+                                    unset($_subOrd, $_subIdx, $_subItem, $isSep, $vbLen, $subRank);   // 아래 페이지 코드와 이름이 겹치지 않게
                                 }
                             }
                         }
@@ -1927,6 +1949,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         'fsvs_more' => __('fsvs_more', '더 보기'),
         'fsvs_smaller' => __('fsvs_smaller', '작게'),
         'fsvs_sub_pos' => __('fsvs_sub_pos', '위치'),
+        'fsvs_sub_file' => __('fsvs_sub_file', '자막 파일'),   // ★ (2026-10-08) ⚙ 자막 파일 고르기
         'fsvs_sub_size' => __('fsvs_sub_size', '크기'),
         'fsvs_sub_sync' => __('fsvs_sub_sync', '싱크'),
         'fsvs_unmute' => __('fsvs_unmute', '소리 켜기'),
@@ -3066,6 +3089,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                     _shareHlsSession = null;
                                 }
                                 window._shareHlsSwRetried = false;
+                                // ★ (2026-10-08) 원본은 처음(0초)부터 실제 시각이므로 스트리밍 위치 보정값을 0 으로(재검토에서 발견) — 화질 CASE 3(아래)과 같게.
+                                //   안 지우면 자막(공유는 늘 보정값을 더함)·아이폰 전체화면 자막·이어 보기 위치 저장·이후 화질 변경이 옛 보정값만큼 어긋났다.
+                                player._qualitySeekOffset = 0;
                                 // 네이티브 src 설정 (source 자식 제거 후)
                                 player._switchingToTranscode = false;
                                 try { player.pause(); } catch(e) {}
@@ -3132,6 +3158,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     // ★ (2026-09-30) HEVC 는 종전 일반재생도 못 풀 가능성이 커 트랜스코딩으로(일반재생 실패 전환과 같은 함수)
                     if (isHevc && typeof window._shareTriggerTranscode === 'function') { window._shareTriggerTranscode(); return; }
                     if (!nativeSrc) return;
+                    // ★ (2026-10-08) 보던 위치(이어 보기로 옮긴 위치 포함)를 일반 재생에서도 이어서 — 탐색기의 _vpPending 과 같은 역할.
+                    //   종전엔 원본을 새로 넣으면 0초부터 시작했다(이어 보기는 이미 '사용함'으로 표시돼 다시 적용되지 않음).
+                    const _resumeAt = Number(player.currentTime) || 0;
+                    try { if (typeof window._shareVpReseek === 'function') window._shareVpReseek(_resumeAt); } catch (e) {}
                     player.removeAttribute('src');
                     player.querySelectorAll('source').forEach((x) => x.remove());
                     const so = document.createElement('source'); so.src = nativeSrc; so.type = 'video/mp4'; player.appendChild(so);
@@ -3265,6 +3295,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 
                 // CASE 2: 네이티브 → 트랜스코딩 (비-original 선택)
                 if (newQuality !== 'original' && !isTranscoding) {
+                    // ★ (2026-10-08) 실제 길이를 기억(탐색기 _startTranscode 와 같게) — 트랜스코딩(HLS)은 브라우저가 아는 길이가 변환된 만큼이라
+                    //   진행바 전체 길이가 계속 늘고 이어 보기 위치가 잘못 저장됐다. 원본을 재생하던 지금의 길이가 실제 길이.
+                    if (!(Number(player._knownDuration) > 0)) { const _d0 = Number(player.duration); if (isFinite(_d0) && _d0 > 0) player._knownDuration = _d0; }
                     // ★ (2026-09-30) 일반재생 빠른 시작 중이면 그 hls 를 먼저 정리(아래에서 트랜스코딩 HLS 를 새로 붙임) — 복귀도 막음
                     if (player._directHls) { try { player._directHls.destroy(); } catch (e) {} player._directHls = null; } player._directOff = true; player._directOn = false;
                     
@@ -3511,6 +3544,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             const _triggerTranscodeFallback = () => {
                 if (_nativeFallbackDone) return;
                 _nativeFallbackDone = true;
+                // ★ (2026-10-08) 실제 길이를 알고 있으면 기억(위 CASE 2 와 같은 이유 — 원본이 영상 정보까지 읽은 경우)
+                if (!(Number(player._knownDuration) > 0)) { const _d0 = Number(player.duration); if (isFinite(_d0) && _d0 > 0) player._knownDuration = _d0; }
                 // ★ (2026-09-30) 일반재생 빠른 시작 중이면 그 hls 를 정리하고 빠른 시작의 복귀를 막는다(두 복귀가 겹치지 않게)
                 if (player._directHls) { try { player._directHls.destroy(); } catch (e) {} player._directHls = null; } player._directOff = true; player._directOn = false;
                 // ★ 이 경로는 startTranscode()를 타지 않는다. 네이티브로 시작해 A-B 버튼이
@@ -3600,7 +3635,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 setTimeout(() => {
                     const autoSubs = <?= json_encode($autoSubtitles, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
                     if (autoSubs.length > 0) {
-                        subCues = parseSubtitle(autoSubs[0].content, autoSubs[0].ext);
+                        const _reSub = (_shareSubList && _shareSubList[_shareSubIdx]) || autoSubs[0];   // ★ (2026-10-08) ⚙ 에서 고른 자막을 그대로
+                        subCues = parseSubtitle(_reSub.content, _reSub.ext);
                         if (subCues.length > 0) _updateTrackElement();
                     }
                 }, 1000);
@@ -4151,6 +4187,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     // 가사 모달 열려있으면 다른 키 무시 (Ctrl+L, Esc만 위에서 처리됨)
                     if (_isLyricsOpen) return;
                     
+                    // ★ (2026-10-08) Shift+← / Shift+→ : 이전·다음 곡(탐색기와 같음 — 버튼 설명에도 적혀 있음). 종전엔 5초 이동으로 처리됐다.
+                    if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+                        if (e.key === 'ArrowLeft') { if (sharePlayer.prev) sharePlayer.prev(); }
+                        else if (sharePlayer.next) sharePlayer.next();
+                        e.preventDefault();
+                        return;
+                    }
                     // Space: 재생/일시정지
                     if (e.key === ' ' || e.code === 'Space') {
                         sharePlayer.togglePlay();
@@ -4277,6 +4320,30 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         const subOverlay = document.getElementById('subtitle-overlay');
         const subInput = document.getElementById('sub-file-input');
         let subCues = [];
+        // ★ (2026-10-08) 자동으로 찾은 자막 목록(고르는 순서대로)·지금 쓰는 번호·영상 이름 — ⚙ '자막 파일' 고르기용
+        let _shareSubList = [];
+        let _shareSubIdx = 0;
+        let _shareSubVB = '';
+        let _shareSubPicked = false;   // ⚙ 에서 자막 파일을 골랐으면(그때 이름을 보여 줌) 재생 시작 때 '자막 있음' 알림은 생략
+        // 자막 이름의 언어(영화.ko.srt 의 'ko') — 탐색기 _subLangOf 와 같은 규칙
+        const _shareSubLang = (name, vb) => {
+            let b = String(name || '');
+            const dot = b.lastIndexOf('.');
+            b = (dot > 0 ? b.substring(0, dot) : b).toLowerCase();
+            vb = String(vb || '').toLowerCase();
+            if (vb && b.startsWith(vb)) b = b.substring(vb.length);
+            const toks = b.split(/[.\-_ \[\]()]+/).filter(Boolean);
+            const MAP = {
+                ko: ['ko', 'kor', 'kr', 'korean', '한글', '한국어'], en: ['en', 'eng', 'english', '영어', '영문'],
+                ja: ['ja', 'jp', 'jpn', 'japanese', '일본어'], zh: ['zh', 'chi', 'chs', 'cht', 'zho', 'chinese', '중국어'],
+                fr: ['fr', 'fre', 'fra', 'french'], de: ['de', 'ger', 'deu', 'german'], es: ['es', 'spa', 'spanish'],
+                ru: ['ru', 'rus', 'russian'], vi: ['vi', 'vie', 'vietnamese'], th: ['th', 'tha', 'thai'], it: ['it', 'ita', 'italian'], pt: ['pt', 'por', 'portuguese']
+            };
+            for (let k = toks.length - 1; k >= 0; k--) {
+                for (const code in MAP) { if (MAP[code].includes(toks[k])) return code; }
+            }
+            return '';
+        };
         let subSize = 1.1;
         let subBottom = 8;
         
@@ -4309,9 +4376,40 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         //     ①일반 재생  : timeupdate 핸들러가 subOverlay 를 갱신
         //     ②iOS 전체화면: 네이티브 textTracks (webkitbeginfullscreen 에서 showing)
         let subEnabled = true;
+        let _subFromUser = false;   // ★ (2026-10-08) 보는 사람이 자막 파일을 직접 골랐는지 — 그러면 '자막 있음' 알림(자동으로 찾은 자막용)을 띄우지 않음
         // ★ (2026-09-23) 새 껍데기가 자막 유무·켜짐·싱크를 읽도록 읽기 전용 창구를 연다(동작 변경 없음).
         //   껍데기 연결 코드는 이 함수 밖에 있어 subCues·subEnabled·subSyncOffset 를 직접 볼 수 없다.
         window._shareSubState = () => ({ has: subCues.length > 0, on: subEnabled !== false, sync: subSyncOffset || 0 });
+        // ★ (2026-10-08) ⚙ '자막 파일' — 자동으로 찾은 자막이 2개 이상일 때만 목록과 바꾸기(크기·위치·싱크·켜짐 그대로, 아이폰 전체화면 자막도 다시 만듦).
+        //   고른 언어를 이 브라우저에 기억(fs_sub_lang — 탐색기와 같은 값, 언어를 모르는 파일이면 기억을 지움).
+        window._shareSubTracks = () => {
+            if (!Array.isArray(_shareSubList) || _shareSubList.length < 2 || _subFromUser) return null;
+            return {
+                tracks: _shareSubList.map((x, i) => ({ label: x.name, on: i === _shareSubIdx })),
+                select: (i) => {
+                    const x = _shareSubList[i];
+                    if (!x || i === _shareSubIdx) return;
+                    const pw = document.getElementById('player-wrap');
+                    const cues = parseSubtitle(x.content, x.ext);
+                    if (!cues || !cues.length) {
+                        try { if (window.FSVideoSkin && window.FSVideoSkin.showMessage) window.FSVideoSkin.showMessage(pw, <?= json_encode(__('sub_switch_fail', '자막 파일을 읽지 못했습니다.'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?> + ' — ' + (x.name || ''), { icon: 'cc', off: true, ms: 2000 }); } catch (e) {}
+                        return;
+                    }
+                    subCues = cues;
+                    _shareSubIdx = i;
+                    _shareSubPicked = true;
+                    if (subOverlay) subOverlay.innerHTML = '';
+                    try { _updateTrackElement(); } catch (e) {}
+                    try { const lg = _shareSubLang(x.name, _shareSubVB); if (lg) localStorage.setItem('fs_sub_lang', lg); else localStorage.removeItem('fs_sub_lang'); } catch (e) {}
+                    try {
+                        if (window.FSVideoSkin && window.FSVideoSkin.showMessage) {
+                            const _lbl = subEnabled ? <?= json_encode(__('sub_osd_found', '자막'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?> : <?= json_encode(__('sub_osd_found_off', '자막 있음(꺼짐)'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+                            window.FSVideoSkin.showMessage(pw, _lbl + ': ' + (x.name || ''), { icon: 'cc', off: !subEnabled, ms: 1500 });
+                        }
+                    } catch (e) {}
+                }
+            };
+        };
         const applySubEnabled = () => {
             document.querySelectorAll('.sub-toggle-btn').forEach(b => {
                 b.classList.toggle('sub-off', !subEnabled);
@@ -4330,7 +4428,15 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         };
 
         const subActions = {
-            toggle: () => { subEnabled = !subEnabled; applySubEnabled(); },
+            toggle: () => {
+                subEnabled = !subEnabled; applySubEnabled();
+                // ★ (2026-10-08) 켜짐/꺼짐을 화면에 1초(음량 표시 자리 — 탐색기와 같음). 스킨이 없으면 아무것도 안 함.
+                try {
+                    if (subCues.length > 0 && window.FSVideoSkin && typeof window.FSVideoSkin.showMessage === 'function') {
+                        window.FSVideoSkin.showMessage(document.getElementById('player-wrap'), subEnabled ? <?= json_encode(__('sub_osd_on', '자막 켜짐'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?> : <?= json_encode(__('sub_osd_off', '자막 꺼짐'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>, { icon: 'cc', off: !subEnabled, ms: 1000 });
+                    }
+                } catch (x) {}
+            },
             sizeDown: () => {
                 subSize = Math.max(0.6, subSize - 0.1);
                 if (subOverlay) subOverlay.style.fontSize = subSize + 'em';
@@ -4436,6 +4542,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             const text = await file.text();
             const ext = file.name.split('.').pop().toLowerCase();
             subCues = parseSubtitle(text, ext);
+            _subFromUser = true;   // ★ (2026-10-08) 직접 고른 자막 — 이쪽은 원래 '✅ 파일명' 을 띄우므로 '자막 있음' 알림은 생략
             if (subCues.length > 0 && subOverlay) {
                 subOverlay.textContent = '✅ ' + file.name + ' (' + subCues.length + ')';
                 setTimeout(() => { subOverlay.textContent = ''; }, 2000);
@@ -4455,6 +4562,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         const _shareInjectCues = (track, cueArr) => {
             try { if (track.cues && track.cues.length) { for (const oc of Array.from(track.cues)) { try { track.removeCue(oc); } catch (eR) {} } } } catch (eR2) {}
             const _off = (subSyncOffset || 0) + (Number(player._qualitySeekOffset) || 0);   // ★ (2026-10-07) 스트리밍 보정값도(네이티브 트랙은 브라우저 시각 기준)
+            try { track._fsInjOff = _off; } catch (eS) {}   // ★ (2026-10-08) 어떤 보정값으로 넣었는지 — 전체화면 들어갈 때 바뀌었으면 다시 넣는다(_shareEnsureCues)
             const _line = Math.max(0, Math.min(100, 100 - (isFinite(subBottom) ? subBottom : 10)));
             let added = 0;
             for (const c of cueArr) {
@@ -4485,7 +4593,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     _shareNativeTrack = track;
                 } catch(eT) { return; }
             }
-            if (!track.cues || track.cues.length === 0) {
+            // ★ (2026-10-08) 비었거나, 넣은 뒤 위치 보정값·싱크가 바뀌었으면(화질·음성 변경·이어 보기·일반재생 전환) 다시 넣는다 — 종전엔 비었을 때만이라
+            //   아이폰 전체화면 자막이 옛 보정값 기준으로 어긋날 수 있었다.
+            const _curOff = (subSyncOffset || 0) + (Number(player._qualitySeekOffset) || 0);
+            if (!track.cues || track.cues.length === 0 || track._fsInjOff !== _curOff) {
                 _shareInjectCues(track, subCues);
             }
         };
@@ -4734,10 +4845,36 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         (function() {
             const autoSubs = <?= json_encode($autoSubtitles, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
             if (autoSubs.length > 0) {
-                const sub = autoSubs[0]; // 첫 번째 자막 사용
+                // ★ (2026-10-08) 고르는 순서 — 서버 순위(이름 같음 먼저) + 이 브라우저가 기억한 언어(⚙ 에서 고른 것, 잘 맞는 자막 안에서) + 순위가 같으면 한국어 먼저(탐색기와 같음)
+                const _vb = <?= json_encode(isset($videoBase) ? (string)$videoBase : '', JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+                let _pref = '';
+                try { _pref = localStorage.getItem('fs_sub_lang') || ''; } catch (e) { _pref = ''; }
+                const _ord = autoSubs.map((x, i) => {
+                    const r = Number.isFinite(x.rank) ? x.rank : 0;
+                    const lg = _shareSubLang(x.name, _vb);
+                    return { x, i, r, g: r <= 2 ? 0 : 1, m: (_pref && lg === _pref) ? 0 : 1, ko: lg === 'ko' ? 0 : 1 };
+                });
+                _ord.sort((a, b) => (a.g - b.g) || (a.m - b.m) || (a.r - b.r) || (a.ko - b.ko) || (a.i - b.i));
+                _shareSubList = _ord.map((o) => o.x);
+                _shareSubIdx = 0;
+                _shareSubVB = _vb;
+                const sub = _shareSubList[0]; // 첫 번째 자막 사용
                 subCues = parseSubtitle(sub.content, sub.ext);
                 if (subCues.length > 0 && subOverlay) {
                     _updateTrackElement(); // iOS 전체화면용 track 생성
+                }
+                // ★ (2026-10-08) '자막 있음' 알림 — 처음 재생이 시작될 때 한 번(탐색기와 같음, 음량 표시 자리 1.5초). 서버가 자동으로 찾은 자막만:
+                //   그 전에 보는 사람이 자막 파일을 직접 골랐으면(그쪽은 원래 '✅ 파일명' 을 띄움) 띄우지 않는다. 트랜스코딩 전환 때 다시 넣는 자막도 다시 안 띄움.
+                if (subCues.length > 0 && player) {
+                    player.addEventListener('playing', () => {
+                        try {
+                            if (_subFromUser || _shareSubPicked || subCues.length === 0) return;
+                            if (!window.FSVideoSkin || typeof window.FSVideoSkin.showMessage !== 'function') return;
+                            const _lbl = subEnabled ? <?= json_encode(__('sub_osd_found', '자막'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?> : <?= json_encode(__('sub_osd_found_off', '자막 있음(꺼짐)'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+                            const _cur = (_shareSubList && _shareSubList[_shareSubIdx]) || sub;   // ★ (2026-10-08) 재생 전에 ⚙ 에서 바꿨으면 지금 자막 이름으로
+                            window.FSVideoSkin.showMessage(document.getElementById('player-wrap'), _lbl + ': ' + (_cur.name || ''), { icon: 'cc', off: !subEnabled, ms: 1500 });
+                        } catch (x) {}
+                    }, { once: true });
                 }
             }
         })();
@@ -4855,6 +4992,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 ccOn: () => { const st = window._shareSubState ? window._shareSubState() : null; return st ? st.on : true; },
                 subAct: (name) => { const b = byId(SUB[name]); if (b) b.click(); },
                 subSync: () => { const st = window._shareSubState ? window._shareSubState() : null; return st ? st.sync : 0; },
+                subTracks: () => (window._shareSubTracks ? window._shareSubTracks() : null),   // ★ (2026-10-08) ⚙ 자막 파일 고르기
+                // ★ (2026-10-08) 설정 창이 플레이어 안에 안 들어가면 플레이어 위 빈 곳(창 위쪽까지 보이는 만큼)까지 펼쳐도 됨 — 전체화면이면 0
+                menuRoomAbove: () => {
+                    if (document.fullscreenElement || document.webkitFullscreenElement) return 0;
+                    const r = wrap.getBoundingClientRect();
+                    return Math.max(0, Math.floor(r.top) - 8);
+                },
                 hasPip: () => shown(byId('btn-pip')),
                 togglePip: () => { const b = byId('btn-pip'); if (b) b.click(); },
                 toggleFs: () => { const b = byId('btn-fullscreen'); if (b) b.click(); },
@@ -5175,6 +5319,14 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         } catch (e) {}
     };
     player.addEventListener('loadedmetadata', applyNative);
+    // ★ (2026-10-08) 일반재생 빠른 시작이 실패해 원본으로 다시 넣을 때 보던 위치로(위 toNative 가 부름). at: 그때 재생 위치(1초 미만이면 이어 보기 위치).
+    window._shareVpReseek = (at) => {
+        try {
+            const t0 = (Number(at) > 1) ? Number(at) : (Number(st.seekT0) || 0);
+            if (!(t0 > 0)) return;
+            player.addEventListener('loadedmetadata', () => { try { if ((Number(player.currentTime) || 0) < 1) player.currentTime = t0; } catch (e) {} }, { once: true });
+        } catch (e) {}
+    };
     // ★ (2026-10-04) 이 모듈은 페이지 끝에서 실행되는데, 일반 재생(preload=metadata)은 그보다 먼저 영상 정보가 준비돼 이벤트를 놓쳤다
     //   (실측: loadedmetadata 118ms · 모듈 228ms, readyState 4) — 이미 준비돼 있으면 바로 한 번(한 번만은 consumed 가 막음).
     if (player.readyState >= 1) applyNative();

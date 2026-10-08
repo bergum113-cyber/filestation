@@ -289,6 +289,10 @@ class FSAudioPlayer {
                       (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
         this._gainNode = null;
         this._audioCtx = null;
+        // ★ (2026-10-08) 잠금화면(MediaSession) 표지 유지 — 탐색기 플레이어와 같은 값(공유에도 이식)
+        this._artworkMaintenanceTimer = null;
+        this._lastArtworkCheck = 0;
+        this._currentMetadata = null;  // 마지막으로 설정한 잠금화면 정보(복구·같은 값 다시 설정 안 함)
         // ★ 볼륨: localStorage 저장값 우선, 없으면 opts.volume, 그것도 없으면 0.8
         //   플레이어 껐다 켜도 마지막 볼륨 유지
         let _initVolume = opts.volume ?? 0.8;
@@ -1133,6 +1137,8 @@ class FSAudioPlayer {
             // 재생 중 세션 keepalive + 화면 자동 잠금 방지
             this._startMediaKeepalive();
             this._acquireWakeLock();
+            // ★ (2026-10-08) 다른 탭·앱이 소리를 가져가 오디오 처리(시각화)가 멈춰 있었으면 되살린다(탐색기와 같음)
+            this._resumeAudioCtx();
         });
         a.addEventListener('pause', () => {
             this._updatePlayUI(false);
@@ -1160,6 +1166,23 @@ class FSAudioPlayer {
             this._stopMediaKeepalive();
             this._releaseWakeLock();
             this._stopVisualizer();
+            
+            // ★ (2026-10-08) 재생하지 못한 이유를 곡 정보 줄에 알린다 — 종전엔 아무 표시 없이 멈추거나 다음 곡으로 넘어갔다.
+            //   음악은 웹 플레이어(브라우저가 직접 재생)라 기기·브라우저가 못 여는 형식(예: 아이폰의 일부 ogg, 크롬의 ALAC m4a)이나 깨진 파일이면 여기로 온다.
+            //   다음 곡을 불러오면 _updateTrackMeta 가 원래 정보로 되돌린다. 글자는 textContent 로만.
+            try {
+                if (this.$ && this.$.meta) {
+                    const _tr = this.playlist[this.currentIndex];
+                    const _nm = String((_tr && (_tr.fullName || _tr.path || _tr.name)) || '');
+                    const _dot = _nm.lastIndexOf('.');
+                    const _ex = String((_tr && _tr.ext) || ((_dot > 0 && _dot < _nm.length - 1) ? _nm.slice(_dot + 1) : '')).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+                    const _ko = (document.documentElement.lang || '').indexOf('ko') === 0 || String(navigator.language || '').indexOf('ko') === 0;
+                    const _code = a.error ? a.error.code : 0;   // 3 = 디코딩 실패, 4 = 형식 미지원
+                    this.$.meta.textContent = '⚠ ' + (_code === 2
+                        ? (_ko ? '네트워크 오류로 재생하지 못했습니다' : 'Network error — could not play')
+                        : (_ko ? '이 기기(브라우저)에서 재생할 수 없는 파일입니다' : "This device (browser) can't play this file")) + (_ex ? ' (.' + _ex + ')' : '');
+                }
+            } catch (eMeta) {}
             
             // 연속 에러 제한
             this._errorSkipCount++;
@@ -1715,7 +1738,14 @@ class FSAudioPlayer {
             
             this._renderLyrics();
         } catch (e) {
-            // 가사 로드 실패는 조용히 무시 (이전 가사 유지)
+            // ★ (2026-10-08) 가사를 못 받았으면 '가사 없음'과 같게 비운다 — 이 곡의 요청일 때만(옵션 A 로 이전 곡 가사를 남겨 둔 채라,
+            //   종전엔 오류가 나면 앞 곡 가사가 새 곡 시간에 맞춰 강조됐다). 탐색기는 시작할 때 비워 이런 일이 없음.
+            if (token === this._lyricsLoadToken && !this._destroyed) {
+                this._lyrics = null;
+                this._lyricsSynced = false;
+                if (this.$.lyricsWrap) this.$.lyricsWrap.style.display = 'none';
+                if (this.$.lyricsContent) this.$.lyricsContent.innerHTML = '';
+            }
         }
     }
     
@@ -2157,7 +2187,9 @@ class FSAudioPlayer {
     // ── Playback controls ──
     togglePlay() {
         if (!this.audio.src) return;
-        this.audio.paused ? this.audio.play().catch(() => {}) : this.audio.pause();
+        // ★ (2026-10-08) 재생을 다시 시작하면 잠금화면 표지를 되살린다(탐색기와 같음 — 멈춘 동안 iOS 가 지웠을 수 있음, 유지 타이머는 재생 중에만 돈다)
+        if (this.audio.paused) this.audio.play().then(() => { this._forceRefreshArtwork(); }).catch(() => {});
+        else this.audio.pause();
     }
     prev() {
         if (!this.playlist.length) return;
@@ -2630,9 +2662,8 @@ class FSAudioPlayer {
         if (!this._visInitialized || this._visRunning) return;
         this._visRunning = true;
         
-        if (this._audioCtx && this._audioCtx.state === 'suspended') {
-            this._audioCtx.resume().catch(() => {});
-        }
+        // ★ (2026-10-08) 'suspended' 뿐 아니라 사파리 전용 'interrupted' 도(탐색기와 같음)
+        this._resumeAudioCtx();
         
         const canvas = this.$.visualizer;
         const ctx = canvas.getContext('2d');
@@ -4172,25 +4203,81 @@ class FSAudioPlayer {
                 artwork.push({ src: resolved, sizes: '384x384', type: imgType });
                 artwork.push({ src: resolved, sizes: '512x512', type: imgType });
             } else {
-                // 기본 음표 아이콘 (SVG → Data URL, 모든 플랫폼 동일)
+                // ★ (2026-10-08) 기본 음표 아이콘 — PNG 파일(탐색기와 같음). 종전 SVG data URL 은 iOS 잠금화면에서 회색 빈 상자로 나왔다
+                //   (탐색기는 v5.8.1g 에 고침, 공유엔 빠져 있었음). 공유는 mp3 만 표지를 받으므로 FLAC·M4A·OGG 는 늘 이 그림.
                 if (!this._defaultArtwork) {
-                    this._defaultArtwork = 'data:image/svg+xml,' + encodeURIComponent(
-                        '<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">' +
-                        '<rect width="512" height="512" rx="64" fill="#1e1e2e"/>' +
-                        '<g fill="#7c6ef6" transform="translate(256,256) scale(0.55) translate(-256,-256)">' +
-                        '<path d="M390 100v236c0 0-4 18-24 32s-46 22-66 18-38-22-38-48 14-44 34-54 38-12 50-8V164l-160 40v196c0 0-4 18-24 32s-46 22-66 18-38-22-38-48 14-44 34-54 38-12 50-8V140c0-12 8-22 20-26l168-44c16-4 30 4 30 20z"/>' +
-                        '</g></svg>'
-                    );
+                    this._defaultArtwork = 'assets/images/default-music-artwork.png';
                 }
-                artwork.push({ src: this._defaultArtwork, sizes: '512x512', type: 'image/svg+xml' });
+                artwork.push({ src: this._defaultArtwork, sizes: '96x96', type: 'image/png' });
+                artwork.push({ src: this._defaultArtwork, sizes: '128x128', type: 'image/png' });
+                artwork.push({ src: this._defaultArtwork, sizes: '256x256', type: 'image/png' });
+                artwork.push({ src: this._defaultArtwork, sizes: '512x512', type: 'image/png' });
             }
-            navigator.mediaSession.metadata = new MediaMetadata({
+            const metadataObj = {
                 title: track.name || '',
                 artist: '',
                 album: '',
                 artwork: artwork
-            });
+            };
+            // ★ (2026-10-08) 값이 이전과 같으면 다시 설정하지 않는다(탐색기 2026-08-20 수정 이식) — 곡 전환 한 번에 이 함수가 여러 번 불리고,
+            //   iOS 는 새 MediaMetadata 마다 잠금화면 카드를 다시 그려 깜빡였다. 세션이 비어 있으면 반드시 다시 설정.
+            const _prev = this._currentMetadata;
+            const _sameMeta = !!_prev
+                && _prev.title === metadataObj.title
+                && _prev.artist === metadataObj.artist
+                && (_prev.artwork && _prev.artwork[0] ? _prev.artwork[0].src : null)
+                   === (artwork[0] ? artwork[0].src : null)
+                && !!navigator.mediaSession.metadata;
+            if (!_sameMeta) {
+                navigator.mediaSession.metadata = new MediaMetadata(metadataObj);
+            }
+            this._currentMetadata = metadataObj;
+            // ★ (2026-10-08) 표지 유지 타이머(탐색기와 같음) — 재생 중 1초마다 잠금화면 정보가 사라졌는지만 보고, 사라졌을 때만 되살린다
+            this._startArtworkMaintenance();
         } catch(e) {}
+    }
+
+    // ★ (2026-10-08) 아래 네 함수는 탐색기 플레이어(app.js)에서 이식 — 진단 기록(_msLog)만 빼고 같다.
+    // 잠금화면 표지 유지: 재생 중 1초마다 정보가 사라졌는지 확인(사라졌을 때만 복구 — 무조건 재설정은 깜빡임이라 하지 않음)
+    _startArtworkMaintenance() {
+        if (!('mediaSession' in navigator)) return;
+        if (this._artworkMaintenanceTimer) clearInterval(this._artworkMaintenanceTimer);
+        this._artworkMaintenanceTimer = setInterval(() => {
+            if (this._destroyed) return;
+            if (!this.audio || this.audio.paused) return;
+            const now = Date.now();
+            if (now - this._lastArtworkCheck < 800) return;
+            this._lastArtworkCheck = now;
+            this._checkAndRestoreArtwork();
+        }, 1000);
+    }
+    _checkAndRestoreArtwork() {
+        if (!('mediaSession' in navigator)) return;
+        if (!this._currentMetadata) return;
+        let needsRestore = false;
+        try {
+            const meta = navigator.mediaSession.metadata;
+            if (!meta || !meta.artwork || meta.artwork.length === 0) needsRestore = true;
+        } catch (e) { needsRestore = true; }
+        if (needsRestore) this._forceRefreshArtwork();
+    }
+    _forceRefreshArtwork() {
+        if (!('mediaSession' in navigator)) return;
+        if (!this._currentMetadata) return;
+        try {
+            const meta = JSON.parse(JSON.stringify(this._currentMetadata));   // 깊은 복사(참조 공유 방지)
+            navigator.mediaSession.metadata = new MediaMetadata(meta);
+        } catch (e) {}
+    }
+    // 오디오 처리(시각화)가 멈춰 있으면 되살린다 — iOS/사파리는 다른 탭·앱이 소리를 가져가면 'suspended' 가 아니라 'interrupted' 로 둔다
+    _resumeAudioCtx() {
+        try {
+            const ctx = this._audioCtx;
+            if (!ctx) return;
+            if (ctx.state !== 'suspended' && ctx.state !== 'interrupted') return;
+            const p = ctx.resume();
+            if (p && typeof p.catch === 'function') p.catch(() => {});
+        } catch (e) {}
     }
 
     // ── 플레이리스트 재생 시간 로드 ──
@@ -4466,6 +4553,9 @@ class FSAudioPlayer {
         // 미디어 keepalive / Wake Lock 정리 (자동 로그아웃/화면 잠금 방지 기능)
         this._stopMediaKeepalive();
         this._releaseWakeLock();
+        // ★ (2026-10-08) 잠금화면 표지 유지 타이머 정리(탐색기와 같음)
+        if (this._artworkMaintenanceTimer) { clearInterval(this._artworkMaintenanceTimer); this._artworkMaintenanceTimer = null; }
+        this._currentMetadata = null;
         // 커버 테스트 이미지 정리 (메모리 누수 방지)
         if (this._coverTestImg) {
             this._coverTestImg.onload = null;
