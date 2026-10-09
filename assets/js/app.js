@@ -8810,6 +8810,17 @@ const App = {
                     }
                     return;
                 }
+                // ★ (2026-10-09) 동영상 ⚙ 설정 창이 열려 있으면 Esc 는 그 창만(하위 목록 → 목록 → 닫기 — 유튜브처럼). 종전엔 미리보기 창 전체가 닫혔다.
+                //   keyup 의 미리보기 닫기도 막는다(_escConsumedByEditor — 찾기 바와 같은 방식). 스킨이 없거나 창이 닫혀 있으면 종전 그대로.
+                try {
+                    const _sw = document.querySelector('#preview-content .video-player-wrap.fsvs-menu-open');
+                    if (_sw && window.FSVideoSkin && typeof FSVideoSkin.menuEscape === 'function' && FSVideoSkin.menuEscape(_sw)) {
+                        _escConsumedByEditor = true;
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        return;
+                    }
+                } catch (_x) {}
                 const previewModal = document.getElementById('modal-preview');
                 if (previewModal && previewModal.style.display !== 'none') {
                     // 찾기/바꾸기 바가 열려있으면 여기서 닫고 소비
@@ -36947,7 +36958,7 @@ const App = {
                     ${qualitySelectHtml}
                     ${toggleBtnHtml}
                     <video ${_initialControlsAttr}playsinline webkit-playsinline preload="metadata" class="preview-video" style="object-fit:contain;width:100%;height:100%;max-width:100%;max-height:100%;" ${needsTranscode ? 'data-transcode-base="' + transcodeBaseUrl + '"' : ''} ${_deferNativeSrc ? 'data-deferred-src="' + url + '"' : ''}>${(needsTranscode || _deferNativeSrc) ? '' : '<source src="' + url + '" type="video/mp4">'} ${t('il_cannot_play_video', '동영상을 재생할 수 없습니다.')}</video>
-                    <div class="video-play-overlay" id="video-play-overlay"><svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></div>
+                    <div class="video-play-overlay" id="video-play-overlay"><svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 6.82v10.36a1.5 1.5 0 0 0 2.3 1.27l8.14-5.18a1.5 1.5 0 0 0 0-2.54L10.3 5.55A1.5 1.5 0 0 0 8 6.82z"/></svg><svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><rect x="6" y="5" width="4.5" height="14" rx="1.6"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.6"/></svg></div>
                     <button type="button" class="video-play-overlay video-seek-btn video-seek-btn-back" aria-label="${t('seek_back_5', '5초 뒤로')}" title="${t('seek_back_5', '5초 뒤로')}"><svg viewBox="0 0 24 24" width="26" height="26" fill="white" aria-hidden="true"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif">5</text></svg></button>
                     <button type="button" class="video-play-overlay video-seek-btn video-seek-btn-fwd" aria-label="${t('seek_fwd_5', '5초 앞으로')}" title="${t('seek_fwd_5', '5초 앞으로')}"><svg viewBox="0 0 24 24" width="26" height="26" fill="white" aria-hidden="true"><path d="M4 13c0 4.42 3.58 8 8 8s8-3.58 8-8h-2c0 3.31-2.69 6-6 6s-6-2.69-6-6 2.69-6 6-6v4l5-5-5-5v4c-4.42 0-8 3.58-8 8z"/><text x="12" y="16.2" text-anchor="middle" font-size="8.5" font-weight="700" font-family="system-ui,-apple-system,sans-serif">5</text></svg></button>
                     <div class="video-seek-overlay video-seek-left">-5</div>
@@ -37344,6 +37355,8 @@ const App = {
                             this._previewAudioKeyHandler = null;
                         }
                         const _previewModalAudio = document.getElementById('modal-preview');
+                        // ★ (2026-10-09) 마지막으로 포인터(마우스·터치)로 누른 요소 기억 — 아래 키 처리에서 그 요소의 키보드 테두리를 막는 데 씀(한 번만 등록)
+                        if (!App._fapPtrTrack) { App._fapPtrTrack = true; document.addEventListener('pointerdown', (ev) => { try { App._fapPtrEl = (ev.target && ev.target.closest) ? ev.target.closest('button,a,[tabindex]') : null; } catch (x) {} }, true); document.addEventListener('keydown', (ev) => { if (ev.key === 'Tab') App._fapPtrEl = null; }, true); }
                         this._previewAudioKeyHandler = (e) => {
                             // 모달이 열려있을 때만 처리
                             if (!_previewModalAudio || getComputedStyle(_previewModalAudio).display === 'none') return;
@@ -37353,6 +37366,19 @@ const App = {
                             
                             const player = this._fsAudioPlayer;
                             if (!player || player._destroyed) return;
+                            // ★ (2026-10-09) 마우스로 누른 플레이어 버튼에 포커스가 남은 채 단축키(스페이스·방향키·M 등)를 누르면 크롬이 그 버튼에 키보드 포커스 테두리를
+                            //   그렸다(펜닐 제보 사진 — 재생 버튼 둘레 검은 원). 마우스(포인터)로 누른 요소에 포커스가 그대로 있으면 포커스를 뺀다 — 크롬은 키를 누르는 순간
+                            //   이미 :focus-visible 로 바꾸므로(실측) 그 값으로는 못 가리고, 마지막으로 포인터로 누른 요소를 기억해 비교한다(Tab 을 누르면 잊음).
+                            //   Tab 으로 버튼에 온 경우(키보드 사용자 '지금 위치')는 그대로, Tab·Enter·조합 키 단독 입력은 건드리지 않는다. 입력칸(검색·음량 막대)은 제외.
+                            try {
+                                const _ae = document.activeElement;
+                                const _root = player.container || document.getElementById('preview-content');
+                                if (_ae && _ae !== document.body && _ae === App._fapPtrEl && _root && _root.contains(_ae) && !/^(INPUT|TEXTAREA|SELECT)$/.test(_ae.tagName)
+                                    && e.key !== 'Tab' && e.key !== 'Enter' && e.key !== 'Shift' && e.key !== 'Control' && e.key !== 'Alt' && e.key !== 'Meta'
+                                    && typeof _ae.blur === 'function') {
+                                    _ae.blur();
+                                }
+                            } catch (x) {}
                             
                             // ★ 가사 모달 열려있으면 Ctrl+L/Esc만 처리, 나머지 키 차단 (v5.8.1c)
                             //    Space로 재생/일시정지하면 가사 모달 닫히는 것처럼 보일 수 있음 방지
@@ -40616,9 +40642,13 @@ const App = {
             if ((parseInt(info && info.audio_count, 10) || 0) >= 2) { try { this._fsvsPrefetchAudioInfo(video); } catch (e) {} }
         };
         if (window.Hls && Hls.isSupported()) {
+            // ★ (2026-10-09) 지난 구간 유지 10 → PC 90초 · 휴대폰(터치) 30초(펜닐 승인). 10초만 남겨 ← 두 번(10초 전)만 눌러도 조각을 다시 받아야 해
+            //   탐색이 들쭉날쭉했다(트랜스코딩 설정을 그대로 가져온 값 — 이유 기록 없음). 720p 2.8Mbps 90초 ≈ 30MB. 브라우저 한도를 넘으면 hls.js 가 스스로 덜어낸다.
+            //   트랜스코딩(_startTranscode)의 hls 설정은 그대로.
+            const _dsBack = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ? 30 : 90;
             const hls = new Hls({
                 enableWorker: true, lowLatencyMode: false,
-                maxBufferLength: 30, maxMaxBufferLength: 120, backBufferLength: 10,
+                maxBufferLength: 30, maxMaxBufferLength: 120, backBufferLength: _dsBack,
                 startPosition: startAt,
                 manifestLoadingTimeOut: 20000, levelLoadingTimeOut: 20000, fragLoadingTimeOut: 30000,
                 manifestLoadingMaxRetry: 2, levelLoadingMaxRetry: 2, fragLoadingMaxRetry: 3
@@ -42594,6 +42624,13 @@ const App = {
                 if (!it || it._vaultBlobUrl || !App._mediaInfoPath || it.path !== App._mediaInfoPath || App._mediaInfoStorageId == null) return null;
                 const ts = (Array.isArray(secs) ? secs : []).map((x) => Math.max(0, Math.floor(x || 0))).join(',');
                 return `api.php?action=video_frames&storage_id=${App._mediaInfoStorageId}&path=${encodeURIComponent(App._mediaInfoPath)}&ts=${ts}`;
+            },
+            // ★ (2026-10-09) 재생바 미리보기용 키프레임 시각 목록 주소(스킨이 긴 mp4 를 키프레임마다 한 장으로 — 서버 FileManager::videoKeyTimesFile). 조건은 frameUrl 과 같다.
+            keyTimesUrl: () => {
+                const it = App._currentPreviewItem;
+                if (!it || it._vaultBlobUrl || !App._mediaInfoPath || it.path !== App._mediaInfoPath || App._mediaInfoStorageId == null) return null;
+                if (!/\.(mp4|m4v|mov)$/i.test(App._mediaInfoPath)) return null;   // ★ (2026-10-09) 재검토 — 서버가 목록을 주는 형식만 요청(다른 형식은 '해당 없음'뿐)
+                return `api.php?action=video_keytimes&storage_id=${App._mediaInfoStorageId}&path=${encodeURIComponent(App._mediaInfoPath)}`;
             },
             // ★ (2026-09-23) 스트리밍 판별.
             //   대부분의 변환 경로는 data-transcode-base 를 붙이지만 '대용량 → 스트리밍' 경로(App._startTranscode 직접 호출)는

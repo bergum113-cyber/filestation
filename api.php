@@ -6623,6 +6623,26 @@ try {
             }
             $fileManager->videoFrames((int)($_GET['storage_id'] ?? 0), $vfsPath, (string)($_GET['ts'] ?? ''), !empty($_GET['a']));
             break;
+
+        // ★ (2026-10-09) 재생바 미리보기용 키프레임 시각 목록(펜닐 승인 — 긴 mp4 는 키프레임마다 한 장). 장면 한 장·묶음과 같은 순서:
+        //   로그인 → 세션 닫기 → 썸네일 사용 설정 → 폴더 권한. 목차만 읽어 JSON(FileManager::videoKeyTimesFile) — 상태를 바꾸지 않는 GET.
+        case 'video_keytimes':
+            $auth->requireLogin();
+            session_write_close();
+            $vkSettings = loadSiteSettings();
+            if (isset($vkSettings['thumbnail_enabled']) && $vkSettings['thumbnail_enabled'] === false) {
+                http_response_code(404); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['ok' => false, 'error' => 'disabled']); exit;
+            }
+            restore_error_handler();
+            set_error_handler(function($errno, $errstr) { return true; });   // JSON 출력 — 경고가 본문에 섞이지 않게
+            $vkPath = (string)($_GET['path'] ?? '');
+            $vkDir = dirname($vkPath);
+            if ($vkDir === '.') $vkDir = '';
+            if (!$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $vkDir ?: $vkPath)) {
+                http_response_code(403); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['ok' => false, 'error' => 'perm']); exit;
+            }
+            $fileManager->videoKeyTimes((int)($_GET['storage_id'] ?? 0), $vkPath);
+            break;
         
         case 'audio_cover':
             // MP3 파일의 ID3v2 APIC 프레임에서 커버 이미지 추출

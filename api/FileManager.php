@@ -2646,6 +2646,46 @@ class FileManager {
     }
 
     /**
+     * ★ (2026-10-09) 재생바 미리보기용 키프레임 시각 목록 — 탐색기용(펜닐 승인: 긴 mp4 미리보기를 '키프레임마다' 한 장으로).
+     *   저장소 경로 확인·폴더 밖 차단 후 공용 videoKeyTimesFile 로. api.php 'video_keytimes' 에서 로그인·썸네일 사용 설정·폴더 권한을 먼저 확인한다
+     *   (장면 한 장·묶음과 같은 순서).
+     */
+    public function videoKeyTimes(int $storageId, string $relativePath): void {
+        $basePath = $this->storage->getRealPath($storageId);
+        if (!$basePath) { self::framesJson(['error' => 'nostorage'], 404); }
+        $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $relativePath);
+        if (!$this->isPathSafe($basePath, $fullPath) || !is_file($fullPath)) { self::framesJson(['error' => 'nofile'], 404); }
+        $this->videoKeyTimesFile($fullPath);
+    }
+
+    /**
+     * ★ (2026-10-09) 키프레임 시각 목록 — 공용(검증된 경로만: 탐색기 videoKeyTimes / 공유 downloadShare 'vk').
+     *   mp4·m4v·mov 만 — 목차(moov)만 읽는 Mp4KeyIndex 결과를 장면 캐시(frameTarget)·원본 스트리밍(directStreamFile)과 **같은 APCu 키·같은 값**으로
+     *   함께 쓴다(영상 데이터는 읽지 않음, ffmpeg 없음). 결과 {ok:true, d: 길이(초), keys: [키프레임 표시 시각(초, 소수 3자리)…]}.
+     *   다른 형식·읽기 실패·APCu 없음과 무관하게 실패면 {ok:false} — 화면은 종전 간격(1·2·5·10초) 방식 그대로. 5만 개가 넘으면 보내지 않음.
+     */
+    public function videoKeyTimesFile(string $fullPath): void {
+        $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
+        if (!in_array($ext, ['mp4', 'm4v', 'mov'], true) || !is_file($fullPath)) { self::framesJson(['ok' => false, 'why' => 'ext']); }
+        $useApcu = function_exists('apcu_fetch') && (!function_exists('apcu_enabled') || @apcu_enabled());
+        $st = @stat($fullPath);
+        $ik = 'fs_ds_' . md5($fullPath . '|' . ($st['size'] ?? 0) . '|' . ($st['mtime'] ?? 0) . '|v2');   // frameTarget·directStreamFile 과 같은 키
+        $idx = null;
+        if ($useApcu) { $hit = false; $c = @apcu_fetch($ik, $hit); if ($hit && is_array($c)) $idx = $c; }
+        if ($idx === null) {
+            require_once __DIR__ . '/Mp4KeyIndex.php';
+            $idx = Mp4KeyIndex::read($fullPath);
+            if (is_array($idx) && $useApcu) @apcu_store($ik, $idx, 3600);   // 같은 보관 시간
+        }
+        $kp = (is_array($idx) && !empty($idx['keyPts']) && is_array($idx['keyPts'])) ? $idx['keyPts'] : null;
+        if (!$kp || count($kp) > 50000) { self::framesJson(['ok' => false, 'why' => $kp ? 'many' : 'noindex']); }
+        $keys = [];
+        foreach ($kp as $k) { $k = (float)$k; if (is_finite($k) && $k >= 0) $keys[] = round($k, 3); }
+        $d = (is_array($idx) && isset($idx['duration']) && is_finite((float)$idx['duration'])) ? round((float)$idx['duration'], 3) : 0;
+        self::framesJson(['ok' => true, 'd' => $d, 'keys' => $keys]);
+    }
+
+    /**
      * ★ (2026-10-02) 재생바 미리보기 장면 묶음 — 공용(검증된 경로만: 탐색기 videoFrames / 공유 downloadShare 'vfs').
      *   ts: 쉼표로 나눈 초 목록(최대 20개, 0~100시간). 캐시에 없는 장면만 **ffmpeg 1번**(입력마다 그 시각으로 이동 · 출력마다 한 장)으로 만들어
      *   한 장 요청과 **같은 캐시 파일**에 저장(frameTarget). 결과 JSON {ok, fail, fallback, left, made, ms}:

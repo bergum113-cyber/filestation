@@ -32,18 +32,27 @@
     const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
     const ICON = {
-        play:  '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>',
-        pause: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>',
+        // ★ (2026-10-09) 재생·일시정지·이전·다음 아이콘을 둥글게(펜닐 요청 — Video.js 처럼 모서리가 둥근 삼각형·막대). 크기·자리는 그대로.
+        play:  '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M8 6.82v10.36a1.5 1.5 0 0 0 2.3 1.27l8.14-5.18a1.5 1.5 0 0 0 0-2.54L10.3 5.55A1.5 1.5 0 0 0 8 6.82z"/></svg>',
+        pause: '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4.5" height="14" rx="1.6"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.6"/></svg>',
         vol:   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 010 6M18.5 6.5a7.5 7.5 0 010 11"/></svg>',
         mute:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>',
         loop:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3l3 3-3 3"/><path d="M4 11V9.5A3.5 3.5 0 017.5 6H20"/><path d="M7 21l-3-3 3-3"/><path d="M20 13v1.5a3.5 3.5 0 01-3.5 3.5H4"/></svg>',
         gear:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
         pip:   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor"/></svg>',
-        prev:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M6 5h2v14H6zM20 5.5v13L9.5 12z"/></svg>',
-        next:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M16 5h2v14h-2zM4 5.5v13L14.5 12z"/></svg>',
+        prev:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><rect x="5.5" y="5" width="2.6" height="14" rx="1.3"/><path d="M19 7.1v9.8a1.3 1.3 0 0 1-2 1.1l-7.4-4.9a1.3 1.3 0 0 1 0-2.2L17 6a1.3 1.3 0 0 1 2 1.1z"/></svg>',
+        next:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><rect x="15.9" y="5" width="2.6" height="14" rx="1.3"/><path d="M5 7.1v9.8a1.3 1.3 0 0 0 2 1.1l7.4-4.9a1.3 1.3 0 0 0 0-2.2L7 6a1.3 1.3 0 0 0-2 1.1z"/></svg>',
         close: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
         info:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r="0.6" fill="currentColor"/></svg>',
-        fs:    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>'
+        fs:    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg>',
+        // ★ (2026-10-09) ⚙ 설정 목록(유튜브처럼 — 펜닐 요청)용 아이콘
+        speed: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 18a8.5 8.5 0 1 1 15 0"/><path d="M12 13.5l4-4"/></svg>',
+        mode:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M10 8.7l5 3.3-5 3.3z"/></svg>',
+        subf:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 11h10M7 15h4M13 15h4"/></svg>',
+        subs:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 12h8M12 9v6"/></svg>',
+        chevR: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
+        chevL: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>',
+        check: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'
     };
 
     const fmt = (s) => {
@@ -114,7 +123,10 @@
         //   가로모드(폭이 넓어 두 칸)에서 ⚙·✕ 로 닫아도 창이 계속 보였다(펜닐 제보). CSS 에도 !important 를 넣었지만
         //   인라인 스타일은 스타일시트 순서·우선순위와 무관하게 이기므로 이중으로 막는다.
         // ★ (2026-10-08) 열려 있는 동안 wrap 에 fsvs-menu-open — 공유 페이지가 설정 창을 플레이어 위로 넘치게 보이도록(overflow) 쓴다
-        const setMenuOpen = (open) => { menu.hidden = !open; menu.style.display = open ? '' : 'none'; wrap.classList.toggle('fsvs-menu-open', !!open); };
+        // ★ (2026-10-09) 설정 창은 목록형(유튜브처럼) — menuPage: 'main'(목록) 또는 하위 목록 이름. 닫으면 처음(목록)으로.
+        let menuPage = 'main';
+        const setMenuOpen = (open) => { menu.hidden = !open; menu.style.display = open ? '' : 'none'; wrap.classList.toggle('fsvs-menu-open', !!open); if (!open) menuPage = 'main'; };
+        menu.classList.add('fsvs-lst');
         setMenuOpen(false);
         const bar = el('div', 'fsvs-bar');
         const prog = el('div', 'fsvs-prog');
@@ -194,6 +206,24 @@
             const ms = Math.max(500, Math.min(5000, Number(opt.ms) || 1500));
             if (volOsdTimer) clearTimeout(volOsdTimer);
             volOsdTimer = setTimeout(() => { volOsdTimer = null; volOsd.classList.remove('on'); }, ms);
+        };
+        // ★ (2026-10-09) 반복·구간 반복·재생 속도를 바꾸면 음량 표시와 같은 자리에 잠깐 알림(펜닐 요청). 바꾼 '뒤'의 실제 상태를 읽어 보여준다
+        //   (조작 줄 버튼·⚙ '더 보기' 칩·속도 칩 — 이 셋 말고는 바꾸는 길이 없음: 반복·구간 반복·속도에는 단축키가 없다). 상태를 바꾸지는 않는다.
+        const announce = (kind, val) => {
+            try {
+                if (kind === 'loop') {
+                    const lo = ctx.isLoop ? ctx.isLoop() : video.loop;
+                    showMsgOsd(lo ? T('video_loop_one_on_s', '이 영상만 반복: 켬') : T('video_loop_one_off', '이 영상만 반복: 끔'));
+                } else if (kind === 'ab') {
+                    const st = (ctx.abState && ctx.abState()) || {};
+                    const a = st.a != null, b = st.b != null;
+                    showMsgOsd(!a ? T('fsvs_osd_ab_off', '구간 반복: 끔')
+                        : (!b ? T('fsvs_osd_ab_a', '구간 반복: A 지점') + ' ' + fmt(st.a)
+                              : T('video_ab', '구간 반복') + ' ' + fmt(st.a) + ' ~ ' + fmt(st.b)));
+                } else if (kind === 'speed') {
+                    showMsgOsd(T('playback_speed', '재생 속도') + ' ' + val + 'x');
+                }
+            } catch (e) {}
         };
         wrap.classList.add('fsvs-on');
         document.body.classList.add('fsvs-active');
@@ -312,7 +342,62 @@
             const rev = (i) => { let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); return r; };
             spQueue = keys.map((k, i) => [rev(i), k]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
             spQueueDur = Math.round(d);
+            spQueueMode = 's';
         };
+        // ★ (2026-10-09) 긴 mp4(10분 넘게 — 서버가 키프레임 장면을 쓰는 영상)는 미리보기 구간을 '키프레임마다'(펜닐 승인).
+        //   종전 5·10초 간격은 키프레임 간격과 어긋나 같은 그림이 이어지거나(키프레임 간격 > 간격) 사이 장면을 건너뛰었다(키프레임 간격 < 간격).
+        //   서버가 목차(moov)만 읽어 준 키프레임 시각(ctx.keyTimesUrl → FileManager::videoKeyTimesFile)으로, 키프레임 k 마다 요청 초 s = ceil(k) 를
+        //   쓴다 — 서버는 s 이하의 마지막 키프레임(= k)으로 맞추므로(frameTarget) 같은 장면이 겹치지 않는다. 다음 키프레임이 s 이내면(1초보다 촘촘) 건너뜀.
+        //   목록을 못 받으면(다른 형식·실패·짧은 영상) 종전 간격 방식 그대로. 영상 하나에 한 번만 받는다(주소가 같으면 다시 안 받음).
+        let spK = null, spKLoading = null, spKLoadAt = 0, spQueueMode = 's', spLastShow = null;
+        const spKeysEnsure = () => {
+            let u = null;
+            try { u = (typeof ctx.keyTimesUrl === 'function') ? ctx.keyTimesUrl() : null; } catch (e) { u = null; }
+            if (!u || typeof fetch !== 'function') return null;
+            if (spK && spK.url === u) return spK.ok ? spK : null;
+            if (spKLoading === u) return null;
+            spKLoading = u; spKLoadAt = Date.now();
+            fetch(u, { credentials: 'same-origin', cache: 'no-store' })
+                .then((r) => (r.ok ? r.json() : null))
+                .then((j) => {
+                    if (spDead || spKLoading !== u) return;
+                    spKLoading = null;
+                    spK = { url: u, ok: false };
+                    if (!j || !j.ok || !Array.isArray(j.keys)) return;
+                    const ks = j.keys.map(Number).filter((v) => isFinite(v) && v >= 0).sort((a, b) => a - b);
+                    const t = [], r = [];
+                    for (let i = 0; i < ks.length; i++) {
+                        const s = Math.ceil(ks[i] - 0.001);
+                        const next = (i + 1 < ks.length) ? ks[i + 1] : Infinity;
+                        if (s + 0.01 >= next) continue;                 // 이 요청 초가 다음 키프레임을 가리키게 되는 촘촘한 구간은 건너뜀
+                        if (r.length && s <= r[r.length - 1]) continue;
+                        t.push(ks[i]); r.push(s);
+                    }
+                    if (t.length < 2) return;
+                    spK = { url: u, ok: true, d: Number(j.d) || 0, t, r };
+                    spCurKey = null;
+                    // 미리 받기 목록을 바로 키프레임 기준으로 바꾼다(길이가 맞을 때 — 아니면 다음 표시 때 판단). 받는 중인 묶음 응답은 새 목록에 이어 붙어도 무해.
+                    try { const d0 = total(); if (d0 > 600 && (!spK.d || Math.abs(spK.d - d0) < 3)) spBuildQueueKeys(spK, d0); else spQueueMode = ''; } catch (e) { spQueueMode = ''; }
+                    // ★ (2026-10-09) 재검토 — 재생바에 마우스를 댄 채로 목록이 오면 그 자리를 키프레임 기준으로 바로 다시 보여준다(종전엔 마우스를 움직여야 바뀜)
+                    try { if (spOn && spLastShow) spShow(spLastShow[0], spLastShow[1]); } catch (e) {}
+                    if (spDiagOk < 3) spDiag({ ev: 'keys', n: t.length, raw: ks.length });
+                })
+                .catch(() => { if (spKLoading === u) { spKLoading = null; spK = { url: u, ok: false }; } });
+            return null;
+        };
+        const spBuildQueueKeys = (kk, d) => {   // 키프레임 요청 초 중 최대 150개를 고르게 — 순서는 종전과 같은 비트 반전(몇 장만 받아도 전체에 고르게)
+            const all = kk.r, n = Math.min(150, all.length), keys = [];
+            for (let i = 0; i < n; i++) { const k = all[Math.min(all.length - 1, Math.floor((i + 0.5) * all.length / n))]; if (keys[keys.length - 1] !== k) keys.push(k); }
+            let bits = 0; while ((1 << bits) < keys.length) bits++;
+            const rev = (i) => { let r = 0; for (let b = 0; b < bits; b++) if (i & (1 << b)) r |= 1 << (bits - 1 - b); return r; };
+            spQueue = keys.map((k, i) => [rev(i), k]).sort((a, b) => a[0] - b[0]).map((x) => x[1]);
+            spQueueDur = Math.round(d);
+            spQueueMode = 'k';
+        };
+        // ★ (2026-10-09) 영상이 이동 중(seeking)이거나 재생 중인데 다음 장면을 못 받아 기다리는 중(readyState < 3)이면 true — 이때는 재생바 미리보기
+        //   '미리 받기'(서버 ffmpeg 묶음·한 장씩)를 0.7초 뒤로 미룬다(펜닐 승인: 탐색이 빨랐다 느렸다 함 — 미리 받기가 같은 파일을 읽으며 서버 자원을 나눠 썼다).
+        //   사용자가 재생바에 올린 자리의 장면 요청은 미루지 않는다. 판단에 실패하면 false(종전처럼 받음).
+        const spMediaBusy = () => { try { return !!(video.seeking || (!video.paused && !video.ended && video.readyState < 3)); } catch (e) { return false; } };
         const spPump = () => {   // 쉬는 중이면 다음 것을 받는다 — 사용자가 보는 구간 → 묶음으로 준비된 것 → 한 장씩 할 것 → (묶음 미지원이면) 미리 받기
             if (spDead || spLoadingKey !== null) return;
             let key = null;
@@ -320,9 +405,14 @@
             spWant = null;
             while (key === null && spReady.length) { const k = spReady.shift(); if (!spDone.has(k)) key = k; }
             while (key === null && spSingle.length) { const k = spSingle.shift(); if (!spDone.has(k) && !spFailed.has(k) && canSeekTo(k)) key = k; }
-            while (key === null && !framesUrl([0]) && spQueue && spQueue.length) {
+            // ★ (2026-10-09) 영상이 이동 중·받는 중이면 미리 받기는 잠깐 쉰다(spMediaBusy) — 사용자가 올린 자리(spWant)·묶음으로 이미 만든 것은 그대로
+            const _mBusy = spMediaBusy();
+            while (key === null && !_mBusy && !framesUrl([0]) && spQueue && spQueue.length) {
                 const k = spQueue.shift();
                 if (!spDone.has(k) && !spFailed.has(k) && canSeekTo(k)) key = k;
+            }
+            if (key === null && _mBusy && !framesUrl([0]) && spQueue && spQueue.length && !spRetryTimer) {
+                spRetryTimer = setTimeout(() => { spRetryTimer = null; spPump(); }, 700);
             }
             if (key === null) return;
             const u = frameUrl(key);
@@ -353,6 +443,16 @@
         });
         const spBatchPump = () => {   // 묶음 미리 받기 — 하나씩(응답이 오면 다음)
             if (spDead || spBatchBusy || !spQueue || !framesUrl([0])) return;
+            if (spMediaBusy()) {
+                if (!spBatchTimer) spBatchTimer = setTimeout(() => { spBatchTimer = null; spBatchPump(); }, 700);
+                return;
+            }
+            // ★ (2026-10-09) 재검토 — 키프레임 목록을 받는 중이면(긴 mp4 첫 표시) 첫 묶음을 잠깐(최대 2초) 기다린다 — 종전엔 목록이 오기 직전
+            //   종전 간격(5·10초)으로 20장을 먼저 만들어 영상마다 한 묶음이 낭비됐다. 2초가 지나도 안 오면 종전 목록 그대로 진행.
+            if (spKLoading && Date.now() - spKLoadAt < 2000) {
+                if (!spBatchTimer) spBatchTimer = setTimeout(() => { spBatchTimer = null; spBatchPump(); }, 200);
+                return;
+            }
             const keys = [];
             while (keys.length < 20 && spQueue.length) {
                 const k = spQueue.shift();
@@ -404,6 +504,7 @@
         const framesUrl = (secs) => { try { const u = (typeof ctx.framesUrl === 'function') ? ctx.framesUrl(secs) : null; return u ? (spAcc ? u + '&a=1' : u) : null; } catch (e) { return null; } };
         const spOff = (why, extra) => { if (!spDiagOff.has(why)) { spDiagOff.add(why); spDiag(Object.assign({ ev: 'off', why }, extra || {})); } spHide(); };
         const spShow = (ratio, clientX) => {
+            spLastShow = [ratio, clientX];
             if (!frameUrl(0)) return spOff('no_url');
             const d = total();
             if (!(d > 0)) return spOff('no_dur', { d: d });
@@ -420,8 +521,18 @@
             // ★ (2026-10-02) 2분 이하 1초 추가(유튜브 방식을 따른 스크립트: 0~2분 1초·2~5분 2초·5~15분 5초·그 이상 10초)
             const step = d <= 120 ? 1 : (d <= 300 ? 2 : (d <= 1800 ? 5 : 10));
             spAcc = d <= 600;
-            const key = Math.floor(tt / step) * step;
-            if (spQueue === null || spQueueDur !== Math.round(d)) spBuildQueue(d, step);   // 처음 보일 때(길이가 바뀌면 다시) 미리 받기 목록
+            let key = Math.floor(tt / step) * step;
+            // ★ (2026-10-09) 긴 mp4 는 키프레임마다(spKeysEnsure) — 목록이 있고 길이가 맞으면(3초 이내) tt 이하의 마지막 키프레임의 요청 초
+            const kk = spAcc ? null : spKeysEnsure();
+            const useK = !!(kk && (!kk.d || Math.abs(kk.d - d) < 3));
+            if (useK) {
+                let lo = 0, hi = kk.t.length - 1, bi = 0;
+                while (lo <= hi) { const mid = (lo + hi) >> 1; if (kk.t[mid] <= tt + 0.001) { bi = mid; lo = mid + 1; } else hi = mid - 1; }
+                key = kk.r[bi];
+            }
+            if (spQueue === null || spQueueDur !== Math.round(d) || spQueueMode !== (useK ? 'k' : 's')) {   // 처음 보일 때(길이·방식이 바뀌면 다시) 미리 받기 목록
+                if (useK) spBuildQueueKeys(kk, d); else spBuildQueue(d, step);
+            }
             if (!spDiagShown) { spDiagShown = true; spDiag({ ev: 'show', d: Math.round(d * 10) / 10, step, queue: spQueue ? spQueue.length : 0, stream: !!isStreaming() }); }
             const entered = key !== spCurKey;
             spCurKey = key;
@@ -448,12 +559,12 @@
         const call = (fn) => { try { if (typeof fn === 'function') fn(); } catch (e) {} setTimeout(render, 30); };
         on(bPrev, 'click', () => { if (!bPrev.disabled) call(ctx.goPrev); });
         on(bNext, 'click', () => { if (!bNext.disabled) call(ctx.goNext); });
-        on(bLoop, 'click', () => call(ctx.toggleLoop));
-        on(bAb, 'click', () => call(ctx.clickAb));
+        on(bLoop, 'click', () => { call(ctx.toggleLoop); announce('loop'); });
+        on(bAb, 'click', () => { call(ctx.clickAb); announce('ab'); });
         on(bCc, 'click', () => call(ctx.toggleCc));
         on(bPip, 'click', () => call(ctx.togglePip));
         on(bFs, 'click', () => call(ctx.toggleFs));
-        on(bSpeed, 'click', () => { setMenuOpen(true); buildMenu(); fitMenu(); render(); });
+        on(bSpeed, 'click', () => { setMenuOpen(true); menuPage = 'speed'; buildMenu(); fitMenu(); render(); });   // ★ (2026-10-09) 속도 칩은 바로 '재생 속도' 목록으로
         on(bInfo, 'click', () => { setMenuOpen(false); render(); try { if (hasInfo) ctx.showInfo(); } catch (e) {} });
         on(bSet, 'click', () => { setMenuOpen(menu.hidden); if (!menu.hidden) { buildMenu(); fitMenu(); } render(); });
 
@@ -472,79 +583,43 @@
             menu.classList.add('fsvs-fitting');
             try { fitMenuInner(); } finally { menu.classList.remove('fsvs-fitting'); }
         }
+        // ★ (2026-10-09) 목록형으로 바꾸며 단순화(펜닐 요청 — 한 화면에 다 펼치던 칩 배치를 유튜브처럼 목록 → 하위 목록으로).
+        //   [종전] 칩을 한 번에 다 보이게 하려고 두 칸 → 세 칸 → 촘촘하게 → 비율 축소 → 휴대폰 판 순서로 맞췄다(2026-09-23~10-08).
+        //   [지금] 한 칸 목록(폭 최대 300px). 플레이어 안 높이(공유는 플레이어 위 빈 곳 ctx.menuRoomAbove 까지)를 넘으면 창 안에서 스크롤
+        //   (긴 하위 목록 — 음성 11개 등, 유튜브와 같음 — 펜닐 승인). 휴대폰(창의 짧은 쪽 600px 미만)에서 플레이어가 너무 낮으면(목록이
+        //   들어갈 높이 220px 미만) 종전처럼 화면 아래에서 올라오는 판 — 조작 줄이 보이면 그 바로 위에(⚙ 를 덮지 않게).
         function fitMenuInner() {
             if (menu.hidden) return;
-            // ★ (2026-09-25) 크기 맞춤 재설계(펜닐 제보: 플레이어 높이가 낮으면 설정 창이 플레이어를 벗어나 브라우저 창 전체로
-            //   펼쳐짐 — ⑤ '화면 아래 판'이 창 기준 고정·전체 폭이었다). **플레이어 안에서** 맞추는 단계를 늘리고,
-            //   창 전체 판은 휴대폰(창의 짧은 쪽 600px 미만)에서만 쓴다 — 휴대폰은 플레이어가 곧 화면 폭이고 높이가 너무 낮아 판이 필요.
-            //   순서: ①그대로 ②두 칸(최대 720px) ③세 칸(넓을 때, 최대 980px) ④촘촘하게 ⑤70% 이상 축소
-            //         ⑥[휴대폰] 창 아래 판 / [그 밖] 플레이어 안 최대 크기 + 창 안 스크롤(최후 수단)
-            //   음성 목록은 CSS 에서 여러 칸 격자로 바꿔 높이 자체를 줄였다(11개면 한 줄에 하나씩일 때보다 훨씬 낮다).
             menu.classList.remove('fsvs-2col', 'fsvs-3col', 'fsvs-compact', 'fsvs-sheet', 'fsvs-raised');
-            menu.style.transform = ''; menu.style.width = ''; menu.style.maxHeight = ''; menu.style.overflowY = '';
+            menu.style.transform = ''; menu.style.width = ''; menu.style.maxHeight = ''; menu.style.overflowY = ''; menu.style.right = '';
             const barH = bar.offsetHeight || 0;
             menu.style.bottom = (barH + 8) + 'px';
-            let availH = (wrap.clientHeight || 0) - barH - 16;   // ★ (2026-10-08) let — 아래 '플레이어 위 빈 곳' 단계에서 늘릴 수 있게
-            const availW = (wrap.clientWidth || 0) - 32;
+            let availH = (wrap.clientHeight || 0) - barH - 16;
+            const availW = (wrap.clientWidth || 0) - 24;
             if (availH <= 0 || availW <= 0) return;   // 배치 정보를 못 얻으면(숨김 등) 그대로 둔다
-            const fits = () => menu.scrollHeight <= availH && menu.scrollWidth <= availW + 1;
-            if (fits()) return;
-            if (availW >= 520) {
-                menu.classList.add('fsvs-2col');
-                menu.style.width = Math.min(720, availW) + 'px';
-                if (fits()) return;
-                if (availW >= 760) {
-                    menu.classList.remove('fsvs-2col'); menu.classList.add('fsvs-3col');
-                    menu.style.width = Math.min(980, availW) + 'px';
-                    if (fits()) return;
-                }
-            }
-            menu.classList.add('fsvs-compact');
-            if (fits()) return;
-            // ★ (2026-10-08) 플레이어 위 빈 곳까지 쓰기(공유 페이지 — ctx.menuRoomAbove, 펜닐 승인) — 공유는 플레이어가 작아(최대 720×405) 음성이 많으면
-            //   설정 창이 플레이어 안에서 스크롤됐다. 페이지가 영상 하나라 플레이어 위(제목·정보)에 겹쳐 펼쳐도 되므로, 줄이거나 스크롤하기 전에
-            //   그 공간(창 위쪽까지 보이는 만큼)을 더해 본다. 휴대폰은 종전대로 아래 판. 탐색기는 이 값을 주지 않아 종전 그대로.
-            const _phoneRoom = Math.min(window.innerWidth || 0, window.innerHeight || 0) < 600;
-            const _extra = (!_phoneRoom && typeof ctx.menuRoomAbove === 'function') ? Math.max(0, Math.floor(Number(ctx.menuRoomAbove()) || 0)) : 0;
-            if (_extra > 0) {
-                const _baseH = availH;
-                availH = _baseH + _extra;
-                if (fits()) return;
-                availH = _baseH;
-            }
-            const sc = Math.min(availH / (menu.scrollHeight || 1), availW / (menu.scrollWidth || 1));
-            // ★ (2026-10-08) 휴대폰(창의 짧은 쪽 600px 미만)·터치 화면은 85% 미만으로 줄이지 않고 아래 판으로 — 긴 목록을 넓게 놓은 뒤(아래)
-            //   휴대폰 가로에서 77% 로 줄어 버튼이 약 21px(손가락으로 누르기 어려움)이 되던 것을 막는다. PC·태블릿은 종전 그대로 70%.
-            const _minSc = (Math.min(window.innerWidth || 0, window.innerHeight || 0) < 600 && window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ? 0.85 : 0.7;
-            if (sc >= _minSc) { menu.style.transform = 'scale(' + sc.toFixed(3) + ')'; return; }
-            // 휴대폰 판정은 '창의 짧은 쪽 < 600px' — 가로로 돌린 휴대폰(예 844×390)도 휴대폰으로 본다.
-            //   ★ 처음엔 '폭 < 600' 으로 써서 가로 화면 휴대폰을 PC 로 판정했다 → 판이 사라져 낮은 플레이어 안 스크롤이 되는
-            //   퇴보를 시험(t13, 09-23 가로 화면 판 수정)이 잡았다.
             const phone = Math.min(window.innerWidth || 0, window.innerHeight || 0) < 600;
-            if (!phone) {
-                // ⑥ 플레이어 안 최대 크기 + 창 안 스크롤 — 플레이어를 벗어나지 않는다
-                menu.style.maxHeight = availH + 'px';
-                menu.style.overflowY = 'auto';
+            if (phone && (availH < 220 || availW < 240)) {
+                menu.style.bottom = '';
+                menu.classList.add('fsvs-sheet');
+                const vh = window.innerHeight || 0;
+                let above = 0;
+                try {
+                    const br = bar.getBoundingClientRect();
+                    if (br.height > 0 && br.top < vh && br.bottom > 0) above = Math.max(0, Math.round(vh - br.top) + 8);
+                } catch (e) {}
+                if (above > 0) { menu.style.bottom = above + 'px'; menu.classList.add('fsvs-raised'); }
+                const maxH = Math.floor((vh - above) * 0.9);
+                if (maxH > 0 && menu.scrollHeight > maxH) { menu.style.maxHeight = maxH + 'px'; menu.style.overflowY = 'auto'; }
                 return;
             }
-            // ⑥ [휴대폰] 창 아래 판
-            menu.style.bottom = ''; menu.style.width = ''; menu.style.transform = '';
-            menu.classList.remove('fsvs-2col', 'fsvs-3col', 'fsvs-raised');
-            menu.classList.add('fsvs-sheet');
-            if ((window.innerWidth || 0) >= 520) menu.classList.add('fsvs-2col');   // 가로 화면 휴대폰은 판도 두 칸(종전 그대로 — 다시 쓰며 빠뜨렸던 줄)
-            // ★ (2026-09-23) 판이 조작 줄을 덮지 않게 한다 — 조작 줄이 화면에 보이면 그 **바로 위**에 띄운다.
-            //   화면 맨 아래에 붙이면 가로모드처럼 화면이 낮을 때 ⚙ 를 덮어 다시 눌러 닫을 수 없었다(펜닐 제보).
-            const vh = window.innerHeight || 0;
-            let above = 0;
-            try {
-                const br = bar.getBoundingClientRect();
-                if (br.height > 0 && br.top < vh && br.bottom > 0) above = Math.max(0, Math.round(vh - br.top) + 8);
-            } catch (e) {}
-            if (above > 0) { menu.style.bottom = above + 'px'; menu.classList.add('fsvs-raised'); }
-            const maxH = Math.floor((vh - above) * 0.95);
-            if (maxH > 0 && menu.scrollHeight > maxH) {   // 남은 공간으로도 안 되는 극단적인 경우만
-                menu.style.maxHeight = maxH + 'px';
-                menu.style.overflowY = 'auto';
+            const extra = (!phone && typeof ctx.menuRoomAbove === 'function') ? Math.max(0, Math.floor(Number(ctx.menuRoomAbove()) || 0)) : 0;
+            // 좁은 플레이어(휴대폰 세로 등 — 남는 폭 400px 미만)는 좌우 8px 만 띄우고 꽉 차게(300px 로 두면 한쪽에 치우쳐 보였다 — 시험에서 확인)
+            if (availW < 400) { menu.style.width = Math.max(0, (wrap.clientWidth || 0) - 16) + 'px'; menu.style.right = '8px'; }
+            else menu.style.width = Math.min(300, availW) + 'px';
+            if (menu.scrollHeight > availH) {
+                const h = (extra > 0) ? Math.min(availH + extra, menu.scrollHeight) : availH;
+                menu.style.maxHeight = h + 'px';
+                if (menu.scrollHeight > h) menu.style.overflowY = 'auto';
             }
         }
         // ★ (2026-09-26) 화면 크기·전체화면이 바뀌면 render() 도 부른다 — 자막 올림 값(--fsvs-sub-raise)이 배치에 따라 달라지게 된 뒤,
@@ -585,128 +660,197 @@
         }
 
         // ── ⚙ 메뉴 (열 때마다 기존 셀렉트/상태에서 다시 만든다) ────────────────
-        const section = (title) => { const s = el('div', 'fsvs-sec'); s.append(el('div', 'fsvs-sectitle', title)); const body = el('div', 'fsvs-chips'); s.append(body); menu.append(s); return body; };
-        // 칩은 메뉴를 다시 만들 때 통째로 버려지므로 정리 목록(on)에 넣지 않는다 — 여닫을수록 목록이 커지는 것 방지
-        // ★ (2026-09-23) 누른 칩은 메뉴를 다시 그린 뒤에도 잠깐 강조한다(flashKey) — 누른 반응이 보이게.
+        // ★ (2026-10-09) ⚙ 설정 — 목록형(유튜브처럼, 펜닐 요청). 목록: [아이콘 · 이름 · 현재 값 · ›] → 누르면 하위 목록([‹ 제목] + 고른 것에 ✓).
+        //   항목이 실제로 하는 일(속도·화질·재생 방식·음성·자막 파일·자막 크기/위치/싱크·더 보기의 정보·음소거·반복·구간 반복)은 종전 칩과 **같은 호출**.
+        //   재생 속도는 고르면 목록으로 돌아가 바뀐 값이 보이고, 화질·재생 방식·음성·자막 파일은 종전처럼 고르면 창을 닫는다(영상을 다시 불러옴).
+        //   ★ 보안(2026-09-25 그대로) — 항목 글자는 HTML 이 아니라 글자 그대로(textContent): 음성 이름 등은 동영상 파일 안의 정보라 HTML 로 넣으면
+        //   제목에 스크립트를 넣은 파일로 ⚙ 에서 실행될 수 있었다. 아이콘만 이 파일의 고정 SVG(innerHTML).
+        // ★ (2026-09-23) 누른 칩(지금은 자막 −/+ 단추)은 메뉴를 다시 그린 뒤에도 잠깐 강조한다(flashKey) — 누른 반응이 보이게.
         let flashKey = null;
-        // ★ (2026-09-25) 보안 — 항목 글자는 HTML 이 아니라 **글자 그대로**(textContent) 넣는다.
-        //   [결함] 종전엔 btn() → el() 가 글자를 innerHTML 로 넣었다. 음성 항목 이름은 **동영상 파일 안의 정보**(음성 제목·언어,
-        //   트랜스코딩 음성 상자의 option 글자, 사파리 audioTracks.label)라, 제목에 '<img src=x onerror=…>' 를 넣은 파일을 열면
-        //   ⚙ 메뉴에서 스크립트가 실행될 수 있었다(공유 페이지면 링크를 받은 사람 브라우저에서). 기존 음성 상자는 escapeHtml 로
-        //   안전하게 넣지만 스킨이 그 글자를 다시 HTML 로 넣어 무의미해졌다 — 09-23 음성을 ⚙ 로 옮길 때 생긴 구멍(재검토에서 발견).
-        //   chip 에 들어가는 글자(배속·번역 글자·선택 상자 글자·음성 이름)는 모두 일반 글자라 모양은 같다.
-        const chip = (label, active, onClick, key) => {
-            const b = btn('fsvs-chip' + (active ? ' is-on' : ''), null, label);
-            b.textContent = (label == null) ? '' : String(label);
-            b.setAttribute('aria-pressed', active ? 'true' : 'false');
-            if (key && key === flashKey) { b.classList.add('is-flash'); setTimeout(() => b.classList.remove('is-flash'), 450); }
-            b.addEventListener('click', () => { flashKey = key || null; onClick(); buildMenu(); fitMenu(); render(); flashKey = null; });
+        const txt = (cls, t) => { const e = el('span', cls); e.textContent = (t == null) ? '' : String(t); return e; };
+        const ico = (svg) => { const e = el('span', 'fsvs-mi'); if (svg) e.innerHTML = svg; return e; };
+        const rebuild = () => { buildMenu(); fitMenu(); render(); };
+        const goPage = (p) => {   // 키보드로 고르던 중이면(포커스가 창 안) 새 목록의 첫 줄로 포커스를 옮긴다 — 다시 그리면 누른 단추가 사라지므로
+            // 키보드로 온 포커스만(:focus-visible) — 마우스로 누른 줄에도 포커스가 남아, 그때 옮기면 다음 단축키에 테두리가 생겼다(시험에서 발견)
+            let kb = false; try { const ae = document.activeElement; kb = !!(ae && menu.contains(ae) && ae.matches && ae.matches(':focus-visible')); } catch (e) {}
+            menuPage = p; rebuild();
+            if (kb) { try { const f = menu.querySelector('.fsvs-mback, .fsvs-mrow'); if (f) f.focus(); } catch (e) {} }
+        };
+        let menuSelRef = null;   // ★ (2026-10-09) 재검토 — 화질·재생 방식·음성 하위 목록은 '몇 번째 상자'가 아니라 상자 자체로 기억(열린 사이 상자가 늘거나 줄어도 엉뚱한 목록이 안 나오게)
+        const navRow = (icon, label, value, page, pre) => {   // 목록 → 하위 목록
+            const b = btn('fsvs-mrow fsvs-mnav', null, label);
+            b.append(ico(icon), txt('fsvs-ml', label), txt('fsvs-mv', value));
+            const c = el('span', 'fsvs-mc'); c.innerHTML = ICON.chevR; b.append(c);
+            b.addEventListener('click', () => { if (pre) pre(); goPage(page); });
+            menu.append(b);
+        };
+        const toggleRow = (icon, label, on_, fn) => {   // 켬/끔
+            const b = btn('fsvs-mrow fsvs-mtog' + (on_ ? ' is-on' : ''), null, label);
+            b.setAttribute('role', 'switch'); b.setAttribute('aria-checked', on_ ? 'true' : 'false');
+            b.append(ico(icon), txt('fsvs-ml', label), el('span', 'fsvs-sw'));
+            b.addEventListener('click', () => { try { fn(); } catch (e) {} rebuild(); });
+            menu.append(b);
+        };
+        const actRow = (icon, label, value, fn, keepOpen) => {   // 누르면 바로 실행
+            const b = btn('fsvs-mrow fsvs-mact', null, label);
+            b.append(ico(icon), txt('fsvs-ml', label), txt('fsvs-mv', value));
+            b.addEventListener('click', () => { try { fn(); } catch (e) {} if (keepOpen && !menu.hidden) rebuild(); else render(); });
+            menu.append(b);
+        };
+        const backHead = (title) => {   // 하위 목록 머리줄 — ‹ 제목(누르면 목록으로) + 휴대폰 판에서만 ✕(CSS)
+            const h = el('div', 'fsvs-mhead');
+            const b = btn('fsvs-mback', null, T('fsvs_back', '뒤로'));
+            const c = el('span', 'fsvs-mbi'); c.innerHTML = ICON.chevL;
+            b.append(c, txt('fsvs-mt', title));
+            b.addEventListener('click', () => goPage('main'));
+            const x = btn('fsvs-menuclose fsvs-mx', ICON.close, T('close', '닫기'));
+            x.addEventListener('click', () => { setMenuOpen(false); render(); });
+            h.append(b, x);
+            menu.append(h);
+        };
+        const optRow = (label, active, fn) => {   // 하위 목록의 선택지(고른 것에 ✓)
+            const b = btn('fsvs-mrow fsvs-mopt' + (active ? ' is-on' : ''), null, label);
+            b.setAttribute('role', 'menuitemradio'); b.setAttribute('aria-checked', active ? 'true' : 'false');
+            const c = el('span', 'fsvs-mck'); if (active) c.innerHTML = ICON.check;
+            b.append(c, txt('fsvs-ml', label));
+            b.addEventListener('click', () => { try { fn(); } catch (e) {} });
+            menu.append(b);
+        };
+        const stepBtn = (label, name) => {   // 자막 −/+ (종전 칩과 같은 ctx.subAct)
+            const b = btn('fsvs-mstepb', null, label);
+            b.textContent = label;
+            if (flashKey === name) { b.classList.add('is-flash'); setTimeout(() => b.classList.remove('is-flash'), 450); }
+            b.addEventListener('click', () => { flashKey = name; try { if (ctx.subAct) ctx.subAct(name); } catch (e) {} rebuild(); flashKey = null; });
             return b;
         };
+        const stepRow = (label, value, down, up) => {
+            const r = el('div', 'fsvs-mstep');
+            r.append(txt('fsvs-ml', label), stepBtn('−', down), txt('fsvs-msv', value), stepBtn('+', up));
+            menu.append(r);
+        };
+        const rateLabel = (v) => (Math.abs(v - 1) < 0.001 ? T('fsvs_normal', '보통') + ' (1x)' : (+v.toFixed(2)) + 'x');
+        // 페이지가 넘겨준 선택 상자 분류(종전과 같은 기준) — 탐색기는 class, 공유 페이지는 id 로 구분
+        const selKind = (sel) => {
+            const isAudio = sel.classList.contains('audio-track-select') || sel.id === 'audio-track-picker' || sel.id === 'share-audio-select';
+            const isMode = sel.classList.contains('playback-mode-select') || /playback-mode/.test(sel.id || '');
+            return isAudio ? 'audio' : (isMode ? 'mode' : 'quality');
+        };
+        const subVals = () => {   // 자막 크기·위치·싱크 현재 값(종전과 같이 자막 요소 인라인 스타일에서 읽음)
+            const ov = wrap.querySelector('.subtitle-overlay');
+            const em = ov ? parseFloat(ov.style.fontSize) : NaN;
+            const bt = ov ? parseFloat(ov.style.bottom) : NaN;
+            const off = (ctx.subSync && ctx.subSync()) || 0;
+            return {
+                size: isFinite(em) ? Math.round(em * 100) + '%' : T('fsvs_default', '기본'),
+                pos: isFinite(bt) ? Math.round(bt) + '%' : T('fsvs_default', '기본'),
+                sync: (off > 0 ? '+' : '') + off.toFixed(1) + T('sec', '초')
+            };
+        };
+        // ★ (2026-10-09) 재검토 — Esc 로 설정 창만(유튜브처럼): 하위 목록이면 목록으로, 목록이면 창을 닫는다. 처리했으면 true.
+        //   탐색기는 앱의 Esc 처리(미리보기 창 닫기)가 먼저 돌므로 앱이 FSVideoSkin.menuEscape(wrap) 로 먼저 묻는다(app.js). 공유는 아래 창(window) 단계 처리.
+        const menuEscape = () => {
+            if (menu.hidden) return false;
+            if (menuPage !== 'main') goPage('main'); else { setMenuOpen(false); render(); }
+            return true;
+        };
+        on(window, 'keydown', (e) => {
+            if (e.key !== 'Escape' || menu.hidden || e.defaultPrevented) return;
+            if (menuEscape()) { e.preventDefault(); e.stopImmediatePropagation(); }
+        }, true);
         function buildMenu() {
             menu.textContent = '';
-            // ★ (2026-09-23) 머리줄(제목 + ✕ 닫기) — 화면 아래 판(⑤)일 때만 보인다(CSS).
-            //   판이 커서 조작 줄의 ⚙ 를 가리는 경우에도 확실히 닫을 수 있게 한다(펜닐 제보: 가로모드에서 ⚙ 로 안 닫힘).
+            const sels = ((ctx.selects && ctx.selects()) || []).filter((sel) => sel && sel.options && sel.options.length >= 2);
+            const hasAudioSel = sels.some((s) => selKind(s) === 'audio');
+            const na = (!hasAudioSel && ctx.nativeAudio) ? ctx.nativeAudio() : null;   // ★ (2026-09-24) 일반 재생 중 다국어 음성(트랜스코딩 상자가 없을 때만)
+            const naOk = !!(na && Array.isArray(na.tracks) && na.tracks.length >= 2 && typeof na.select === 'function');
+            const ccOn = !!(ctx.hasCc && ctx.hasCc());
+            const st = ccOn && ctx.subTracks ? ctx.subTracks() : null;   // ★ (2026-10-08) 자막 파일 고르기 — 2개 이상일 때만
+            const stOk = !!(st && Array.isArray(st.tracks) && st.tracks.length >= 2 && typeof st.select === 'function');
+            const page = menuPage;
+            // ── 하위 목록 ──
+            if (page === 'speed') {
+                backHead(T('playback_speed', '재생 속도'));
+                SPEEDS.forEach((v) => optRow(rateLabel(v), Math.abs(video.playbackRate - v) < 0.001, () => {
+                    if (ctx.setSpeed) ctx.setSpeed(v); else video.playbackRate = v;
+                    announce('speed', v);
+                    goPage('main');
+                }));
+                return;
+            }
+            if (page === 'sel') {
+                const sel = (menuSelRef && sels.indexOf(menuSelRef) >= 0) ? menuSelRef : null;
+                if (sel) {
+                    const k = selKind(sel);
+                    backHead(k === 'audio' ? T('audio_track', '오디오') : (k === 'mode' ? T('playback_mode', '재생 방식') : T('quality', '화질')));
+                    Array.from(sel.options).forEach((o) => optRow(o.textContent, sel.value === o.value, () => {
+                        if (sel.value === o.value) { goPage('main'); return; }
+                        sel.value = o.value;
+                        sel.dispatchEvent(new Event('change', { bubbles: true }));
+                        setMenuOpen(false); render();
+                    }));
+                    return;
+                }
+                menuPage = 'main';   // 상자가 사라졌으면(영상 전환 등) 목록으로
+            }
+            if (page === 'naudio' && naOk) {
+                backHead(T('audio_track', '오디오'));
+                na.tracks.forEach((tk, i) => optRow(String(tk.label || ('Track ' + (i + 1))), !!tk.on, () => {
+                    if (tk.on) { goPage('main'); return; }
+                    try { na.select(i); } catch (e) {}
+                    setMenuOpen(false); render();
+                }));
+                return;
+            }
+            if (page === 'subfile' && stOk) {
+                backHead(T('fsvs_sub_file', '자막 파일'));
+                st.tracks.forEach((tk, i) => optRow(String(tk.label || ('#' + (i + 1))), !!tk.on, () => {
+                    if (tk.on) { goPage('main'); return; }
+                    try { st.select(i); } catch (e) {}
+                    setMenuOpen(false); render();
+                }));
+                return;
+            }
+            if (page === 'subset' && ccOn) {
+                backHead(T('fsvs_sub_settings', '자막 설정'));
+                const v = subVals();
+                stepRow(T('fsvs_sub_size', '크기'), v.size, 'size-down', 'size-up');
+                stepRow(T('fsvs_sub_pos', '위치'), v.pos, 'pos-down', 'pos-up');
+                stepRow(T('fsvs_sub_sync', '싱크'), v.sync, 'sync-down', 'sync-up');
+                actRow(null, '↺ ' + T('fsvs_sync_reset', '싱크 0초로'), '', () => { if (ctx.subAct) ctx.subAct('sync-reset'); }, true);
+                return;
+            }
+            menuPage = 'main';
+            // ── 목록 ──
+            // ★ (2026-09-23) 머리줄(제목 + ✕ 닫기) — 화면 아래 판일 때만 보인다(CSS). 판이 ⚙ 를 가려도 닫을 수 있게.
             const head = el('div', 'fsvs-menuhead');
             head.append(el('div', 'fsvs-menutitle', T('settings', '설정')));
             const bClose = btn('fsvs-menuclose', ICON.close, T('close', '닫기'));
             bClose.addEventListener('click', () => { setMenuOpen(false); render(); });
             head.append(bClose);
             menu.append(head);
-            // ★ (2026-09-23) 자리가 모자라 조작 줄에서 접힌 버튼은 여기 '더 보기'에 상태와 함께 나온다(fitRow).
+            // ★ (2026-09-23) 자리가 모자라 조작 줄에서 접힌 버튼(fitRow) — 상태와 함께 목록 맨 위에
             const folded = collapsible.filter((b) => b.classList.contains('fsvs-collapsed'));
-            if (folded.length) {
-                const more = section(T('fsvs_more', '더 보기'));
-                if (folded.includes(bInfo)) {
-                    more.append(chip(T('vi_dlg_title', '동영상 정보'), false, () => { setMenuOpen(false); try { ctx.showInfo(); } catch (e) {} }, 'info'));
-                }
-                if (folded.includes(bVol)) {
-                    const m = video.muted || video.volume === 0;
-                    more.append(chip(m ? T('fsvs_unmute', '소리 켜기') : T('mute', '음소거'), m, () => { video.muted = !video.muted; }, 'mute'));
-                }
-                if (folded.includes(bLoop)) {
-                    const lo = ctx.isLoop ? ctx.isLoop() : video.loop;
-                    more.append(chip(lo ? T('video_loop_one_on_s', '이 영상만 반복: 켬') : T('video_loop_one', '이 영상만 반복'), lo, () => { if (ctx.toggleLoop) ctx.toggleLoop(); }, 'loop'));
-                }
-                if (folded.includes(bAb)) {
-                    const st = (ctx.abState && ctx.abState()) || {};
-                    const a = st.a != null, b = st.b != null;
-                    const label = !a ? T('fsvs_ab_set_a', '구간 반복: A 지정') : (!b ? T('fsvs_ab_set_b', '구간 반복: B 지정') : T('fsvs_ab_clear', '구간 반복 해제'));
-                    more.append(chip(label, a && b, () => { if (ctx.clickAb) ctx.clickAb(); }, 'ab'));
-                }
+            if (folded.includes(bInfo)) actRow(ICON.info, T('vi_dlg_title', '동영상 정보'), '', () => { setMenuOpen(false); try { ctx.showInfo(); } catch (e) {} });
+            if (folded.includes(bVol)) toggleRow(ICON.vol, T('mute', '음소거'), video.muted || video.volume === 0, () => { video.muted = !video.muted; });
+            if (folded.includes(bLoop)) toggleRow(ICON.loop, T('video_loop_one', '이 영상만 반복'), !!(ctx.isLoop ? ctx.isLoop() : video.loop), () => { if (ctx.toggleLoop) ctx.toggleLoop(); announce('loop'); });
+            if (folded.includes(bAb)) {
+                const ab_ = (ctx.abState && ctx.abState()) || {};
+                const a = ab_.a != null, b = ab_.b != null;
+                const val = !a ? T('fsvs_ab_set_a', '구간 반복: A 지정') : (!b ? T('fsvs_ab_set_b', '구간 반복: B 지정') : T('fsvs_ab_clear', '구간 반복 해제'));
+                const abIco = '<b class="fsvs-mab">A-B</b>';
+                actRow(abIco, T('video_ab', '구간 반복') + ((a && b) ? ' ' + fmt(ab_.a) + ' ~ ' + fmt(ab_.b) : (a ? ' A ' + fmt(ab_.a) : '')), val.replace(/^.*?:\s*/, ''), () => { if (ctx.clickAb) ctx.clickAb(); announce('ab'); }, true);
             }
-            const sp = section(T('playback_speed', '재생 속도'));
-            SPEEDS.forEach((v) => sp.append(chip(v + 'x', Math.abs(video.playbackRate - v) < 0.001,
-                () => { if (ctx.setSpeed) ctx.setSpeed(v); else video.playbackRate = v; })));
-            const sels = (ctx.selects && ctx.selects()) || [];
+            navRow(ICON.speed, T('playback_speed', '재생 속도'), rateLabel(video.playbackRate).replace(' (1x)', ''), 'speed');
             sels.forEach((sel) => {
-                if (!sel || !sel.options || sel.options.length < 2) return;
-                // 탐색기는 class, 공유 페이지는 id(share-playback-mode)로 재생방식 셀렉트를 구분한다
-                const isMode = sel.classList.contains('playback-mode-select') || /playback-mode/.test(sel.id || '');
-                // ★ (2026-09-23) 다국어 음성 — 탐색기 audio-track-picker(.audio-track-select), 공유 share-audio-select.
-                //   항목 글자가 길어('English · EAC3 · 5.1(side)') 한 줄에 하나씩 보이게 한다(fsvs-list).
-                const isAudio = sel.classList.contains('audio-track-select') || sel.id === 'audio-track-picker' || sel.id === 'share-audio-select';
-                const body = section(isAudio ? T('audio_track', '오디오') : (isMode ? T('playback_mode', '재생 방식') : T('quality', '화질')));
-                if (isAudio) { body.classList.add('fsvs-list'); body.parentNode.classList.add('fsvs-sec-wide'); }   // ★ (2026-10-08) 긴 목록은 한 줄을 통째로(CSS)
-                Array.from(sel.options).forEach((o) => body.append(chip(o.textContent, sel.value === o.value, () => {
-                    if (sel.value === o.value) return;
-                    sel.value = o.value;
-                    sel.dispatchEvent(new Event('change', { bubbles: true }));
-                    setMenuOpen(false);
-                })));
+                const k = selKind(sel);
+                const cur = sel.options[sel.selectedIndex];
+                navRow(k === 'audio' ? ICON.vol : (k === 'mode' ? ICON.mode : ICON.gear),
+                    k === 'audio' ? T('audio_track', '오디오') : (k === 'mode' ? T('playback_mode', '재생 방식') : T('quality', '화질')),
+                    cur ? cur.textContent : '', 'sel', () => { menuSelRef = sel; });
             });
-            // ★ (2026-09-24) 일반 재생 중 다국어 음성(펜닐 지시 — 4번 '나'). 트랜스코딩 중엔 위의 기존 음성 상자가 맡으므로
-            //   그 상자가 없을 때만 페이지(ctx.nativeAudio)에 묻는다. 사파리는 즉시 전환, 그 밖의 브라우저는
-            //   그 음성으로 스트리밍 전환(보던 위치부터) — 전환 방법은 페이지 쪽이 기존 흐름대로 처리한다.
-            const hasAudioSel = sels.some((s) => s && s.options && s.options.length > 1
-                && (s.classList.contains('audio-track-select') || s.id === 'audio-track-picker' || s.id === 'share-audio-select'));
-            const na = (!hasAudioSel && ctx.nativeAudio) ? ctx.nativeAudio() : null;
-            if (na && Array.isArray(na.tracks) && na.tracks.length >= 2 && typeof na.select === 'function') {
-                const ab = section(T('audio_track', '오디오'));
-                ab.classList.add('fsvs-list'); ab.parentNode.classList.add('fsvs-sec-wide');   // ★ (2026-10-08) 긴 목록은 한 줄을 통째로(CSS)
-                na.tracks.forEach((tk, i) => ab.append(chip(String(tk.label || ('Track ' + (i + 1))), !!tk.on, () => {
-                    if (tk.on) return;
-                    try { na.select(i); } catch (e) {}
-                    setMenuOpen(false);
-                })));
-            }
-            if (ctx.hasCc && ctx.hasCc()) {
-                // ★ (2026-10-08) 자막 파일 고르기(펜닐 요청) — 페이지가 찾은 자막이 2개 이상일 때만(ctx.subTracks). 파일 이름은 글자 그대로(chip → textContent).
-                const st = ctx.subTracks ? ctx.subTracks() : null;
-                if (st && Array.isArray(st.tracks) && st.tracks.length >= 2 && typeof st.select === 'function') {
-                    const fb = section(T('fsvs_sub_file', '자막 파일'));
-                    fb.classList.add('fsvs-list', 'fsvs-subfiles'); fb.parentNode.classList.add('fsvs-sec-wide');   // ★ (2026-10-08) 한 줄을 통째로(CSS)
-                    st.tracks.forEach((tk, i) => fb.append(chip(String(tk.label || ('#' + (i + 1))), !!tk.on, () => {
-                        if (tk.on) return;
-                        try { st.select(i); } catch (e) {}
-                        setMenuOpen(false);
-                    })));
-                }
-                const sb = section(T('subtitle', '자막'));
-                sb.classList.add('fsvs-subgrid');   // ★ (2026-10-08) 행 이름 칸을 가장 긴 이름에 맞춤(CSS) — 영어 'Position' 이 34px 칸을 넘어 버튼에 겹쳤다
-                // ★ (2026-09-23) 크기·위치에 현재 값을 보여 준다 — 누를 때마다 숫자가 바뀌어 반응이 보인다.
-                //   탐색기·공유 모두 자막 크기·위치를 자막 요소의 인라인 스타일(font-size em · bottom %)에 적용하므로
-                //   그 값을 그대로 읽는다(누른 즉시 기존 핸들러가 바꾼 뒤 메뉴를 다시 그리므로 새 값이 나온다).
-                const ov = wrap.querySelector('.subtitle-overlay');
-                const em = ov ? parseFloat(ov.style.fontSize) : NaN;
-                const bt = ov ? parseFloat(ov.style.bottom) : NaN;
-                const val = (txt) => el('div', 'fsvs-val', txt);
-                const row = (label, a, mid, b) => { const g = el('div', 'fsvs-subrow'); g.append(el('div', 'fsvs-rowlabel', label), a, mid, b); sb.append(g); };
-                const act = (name, label) => chip(label, false, () => ctx.subAct && ctx.subAct(name), name);
-                row(T('fsvs_sub_size', '크기'), act('size-down', T('fsvs_smaller', '작게')),
-                    val(isFinite(em) ? Math.round(em * 100) + '%' : T('fsvs_default', '기본')), act('size-up', T('fsvs_bigger', '크게')));
-                row(T('fsvs_sub_pos', '위치'), act('pos-down', T('fsvs_lower', '아래로')),
-                    val(isFinite(bt) ? Math.round(bt) + '%' : T('fsvs_default', '기본')), act('pos-up', T('fsvs_higher', '위로')));
-                const off = (ctx.subSync && ctx.subSync()) || 0;
-                const g = el('div', 'fsvs-subrow');
-                g.append(el('div', 'fsvs-rowlabel', T('fsvs_sub_sync', '싱크')));
-                // ★ (2026-09-23) 가운데는 '현재값 + 되돌리기'임을 ↺ 로 구분한다.
-                //   싱크가 +0.5초일 때 가운데와 오른쪽이 똑같이 "+0.5초"로 보여 누르면 다른 동작인데 구분되지 않았다.
-                g.append(act('sync-down', '−0.5' + T('sec', '초')),
-                         act('sync-reset', '↺ ' + (off > 0 ? '+' : '') + off.toFixed(1) + T('sec', '초')),
-                         act('sync-up', '+0.5' + T('sec', '초')));
-                sb.append(g);
-            }
+            if (naOk) { const on_ = na.tracks.find((t) => t.on); navRow(ICON.vol, T('audio_track', '오디오'), on_ ? String(on_.label || '') : '', 'naudio'); }
+            if (stOk) { const on_ = st.tracks.find((t) => t.on); navRow(ICON.subf, T('fsvs_sub_file', '자막 파일'), on_ ? String(on_.label || '') : '', 'subfile'); }
+            if (ccOn) { const v = subVals(); navRow(ICON.subs, T('fsvs_sub_settings', '자막 설정'), v.size + ' · ' + v.pos + ' · ' + v.sync, 'subset'); }
         }
         on(document, 'pointerdown', (e) => { if (!menu.hidden && !menu.contains(e.target) && e.target !== bSet && e.target !== bSpeed && !bSet.contains(e.target)) { setMenuOpen(false); render(); } });
 
@@ -927,6 +1071,20 @@
         on(wrap, 'pointermove', wake, { passive: true });
         on(wrap, 'touchstart', wake, { passive: true });
         on(wrap, 'keydown', wake);
+        // ★ (2026-10-09) 포커스가 플레이어 밖(문서 본문·미리보기 창)에 있어도 단축키(스페이스·방향키 등)를 누르면 숨은 조작 줄을 다시 보인다.
+        //   종전엔 위 wrap 의 keydown 만 있어 포커스가 플레이어 안 버튼에 있을 때만 떴다(탐색기는 미리보기 창으로 포커스가 옮겨져 두 번째 키부터 안 뜸,
+        //   공유는 버튼 포커스를 빼는 테두리 수정 뒤 같은 상태). 플레이어가 화면에 보일 때만, 입력칸 입력·조합 키(Ctrl/⌘+)·수정 키 단독은 제외.
+        //   캡처 단계라 다른 단축키 처리가 전파를 막아도 받는다. 보이기만 하고 키 동작은 건드리지 않음.
+        on(document, 'keydown', (e) => {
+            try {
+                if (!wrap.isConnected || !wrap.getClientRects().length) return;
+                if (e.ctrlKey || e.metaKey || e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') return;
+                const t = e.target;
+                if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+                if (t && wrap.contains(t)) return;   // 플레이어 안이면 위 wrap 처리가 이미 함
+                wake();
+            } catch (x) {}
+        }, true);
         cleanups.push(() => { clearTimeout(idleTimer); wrap.classList.remove('fsvs-idle'); });
 
         // ★ (2026-09-25) 켜진 음성이 여럿이면 첫 번째만 남긴다(사파리 audioTracks — 아이폰·맥).
@@ -970,6 +1128,7 @@
             video, wrap,
             showVolume: showVolOsd,   // ★ (2026-10-05) 음량 표시 — FSVideoSkin.showVolume(wrap)
             showMessage: showMsgOsd,  // ★ (2026-10-08) 짧은 알림 — FSVideoSkin.showMessage(wrap, 글자, opt)
+            menuEscape,               // ★ (2026-10-09) Esc — 설정 창이 열려 있으면 그 창만(FSVideoSkin.menuEscape(wrap))
             destroy() {
                 cleanups.splice(0).reverse().forEach((f) => { try { f(); } catch (e) {} });
                 try { root.remove(); } catch (e) {}
@@ -992,5 +1151,7 @@
     function showVolume(wrap) { try { if (wrap && wrap._fsvs && typeof wrap._fsvs.showVolume === 'function') wrap._fsvs.showVolume(); } catch (e) {} }
     // ★ (2026-10-08) 짧은 알림(자막 있음·자막 켜짐/꺼짐) — 음량 표시와 같은 자리. 스킨이 붙어 있을 때만, 아니면 아무것도 안 함.
     function showMessage(wrap, text, opt) { try { if (wrap && wrap._fsvs && typeof wrap._fsvs.showMessage === 'function') wrap._fsvs.showMessage(text, opt); } catch (e) {} }
-    window.FSVideoSkin = { attach, detach, showVolume, showMessage, version: '1' };
+    // ★ (2026-10-09) Esc — 설정 창이 열려 있으면 하위 목록 → 목록 → 닫기 순으로 처리하고 true(탐색기 앱의 Esc 처리가 먼저 묻는다). 아니면 false.
+    function menuEscape(wrap) { try { return !!(wrap && wrap._fsvs && typeof wrap._fsvs.menuEscape === 'function' && wrap._fsvs.menuEscape()); } catch (e) { return false; } }
+    window.FSVideoSkin = { attach, detach, showVolume, showMessage, menuEscape, version: '1' };
 })();

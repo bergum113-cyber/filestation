@@ -707,6 +707,16 @@ class ShareManager {
             $fileManager->videoFramesFile($fullPath, (string)$_GET['vfs'], !empty($_GET['a']));
             exit;
         }
+
+        // ★ (2026-10-09) 재생바 미리보기용 키프레임 시각 목록 — 장면(vf·vfs)과 같은 조건(공유 검증 모두 통과 + 스트리밍 공유 + stream=1). 다운로드 횟수 안 늘림.
+        if ($isStream && isset($_GET['vk'])) {
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+            require_once __DIR__ . '/FileManager.php';
+            $fileManager = new FileManager();
+            if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // FileManager 생성자의 new Auth() 가 세션을 다시 열 수 있어(vf 와 같음)
+            $fileManager->videoKeyTimesFile($fullPath);
+            exit;
+        }
         
         if ($isStream) {
             // 스트리밍: 올바른 MIME + inline

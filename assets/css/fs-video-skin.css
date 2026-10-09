@@ -374,3 +374,122 @@ body.fsvs-active #player-wrap .stream-badge.fsvs-badge-error { white-space: norm
 .fsvs-osd-cc.is-off { opacity: .55; text-decoration: line-through; }
 /* ★ (2026-10-08) ⚙ '자막 파일' 목록 — 긴 파일 이름(띄어쓰기 없는 것 포함)이 칸 밖으로 안 나가게 줄바꿈 */
 .fsvs-root .fsvs-chips.fsvs-subfiles .fsvs-chip { overflow-wrap: anywhere; word-break: break-all; }
+
+/* ========================================================================
+   ★ (2026-10-09) 버튼 모양 다듬기 — Video.js 처럼 둥글게 · 테두리 없이 · 그림자는 약하게(펜닐 요청, 사진 5장 참고)
+   - 스킨이 켜진 플레이어(.fsvs-root / .fsvs-on)에만 적용 — 스킨이 꺼지면 원래 모양 그대로. 크기·위치·간격·동작은 바꾸지 않고 '겉모양'만.
+   - 조작 줄 버튼: 테두리 없음. 마우스를 올리면 둥근 옅은 바탕, 켜짐은 둥근 흰 바탕(종전: 흰 테두리 네모). 구간 반복은 호박색 바탕 그대로 구분.
+   - 가운데 재생·±5초 버튼: 흰 테두리를 없애고 흐림(유리) 바탕 + 약한 그림자.
+   - 방향키 이동 표시(-5/+5): 동그란 검은 바탕 → 바탕 없이 화살표(‹ ›) + 글자, 약한 그림자.
+   - ⚙ 설정 창·칩: 테두리 없음. 선택된 칩은 흰 바탕·검은 글자로 확실히 구분.
+   - 마우스 올림 효과는 '터치 기기가 아니면'(위 PC 재생바 규칙과 같은 조건 — 손가락으로 누른 뒤 바탕이 남지 않게).
+   - Tab 키로 옮겨 다닐 때의 흰 포커스 테두리(:focus-visible)는 키보드 사용자를 위해 그대로 둔다.
+   ======================================================================== */
+/* 조작 줄 버튼 — 바탕은 버튼 안쪽의 둥근 판(::before)으로 그린다(켜짐 표시와 같은 자리) */
+.fsvs-root .fsvs-row .fsvs-btn { border-color: transparent; border-radius: 999px; isolation: isolate; }
+.fsvs-root .fsvs-row .fsvs-btn::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: 4px; right: 4px; border: 0; border-radius: 999px; background: transparent; z-index: -1; pointer-events: none; transition: background-color .15s ease; }
+@media not all and (pointer: coarse) {
+    .fsvs-root .fsvs-row .fsvs-btn:not(:disabled):hover::before { background: rgba(255, 255, 255, 0.14); }
+}
+.fsvs-root .fsvs-row .fsvs-btn.is-on::before { top: 4px; bottom: 4px; left: 4px; right: 4px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.24); }
+@media not all and (pointer: coarse) { .fsvs-root .fsvs-row .fsvs-btn.is-on:not(:disabled):hover::before { background: rgba(255, 255, 255, 0.32); } }
+.fsvs-root .fsvs-row .fsvs-ab.is-on::before { border: 0; background: rgba(242, 184, 75, 0.38); }
+.fsvs-root .fsvs-row .fsvs-ab.is-half::before { top: 4px; bottom: 4px; left: 4px; right: 4px; border: 0; border-radius: 999px; background: rgba(242, 184, 75, 0.18); }
+.fsvs-root .fsvs-row .fsvs-cc.is-off::before { top: 4px; bottom: 4px; left: 4px; right: 4px; border: 0; border-radius: 999px; background: transparent; }
+.fsvs-root .fsvs-row .fsvs-cc.is-off { opacity: 0.6; }
+/* 재생 버튼 — 원래도 둥근 옅은 바탕(40px). 올리면 조금 밝게 */
+.fsvs-root .fsvs-row .fsvs-play::before { top: 0; bottom: 0; left: 0; right: 0; }
+.fsvs-root .fsvs-row .fsvs-speedchip { border-color: transparent; }
+/* ★ (2026-10-09) 재검토 — 속도 칩은 자체 바탕이 있어 마우스 올림 바탕이 안쪽 4px 에 한 겹 더 보였다 → 칩 크기 그대로 겹치게 */
+.fsvs-root .fsvs-row .fsvs-speedchip::before { top: 0; bottom: 0; left: 0; right: 0; }
+/* 메뉴 등 조작 줄 밖의 켜진 버튼 */
+.fsvs-root .fsvs-btn.is-on { border-color: transparent; }
+
+/* 가운데 재생·±5초 버튼 — 테두리 없이 흐림 바탕 + 약한 그림자(크기·위치·보이기 규칙은 원래 그대로) */
+body.fsvs-active .fsvs-on .video-play-overlay {
+    border: 0;
+    background: rgba(24, 24, 28, 0.42);
+    -webkit-backdrop-filter: blur(12px) saturate(1.3);
+    backdrop-filter: blur(12px) saturate(1.3);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
+}
+body.fsvs-active .fsvs-on .video-play-overlay:hover { background: rgba(24, 24, 28, 0.56); }
+body.fsvs-active .fsvs-on .video-play-overlay svg { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.25)); }
+
+/* 방향키 이동 표시 — 바탕 없이 화살표 + 글자(-5/+5 글자는 원래 그대로), 약한 그림자 */
+body.fsvs-active .fsvs-on .video-seek-overlay {
+    width: auto; height: auto; min-width: 48px; padding: 4px 6px; gap: 2px;
+    flex-direction: column; border-radius: 0; background: transparent;
+    font-size: 15px; font-weight: 600; line-height: 1;
+    filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.5)) drop-shadow(0 1px 6px rgba(0, 0, 0, 0.45));   /* 밝은 화면에서도 보이게 두 겹 */
+}
+body.fsvs-active .fsvs-on .video-seek-overlay::before {
+    content: ''; display: block; width: 26px; height: 26px; background: no-repeat center / contain;
+}
+body.fsvs-active .fsvs-on .video-seek-left::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M15 5l-7 7 7 7' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+body.fsvs-active .fsvs-on .video-seek-right::before { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M9 5l7 7-7 7' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+
+/* ⚙ 설정 창·칩 — 테두리 없이, 창은 약한 그림자 */
+.fsvs-root .fsvs-menu { border: 0; box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32); }
+.fsvs-root .fsvs-chip { border-color: transparent; border-radius: 999px; background: rgba(255, 255, 255, 0.08); transition: background-color .15s ease; }
+/* ★ (2026-10-09) 재검토 — 누른 반응(반짝임 .is-flash)은 올림 바탕보다 우선해야 한다. 종전엔 이 규칙이 더 강해 PC 에서 누를 때(마우스가 늘 위에 있음)
+   반짝임 0.24 가 올림 0.16 에 가려 눌린 반응이 안 보였다(실측: 올림·누른 직후·끝 모두 0.16). 반짝임 중인 칩은 올림 규칙에서 뺀다. */
+@media not all and (pointer: coarse) { .fsvs-root .fsvs-chip:not(:disabled):not(.is-on):not(.is-flash):hover { background: rgba(255, 255, 255, 0.16); } }
+.fsvs-root .fsvs-chip.is-on { border-color: transparent; background: rgba(255, 255, 255, 0.92); color: #15172A; }
+.fsvs-root .fsvs-chip.is-flash:not(.is-on) { border-color: transparent; background: rgba(255, 255, 255, 0.24); }
+/* ★ (2026-10-09) 재검토 — 켜짐 + 누른 반응(반짝임)이 겹칠 때: 위 반짝임 바탕(옅은 흰색)만 남고 글자는 켜짐용 검은색이라 0.45초 동안 글자가 안 보였다
+   ('더 보기'의 음소거·반복·A-B 칩을 눌러 켤 때 — 실측 바탕 0.24·글자 #15172A). 켜짐이면 흰 바탕을 조금만 흐리게 해 반응은 보이고 글자는 그대로 읽히게. */
+.fsvs-root .fsvs-chip.is-on.is-flash { border-color: transparent; background: rgba(255, 255, 255, 0.78); color: #15172A; }
+/* 여러 줄로 접히는 긴 칩(음성 목록·자막 파일)은 알약 모양이면 모서리가 어색해 살짝만 둥글게 */
+.fsvs-root .fsvs-chips.fsvs-list .fsvs-chip, .fsvs-root .fsvs-chips.fsvs-subfiles .fsvs-chip { border-radius: 12px; }
+
+/* ★ (2026-10-09) 영상 준비 전(탐색기 .video-not-ready — 받는 중·파일 정보 확인 중·변환 시작 중)엔 가운데 재생·±5초 버튼을 숨긴다(펜닐 요청).
+   원래 규칙은 30% 로 흐리게 보이며 누르기만 막았다(style.css). 준비되면 클래스가 빠져 원래 규칙대로 다시 보인다. 스킨이 켜진 플레이어만. */
+body.fsvs-active .fsvs-on.video-not-ready .video-play-overlay { opacity: 0 !important; visibility: hidden; pointer-events: none !important; }
+
+/* ========================================================================
+   ★ (2026-10-09) ⚙ 설정 — 목록형(유튜브처럼, 펜닐 요청). 목록 [아이콘 · 이름 · 현재 값 · ›] → 하위 목록 [‹ 제목] + 선택지(✓).
+   종전 칩 배치(두 칸·세 칸·촘촘하게·비율 축소)는 쓰지 않는다(스킨 JS fitMenu 단순화). 휴대폰에서 플레이어가 너무 낮으면 종전 '화면 아래 판'.
+   ======================================================================== */
+.fsvs-root .fsvs-menu.fsvs-lst { padding: 6px 0; width: 300px; max-width: calc(100% - 24px); display: block; overscroll-behavior: contain; }
+.fsvs-root .fsvs-menu.fsvs-lst:not(.fsvs-sheet) { left: auto; }   /* ★ 재검토 — 폭 600px 이하 옛 규칙(left·right 8px)의 left 때문에 300px 창이 왼쪽에 붙던 것(⚙ 는 오른쪽) */
+.fsvs-root .fsvs-menu.fsvs-lst.fsvs-sheet { width: auto; max-width: 480px; margin: 0 auto; padding: 8px 0 calc(8px + env(safe-area-inset-bottom, 0px)); }   /* 가로 화면 휴대폰에서 목록이 화면 끝까지 길게 늘어지지 않게 가운데 480px */
+.fsvs-root .fsvs-menu.fsvs-lst.fsvs-sheet.fsvs-raised { padding-bottom: 8px; }
+.fsvs-root .fsvs-menu.fsvs-lst .fsvs-menuhead { margin: 0; padding: 2px 6px 6px 16px; }
+/* 줄(목록·선택지·실행·켬끔 공통) — .fsvs-btn 의 둥근 단추 모양을 줄 모양으로 */
+.fsvs-root .fsvs-menu .fsvs-mrow {
+    display: flex; align-items: center; justify-content: flex-start; gap: 12px;
+    width: 100%; min-width: 0; height: auto; min-height: 42px; margin: 0; padding: 6px 14px;
+    border: 0; border-radius: 0; background: transparent; text-align: left; font-size: 14px; line-height: 1.3;
+}
+.fsvs-root .fsvs-menu .fsvs-mrow:focus-visible, .fsvs-root .fsvs-menu .fsvs-mback:focus-visible { outline-offset: -3px; }
+@media not all and (pointer: coarse) { .fsvs-root .fsvs-menu .fsvs-mrow:hover, .fsvs-root .fsvs-menu .fsvs-mback:hover { background: rgba(255, 255, 255, 0.08); } }
+.fsvs-root .fsvs-menu .fsvs-mrow:active { background: rgba(255, 255, 255, 0.12); transform: none; }
+.fsvs-root .fsvs-menu .fsvs-mi { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; }
+.fsvs-root .fsvs-menu .fsvs-mi svg { width: 22px; height: 22px; }
+.fsvs-root .fsvs-menu .fsvs-mab { font-size: 10px; font-weight: 800; letter-spacing: -0.3px; }
+.fsvs-root .fsvs-menu .fsvs-ml { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.fsvs-root .fsvs-menu .fsvs-mv { flex: 0 1 auto; max-width: 48%; min-width: 0; color: #B9BDD0; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fsvs-root .fsvs-menu .fsvs-mv:empty { display: none; }
+.fsvs-root .fsvs-menu .fsvs-mc { flex: none; display: inline-flex; color: #B9BDD0; margin-right: -4px; }
+/* 켬/끔 스위치 */
+.fsvs-root .fsvs-menu .fsvs-sw { flex: none; position: relative; width: 34px; height: 18px; border-radius: 9px; background: rgba(255, 255, 255, 0.28); transition: background-color .15s ease; }
+.fsvs-root .fsvs-menu .fsvs-sw::after { content: ''; position: absolute; left: 2px; top: 2px; width: 14px; height: 14px; border-radius: 7px; background: #fff; transition: left .15s ease; }
+.fsvs-root .fsvs-menu .fsvs-mtog.is-on .fsvs-sw { background: rgba(255, 255, 255, 0.62); }
+.fsvs-root .fsvs-menu .fsvs-mtog.is-on .fsvs-sw::after { left: 18px; }
+/* 하위 목록 머리줄 — ‹ 제목 (+ 휴대폰 판에서만 ✕) */
+.fsvs-root .fsvs-menu .fsvs-mhead { display: flex; align-items: center; gap: 4px; padding: 0 6px 6px; margin-bottom: 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
+.fsvs-root .fsvs-menu .fsvs-mback { flex: 1 1 auto; justify-content: flex-start; gap: 6px; min-width: 0; height: 40px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; font-size: 14px; font-weight: 700; text-align: left; }
+.fsvs-root .fsvs-menu .fsvs-mbi { flex: none; display: inline-flex; }
+.fsvs-root .fsvs-menu .fsvs-mt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fsvs-root .fsvs-menu .fsvs-mx { display: none; flex: none; }
+.fsvs-root .fsvs-menu.fsvs-sheet .fsvs-mx { display: inline-flex; }
+/* 선택지 — 고른 것에 ✓ */
+.fsvs-root .fsvs-menu .fsvs-mck { flex: none; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; }
+.fsvs-root .fsvs-menu .fsvs-mopt.is-on { font-weight: 700; }
+/* 자막 설정 — 이름 · − 값 + */
+.fsvs-root .fsvs-menu .fsvs-mstep { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 4px 14px; font-size: 14px; }
+.fsvs-root .fsvs-menu .fsvs-mstepb { flex: none; min-width: 34px; width: 34px; height: 32px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, 0.1); font-size: 18px; font-weight: 600; line-height: 1; }
+@media not all and (pointer: coarse) { .fsvs-root .fsvs-menu .fsvs-mstepb:hover { background: rgba(255, 255, 255, 0.18); } }
+.fsvs-root .fsvs-menu .fsvs-mstepb.is-flash { background: rgba(255, 255, 255, 0.3); }
+.fsvs-root .fsvs-menu .fsvs-msv { flex: none; min-width: 58px; text-align: center; font-weight: 700; font-variant-numeric: tabular-nums; }

@@ -1621,17 +1621,17 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
-                <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" style="min-height:220px;background:#111;">
+                <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" <?php if (in_array($ext ?? '', ['mp4', 'm4v', 'mov'], true)): ?>data-keys-url="<?= htmlspecialchars($streamUrl . '&vk=1') ?>"<?php endif; ?> data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" style="min-height:220px;background:#111;">
                 </video>
                 <div class="play-overlay" id="play-overlay">
                     <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
                         <circle cx="36" cy="36" r="35" fill="rgba(0,0,0,0.6)"/>
-                        <path d="M28 20L54 36L28 52V20Z" fill="white"/>
+                        <path d="M28 20L54 36L28 52V20Z" fill="white" stroke="white" stroke-width="5" stroke-linejoin="round"/>
                     </svg>
                 </div>
                 <div class="video-play-overlay" id="share-play-pause">
-                    <svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg>
-                    <svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                    <svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 6.82v10.36a1.5 1.5 0 0 0 2.3 1.27l8.14-5.18a1.5 1.5 0 0 0 0-2.54L10.3 5.55A1.5 1.5 0 0 0 8 6.82z"/></svg>
+                    <svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><rect x="6" y="5" width="4.5" height="14" rx="1.6"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.6"/></svg>
                 </div>
                 <?php else: ?>
                 <div class="stream-badge native">▶ <?= __('native_playback', '일반 재생') ?><?php if ($videoCodec): ?> (<?= htmlspecialchars(strtoupper($videoCodec)) ?><?php if ($videoResolution): ?> <?= htmlspecialchars($videoResolution) ?><?php endif; ?><?php if ($fileSize > 0): ?> <?= htmlspecialchars(formatFileSize($fileSize)) ?><?php endif; ?>)<?php endif; ?></div>
@@ -1650,12 +1650,12 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
-                <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>"<?php if (!empty($fastNative)): ?> data-direct-url="<?= htmlspecialchars($streamUrl . '&ds=playlist') ?>" data-native-src="<?= htmlspecialchars($streamUrl) ?>" data-direct-codec="<?= htmlspecialchars((string)($videoCodec ?? '')) ?>" data-audio-count="<?= (int)($_shareAudioCount ?? 0) ?>"<?php endif; ?>>
+                <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" <?php if (in_array($ext ?? '', ['mp4', 'm4v', 'mov'], true)): ?>data-keys-url="<?= htmlspecialchars($streamUrl . '&vk=1') ?>"<?php endif; ?> data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>"<?php if (!empty($fastNative)): ?> data-direct-url="<?= htmlspecialchars($streamUrl . '&ds=playlist') ?>" data-native-src="<?= htmlspecialchars($streamUrl) ?>" data-direct-codec="<?= htmlspecialchars((string)($videoCodec ?? '')) ?>" data-audio-count="<?= (int)($_shareAudioCount ?? 0) ?>"<?php endif; ?>>
                     <?php if (empty($fastNative)): ?><source src="<?= htmlspecialchars($streamUrl) ?>" type="video/mp4"><?php endif; ?>
                 </video>
                 <div class="video-play-overlay" id="share-play-pause">
-                    <svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 5v14l11-7z"/></svg>
-                    <svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                    <svg class="icon-play" viewBox="0 0 24 24" width="48" height="48" fill="white"><path d="M8 6.82v10.36a1.5 1.5 0 0 0 2.3 1.27l8.14-5.18a1.5 1.5 0 0 0 0-2.54L10.3 5.55A1.5 1.5 0 0 0 8 6.82z"/></svg>
+                    <svg class="icon-pause" viewBox="0 0 24 24" width="48" height="48" fill="white" style="display:none"><rect x="6" y="5" width="4.5" height="14" rx="1.6"/><rect x="13.5" y="5" width="4.5" height="14" rx="1.6"/></svg>
                 </div>
                 <?php endif; ?>
                 <!-- 재생 버튼 좌우 탐색 버튼 (±5초, 메인 패턴 동일) — 두 분기 공용 -->
@@ -1947,6 +1947,12 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         'fsvs_higher' => __('fsvs_higher', '위로'),
         'fsvs_lower' => __('fsvs_lower', '아래로'),
         'fsvs_more' => __('fsvs_more', '더 보기'),
+        'fsvs_back' => __('fsvs_back', '뒤로'),   // ★ (2026-10-09) ⚙ 목록형 설정 — 하위 목록 머리줄·'보통'·자막 설정·싱크 초기화
+        'fsvs_normal' => __('fsvs_normal', '보통'),
+        'fsvs_sub_settings' => __('fsvs_sub_settings', '자막 설정'),
+        'fsvs_sync_reset' => __('fsvs_sync_reset', '싱크 0초로'),
+        'fsvs_osd_ab_a' => __('fsvs_osd_ab_a', '구간 반복: A 지점'),   // ★ (2026-10-09) 반복·구간 반복·속도 바꿀 때 화면 알림
+        'fsvs_osd_ab_off' => __('fsvs_osd_ab_off', '구간 반복: 끔'),
         'fsvs_smaller' => __('fsvs_smaller', '작게'),
         'fsvs_sub_pos' => __('fsvs_sub_pos', '위치'),
         'fsvs_sub_file' => __('fsvs_sub_file', '자막 파일'),   // ★ (2026-10-08) ⚙ 자막 파일 고르기
@@ -3184,7 +3190,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         if (audioCount >= 2 && typeof window._shareFsvsPrefetch === 'function') { try { window._shareFsvsPrefetch(); } catch (e) {} }
                     };
                     if (typeof Hls !== 'undefined' && Hls.isSupported()) {
-                        const hls = new Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 30, maxMaxBufferLength: 120, backBufferLength: 10, startPosition: start || 0 });
+                        // ★ (2026-10-09) 지난 구간 유지 10 → PC 90초 · 휴대폰(터치) 30초 — 탐색기 원본 스트리밍과 같게(← 로 조금만 돌아가도 조각을 다시 받던 문제)
+                        const _dsBack = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ? 30 : 90;
+                        const hls = new Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 30, maxMaxBufferLength: 120, backBufferLength: _dsBack, startPosition: start || 0 });
                         player._directHls = hls;
                         // 복귀는 hls.js 오류 알림 처리가 끝난 다음 순간에(알림 안에서 destroy 하면 hls.js 내부 'reading trigger' 오류) — toNative 는 한 번만 실행
                         const later = (why) => setTimeout(() => { if (my === gen) toNative(why); }, 0);
@@ -3965,10 +3973,24 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 }
             } catch (e) { /* 무시 */ }
             
+            // ★ (2026-10-09) 마지막으로 포인터(마우스·터치)로 누른 요소 기억 — 아래 키 처리에서 그 요소의 키보드 테두리를 막는 데 씀(음악과 같은 값, 한 번만 등록)
+            if (!window._fapPtrTrack) { window._fapPtrTrack = true; document.addEventListener('pointerdown', (ev) => { try { window._fapPtrEl = (ev.target && ev.target.closest) ? ev.target.closest('button,a,[tabindex]') : null; } catch (x) {} }, true); document.addEventListener('keydown', (ev) => { if (ev.key === 'Tab') window._fapPtrEl = null; }, true); }
             const shareVideoKeyHandler = (e) => {
                 // input/textarea 안에서는 무시 (자막 검색 등)
                 if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
                 if (e.target.isContentEditable) return;
+                // ★ (2026-10-09) 마우스로 누른 플레이어 버튼(조작 줄·⚙ 칩 등)에 포커스가 남은 채 단축키를 누르면 그 버튼에 키보드 포커스 테두리(흰 실선)가 생겼다
+                //   (음악과 같은 처리) — 마지막으로 포인터로 누른 요소면 포커스를 뺀다. Tab 으로 온 경우·Tab·Enter·조합 키 단독은 그대로.
+                //   탐색기는 재생·이동 때 미리보기 창으로 포커스를 옮기는 기존 동작이라 해당 없음(확인).
+                try {
+                    const _ae = document.activeElement;
+                    const _root = document.getElementById('player-wrap');
+                    if (_ae && _ae !== document.body && _ae === window._fapPtrEl && _root && _root.contains(_ae) && !/^(INPUT|TEXTAREA|SELECT)$/.test(_ae.tagName)
+                        && e.key !== 'Tab' && e.key !== 'Enter' && e.key !== 'Shift' && e.key !== 'Control' && e.key !== 'Alt' && e.key !== 'Meta'
+                        && typeof _ae.blur === 'function') {
+                        _ae.blur();
+                    }
+                } catch (x) {}
                 
                 // ←→: 5초 이동 + 시킹 오버레이 시각 피드백 (메인 패턴 동일)
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -4148,6 +4170,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 // Space: 재생/일시정지, M: 음소거, ←→: 5초 이동, ↑↓: 볼륨 ±5%, S: 셔플, L: 반복
                 // ★ Ctrl+L: 가사 모달 토글, Esc: 가사 모달 닫기 (v5.8.1c)
                 // 버튼 click() 시뮬레이션으로 FSAudioPlayer 내부 로직 그대로 활용 (안전)
+                // ★ (2026-10-09) 마지막으로 포인터(마우스·터치)로 누른 요소 기억 — 아래 키 처리에서 그 요소의 키보드 테두리를 막는 데 씀(한 번만 등록)
+                if (!window._fapPtrTrack) { window._fapPtrTrack = true; document.addEventListener('pointerdown', (ev) => { try { window._fapPtrEl = (ev.target && ev.target.closest) ? ev.target.closest('button,a,[tabindex]') : null; } catch (x) {} }, true); document.addEventListener('keydown', (ev) => { if (ev.key === 'Tab') window._fapPtrEl = null; }, true); }
                 const shareKeyHandler = (e) => {
                     // input/textarea 안에서는 무시
                     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -4156,6 +4180,19 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     
                     const audio = sharePlayer.audio;
                     if (!audio) return;
+                    // ★ (2026-10-09) 마우스로 누른 플레이어 버튼에 포커스가 남은 채 단축키(스페이스·방향키·M 등)를 누르면 크롬이 그 버튼에 키보드 포커스 테두리를
+                    //   그렸다(펜닐 제보 사진 — 재생 버튼 둘레 검은 원). 마우스(포인터)로 누른 요소에 포커스가 그대로 있으면 포커스를 뺀다 — 크롬은 키를 누르는 순간
+                    //   이미 :focus-visible 로 바꾸므로(실측) 그 값으로는 못 가리고, 마지막으로 포인터로 누른 요소를 기억해 비교한다(Tab 을 누르면 잊음).
+                    //   Tab 으로 버튼에 온 경우(키보드 사용자 '지금 위치')는 그대로, Tab·Enter·조합 키 단독 입력은 건드리지 않는다. 입력칸(검색·음량 막대)은 제외.
+                    try {
+                        const _ae = document.activeElement;
+                        const _root = sharePlayer.container;
+                        if (_ae && _ae !== document.body && _ae === window._fapPtrEl && _root && _root.contains(_ae) && !/^(INPUT|TEXTAREA|SELECT)$/.test(_ae.tagName)
+                            && e.key !== 'Tab' && e.key !== 'Enter' && e.key !== 'Shift' && e.key !== 'Control' && e.key !== 'Alt' && e.key !== 'Meta'
+                            && typeof _ae.blur === 'function') {
+                            _ae.blur();
+                        }
+                    } catch (x) {}
                     
                     // ★ 가사 모달이 열려있으면 Ctrl+L/Esc만 처리, 나머지 키 차단 (v5.8.1c)
                     //    Space로 재생/일시정지하면 가사 모달이 의도치 않게 닫히는 것처럼 보일 수 있음 방지
@@ -4977,6 +5014,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 frameUrl: (sec) => (player.dataset.frameUrl ? player.dataset.frameUrl + Math.max(0, Math.floor(sec || 0)) : null),
                 // ★ (2026-10-02) 재생바 미리보기 장면 묶음 주소 — 영상 태그의 data-frames-url(스트리밍 주소 + &vfs=). 서버는 공유 검증을 모두 거친다.
                 framesUrl: (secs) => (player.dataset.framesUrl ? player.dataset.framesUrl + (Array.isArray(secs) ? secs : []).map((x) => Math.max(0, Math.floor(x || 0))).join(',') : null),
+                // ★ (2026-10-09) 재생바 미리보기용 키프레임 시각 목록 주소 — 영상 태그의 data-keys-url(스트리밍 주소 + &vk=1). 서버는 공유 검증을 모두 거친다.
+                //   mp4·m4v·mov 일 때만 태그에 넣는다(재검토 — 다른 형식은 서버가 '해당 없음'만 답하므로 요청하지 않게).
+                keyTimesUrl: () => (player.dataset.keysUrl || null),
                 nativeAudio: () => ((isStreaming() && !player._directOn) ? null : fsvsNativeAudio()),   // ★ (2026-09-30) 빠른 시작 중에도
                 isStreaming,
                 timeOffset: () => player._qualitySeekOffset || 0,
