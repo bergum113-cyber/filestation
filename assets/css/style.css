@@ -1689,8 +1689,11 @@ body {
 .quota-bar-mini {
     flex: 1;
     height: 4px;
-    background: var(--sidebar-text);
-    opacity: 0.3;
+    /* ★ (2026-10-10) 바탕만 흐리게(펜닐 요청 — 색 막대가 연하게 보임). 종전 opacity: 0.3 은 안쪽 색 막대(.quota-used-mini)까지 30% 로 흐려
+       초록·주황·빨강이 연두·분홍처럼 보였다(자식의 opacity: 1 로는 되돌릴 수 없음). 바탕색만 30% 로 섞고 틀 자체는 불투명.
+       color-mix 를 모르는 오래된 브라우저는 앞 줄의 회색 30% 를 쓴다. 사용률 기준(70%·90%)과 색은 그대로. */
+    background: rgba(128, 128, 128, 0.3);
+    background: color-mix(in srgb, var(--sidebar-text) 30%, transparent);
     border-radius: 2px;
     overflow: hidden;
 }
@@ -1717,6 +1720,11 @@ body {
     opacity: 0.8;
     white-space: nowrap;
 }
+/* ★ (2026-10-10) 선택된 스토리지 칸(모든 테마에서 연한 파랑 #e3f2fd — 위 '.storage-list a.active')에서는 용량 글자·막대 바탕을 그 칸에 맞춘다(펜닐 요청).
+   글자·바탕이 사이드바 글자색이라, 사이드바 글자가 밝은 테마(다크·블루·민트 풀·로즈 풀 등)는 흰 칸에 밝은 글자가 되어 거의 안 보였다(원래부터).
+   글자는 선택 칸의 글자색(inherit — #4a90d9, 스토리지 이름과 같은 색), 바탕 막대는 같은 파랑 25%. 사용률 색 막대(초록·주황·빨강)는 그대로. */
+.storage-list a.active .quota-text-mini { color: inherit; opacity: 0.9; }
+.storage-list a.active .quota-bar-mini { background: rgba(74, 144, 217, 0.25); }
 
 /* 파일 영역 */
 .file-area {

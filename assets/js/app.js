@@ -10508,11 +10508,15 @@ const App = {
                 this.browseInternalShare(share.id);
             } else {
                 // filedrop 등: 실제 스토리지 폴더로 이동 (검증된 네비게이션 패턴)
+                const _prevSidShare = this.currentStorage;
                 this.currentStorage = share.storage_id;
                 this.currentPath = share.file_path || '';
                 // 사이드바 스토리지 선택 표시 갱신
-                $('.storage-item').removeClass('active');
-                $(`.storage-item[data-id="${share.storage_id}"]`).addClass('active');
+                // ★ (2026-10-10) 사이드바 선택 표시 — 실제 사이드바 링크(#storage-list a)로. 종전 '.storage-item' 은 그 이름표가 붙은 요소가 없어 아무것도 안 바뀌었다(다른 이동 경로와 같게)
+                $('#storage-list a').removeClass('active');
+                $(`#storage-list a[data-id="${share.storage_id}"]`).addClass('active');
+                // ★ (2026-10-10) 스토리지가 실제로 바뀌었을 때만 그 스토리지의 보기 방식·정렬 복원(_restoreStorageSettings — 사이드바 클릭·뒤로가기·내 공유 링크 등과 같게). 종전엔 빠져 예전 스토리지 보기로 나왔다
+                if (String(_prevSidShare) !== String(share.storage_id)) this._restoreStorageSettings(share.storage_id);
                 await this.loadFiles();
             }
             // 알림 갱신 (초기화 반영)
@@ -14623,8 +14627,11 @@ const App = {
                     // 검색 결과에서 폴더 열기 - 스토리지 변경
                     if (item.storageId && item.storageId !== this.currentStorage) {
                         this.currentStorage = item.storageId;
-                        $('.storage-item').removeClass('active');
-                        $(`.storage-item[data-id="${item.storageId}"]`).addClass('active');
+                        // ★ (2026-10-10) 사이드바 선택 표시 — 실제 사이드바 링크(#storage-list a)로. 종전 '.storage-item' 은 그 이름표가 붙은 요소가 없어 아무것도 안 바뀌었다(다른 이동 경로와 같게)
+                        $('#storage-list a').removeClass('active');
+                        $(`#storage-list a[data-id="${item.storageId}"]`).addClass('active');
+                        // ★ (2026-10-10) 스토리지가 실제로 바뀌었을 때만 그 스토리지의 보기 방식·정렬 복원(_restoreStorageSettings — 사이드바 클릭·뒤로가기·내 공유 링크 등과 같게). 종전엔 빠져 예전 스토리지 보기로 나왔다
+                        this._restoreStorageSettings(item.storageId);   // 이 블록은 이미 '스토리지가 다를 때'만 들어옴
                     }
                     this.exitSearchMode();
                     
@@ -20191,11 +20198,15 @@ const App = {
         sessionStorage.removeItem('webhard_search');
         
         // 스토리지 변경
+        const _prevSidNav = this.currentStorage;
         this.currentStorage = item.storage_id;
         
         // 사이드바 스토리지 선택 업데이트
-        $('.storage-item').removeClass('active');
-        $(`.storage-item[data-id="${item.storage_id}"]`).addClass('active');
+        // ★ (2026-10-10) 사이드바 선택 표시 — 실제 사이드바 링크(#storage-list a)로. 종전 '.storage-item' 은 그 이름표가 붙은 요소가 없어 아무것도 안 바뀌었다(다른 이동 경로와 같게)
+        $('#storage-list a').removeClass('active');
+        $(`#storage-list a[data-id="${item.storage_id}"]`).addClass('active');
+        // ★ (2026-10-10) 스토리지가 실제로 바뀌었을 때만 그 스토리지의 보기 방식·정렬 복원(_restoreStorageSettings — 사이드바 클릭·뒤로가기·내 공유 링크 등과 같게). 종전엔 빠져 예전 스토리지 보기로 나왔다
+        if (String(_prevSidNav) !== String(item.storage_id)) this._restoreStorageSettings(item.storage_id);
         
         // 경로 계산
         const filepath = item.filepath || item.path || '';
