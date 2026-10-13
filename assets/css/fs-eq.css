@@ -1,0 +1,62 @@
+/* ★ (2026-10-11) FSEQ 이퀄라이저 — 음악 플레이어 팝업(.fseq-pop)과 동영상 ⚙ 목록 안(.fseq-in-menu) 공통 (펜닐 요청)
+   팝업은 음악 플레이어 스킨 메뉴와 같은 어두운 반투명 판. 동영상 목록 안에서는 목록의 글자색·바탕을 그대로 따른다. */
+.fseq { font-size: 13px; line-height: 1.3; color: inherit; -webkit-user-select: none; user-select: none; }
+.fseq button, .fseq select, .fseq input { font: inherit; }
+
+/* 켬/끔 */
+.fseq .fseq-sw {
+    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 42px; padding: 6px 14px;
+    background: none; border: 0; color: inherit; cursor: pointer; text-align: left;
+}
+.fseq .fseq-sw:hover { background: rgba(255, 255, 255, 0.08); }
+.fseq .fseq-swl { flex: 1; font-weight: 600; }
+.fseq .fseq-swt { opacity: 0.75; font-size: 12px; }
+.fseq .fseq-swk { position: relative; flex: 0 0 auto; width: 34px; height: 18px; border-radius: 9px; background: rgba(255, 255, 255, 0.28); transition: background 0.15s; }
+.fseq .fseq-swk::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform 0.15s; }
+.fseq .fseq-sw.is-on .fseq-swk { background: #6c8cff; }
+.fseq .fseq-sw.is-on .fseq-swk::after { transform: translateX(16px); }
+
+/* 프리셋 */
+.fseq .fseq-prow { display: flex; align-items: center; gap: 10px; padding: 4px 14px 8px; }
+.fseq .fseq-pl { flex: 0 0 auto; opacity: 0.8; font-size: 12px; }
+.fseq .fseq-preset {
+    flex: 1; min-width: 0; height: 30px; padding: 0 8px; border-radius: 6px; cursor: pointer;
+    background: rgba(255, 255, 255, 0.1); color: inherit; border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.fseq .fseq-preset option { color: #111; background: #fff; }
+
+/* 밴드 */
+.fseq .fseq-bands { padding: 2px 14px 4px; transition: opacity 0.15s; }
+.fseq.is-off .fseq-bands { opacity: 0.45; }
+.fseq .fseq-band { display: grid; grid-template-columns: 34px 1fr 38px; align-items: center; gap: 8px; height: 28px; }
+.fseq .fseq-hz { font-size: 11px; opacity: 0.8; text-align: right; font-variant-numeric: tabular-nums; }
+.fseq .fseq-db { font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; opacity: 0.9; }
+.fseq .fseq-range { width: 100%; min-width: 0; margin: 0; height: 22px; cursor: pointer; accent-color: #6c8cff; background: transparent; }
+
+/* 아래 줄 */
+.fseq .fseq-foot { display: flex; align-items: center; gap: 8px; padding: 6px 14px 10px; }
+.fseq .fseq-note { flex: 1; font-size: 11px; opacity: 0.55; }
+.fseq .fseq-reset {
+    height: 28px; padding: 0 12px; border-radius: 6px; cursor: pointer;
+    background: rgba(255, 255, 255, 0.1); color: inherit; border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.fseq .fseq-reset:hover { background: rgba(255, 255, 255, 0.18); }
+.fseq button:focus { outline: none; }
+.fseq button:focus-visible, .fseq select:focus-visible, .fseq input:focus-visible { outline: 2px solid #8ab4ff; outline-offset: -2px; }
+
+/* 음악 플레이어 팝업 — 스킨 선택 단추(오른쪽 위) 아래로 */
+.fseq-pop {
+    position: absolute; top: 100%; right: 0; margin-top: 4px; z-index: 60;
+    width: 300px; max-width: calc(100vw - 24px); max-height: min(70vh, 480px); overflow-y: auto; overscroll-behavior: contain;
+    background: rgba(20, 20, 30, 0.96); color: #e8e8ee; text-align: left;
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+    border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; box-shadow: 0 8px 30px rgba(0, 0, 0, 0.45);
+    font-family: system-ui, -apple-system, 'Segoe UI', sans-serif; letter-spacing: normal; text-transform: none;
+}
+.fseq-pop .fseq-pophead { display: flex; align-items: center; gap: 8px; padding: 8px 8px 4px 14px; border-bottom: 1px solid rgba(255, 255, 255, 0.07); }
+.fseq-pop .fseq-poptitle { flex: 1; font-size: 12px; font-weight: 600; opacity: 0.7; }
+.fseq-pop .fseq-popclose { width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; font-size: 13px; opacity: 0.75; }
+.fseq-pop .fseq-popclose:hover { background: rgba(255, 255, 255, 0.1); opacity: 1; }
+
+/* 동영상 ⚙ 목록 안 — 목록 줄과 같은 여백 */
+.fseq.fseq-in-menu { padding-bottom: 2px; }

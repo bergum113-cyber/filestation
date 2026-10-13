@@ -126,6 +126,8 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
     <link rel="stylesheet" href="assets/css/style.css?v=<?php echo substr(md5_file(__DIR__ . '/assets/css/style.css'), 0, 10); ?>">
     <!-- ★ (2026-09-23) 동영상 새 껍데기(기본 켜짐 — ?vskin=0 으로 끔). 규칙은 .fsvs-* 로만 적용돼 꺼져 있으면 영향 없음 -->
     <link rel="stylesheet" href="assets/css/fs-video-skin.css?v=<?php echo substr(md5_file(__DIR__ . '/assets/css/fs-video-skin.css'), 0, 10); ?>">
+    <!-- ★ (2026-10-11) 이퀄라이저(음악·동영상 플레이어 — 설정은 따로) -->
+    <link rel="stylesheet" href="assets/css/fs-eq.css?v=<?php echo substr(md5_file(__DIR__ . '/assets/css/fs-eq.css'), 0, 10); ?>">
     <link rel="stylesheet" href="assets/lib/viewerjs/viewer.min.css">
     <!-- 테마 깜빡임 방지: localStorage에서 테마 즉시 로드 -->
     <script>
@@ -5745,6 +5747,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
     <script src="assets/lib/viewerjs/viewer.min.js"></script>
     <script src="assets/vendor/hls.min.js"></script>
     <script src="assets/js/e2e-crypto.js?v=<?php echo substr(md5_file(__DIR__ . '/assets/js/e2e-crypto.js'), 0, 10); ?>"></script>
+    <script src="assets/js/fs-eq.js?v=<?php echo substr(md5_file(__DIR__ . '/assets/js/fs-eq.js'), 0, 10); ?>"></script><!-- ★ (2026-10-11) 이퀄라이저 — app.js 가 시작할 때(계정 설정 불러오기) 이미 있어야 해 앞에 둔다 -->
     <script src="assets/js/app.js?v=<?php echo substr(md5_file(__DIR__ . '/assets/js/app.js'), 0, 10); ?>"></script>
     <script src="assets/js/fs-video-skin.js?v=<?php echo substr(md5_file(__DIR__ . '/assets/js/fs-video-skin.js'), 0, 10); ?>"></script>
 <!-- 알림 드롭다운 (body 직접 자식 - overflow hidden 회피) -->

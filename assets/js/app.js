@@ -191,6 +191,28 @@
         else if (_dq === '0') { sessionStorage.removeItem('fs_hlsdiag'); }
         else if (sessionStorage.getItem('fs_hlsdiag') === '1') { window._hlsDiag = true; }
     } catch (e) {}
+    // ★ (2026-10-12) 진단이 켜져 있다는 표시를 쿠키(fs_dsdiag=1)로도 서버에 알린다 — 원본 스트리밍 조각 요청은 hls.js 가 보내 주소에 표시를 붙일 수 없어서,
+    //   서버(FileManager::directStreamFile)가 이 쿠키가 있을 때만 조각마다 걸린 시간을 같은 진단 로그에 남긴다(펜닐: mp4 탐색 느림 — 서버 처리인지 전송인지 가르기).
+    //   기록만, 재생 동작 변경 없음. 브라우저를 닫으면 사라지는 쿠키, 진단을 끄면(&hlsdiag=0·콘솔 false) 5초 안에 지움.
+    // ★ (2026-10-13) 비교 시험 — 주소 &dsmode=file 이면(같은 탭 유지, &dsmode=0 으로 끔) 진단이 켜졌을 때만 쿠키 fs_dsmode=file → 서버가 원본 스트리밍 조각을
+    //   파이프 대신 임시 파일로 만들어 보냄(FileManager::directStreamFile — 속도 비교용, 펜닐 승인). 진단이 꺼지면 이 쿠키도 같이 지움.
+    try {
+        const _dm = new URLSearchParams(window.location.search).get('dsmode');
+        // ★ (2026-10-13) 윈도우 서버는 평소 파일 방식이 되어(정식 적용) 비교하려면 파이프를 고를 수 있어야 함 — &dsmode=pipe 추가, &dsmode=0 은 서버 기본으로.
+        if (_dm === 'file' || _dm === 'pipe') sessionStorage.setItem('fs_dsmode', _dm);
+        else if (_dm === '0') sessionStorage.removeItem('fs_dsmode');
+    } catch (e) {}
+    window._fsDsDiagCookie = function () {
+        try {
+            const sec = location.protocol === 'https:' ? '; Secure' : '';
+            const want = !!window._hlsDiag, has = /(?:^|;\s*)fs_dsdiag=1/.test(document.cookie);
+            if (want !== has) document.cookie = want ? ('fs_dsdiag=1; SameSite=Lax' + sec) : ('fs_dsdiag=; Max-Age=0; SameSite=Lax' + sec);
+            let mode = ''; try { const m = sessionStorage.getItem('fs_dsmode'); if (want && (m === 'file' || m === 'pipe')) mode = m; } catch (e) {}
+            const mm = document.cookie.match(/(?:^|;\s*)fs_dsmode=([a-z]*)/), hasM = mm ? mm[1] : '';
+            if (mode !== hasM) document.cookie = mode ? ('fs_dsmode=' + mode + '; SameSite=Lax' + sec) : ('fs_dsmode=; Max-Age=0; SameSite=Lax' + sec);
+        } catch (e) {}
+    };
+    window._fsDsDiagCookie();
     // 영상 이벤트를 문서 한 곳에서 받아 기록(영상 이벤트는 거품이 올라오지 않으므로 capture 단계). 진단이 꺼져 있으면 아무것도 안 함.
     //   timeupdate·progress 처럼 잦은 이벤트는 넣지 않는다(요청 수 제한 대비).
     ['loadstart', 'loadedmetadata', 'canplay', 'play', 'playing', 'pause', 'waiting', 'stalled', 'error', 'ended', 'emptied'].forEach((_ev) => {
@@ -370,6 +392,7 @@
             if (key !== _lastUi) { _lastUi = key; window._diagLog('ui_state', st); }
         }, 1000);
         setInterval(() => {
+            try { if (window._fsDsDiagCookie) window._fsDsDiagCookie(); } catch (e) {}   // ★ (2026-10-12) 콘솔로 켜고 끈 경우도 쿠키를 맞춤
             if (!window._hlsDiag) { _lastBuf = null; return; }
             const v = _pv(); if (!v) { _lastBuf = null; _waits = 0; _stalls = 0; return; }
             let be = 0; try { be = v.buffered.length ? v.buffered.end(v.buffered.length - 1) : 0; } catch (e) {}
@@ -396,6 +419,22 @@
                         o.res.proto = proto; o.res.acts = acts; o.res.slowest = slow;
                         if (nt) o.res.avgMs = { queue: Math.round(q / nt), server: Math.round(sv / nt), recv: Math.round(rc / nt) };
                     } catch (e2) {}
+                    // ★ (2026-10-12) 원본 스트리밍 조각(direct_stream ds=segment)은 하나씩 따로 — 평균에 진단 로그 요청이 섞여 조각 하나의 '첫 응답까지·받기'를
+                    //   가를 수 없었다(펜닐 로그 20:15). i: 조각 번호, at: 요청 시작(로그 앞 [x.xxxs] 와 같은 기준 — 탐색 시각과 맞춰 봄),
+                    //   q: 보내기 전 대기, sv: 보낸 뒤 첫 응답까지(서버 처리), rc: 받기, kb: 받은 양. 기록만.
+                    try {
+                        const segs = [];
+                        ents.forEach((r) => {
+                            if (!/[?&]action=direct_stream\b/.test(r.name) || !/[?&]ds=segment\b/.test(r.name)) return;
+                            const mi = /[?&]i=(\d+)/.exec(r.name);
+                            const g = { i: mi ? +mi[1] : -1, at: +(r.startTime / 1000).toFixed(3), ms: Math.round(r.duration), kb: Math.round((r.transferSize || r.encodedBodySize || 0) / 1024) };
+                            // ★ (2026-10-13) 연결 방식(h2·http/1.1)·압축 여부(받은 크기 enc ≠ 풀린 크기 dec 면 서버가 압축해 보냄)·받은 속도(kbps = 받은 양 ÷ 받기 시간)
+                            try { g.p = r.nextHopProtocol || ''; g.enc = Math.round((r.encodedBodySize || 0) / 1024); g.dec = Math.round((r.decodedBodySize || 0) / 1024); } catch (e4) {}
+                            if (r.requestStart > 0 && r.responseStart > 0) { g.q = Math.round(r.requestStart - r.startTime); g.sv = Math.round(r.responseStart - r.requestStart); g.rc = Math.round(r.responseEnd - r.responseStart); if (g.rc > 0 && g.enc) g.kbps = Math.round(g.enc * 8 / (g.rc / 1000)); }
+                            segs.push(g);
+                        });
+                        if (segs.length) o.res.segs = segs.slice(0, 30);
+                    } catch (e3) {}
                 }
                 performance.clearResourceTimings();
             } catch (e) {}
@@ -1261,6 +1300,14 @@ class FSAudioPlayer {
                         ${s.name}
                     </div>
                 `).join('')}
+                ${(window.FSEQ && FSEQ.supported && !this._isIOS) ? `
+                <div class="fap-eq-section">
+                <div class="fap-skin-section-title">${isKo ? '이퀄라이저' : 'Equalizer'}</div>
+                <div class="fap-vis-toggle-item fap-eq-item" data-eq-open="1">
+                    <span class="fap-vis-toggle-label">${isKo ? '설정' : 'Settings'}</span>
+                    <span class="fap-vis-toggle-state fap-eq-state"></span>
+                </div>
+                </div>` : ''}
                 <div class="fap-vis-section">
                 <div class="fap-skin-section-title">${isKo ? '비주얼라이저' : 'Visualizer'}</div>
                 <div class="fap-vis-toggle-item" data-vis-toggle="1">
@@ -1310,6 +1357,14 @@ class FSAudioPlayer {
                 menu.style.display = 'none';
                 return;
             }
+            // ★ (2026-10-11) 이퀄라이저 — 스킨 메뉴를 닫고 같은 자리(오른쪽 위)에 EQ 팝업을 연다. 아래 비주얼라이저 토글과 같은 모양 클래스를 써서 먼저 가른다.
+            const eqItem = e.target.closest('.fap-eq-item');
+            if (eqItem) {
+                e.stopPropagation();
+                menu.style.display = 'none';
+                try { if (window.FSEQ) FSEQ.openPopover(selector, { profile: 'music' }); } catch (x) {}   // ★ 음악용 설정(동영상과 따로)
+                return;
+            }
             // 비주얼라이저 ON/OFF 토글
             const visToggle = e.target.closest('.fap-vis-toggle-item');
             if (visToggle) {
@@ -1334,6 +1389,13 @@ class FSAudioPlayer {
             }
         });
         this._skinSelectorEl = selector;
+        // ★ (2026-10-11) 메뉴의 이퀄라이저 상태 글자(끔·프리셋 이름) — 바뀔 때마다(다른 탭·동영상에서 바꿔도) 갱신, destroy 때 해제
+        const eqState = selector.querySelector('.fap-eq-state');
+        if (eqState && window.FSEQ) {
+            const eqUpd = () => { try { eqState.textContent = FSEQ.summary('music'); } catch (x) {} };
+            eqUpd();
+            this._eqUnsub = FSEQ.subscribe(eqUpd, 'music');
+        }
     }
     
     // 비주얼라이저 색상 변경 (localStorage 저장 + 즉시 반영)
@@ -1927,7 +1989,10 @@ class FSAudioPlayer {
                     this.audio.currentTime = Math.max(0, this.audio.currentTime - ((details && details.seekOffset) || 10));
                 },
                 seekforward: (details) => {
-                    this.audio.currentTime = Math.min(this.audio.duration || 0, this.audio.currentTime + ((details && details.seekOffset) || 10));
+                    // ★ (2026-10-12) 길이를 아직 모를 때(NaN) '|| 0' 이 상한 0 이 되어 처음으로 튀었다 — 길이가 유한할 때만 상한(동영상 방향키와 같게)
+                    const _adur = this.audio.duration;
+                    const _atgt = this.audio.currentTime + ((details && details.seekOffset) || 10);
+                    this.audio.currentTime = (isFinite(_adur) && _adur > 0) ? Math.min(_adur, _atgt) : _atgt;
                 },
                 seekto: (details) => {
                     if (!details || details.seekTime == null) return;
@@ -3393,7 +3458,20 @@ class FSAudioPlayer {
             
             // MediaElementSource는 audio 당 한 번만 생성 가능
             this._mediaSource = this._audioCtx.createMediaElementSource(this.audio);
-            this._mediaSource.connect(this._analyser);
+            // ★ (2026-10-11) 이퀄라이저(fs-eq.js) — 소리 → EQ 필터 줄(끄면 0dB 통과) → 분석기 → 출력. 못 끼우면 종전처럼 소리 → 분석기.
+            //   이 경로는 비주얼라이저 때문에 원래 있던 것(아이폰은 비주얼라이저와 함께 꺼져 EQ 도 없음). EQ 설정은 음악용(동영상과 따로).
+            this._eqOut = this._mediaSource;
+            try {
+                if (window.FSEQ && FSEQ.supported) {
+                    this._eqChain = FSEQ.createChain(this._audioCtx, 'music');
+                    if (this._eqChain) { this._mediaSource.connect(this._eqChain.input); this._eqOut = this._eqChain.output; }
+                }
+            } catch (eqErr) {
+                try { this._mediaSource.disconnect(); } catch (x) {}
+                try { if (this._eqChain) this._eqChain.dispose(); } catch (x) {}
+                this._eqChain = null; this._eqOut = this._mediaSource;
+            }
+            this._eqOut.connect(this._analyser);
             this._analyser.connect(this._audioCtx.destination);
             
             const bufferLength = this._analyser.frequencyBinCount;  // 512
@@ -3421,7 +3499,7 @@ class FSAudioPlayer {
                 this._vuAnalyserR.fftSize = 1024;
                 this._vuAnalyserL.smoothingTimeConstant = 0;  // 직접 RMS 계산 (스무딩 비활성)
                 this._vuAnalyserR.smoothingTimeConstant = 0;
-                this._mediaSource.connect(this._vuSplitter);
+                (this._eqOut || this._mediaSource).connect(this._vuSplitter);   // ★ (2026-10-11) EQ 뒤 소리(들리는 그대로)를 잰다
                 this._vuSplitter.connect(this._vuAnalyserL, 0);  // L 채널
                 this._vuSplitter.connect(this._vuAnalyserR, 1);  // R 채널
                 this._vuTimeDataL = new Float32Array(this._vuAnalyserL.fftSize);
@@ -3459,6 +3537,7 @@ class FSAudioPlayer {
             console.warn('[FSAudioPlayer] Visualizer init failed:', e.message);
             this._visFailed = true;
             try {
+                if (this._eqChain) { try { this._eqChain.dispose(); } catch (x) {} this._eqChain = null; this._eqOut = null; }   // ★ (2026-10-11) EQ 필터 줄도 정리
                 if (this._mediaSource) {
                     this._mediaSource.disconnect();
                     this._mediaSource = null;
@@ -5786,6 +5865,10 @@ class FSAudioPlayer {
             this._vuTimeDataL = null;
             this._vuTimeDataR = null;
         }
+        // ★ (2026-10-11) 이퀄라이저 정리 — 필터 줄(설정 변경 알림 목록에서 빠짐)·상태 글자 구독·이 플레이어에 열린 팝업
+        if (this._eqChain) { try { this._eqChain.dispose(); } catch (e) {} this._eqChain = null; this._eqOut = null; }
+        if (this._eqUnsub) { try { this._eqUnsub(); } catch (e) {} this._eqUnsub = null; }
+        try { if (window.FSEQ && this._skinSelectorEl && this._skinSelectorEl.querySelector('.fseq-pop')) FSEQ.closePopover(); } catch (e) {}
         this.audio.removeAttribute('src');
         this.audio.load();
         // 진행 중인 duration 로더 정리 (핸들러 제거 + src 클리어로 다운로드 중단)
@@ -8810,6 +8893,15 @@ const App = {
                     }
                     return;
                 }
+                // ★ (2026-10-11) 음악 플레이어 이퀄라이저 팝업이 열려 있으면 Esc 는 팝업만 닫는다(미리보기 창은 그대로 — 아래 ⚙ 창과 같은 방식)
+                try {
+                    if (window.FSEQ && typeof FSEQ.escape === 'function' && FSEQ.isOpen && FSEQ.isOpen() && FSEQ.escape()) {
+                        _escConsumedByEditor = true;
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        return;
+                    }
+                } catch (_x) {}
                 // ★ (2026-10-09) 동영상 ⚙ 설정 창이 열려 있으면 Esc 는 그 창만(하위 목록 → 목록 → 닫기 — 유튜브처럼). 종전엔 미리보기 창 전체가 닫혔다.
                 //   keyup 의 미리보기 닫기도 막는다(_escConsumedByEditor — 찾기 바와 같은 방식). 스킨이 없거나 창이 닫혀 있으면 종전 그대로.
                 try {
@@ -29323,6 +29415,14 @@ const App = {
                     const merged = { ...res.preferences.view_settings, ...local };
                     localStorage.setItem('fs_view_settings', JSON.stringify(merged));
                 }
+                // ★ (2026-10-11) 이퀄라이저(음악용·동영상용 따로, 한 묶음으로 저장) — 계정 값과 이 브라우저 값 중 나중에 바꾼 쪽으로 맞추고(브라우저 쪽이 새것이면 계정에 올림),
+                //   이후 바꾸면 계정에도 저장(fs-eq.js 가 0.7초 모아서 한 번). 서버는 형식·범위를 다시 검사한다(api.php user_preferences_save).
+                try {
+                    if (window.FSEQ && typeof FSEQ.setRemoteSaver === 'function') {
+                        FSEQ.setRemoteSaver((v) => { this.api('user_preferences_save', { eq_settings: v }).catch(() => {}); });
+                        FSEQ.syncRemote(res.preferences.eq_settings || null, this.user && this.user.id != null ? this.user.id : null);   // 사용자 번호 — 이 브라우저 값을 다른 계정이 저장했으면 올리지 않음
+                    }
+                } catch (eqErr) {}
             }
         } catch (e) {
         }
@@ -36963,7 +37063,11 @@ const App = {
                 const _deferNativeSrc = !needsTranscode && !item._vaultBlobUrl && ext === 'mp4';
                 // ★ (2026-09-30) 진단 기록(동작 변경 없음) — 원본을 미뤘는지와 근거(넘어온 크기)
                 try { window._diagLog && window._diagLog('preview_defer', { defer: _deferNativeSrc, itemSize: (item.size === undefined ? 'undefined' : item.size), ext: ext, force: !!this._forceNativePlayback, mobile: /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && ('ontouchend' in document), needsTranscode: needsTranscode }); } catch (eD) {}
-                const videoInnerHtml = `<div class="video-player-wrap${_initialNotReady}" style="max-width:100%;max-height:100%;">
+                // ★ (2026-10-12) 새 플레이어 스킨이 붙기 전(약 0.1~0.2초) 원래 모양 가운데 버튼(검은 동그라미)이 잠깐 보였다(펜닐 제보) — 스킨을 쓸 때만
+                //   'fsvs-pending' 을 달아 그동안 가운데 버튼을 숨긴다(fs-video-skin.css). 스킨이 붙는 순간 attach 가 떼고, 스킨을 꺼 두었으면 처음부터 달지 않는다.
+                let _skinPending = '';
+                try { _skinPending = (window.FSVideoSkin && this._videoSkinEnabled()) ? ' fsvs-pending' : ''; } catch (e) { _skinPending = ''; }
+                const videoInnerHtml = `<div class="video-player-wrap${_initialNotReady}${_skinPending}" style="max-width:100%;max-height:100%;">
                     ${streamBadge}
                     ${audioSelectHtml}
                     ${qualitySelectHtml}
@@ -37134,6 +37238,20 @@ const App = {
                 
                 // 배속/PIP 컨트롤 바인딩
                 setTimeout(() => this._bindVideoExtraControls(), 100);
+
+                // ★ (2026-10-12) fsvs-pending 안전장치 — 5초가 지나도 스킨이 안 붙었으면(fsvs-on 없음) 표시를 떼서 원래 가운데 버튼이 보이게.
+                //   평소엔 0.1초 만에 붙어 아무 영향 없음. 그 사이 다른 파일을 열면 그 창의 wrap 은 이미 사라졌으므로(분리된 요소) 건드리지 않는다.
+                if (_skinPending) {
+                    setTimeout(() => {
+                        try {
+                            const _pw = document.querySelector('#preview-content .video-player-wrap.fsvs-pending');
+                            if (!_pw) return;
+                            setTimeout(() => {
+                                try { if (_pw.isConnected && !_pw.classList.contains('fsvs-on')) _pw.classList.remove('fsvs-pending'); } catch (e) {}
+                            }, 4900);
+                        } catch (e) {}
+                    }, 100);
+                }
 
                 // ★ 폴더 동영상 플레이리스트 사이드 패널 셋업 (펜닐님 결정: 2개 이상일 때만)
                 if (hasVideoPlaylist) {
@@ -37441,7 +37559,10 @@ const App = {
                                 const audio = player.audio;
                                 if (audio) {
                                     const seekAmount = e.key === 'ArrowLeft' ? -5 : 5;
-                                    audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + seekAmount));
+                                    // ★ (2026-10-12) 길이를 아직 모를 때(NaN) 처음으로 튀지 않게 — 길이가 유한할 때만 상한(동영상 방향키와 같게)
+                                    const _adur = audio.duration;
+                                    const _atgt = audio.currentTime + seekAmount;
+                                    audio.currentTime = Math.max(0, (isFinite(_adur) && _adur > 0) ? Math.min(_adur, _atgt) : _atgt);
                                     e.preventDefault();
                                 }
                                 return;
@@ -38725,15 +38846,14 @@ const App = {
                         const video = document.querySelector('#preview-content .preview-video');
                         if (video) {
                             const seekAmount = e.key === 'ArrowLeft' ? -5 : 5;
-                            video.currentTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + seekAmount));
+                            // ★ (2026-10-12) 길이를 아직 모를 때(NaN — 불러오는 직후) '|| 0' 이 상한 0 이 되어 처음(0초)으로 튀었다.
+                            //   ±5초 버튼(_bindVideoSeekButtons)과 같게 길이가 유한할 때만 상한 적용.
+                            const _vdur = video.duration;
+                            const _vtgt = video.currentTime + seekAmount;
+                            video.currentTime = Math.max(0, (isFinite(_vdur) && _vdur > 0) ? Math.min(_vdur, _vtgt) : _vtgt);
                             
-                            // 오버레이 피드백 표시
-                            const overlay = document.querySelector(e.key === 'ArrowLeft' ? '.video-seek-left' : '.video-seek-right');
-                            if (overlay) {
-                                overlay.classList.remove('show');
-                                void overlay.offsetWidth;
-                                overlay.classList.add('show');
-                            }
+                            // 오버레이 피드백 표시 — ★ (2026-10-12) 유튜브처럼 누적·화살표 개수(App._seekFeedback)
+                            App._seekFeedback(e.key === 'ArrowLeft', e);
                             e.preventDefault();
                         }
                     }
@@ -42179,13 +42299,53 @@ const App = {
                 const dur = video.duration;
                 const target = video.currentTime + (back ? -5 : 5);
                 video.currentTime = Math.max(0, (isFinite(dur) && dur > 0) ? Math.min(dur, target) : target);
-                // 키보드 탐색과 동일한 ±5 피드백 오버레이 재사용
-                const fb = document.querySelector(back ? '.video-seek-left' : '.video-seek-right');
-                if (fb) { fb.classList.remove('show'); void fb.offsetWidth; fb.classList.add('show'); }
+                // 키보드 탐색과 동일한 ±5 피드백 오버레이 재사용 — ★ (2026-10-12) 누적 표시도 키보드와 같게
+                App._seekFeedback(back, e);
             };
             btn.addEventListener('click', seek);
             btn.addEventListener('touchend', seek);
         });
+    },
+
+    // ★ (2026-10-12) 방향키·±5초 버튼 이동 표시 — 유튜브처럼 누적(펜닐 요청). 공유 페이지(share.php fsSeekFeedback)와 같은 규칙.
+    //   · 표시가 남아 있는 동안(마지막으로 누른 뒤 1.2초 — 10-12 밤, 종전 0.6·0.8초) 같은 방향을 다시 누르면 +5 → +10 → +15 로 쌓이고 보인 채로 유지(.again).
+    //     그 시간이 지나거나 반대 방향을 누르면 처음부터(반대쪽 표시는 바로 지움).
+    //   · 빠르기 표시(data-chev — 스킨 CSS 가 그림): 천천히 1 · 0.35초 안에 다시 누르면(키를 누르고 있는 자동 반복 포함) 2 → 화살표가 밀리며 합쳐지는 움직임(10-12 밤).
+    //   · 이동량 자체는 호출한 쪽 그대로(5초) — 여기는 표시만.
+    _seekFeedback(back, ev) {
+        try {
+            const el = document.querySelector(back ? '.video-seek-left' : '.video-seek-right');
+            if (!el) return;
+            const other = document.querySelector(back ? '.video-seek-right' : '.video-seek-left');
+            if (other && other._fsSeek) { other._fsSeek = null; other.classList.remove('show', 'again'); }
+            const now = performance.now();
+            const st = el._fsSeek;
+            const cont = !!(st && now < st.end);
+            const gap = cont ? now - st.last : Infinity;
+            const chev = gap < 350 ? 2 : 1;   // ★ (2026-10-12) 꾹 누르기 3개(›››)는 펜닐 요청으로 뺌 — 자동 반복도 빠른 연타라 2개
+            const sum = (cont ? st.sum : 0) + 5;
+            el._fsSeek = { sum: sum, last: now, end: now + 1200 };   // ★ (2026-10-12 밤) 표시가 남는 1.2초 동안 누적(종전 0.6·0.8초 — 천천히 누르면 끊김)
+            el.textContent = (back ? '\u2212' : '+') + sum;
+            el.setAttribute('data-chev', String(chev));
+            el.classList.remove('show', 'again');
+            // ★ (2026-10-13) 플레이어 크기와 상관없이 표시하되, 가운데 버튼(±5초·재생)과 겹치거나 플레이어 높이가 모자라 잘리면 그때만 안 보임(펜닐 요청).
+            //   움직임을 뗀 상태(위 줄)로 실제 자리를 재서 판단 — 글자가 길어져(+100 등) 겹치게 되면 그때부터 안 보임. 숨긴 버튼(준비 중 등)은 겹침에서 뺌.
+            {
+                const wrap = el.parentElement, r = el.getBoundingClientRect(), wr = wrap ? wrap.getBoundingClientRect() : null;
+                let blocked = !wr || r.width === 0 || r.top < wr.top || r.bottom > wr.bottom || r.left < wr.left || r.right > wr.right;
+                if (!blocked) wrap.querySelectorAll('.video-play-overlay').forEach(b => {
+                    if (blocked) return;
+                    const cs = getComputedStyle(b);
+                    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+                    const br = b.getBoundingClientRect();
+                    if (br.width > 0 && r.left < br.right + 4 && r.right > br.left - 4 && r.top < br.bottom && r.bottom > br.top) blocked = true;
+                });
+                if (blocked) { el._fsSeek = null; return; }
+            }
+            void el.offsetWidth;   // 애니메이션 재시작
+            el.classList.add('show');
+            if (cont) el.classList.add('again');
+        } catch (x) {}
     },
 
     // 배속/PIP 컨트롤 바인딩 (미리보기 footer에 추가)
@@ -42701,9 +42861,9 @@ const App = {
         if (!video || !wrap) return;
         // ★ (2026-09-23) 스트리밍에도 붙는다 — 부품이 실제 길이(_knownDuration)·오프셋(_qualitySeekOffset)·
         //   변환된 끝(seekable)으로 시간축을 그린다. 꺼져 있으면 떼어 두고 기본 컨트롤로 둔다.
-        if (!this._videoSkinEnabled()) { window.FSVideoSkin.detach(wrap); return; }
+        if (!this._videoSkinEnabled()) { window.FSVideoSkin.detach(wrap); wrap.classList.remove('fsvs-pending'); return; }   // ★ (2026-10-12) 꺼 두면 원래 버튼 그대로
         const ctx = this._videoSkinCtx(video);
-        window.FSVideoSkin.attach({ video, wrap, ctx });
+        try { window.FSVideoSkin.attach({ video, wrap, ctx }); } catch (e) { wrap.classList.remove('fsvs-pending'); throw e; }   // ★ (2026-10-12) 붙이기 실패 시 가운데 버튼이 숨은 채 남지 않게
         // ★ (2026-09-24) 일반 재생이면 음성 목록을 미리 받아 둔다(정보 요청 info=1 — 변환은 하지 않음)
         try { if (!ctx.isStreaming()) this._fsvsPrefetchAudioInfo(video); } catch (e) {}
     },

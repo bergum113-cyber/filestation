@@ -404,7 +404,9 @@ $rateLimitExclude = [
     // 스트리밍 (세그먼트 연속 요청)
     'transcode', 'hls_stream', 'direct_stream',   // ★ (2026-09-30) 원본 스트리밍 조각 연속 요청(GET)
     // ZIP 내부 목록 조회
-    'zip_list', 'archive_list', 'archive_preview'
+    'zip_list', 'archive_list', 'archive_preview',
+    // ★ (2026-10-12) 진단 로그 — 아래에서 따로 분당 600 으로 제한
+    'hls_diag_log'
 ];
 if (!in_array($action, $rateLimitExclude)) {
     $clientIP = getClientIP();
@@ -431,6 +433,20 @@ if (in_array($action, $uploadRateLimitActions)) {
         $clientIP = trim(explode(',', $clientIP)[0]);
     }
     if (!checkRateLimit($clientIP . '_upload', 1000, 60)) {
+        http_response_code(429);
+        echo json_encode(['success' => false, 'error' => __('api_err_too_many_requests', '요청이 너무 많습니다. 잠시 후 다시 시도하세요.')]);
+        exit;
+    }
+}
+
+// ★ (2026-10-12) 진단 로그는 공용 제한(분당 120)에서 빼고 따로 분당 600 — 진단을 켜고 탐색을 여러 번 하면 공용 제한에 걸려 기록이 빠지고(펜닐 20:15 로그 — 429),
+//   같은 IP 의 평소 요청(재생 위치 저장 등)까지 함께 제한될 수 있었다. 로그인 필요·한 번에 최대 100건·128KB·파일 5MB 규칙은 그대로(hls_diag_log).
+if ($action === 'hls_diag_log') {
+    $clientIP = getClientIP();
+    if (strpos($clientIP, ',') !== false) {
+        $clientIP = trim(explode(',', $clientIP)[0]);
+    }
+    if (!checkRateLimit($clientIP . '_diag', 600, 60)) {
         http_response_code(429);
         echo json_encode(['success' => false, 'error' => __('api_err_too_many_requests', '요청이 너무 많습니다. 잠시 후 다시 시도하세요.')]);
         exit;
@@ -2686,32 +2702,74 @@ try {
         case 'user_preferences_save':
             $auth->requireLogin();
             $user = $auth->getUser();
-            $users = $db->load('users');
-            
-            foreach ($users as &$u) {
-                if ($u['id'] === $user['id']) {
-                    if (!isset($u['preferences'])) {
-                        $u['preferences'] = [];
+            // ★ (2026-10-11) 이퀄라이저(fs-eq.js — 음악용·동영상용 따로) — 형식·범위를 검사해 맞는 것만 저장한다.
+            //   저장 형식 v2: { v:2, music:{on,preset,custom}, video:{on,preset,custom}, t }. 종전 v1(공통 1개 {on,preset,custom,t})이 오면 양쪽에 같은 값으로.
+            //   밴드는 정확히 10개 숫자(각 ±12dB 로 자르고 0.1 단위로 맞춤 — VLC 프리셋 값 7.2 등을 담으려고), 프리셋은 정해진 이름만(그 밖은 플랫),
+            //   on 은 true 일 때만 켬, t(바꾼 시각 ms)는 0 이상 정수. 형식이 틀리면 아무것도 저장하지 않고 오류(다른 설정이 섞여 와도 함께 저장 안 함 — EQ 는 따로 보냄).
+            $eqNorm = null;
+            if (isset($input['eq_settings'])) {
+                $eq = $input['eq_settings'];
+                $eqPresets = ['flat', 'classical', 'club', 'dance', 'fullbass', 'fullbasstreble', 'fulltreble', 'headphones', 'largehall', 'live',
+                    'party', 'pop', 'reggae', 'rock', 'ska', 'soft', 'softrock', 'techno', 'custom'];
+                $eqProf = function ($p) use ($eqPresets) {
+                    if (!is_array($p) || !isset($p['custom']) || !is_array($p['custom']) || count($p['custom']) !== 10 || !array_is_list($p['custom'])) return null;
+                    $custom = [];
+                    foreach ($p['custom'] as $g) {
+                        if (!is_int($g) && !is_float($g)) return null;
+                        $g = max(-12.0, min(12.0, (float)$g));
+                        $custom[] = round($g * 10) / 10;
                     }
-                    // 개별 설정 업데이트
-                    if (isset($input['clock_style'])) {
-                        $u['preferences']['clock_style'] = $input['clock_style'];
-                    }
-                    if (isset($input['dismissed_notifications'])) {
-                        $u['preferences']['dismissed_notifications'] = $input['dismissed_notifications'];
-                    }
-                    if (isset($input['sort_settings'])) {
-                        $u['preferences']['sort_settings'] = $input['sort_settings'];
-                    }
-                    if (isset($input['view_settings'])) {
-                        $u['preferences']['view_settings'] = $input['view_settings'];
-                    }
+                    return [
+                        'on' => (($p['on'] ?? false) === true),
+                        'preset' => in_array($p['preset'] ?? '', $eqPresets, true) ? $p['preset'] : 'flat',
+                        'custom' => $custom,
+                    ];
+                };
+                $eqMusic = null; $eqVideo = null;
+                if (is_array($eq) && (isset($eq['music']) || isset($eq['video']))) {
+                    $eqMusic = $eqProf($eq['music'] ?? null);
+                    $eqVideo = $eqProf($eq['video'] ?? null);
+                } elseif (is_array($eq)) {
+                    $eqMusic = $eqVideo = $eqProf($eq);
+                }
+                if ($eqMusic === null || $eqVideo === null) {
+                    $result = ['success' => false, 'error' => 'invalid eq_settings'];
                     break;
                 }
+                $eqT = (isset($eq['t']) && (is_int($eq['t']) || is_float($eq['t'])) && $eq['t'] > 0 && $eq['t'] < 1e15) ? (int)$eq['t'] : 0;
+                $eqNorm = ['v' => 2, 'music' => $eqMusic, 'video' => $eqVideo, 't' => $eqT];
             }
-            
-            $db->save('users', $users);
-            $result = ['success' => true];
+            // ★ (2026-10-11) 읽기-고치기-쓰기를 잠금 하나로(atomicUpdate) — 종전엔 잠금 없이 읽은 뒤 저장해, 그 사이(몇 ms)에 다른 요청이
+            //   사용자 파일을 고치면(로그인 기록·관리자 변경 등) 그 변경이 이 저장에 덮여 사라질 수 있었다(펜닐 승인). 고치는 내용은 종전과 같다.
+            $prefsSaved = $db->atomicUpdate('users', function ($users) use ($user, $input, $eqNorm) {
+                foreach ($users as &$u) {
+                    if ($u['id'] === $user['id']) {
+                        if (!isset($u['preferences'])) {
+                            $u['preferences'] = [];
+                        }
+                        // 개별 설정 업데이트
+                        if (isset($input['clock_style'])) {
+                            $u['preferences']['clock_style'] = $input['clock_style'];
+                        }
+                        if (isset($input['dismissed_notifications'])) {
+                            $u['preferences']['dismissed_notifications'] = $input['dismissed_notifications'];
+                        }
+                        if (isset($input['sort_settings'])) {
+                            $u['preferences']['sort_settings'] = $input['sort_settings'];
+                        }
+                        if (isset($input['view_settings'])) {
+                            $u['preferences']['view_settings'] = $input['view_settings'];
+                        }
+                        if ($eqNorm !== null) {
+                            $u['preferences']['eq_settings'] = $eqNorm;
+                        }
+                        break;
+                    }
+                }
+                unset($u);
+                return $users;
+            });
+            $result = $prefsSaved ? ['success' => true] : ['success' => false, 'error' => 'save failed'];
             break;
         
         // ===== 회원 탈퇴 =====

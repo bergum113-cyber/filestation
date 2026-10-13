@@ -4762,7 +4762,13 @@ body.board-mode #transfer-progress {
 }
 
 .video-seek-overlay.show {
-    animation: seekFlash 0.6s ease-out forwards;
+    animation: seekFlash 1.2s ease-out forwards;   /* ★ (2026-10-12 밤) 0.6 → 1.2초 — 천천히 눌러도 누적이 이어지게(펜닐: 유튜브는 천천히 해도 카운트가 올라감) */
+}
+/* ★ (2026-10-12) 유튜브처럼 누적(+5 → +10 → +15, 펜닐 요청) — 표시가 남아 있는 동안 다시 누르면 처음의 '나타나기' 없이 바로 보인 채로
+   0.8초 유지 후 사라짐(App._seekFeedback). 글자가 길어져도(+100 등) 넘치지 않게 가로만 늘어남 — 짧은 글자(−5)는 원래 48px 원 그대로. */
+.video-seek-overlay { min-width: 48px; width: auto; padding: 0 10px; box-sizing: border-box; border-radius: 24px; white-space: nowrap; }
+.video-seek-overlay.show.again {
+    animation: seekFlashAgain 1.2s ease-out forwards;   /* ★ (2026-10-12 밤) 0.8 → 1.2초(위와 같은 이유) */
 }
 
 .video-seek-left {
@@ -4773,10 +4779,18 @@ body.board-mode #transfer-progress {
     right: 16px;
 }
 
+/* ★ (2026-10-12 밤) 1.2초에 맞춤 — 나타나기·튀기는 종전과 같은 실제 시간(0.12·0.24초), 약 0.84초까지 보인 채로, 끝 0.36초 동안 사라짐 */
 @keyframes seekFlash {
     0% { opacity: 0; transform: translateY(-50%) scale(0.8); }
-    20% { opacity: 1; transform: translateY(-50%) scale(1.1); }
-    40% { opacity: 1; transform: translateY(-50%) scale(1); }
+    10% { opacity: 1; transform: translateY(-50%) scale(1.1); }
+    20% { opacity: 1; transform: translateY(-50%) scale(1); }
+    70% { opacity: 1; transform: translateY(-50%) scale(1); }
+    100% { opacity: 0; transform: translateY(-50%) scale(1); }
+}
+@keyframes seekFlashAgain {
+    0% { opacity: 1; transform: translateY(-50%) scale(1.06); }
+    8% { opacity: 1; transform: translateY(-50%) scale(1); }
+    70% { opacity: 1; transform: translateY(-50%) scale(1); }
     100% { opacity: 0; transform: translateY(-50%) scale(1); }
 }
 
@@ -10614,6 +10628,19 @@ tr:hover,
         transition: none !important;
         animation: none !important;
     }
+    /* ★ (2026-10-13) 동영상 이동 표시(−5/+5)는 예외 — 평소 투명(opacity 0)이고 나타나기 움직임으로만 보이는 구조라, 윈도우 '애니메이션 효과' 끔·
+       아이폰 '동작 줄이기'처럼 이 설정이 켜진 기기에선 위 규칙에 움직임이 지워져 아예 안 보였다(실측: 평소 op=1, 이 설정 op=0).
+       ★ (2026-10-13 오전) 이 설정에서도 평소와 똑같이(나타나기·누적 유지·화살표 합쳐지기) — 종전(같은 날 아침)엔 이 설정에서 움직임 없이 보이기만 하게 해
+       PC 에서 화살표 합쳐지는 움직임이 안 나왔다(펜닐 제보 — 평소 모양으로 돌려 달라). 위 규칙과 같은 우선순위(클래스 4개, 누적은 5개)로 뒤에 두어
+       이 표시에만 적용. 화살표 움직임(::before/::after — 스킨 CSS)은 위 규칙(*)이 가상 요소에 걸리지 않아 그대로 움직임. */
+    .video-player-wrap .video-seek-overlay.video-seek-left.show,
+    .video-player-wrap .video-seek-overlay.video-seek-right.show {
+        animation: seekFlash 1.2s ease-out forwards !important;
+    }
+    .video-player-wrap .video-seek-overlay.video-seek-left.show.again,
+    .video-player-wrap .video-seek-overlay.video-seek-right.show.again {
+        animation: seekFlashAgain 1.2s ease-out forwards !important;
+    }
 }
 
 /* ========================================
@@ -11050,10 +11077,8 @@ tr:hover,
         pointer-events: none;
     }
     
-    /* 모바일: 10초 뒤/앞 오버레이 숨김 */
-    .video-seek-overlay {
-        display: none !important;
-    }
+    /* (종전) 모바일: 10초 뒤/앞 오버레이 숨김 — ★ (2026-10-12) 터치 기기만으로 좁혔다가
+       ★ (2026-10-13) 휴대폰에서도 보이게 숨김 규칙을 뺌(펜닐 요청 — 휴대폰 ±5초 버튼으로 이동할 때 양쪽 끝 표시가 안 나옴). 숨긴 이유는 기록 없음. */
     
     /* 모바일 오디오 트랙 — 우측 상단, 컴팩트 */
     .video-audio-select {

@@ -726,6 +726,14 @@ class FSAudioPlayer {
                         ${s.name}
                     </div>
                 `).join('')}
+                ${(window.FSEQ && FSEQ.supported && !this._isIOS) ? `
+                <div class="fap-eq-section">
+                <div class="fap-skin-section-title">${isKo ? '이퀄라이저' : 'Equalizer'}</div>
+                <div class="fap-vis-toggle-item fap-eq-item" data-eq-open="1">
+                    <span class="fap-vis-toggle-label">${isKo ? '설정' : 'Settings'}</span>
+                    <span class="fap-vis-toggle-state fap-eq-state"></span>
+                </div>
+                </div>` : ''}
                 <div class="fap-vis-section">
                 <div class="fap-skin-section-title">${isKo ? '비주얼라이저' : 'Visualizer'}</div>
                 <div class="fap-vis-toggle-item" data-vis-toggle="1">
@@ -776,6 +784,14 @@ class FSAudioPlayer {
                 return;
             }
             // 비주얼라이저 색상 아이템
+            // ★ (2026-10-11) 이퀄라이저 — 스킨 메뉴를 닫고 같은 자리(오른쪽 위)에 EQ 팝업을 연다. 아래 비주얼라이저 토글과 같은 모양 클래스를 써서 먼저 가른다.
+            const eqItem = e.target.closest('.fap-eq-item');
+            if (eqItem) {
+                e.stopPropagation();
+                menu.style.display = 'none';
+                try { if (window.FSEQ) FSEQ.openPopover(selector, { profile: 'music' }); } catch (x) {}   // ★ 음악용 설정(동영상과 따로)
+                return;
+            }
             // 비주얼라이저 ON/OFF 토글
             const visToggle = e.target.closest('.fap-vis-toggle-item');
             if (visToggle) {
@@ -799,6 +815,13 @@ class FSAudioPlayer {
             }
         });
         this._skinSelectorEl = selector;
+        // ★ (2026-10-11) 메뉴의 이퀄라이저 상태 글자(끔·프리셋 이름) — 바뀔 때마다(다른 탭·동영상에서 바꿔도) 갱신, destroy 때 해제
+        const eqState = selector.querySelector('.fap-eq-state');
+        if (eqState && window.FSEQ) {
+            const eqUpd = () => { try { eqState.textContent = FSEQ.summary('music'); } catch (x) {} };
+            eqUpd();
+            this._eqUnsub = FSEQ.subscribe(eqUpd, 'music');
+        }
     }
     
     // 비주얼라이저 색상 변경 (localStorage 저장 + 즉시 반영)
@@ -2531,7 +2554,20 @@ class FSAudioPlayer {
             
             // MediaElementSource는 audio 당 한 번만 생성 가능
             this._mediaSource = this._audioCtx.createMediaElementSource(this.audio);
-            this._mediaSource.connect(this._analyser);
+            // ★ (2026-10-11) 이퀄라이저(fs-eq.js) — 소리 → EQ 필터 줄(끄면 0dB 통과) → 분석기 → 출력. 못 끼우면 종전처럼 소리 → 분석기.
+            //   이 경로는 비주얼라이저 때문에 원래 있던 것(아이폰은 비주얼라이저와 함께 꺼져 EQ 도 없음). EQ 설정은 음악용(동영상과 따로).
+            this._eqOut = this._mediaSource;
+            try {
+                if (window.FSEQ && FSEQ.supported) {
+                    this._eqChain = FSEQ.createChain(this._audioCtx, 'music');
+                    if (this._eqChain) { this._mediaSource.connect(this._eqChain.input); this._eqOut = this._eqChain.output; }
+                }
+            } catch (eqErr) {
+                try { this._mediaSource.disconnect(); } catch (x) {}
+                try { if (this._eqChain) this._eqChain.dispose(); } catch (x) {}
+                this._eqChain = null; this._eqOut = this._mediaSource;
+            }
+            this._eqOut.connect(this._analyser);
             this._analyser.connect(this._audioCtx.destination);
             
             const bufferLength = this._analyser.frequencyBinCount;  // 512
@@ -2558,7 +2594,7 @@ class FSAudioPlayer {
                 this._vuAnalyserR.fftSize = 1024;
                 this._vuAnalyserL.smoothingTimeConstant = 0;
                 this._vuAnalyserR.smoothingTimeConstant = 0;
-                this._mediaSource.connect(this._vuSplitter);
+                (this._eqOut || this._mediaSource).connect(this._vuSplitter);   // ★ (2026-10-11) EQ 뒤 소리(들리는 그대로)를 잰다
                 this._vuSplitter.connect(this._vuAnalyserL, 0);
                 this._vuSplitter.connect(this._vuAnalyserR, 1);
                 this._vuTimeDataL = new Float32Array(this._vuAnalyserL.fftSize);
@@ -2590,6 +2626,7 @@ class FSAudioPlayer {
             console.warn('[FSAudioPlayer] Visualizer init failed:', e.message);
             this._visFailed = true;
             try {
+                if (this._eqChain) { try { this._eqChain.dispose(); } catch (x) {} this._eqChain = null; this._eqOut = null; }   // ★ (2026-10-11) EQ 필터 줄도 정리
                 if (this._mediaSource) {
                     this._mediaSource.disconnect();
                     this._mediaSource = null;
@@ -4046,16 +4083,16 @@ class FSAudioPlayer {
                 // ID3 커버 시도 (mp3 + 로컬)
                 if (folderCover) {
                     // ID3 실패 → 폴더 커버로 전환 (캐시된 URL 우선), 그것도 실패 → 🎵 아이콘
-                    coverHtml = `<img src="${_imgPlaceholder}" alt="" draggable="false" onerror="this.onerror=null;this.src='${folderCoverFallbackJs}';this.onerror=function(){this.parentNode.innerHTML='&#x1F3B5;';};">`;
+                    coverHtml = `<img src="${_imgPlaceholder}" alt="" draggable="false" data-fap-fb="${this._esc(folderCoverCachedSync || folderCover)}">`;
                 } else {
                     // ID3 실패 → 바로 🎵 아이콘
-                    coverHtml = `<img src="${_imgPlaceholder}" alt="" draggable="false" onerror="this.parentNode.innerHTML='&#x1F3B5;';">`;
+                    coverHtml = `<img src="${_imgPlaceholder}" alt="" draggable="false">`;
                 }
                 asyncCoverUrl = t.coverApiUrl;
             } else if (folderCoverHtml) {
                 // ID3 시도 대상 아님 (mp3 아님/원격/vault) + 폴더 커버 있음
                 //   FTP/SFTP에서 폴더 cover.jpg 사용하는 케이스 → 메모리 캐시 적용
-                coverHtml = `<img src="${_imgPlaceholder}" alt="" draggable="false" onerror="this.parentNode.innerHTML='&#x1F3B5;';">`;
+                coverHtml = `<img src="${_imgPlaceholder}" alt="" draggable="false">`;
                 asyncCoverUrl = folderCover;  // 원본 URL (escape 안 된 것)
             } else {
                 // 폴더 커버도 없음 → 🎵 아이콘
@@ -4066,6 +4103,22 @@ class FSAudioPlayer {
             //   CSS에서 작은 회색 박스로 표시 → 파일명에 이미 번호가 있어도 명확히 다름
             const _trackNum = String(i + 1).padStart(_numPadWidth, '0');
             li.innerHTML = `<div class="fap-pl-cover">${coverHtml}</div><span class="fap-pl-num">${_trackNum}</span><span class="fap-pl-name">${this._esc(t.name)}</span><span class="fap-pl-dur">${this._vsDurations[i] || ''}</span>`;
+            // ★ (2026-10-11) 커버 실패 처리 — 종전 글자 속 onerror="…" 는 공유 페이지의 보안 정책(CSP: 인라인 스크립트 금지)에 막혀 실행되지 않아
+            //   커버 없는 곡이 깨진 그림으로 보이고 콘솔 오류가 났다(탐색기는 정책이 허용해 정상 — app.js 는 그대로). 같은 동작을 코드로 붙인다:
+            //   폴더 커버가 있으면 한 번 그것으로 바꾸고(data-fap-fb), 그것도 실패하거나 없으면 🎵.
+            const _plImg = li.querySelector('.fap-pl-cover img');
+            if (_plImg) {
+                if (!this._plCoverErr) {
+                    this._plCoverErr = (ev) => {
+                        const im = ev.currentTarget;
+                        const fb = im.getAttribute('data-fap-fb');
+                        if (fb) { im.removeAttribute('data-fap-fb'); im.src = fb; return; }
+                        im.removeEventListener('error', this._plCoverErr);
+                        if (im.parentNode) im.parentNode.textContent = '🎵';
+                    };
+                }
+                _plImg.addEventListener('error', this._plCoverErr);
+            }
             // ★ 메모리 캐시에서 가져와 비동기로 src 세팅
             //   캐시 hit → 즉시 (네트워크 X) / 캐시 miss → 한 번 fetch 후 캐시 저장
             if (asyncCoverUrl) {
@@ -4621,6 +4674,10 @@ class FSAudioPlayer {
             this._vuTimeDataL = null;
             this._vuTimeDataR = null;
         }
+        // ★ (2026-10-11) 이퀄라이저 정리 — 필터 줄(설정 변경 알림 목록에서 빠짐)·상태 글자 구독·이 플레이어에 열린 팝업
+        if (this._eqChain) { try { this._eqChain.dispose(); } catch (e) {} this._eqChain = null; this._eqOut = null; }
+        if (this._eqUnsub) { try { this._eqUnsub(); } catch (e) {} this._eqUnsub = null; }
+        try { if (window.FSEQ && this._skinSelectorEl && this._skinSelectorEl.querySelector('.fseq-pop')) FSEQ.closePopover(); } catch (e) {}
         this.audio.removeAttribute('src');
         this.audio.load();
         // 진행 중인 duration 로더 정리 (핸들러 제거 + src 클리어로 다운로드 중단)

@@ -12,6 +12,101 @@ class FileManager {
     private $fileIndex;
     private $adapters = [];  // 어댑터 캐시
     private ?string $cancelCheckFile = null;  // 취소 체크용 job 파일 경로
+    private bool $dsDiagAllowed = false;      // ★ (2026-10-12) 원본 스트리밍 조각 진단 기록 허용 — 탐색기 경로(directStream, 로그인 필요)에서만 true
+
+    /**
+     * ★ (2026-10-13) 진단 한 줄을 data/hls_diag.log 에 — 브라우저 진단이 켜졌을 때(쿠키 fs_dsdiag=1)만 부르는 쪽에서 판단.
+     *   진단 로그와 같은 5MB 규칙(넘으면 비움), 실패해도 무시. 기록만(재생·전송 동작에 영향 없음).
+     */
+    private function dsDiagWrite(string $event, array $data): void {
+        try {
+            $dir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
+            $file = $dir . '/hls_diag.log';
+            if (is_file($file) && filesize($file) > 5242880) @file_put_contents($file, '');
+            @file_put_contents($file, '[' . date('Y-m-d H:i:s') . '] [server] ' . $event . ' | ' . json_encode($data, JSON_UNESCAPED_UNICODE) . "\n", FILE_APPEND | LOCK_EX);
+        } catch (\Throwable $e) {}
+    }
+
+    /** ★ (2026-10-13) 진단 — 서버 출력 환경 요약(보내기가 느릴 때 PHP·Apache 쪽 버퍼·압축 설정을 가르려고). 값 읽기만. */
+    private function dsDiagEnv(): array {
+        $h = function_exists('headers_list') ? implode(';', headers_list()) : '';
+        return [
+            'proto' => (string)($_SERVER['SERVER_PROTOCOL'] ?? ''), 'sapi' => PHP_SAPI,
+            'ob' => ob_get_level(), 'obIni' => (string)ini_get('output_buffering'), 'zlib' => (string)ini_get('zlib.output_compression'),
+            'implicit' => (string)ini_get('implicit_flush'), 'enc' => (stripos($h, 'Content-Encoding') !== false) ? 'yes' : 'no',
+        ];
+    }
+
+
+    /**
+     * ★ (2026-10-13) 원본 스트리밍 H.264 조각 — '파이프 / 파일 방식' 자동 선택(펜닐: 서버 환경마다 로그를 모을 수 없음).
+     *   평소 재생 중 조각을 만들 때 걸린 시간(ffmpeg 시작 → 조각 다 받음, 1MB 당 ms — 네트워크로 보내는 시간은 뺌)을 두 방식 번갈아 5개씩 재서
+     *   파일 방식이 40% 넘게 빠를 때만 파일 방식, 아니면 파이프(디스크에 안 씀). 정한 뒤 24시간 유지 → 다시 잰다(서버 바뀜·업데이트 대비).
+     *   저장: APCu(있으면) — 없으면 data/ds_auto.json(작은 파일, 잴 때만 씀). 읽기·쓰기 실패는 무시(그때는 운영체제 기본: 윈도우 파일·나머지 파이프).
+     *   펜닐 윈도우 서버 실측: 파이프 약 520~690ms·파일 약 80ms(조각 약 1MB) → 파일. 리눅스 시험 환경: 파이프 약 89·파일 약 80 ms/MB → 파이프.
+     */
+    private function dsAutoLoad(bool $useApcu): array {
+        $st = null;
+        try {
+            if ($useApcu) { $hit = false; $c = @apcu_fetch('fs_ds_auto|' . PHP_OS_FAMILY, $hit); if ($hit && is_array($c)) $st = $c; }
+            else {
+                $f = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/ds_auto.json';
+                if (is_file($f)) { $c = json_decode((string)@file_get_contents($f), true); if (is_array($c) && ($c['os'] ?? '') === PHP_OS_FAMILY) $st = $c; }
+            }
+        } catch (\Throwable $e) {}
+        if (!is_array($st)) $st = [];
+        return [
+            'pipe' => array_values(array_filter((array)($st['pipe'] ?? []), 'is_numeric')),
+            'file' => array_values(array_filter((array)($st['file'] ?? []), 'is_numeric')),
+            'mode' => in_array($st['mode'] ?? '', ['pipe', 'file'], true) ? $st['mode'] : '',
+            'at' => (int)($st['at'] ?? 0), 'ttl' => max(60, min(86400, (int)($st['ttl'] ?? 86400))), 'why' => (string)($st['why'] ?? ''),
+        ];
+    }
+
+    private function dsAutoSave(bool $useApcu, array $st): void {
+        try {
+            $st['os'] = PHP_OS_FAMILY;
+            if ($useApcu) { @apcu_store('fs_ds_auto|' . PHP_OS_FAMILY, $st, 7 * 86400); return; }
+            $f = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/ds_auto.json';
+            @file_put_contents($f, json_encode($st), LOCK_EX);
+        } catch (\Throwable $e) {}
+    }
+
+    /** 정해진 방식이 있고 24시간 안이면 그 방식, 아니면 재는 중 — 덜 잰 쪽(같으면 운영체제 기본). true = 파일 방식. */
+    private function dsAutoPick(array $st): bool {
+        if ($st['mode'] !== '' && time() - $st['at'] < $st['ttl']) return $st['mode'] === 'file';
+        $p = count($st['pipe']); $f = count($st['file']);
+        if ($f < $p) return true;
+        if ($p < $f) return false;
+        return PHP_OS_FAMILY === 'Windows';
+    }
+
+    /** 잰 값 하나 넣기(재는 중일 때만) — 5개씩 모이면 정하고 잰 값은 비움. 정했을 때 진단용으로 결과 배열을, 아니면 null. */
+    private function dsAutoRecord(bool $useApcu, string $mode, float $ms, int $bytes): ?array {
+        if ($bytes < 262144 || $ms <= 0) return null;                  // 너무 작은 조각은 시작 비용이 커 비교가 흐려짐 — 빼고
+        $st = $this->dsAutoLoad($useApcu);
+        if ($st['mode'] !== '' && time() - $st['at'] < $st['ttl']) return null;   // 이미 정함 — 쓰기 없음
+        $st[$mode][] = round($ms / ($bytes / 1048576), 1);
+        $st[$mode] = array_slice($st[$mode], -5);
+        $res = null;
+        if (count($st['pipe']) >= 5 && count($st['file']) >= 5) {
+            $med = function (array $a) { sort($a); return $a[intdiv(count($a), 2)]; };
+            $mp = $med($st['pipe']); $mf = $med($st['file']);
+            $st['mode'] = ($mf < $mp * 0.6) ? 'file' : 'pipe';   // 40% 넘게 빠를 때만 — 리눅스처럼 비슷하면(시험 환경 두 번 잼: 89/80·108/72) 흔들리지 않게 파이프
+            $st['at'] = time(); $st['ttl'] = 86400; $st['why'] = 'pipe ' . $mp . ' / file ' . $mf . ' ms/MB';
+            $res = ['mode' => $st['mode'], 'pipe' => $st['pipe'], 'file' => $st['file'], 'pipeMed' => $mp, 'fileMed' => $mf];
+            $st['pipe'] = []; $st['file'] = [];
+        }
+        $this->dsAutoSave($useApcu, $st);
+        return $res;
+    }
+
+    /** 파일 방식이 서버 환경 문제로 안 될 때 — 1시간 파이프로 정함(재는 중 번갈아 시도하며 매번 실패·다시 하기를 막음, 디스크 일시 문제일 수 있어 짧게). */
+    private function dsAutoForcePipe(bool $useApcu, string $why): void {
+        $st = $this->dsAutoLoad($useApcu);
+        $st['mode'] = 'pipe'; $st['at'] = time(); $st['ttl'] = 3600; $st['why'] = 'file_fail ' . $why; $st['pipe'] = []; $st['file'] = [];
+        $this->dsAutoSave($useApcu, $st);
+    }
     
     /** 위험 확장자 목록 (업로드/청크 공통) */
     // DANGEROUS_EXTS는 config.php의 전역 상수 사용
@@ -3667,6 +3762,7 @@ class FileManager {
         $fullPath = $realPath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
         if (!is_file($fullPath)) $fail(404, 'File not found');
         if (!$this->isPathSafe($realPath, $fullPath)) $fail(403, 'Invalid path');
+        $this->dsDiagAllowed = true;   // ★ (2026-10-12) 로그인한 탐색기 요청만 진단 기록(공유 방문자는 쿠키를 넣어도 기록 안 함)
         $this->directStreamFile($fullPath, 'api.php?action=direct_stream&ds=segment&storage_id=' . $storageId . '&path=' . rawurlencode($path));
     }
 
@@ -3676,6 +3772,7 @@ class FileManager {
      *   각자 검증을 마친 뒤 부른다. 이 함수는 경로 검증을 하지 않으므로 반드시 검증된 경로만 넘길 것.
      */
     public function directStreamFile(string $fullPath, string $segBase): void {
+        $dgIn = microtime(true);   // ★ (2026-10-12) 진단 — 이 함수 시작(앞은 PHP 시작·로그인·권한)
         require_once __DIR__ . '/Mp4KeyIndex.php';
         $ds = $_GET['ds'] ?? 'playlist';
         $fail = function (int $code, string $err) { http_response_code($code); header('Content-Type: application/json'); header('Cache-Control: no-store'); echo json_encode(['error' => $err]); exit; };
@@ -3685,16 +3782,19 @@ class FileManager {
         // 키프레임 목록 — 파일 크기·수정 시각이 같으면 메모리 캐시 사용
         $st = @stat($fullPath);
         // ★ (2026-09-30) '|v2' — 목차에 음성 트랙 목록(acodecs)이 생겨 예전 저장값을 쓰지 않게(조각 주소의 k 도 함께 바뀜)
-        $key = 'fs_ds_' . md5($fullPath . '|' . ($st['size'] ?? 0) . '|' . ($st['mtime'] ?? 0) . '|v2');
+        // ★ (2026-10-12) '|v3' — 조각을 약 4초 → 약 2초로 묶게 바뀌어 조각 번호가 달라졌다. 조각 주소의 k 가 함께 바뀌므로 바꾸기 전 목록을 가진 재생기는
+        //   409(file_changed)를 받고 엉뚱한 구간을 받지 않는다(키프레임 목록 메모리 저장도 새 이름으로 다시 만듦).
+        $key = 'fs_ds_' . md5($fullPath . '|' . ($st['size'] ?? 0) . '|' . ($st['mtime'] ?? 0) . '|v3');
         $tag = substr($key, 6, 12);
         $useApcu = function_exists('apcu_fetch') && (!function_exists('apcu_enabled') || @apcu_enabled());
-        $idx = null;
-        if ($useApcu) { $hit = false; $c = @apcu_fetch($key, $hit); if ($hit && is_array($c)) $idx = $c; }
+        $idx = null; $dgIdxHit = false;
+        if ($useApcu) { $hit = false; $c = @apcu_fetch($key, $hit); if ($hit && is_array($c)) { $idx = $c; $dgIdxHit = true; } }
         if ($idx === null) {
             $idx = Mp4KeyIndex::read($fullPath);
             if ($idx === null) $fail(415, 'unsupported_file');
             if ($useApcu) @apcu_store($key, $idx, 3600);
         }
+        $dgIdx = microtime(true);   // ★ (2026-10-12) 진단 — 키프레임 목록 준비 끝
         // ★ (2026-09-30) H.264 는 TS 조각(종전), HEVC(hvc1/hev1)는 조각 mp4(fMP4 — hls.js·사파리는 HEVC 를 TS 로 받지 않음). 둘 다 복사(다시 인코딩 없음).
         $vc = $idx['vcodec'];
         $isHevc = in_array($vc, ['hvc1', 'hev1'], true);
@@ -3703,7 +3803,9 @@ class FileManager {
         $acodecs = $idx['acodecs'] ?? ((($idx['acodec'] ?? '') !== '') ? [$idx['acodec']] : []);
         $a = (int)($_GET['a'] ?? 0);
         if ($acodecs) { if ($a < 0 || $a >= count($acodecs)) $fail(400, 'bad_audio'); } else { $a = 0; }
-        $segs = Mp4KeyIndex::plan($idx, 4.0);
+        // ★ (2026-10-12) 약 4초 → 약 2초씩(키프레임 경계 — 키프레임 간격이 2초보다 길면 그 간격대로). 받지 않은 위치로 이동할 때 조각 하나를 받아야
+        //   화면이 나오는데, 전송이 대부분이라(펜닐 로그 21:38 — 서버 준비 8ms·ffmpeg 80ms·전송 1.4초/1.6MB) 조각이 작을수록 빨리 나온다(펜닐 승인).
+        $segs = Mp4KeyIndex::plan($idx, 2.0);
         if (!$segs) $fail(415, 'unsupported_file');
         $sfx = '&k=' . $tag . '&a=' . $a;
 
@@ -3716,7 +3818,16 @@ class FileManager {
             header('Content-Type: application/vnd.apple.mpegurl');
             header('Cache-Control: no-store');
             header('Content-Length: ' . strlen($out));
+            $dgPl0 = microtime(true);
             echo $out;
+            @flush();
+            // ★ (2026-10-13) 진단 — 조각 목록(m3u8) 크기·만들기·보내기 시간(조각 2초로 목록이 커져서 — 70분 영상 약 670KB)
+            if ($this->dsDiagAllowed && ($_COOKIE['fs_dsdiag'] ?? '') === '1') {
+                $dgT0p = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : $dgIn;
+                $this->dsDiagWrite('ds_pl_srv', ['segs' => count($segs), 'kb' => (int)round(strlen($out) / 1024), 'pre' => (int)round(($dgIn - $dgT0p) * 1000),
+                    'idx' => (int)round(($dgIdx - $dgIn) * 1000), 'idxHit' => $dgIdxHit, 'make' => (int)round(($dgPl0 - $dgIdx) * 1000), 'send' => (int)round((microtime(true) - $dgPl0) * 1000),
+                    'env' => $this->dsDiagEnv()]);
+            }
             exit;
         }
         if (!($ds === 'segment' || ($ds === 'init' && $isHevc))) $fail(400, 'bad_request');
@@ -3724,10 +3835,31 @@ class FileManager {
         $i = ($ds === 'init') ? 0 : (int)($_GET['i'] ?? -1);        // 초기화 조각은 첫 조각을 만들어 그 목차 부분만 쓴다(조각마다 목차가 같음 — 검증)
         if (!isset($segs[$i])) $fail(404, 'no_segment');
 
-        $ffmpeg = $this->findFfmpeg();
+        // ★ (2026-10-12) ffmpeg 위치·윈도우 짧은 경로를 메모리(APCu) 10분 저장 — 조각마다 'ffmpeg -version' 을 실제로 실행해 위치를 확인하고(윈도우는 프로세스
+        //   띄우기가 비쌈) 짧은 경로용 COM 객체를 새로 만들었다(펜닐 로그 21:22 — 조각마다 요청 도착 → ffmpeg 시작까지 약 0.59초, 다른 API 는 약 0.03초).
+        //   원본 스트리밍 조각(이 함수)에서만 — 다른 기능의 findFfmpeg 는 그대로. 저장값으로 ffmpeg 를 못 띄우거나 아무것도 안 나오면 저장값을 지우고
+        //   종전처럼 오류 응답(재생기는 다음 요청에서 다시 확인한 값으로 받음). APCu 가 없으면 종전과 같음.
+        $ffKey = 'fs_ds_ffmpeg|' . PHP_OS_FAMILY;
+        $dgFf0 = microtime(true); $dgFfHit = false; $ffmpeg = null;
+        if ($useApcu) { $hit = false; $c = @apcu_fetch($ffKey, $hit); if ($hit && is_string($c) && $c !== '') { $ffmpeg = $c; $dgFfHit = true; } }
+        if ($ffmpeg === null) {
+            $ffmpeg = $this->findFfmpeg();
+            if ($ffmpeg && $useApcu) @apcu_store($ffKey, $ffmpeg, 600);
+        }
+        $dgFf1 = microtime(true);
         if (!$ffmpeg) $fail(500, 'ffmpeg not available');
-        $ffmpegInput = $fullPath;
-        if (PHP_OS_FAMILY === 'Windows') { $short = $this->getWindowsShortPath($fullPath); if ($short) $ffmpegInput = $short; }
+        $ffmpegInput = $fullPath; $dgSpHit = false;
+        if (PHP_OS_FAMILY === 'Windows') {
+            $spKey = 'fs_ds_sp_' . md5($fullPath . '|' . ($st['size'] ?? 0) . '|' . ($st['mtime'] ?? 0));   // 파일이 바뀌면 다른 키
+            $short = null;
+            if ($useApcu) { $hit = false; $c = @apcu_fetch($spKey, $hit); if ($hit && is_string($c)) { $short = $c; $dgSpHit = true; } }   // '' = 짧은 경로 없음(원래 경로 사용)
+            if ($short === null) {
+                $short = (string)($this->getWindowsShortPath($fullPath) ?? '');
+                if ($useApcu) @apcu_store($spKey, $short, 600);
+            }
+            if ($short !== '') $ffmpegInput = $short;
+        }
+        $dgSp = microtime(true);
         $inputPath = $this->escapeShellPath($ffmpegInput);
         [$ss, , $cut] = $segs[$i];
         // ★ (2026-09-30) 초기화 조각은 목차(ftyp+moov)만 쓰므로 첫 0.1초 분량만 만든다 — 전체 조각으로 만든 목차와 바이트 단위로 같음 확인
@@ -3755,8 +3887,97 @@ class FileManager {
 
         $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null', 'w']];
         @set_time_limit(0);
+        $dgT0 = isset($_SERVER['REQUEST_TIME_FLOAT']) ? (float)$_SERVER['REQUEST_TIME_FLOAT'] : microtime(true);   // ★ (2026-10-12) 진단 — 요청 도착
+
+        // ★ (2026-10-13) 진단용 비교 시험 — '파일 방식'(펜닐 승인). 10-13 로그: 조각 보내기 약 0.59초 중 ffmpeg 출력 기다림(rd)이 거의 전부, 내보내기(wr) 3~5ms,
+        //   한 번에 약 6KB·최대 기다림 늘 15~16ms(윈도우 대기 단위) → ffmpeg→PHP 파이프가 느린 것으로 보임(리눅스 시험 환경에선 재현 안 됨 — 추정).
+        //   진단이 켜졌고(쿠키 fs_dsdiag=1, 로그인한 탐색기 경로만) 쿠키 fs_dsmode=file(주소 &dsmode=file, app.js)일 때만: ffmpeg 가 같은 조각을 임시 파일로
+        //   쓰고(파이프 안 거침) 끝나면 PHP 가 그 파일을 보내고 바로 지운다(조각 하나 약 1MB). 만드는 명령·조각 내용은 같고 출력 위치만 다름(H.264 TS 조각만).
+        //   평소(쿠키 없음)는 종전 파이프 방식 그대로. 두 방식의 기록(ds_seg_srv — mode·ffms·send)을 같은 로그에서 비교해 정식 적용을 정한다. → 아래 정식 적용으로 바뀜.
+        // ★ (2026-10-13) 정식 적용 — 윈도우 서버는 H.264 조각을 '파일 방식'으로(펜닐 승인). 펜닐 서버 로그(09:20, 파일 방식): ffmpeg 시작~끝 약 80ms·
+        //   서버 전체 약 90ms·보내기 0~1ms(08:01 파이프 방식은 ffmpeg 출력 기다림만 520~690ms) → 윈도우 파이프가 느린 것으로 판단.
+        //   리눅스 등은 파이프가 빨라(시험 환경 조각 6ms) 종전 파이프 그대로. HEVC(조각 mp4)는 종전 파이프 그대로(따로 확인 후).
+        //   ★ (2026-10-13 오전 정정) 위 '6ms' 는 보내는 시간만 본 잘못된 비교 — 같은 기준(ffmpeg 시작 → 조각 다 받음)으로 리눅스 시험 환경은 파이프 약 89·
+        //   파일 약 80 ms/MB 로 비슷. 운영체제로 고정하던 것을 이 서버에서 잰 값으로 자동 선택하게 바꿈(아래 dsAutoPick — 펜닐: 환경마다 로그를 못 모음).
+        //   진단이 켜졌을 때(로그인한 탐색기 경로)만 주소 &dsmode=file / &dsmode=pipe 로 방식을 골라 비교 가능(쿠키 fs_dsmode — app.js).
+        //   임시 폴더(data/ds_tmp)를 못 쓰거나 경로에 영문·숫자 밖의 글자(한글 등 — 셸 명령 인코딩)가 있으면 시스템 임시 폴더, 그것도 안 되면 파이프.
+        //   파일 방식에서 ffmpeg 를 못 띄우거나 결과가 비면 같은 요청 안에서 파이프 방식으로 다시(아직 응답을 보내기 전이라 안전).
+        $dsFileMode = false; $dsFileFail = null; $dsAuto = null; $dsAutoRes = null; $dsPick = '';
+        if (!$isHevc && $ds === 'segment') {
+            $dsPick = ($this->dsDiagAllowed && ($_COOKIE['fs_dsdiag'] ?? '') === '1') ? (string)($_COOKIE['fs_dsmode'] ?? '') : '';
+            // ★ (2026-10-13 오전) 운영체제로 고정하지 않고 이 서버에서 잰 값으로 자동 선택(dsAutoPick — 정하기 전엔 두 방식 번갈아, 같으면 윈도우 파일·나머지 파이프).
+            //   진단 &dsmode=file/pipe 는 종전처럼 강제(잰 값으로는 쓰임).
+            if ($dsPick !== 'file' && $dsPick !== 'pipe') { $dsPick = ''; $dsAuto = $this->dsAutoLoad($useApcu); }
+            $dsFileMode = $dsPick === 'file' ? true : ($dsPick === 'pipe' ? false : $this->dsAutoPick($dsAuto));
+            // 파일 방식이 이 서버에서 실패했으면 10분간 바로 파이프로(조각마다 실패 → 다시 하기로 ffmpeg 를 두 번 띄우지 않게). 진단 &dsmode=file 은 늘 시도.
+            // ★ (2026-10-13 재검토) 저장은 '파일 방식 실패 + 파이프 성공'일 때만(아래 파이프 첫 출력 뒤) — 서버 환경 문제일 때만 10분 파이프.
+            if ($dsFileMode && $dsPick !== 'file' && $useApcu) { $hit = false; @apcu_fetch('fs_ds_nofile|' . PHP_OS_FAMILY, $hit); if ($hit) { $dsFileMode = false; $dsFileFail = 'cached'; } }
+        }
+        $dsTmpDir = null;
+        if ($dsFileMode) {
+            foreach ([(defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . DIRECTORY_SEPARATOR . 'ds_tmp', rtrim(sys_get_temp_dir(), '\\/') . DIRECTORY_SEPARATOR . 'fs_ds_tmp'] as $cand) {
+                if (preg_match('/[^\x20-\x7E]/', $cand)) continue;                 // 한글 등 — 셸 명령에서 깨질 수 있어 건너뜀
+                if (!is_dir($cand)) @mkdir($cand, 0755, true);
+                if (is_dir($cand) && is_writable($cand)) { $dsTmpDir = $cand; break; }
+            }
+            if ($dsTmpDir === null) $dsFileFail = 'no_tmp_dir';
+        }
+        if ($dsTmpDir !== null) {
+            // 남은 임시 파일 정리(10분 넘은 것 — 비정상 종료 대비, 가끔만)
+            if (mt_rand(1, 20) === 1) { foreach ((array)@glob($dsTmpDir . DIRECTORY_SEPARATOR . 'seg_*.ts') as $old) { if (is_file($old) && @filemtime($old) < time() - 600) @unlink($old); } }
+            $dsTmp = $dsTmpDir . DIRECTORY_SEPARATOR . 'seg_' . bin2hex(random_bytes(8)) . '.ts';
+            register_shutdown_function(function () use ($dsTmp) { if (is_file($dsTmp)) @unlink($dsTmp); });
+            $cmdFile = preg_replace('/ pipe:1$/', ' -y ' . $this->escapeShellPath($dsTmp), $cmd, 1);
+            $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
+            $dgSpawn = microtime(true);
+            $proc = @proc_open($cmdFile, [0 => ['pipe', 'r'], 1 => ['file', $null, 'w'], 2 => ['file', $null, 'w']], $pp);
+            $rc = null; $sz = 0;
+            if (is_resource($proc)) {
+                @fclose($pp[0]);
+                $rc = @proc_close($proc);
+                clearstatcache(true, $dsTmp);
+                $sz = is_file($dsTmp) ? (int)@filesize($dsTmp) : 0;
+            }
+            $dgFfEnd = microtime(true);
+            // ★ (2026-10-13) 실패하면(못 띄움·빈 결과) 오류 응답 대신 아래 파이프 방식으로 다시 — 파이프도 실패하면 그쪽이 종전처럼 저장값을 지우고 오류 응답.
+            // ★ (2026-10-13 재검토) 결과 파일이 있으면 ffmpeg 종료 코드와 상관없이 보냄 — 파이프도 종료 코드를 보지 않고 나온 만큼 보내므로 같은 결과를
+            //   다시 만들 필요가 없다(종전: 오류 코드면 버리고 파이프로 다시). 종료 코드는 진단 기록(rc)에만.
+            if ($rc === null) $dsFileFail = 'start';
+            elseif ($sz <= 0) $dsFileFail = 'rc' . (int)$rc . '_sz0';
+            if ($dsFileFail !== null && is_file($dsTmp)) @unlink($dsTmp);
+        }
+        if ($dsTmpDir !== null && $dsFileFail === null) {
+            while (ob_get_level()) ob_end_clean();
+            header('Content-Type: video/mp2t');
+            header('Cache-Control: no-store');
+            header('X-Accel-Buffering: no');
+            header('Content-Length: ' . $sz);
+            ignore_user_abort(true);
+            $dgW0 = microtime(true);
+            $fh = @fopen($dsTmp, 'rb'); $sent = 0; $abort = false;
+            if ($fh) {
+                while (!feof($fh)) { $buf = fread($fh, 262144); if ($buf === false || $buf === '') break; echo $buf; @flush(); $sent += strlen($buf); if (connection_aborted()) { $abort = true; break; } }
+                fclose($fh);
+            }
+            $dgW1 = microtime(true);
+            @unlink($dsTmp);
+            $dsAutoRes = $this->dsAutoRecord($useApcu, 'file', ($dgFfEnd - $dgSpawn) * 1000, $sz);   // ★ (2026-10-13 오전) 자동 선택용 잰 값(재는 중일 때만 저장)
+            // ★ (2026-10-13) 정식 적용으로 평소에도 이 길을 타므로 기록은 진단이 켜졌을 때만(종전 시험용은 늘 진단 중이었음)
+            if ($this->dsDiagAllowed && ($_COOKIE['fs_dsdiag'] ?? '') === '1') $this->dsDiagWrite('ds_seg_srv', [
+                'mode' => 'file', 'i' => $i, 'ss' => round($ss, 3), 'len' => round($cut - $ss, 3),
+                'boot' => (int)round(($dgSpawn - $dgT0) * 1000), 'ffms' => (int)round(($dgFfEnd - $dgSpawn) * 1000), 'rc' => $rc,
+                'send' => (int)round(($dgW1 - $dgW0) * 1000), 'kb' => (int)round($sent / 1024), 'abort' => $abort,
+                'kbps' => ($dgW1 - $dgW0) > 0.001 ? (int)round($sent * 8 / 1024 / ($dgW1 - $dgW0)) : null,
+                'total' => (int)round(($dgW1 - $dgT0) * 1000),
+                'ffHit' => $dgFfHit, 'spHit' => $dgSpHit, 'pick' => $dsPick !== '' ? $dsPick : 'auto',
+            ]);
+            if ($dsAutoRes !== null && $this->dsDiagAllowed && ($_COOKIE['fs_dsdiag'] ?? '') === '1') $this->dsDiagWrite('ds_auto', $dsAutoRes);
+            exit;
+        }
+
+        $dgSpawn = microtime(true);                                                                                  //   ffmpeg 시작 직전
         $process = @proc_open($cmd, $descriptors, $pipes);
-        if (!is_resource($process)) $fail(500, 'ffmpeg_start_failed');
+        if (!is_resource($process)) { if ($useApcu) { @apcu_delete($ffKey); if (isset($spKey)) @apcu_delete($spKey); } $fail(500, 'ffmpeg_start_failed'); }   // ★ (2026-10-12) 저장값 지움
         fclose($pipes[0]);
         ignore_user_abort(true);
         register_shutdown_function(function () use ($process, &$pipes) {
@@ -3822,24 +4043,70 @@ class FileManager {
         }
 
         $first = fread($pipes[1], 65536);
+        $dgFirst = microtime(true);                                      // ★ (2026-10-12) 진단 — ffmpeg 첫 출력(64KB 까지)
         if ($first === false || $first === '') {                          // 아무것도 안 나오면 빈 영상 대신 오류 응답
             @fclose($pipes[1]); @proc_terminate($process, 9); @proc_close($process);
+            if ($useApcu) { @apcu_delete($ffKey); if (isset($spKey)) @apcu_delete($spKey); }   // ★ (2026-10-12) 저장값이 원인일 수 있으니 지워 다음 요청은 다시 확인
             $fail(500, 'segment_failed');
         }
+        // ★ (2026-10-13 재검토) 파일 방식은 실패했는데 파이프로는 나왔다 = 서버 환경 문제(임시 폴더 권한·셸 등) → 10분간 바로 파이프.
+        //   종전엔 파일 방식이 실패하기만 하면 저장해서, 영상 파일 자체 문제(뒤가 잘린 mp4 등 — 파이프도 실패)로도 다른 정상 영상까지 10분간 파이프로 갔다(재검토 실측).
+        if ($dsFileFail !== null && $dsFileFail !== 'cached' && $useApcu) @apcu_store('fs_ds_nofile|' . PHP_OS_FAMILY, $dsFileFail, 600);
+        if ($dsFileFail !== null && $dsFileFail !== 'cached') $this->dsAutoForcePipe($useApcu, $dsFileFail);   // ★ (2026-10-13 오전) 자동 선택도 1시간 파이프로
         while (ob_get_level()) ob_end_clean();
         header('Content-Type: video/mp2t');
         header('Cache-Control: no-store');
         header('X-Accel-Buffering: no');
-        echo $first; @flush();
+        // ★ (2026-10-13) 진단 — 보내는 시간을 'ffmpeg 출력 기다림(rd)'과 '브라우저로 내보내기 기다림(wr — echo+flush, 보낼 곳이 막히면 여기서 멈춤)'으로 나눠 잰다
+        //   (펜닐: 회선 1Gbps·일반 다운로드 18~25MB/s 인데 조각은 약 12Mbps). 읽기 횟수·최대 한 번 기다림도. 재는 것만 — 보내는 데이터·순서 그대로.
+        $dgW0 = microtime(true); echo $first; @flush(); $dgWr = microtime(true) - $dgW0; $dgRd = 0.0; $dgN = 1; $dgRdMax = 0.0; $dgWrMax = $dgWr;
+        $dgBytes = strlen($first); $dgAbort = false;
         while (!feof($pipes[1])) {
+            $dgR0 = microtime(true);
             $chunk = fread($pipes[1], 65536);
+            $dgRt = microtime(true) - $dgR0; $dgRd += $dgRt; if ($dgRt > $dgRdMax) $dgRdMax = $dgRt;
             if ($chunk === false || $chunk === '') break;
+            $dgW0 = microtime(true);
             echo $chunk; @flush();
-            if (connection_aborted()) break;                            // 탐색 등으로 재생기가 취소
+            $dgWt = microtime(true) - $dgW0; $dgWr += $dgWt; if ($dgWt > $dgWrMax) $dgWrMax = $dgWt; $dgN++;
+            $dgBytes += strlen($chunk);
+            if (connection_aborted()) { $dgAbort = true; break; }       // 탐색 등으로 재생기가 취소
         }
         @fclose($pipes[1]);
         @proc_terminate($process, 9);
         @proc_close($process);
+        // ★ (2026-10-13 오전) 자동 선택용 잰 값 — ffmpeg 시작 → 첫 출력 + 출력 기다림 합(보내는 시간 wr 은 뺌), 끝까지 받은 H.264 조각만(재는 중일 때만 저장)
+        // ★ (2026-10-13 재검토) 보내는 시간(wr)이 출력 기다림(rd)보다 긴 조각은 뺌 — 보는 쪽 회선이 느리면(또는 일부러 천천히 받으면) 보내는 동안 ffmpeg 가
+        //   출력을 미리 채워 기다림이 거의 0 이 되어 파이프가 실제보다 빨라 보였다(실측: 보통 회선 rd 10~22ms·80~108ms/MB → 느린 회선 rd 2ms·wr 3.9초·64ms/MB).
+        //   그러면 서버 속도와 상관없이 파이프로 정해질 수 있었다. 파일 방식 잰 값(ffmpeg 시작~끝)은 회선과 무관.
+        if (!$isHevc && $ds === 'segment' && !$dgAbort && $dsFileFail === null && $dgWr <= $dgRd) $dsAutoRes = $this->dsAutoRecord($useApcu, 'pipe', ($dgFirst - $dgSpawn + $dgRd) * 1000, $dgBytes);
+        // ★ (2026-10-12) 진단 기록 — 브라우저 진단이 켜졌을 때(쿠키 fs_dsdiag=1, app.js)만 조각마다 한 줄을 같은 진단 로그(data/hls_diag.log)에.
+        //   펜닐: mp4(원본 스트리밍) 탐색이 조각당 약 2초 — 서버 처리인지 전송인지 가르려고. 기록만(보낸 데이터·순서 그대로), 실패해도 무시.
+        //   boot: 요청 도착 → ffmpeg 시작 직전(PHP 시작·로그인·목차 캐시), first: ffmpeg 시작 → 첫 출력, send: 첫 출력 → 다 보냄(ffmpeg 읽기 + 전송,
+        //   보낼 곳이 막히면 여기서 기다림), len: 조각 길이(초), kb: 보낸 양, abort: 재생기가 중간에 취소.
+        //   ★ (2026-10-13) send 세부 — rd: ffmpeg 출력 기다림 합(rdMax 한 번 최대), wr: 내보내기(echo+flush) 기다림 합(wrMax), n: 64KB 읽기 횟수,
+        //   kbps: 보낸 양 ÷ send. rd 가 크면 ffmpeg·디스크, wr 가 크면 PHP→Apache→네트워크 쪽. env: 서버 출력 환경(가끔 — 첫 조각·20번째마다).
+        // ★ (2026-10-12) 탐색기 경로(로그인 필요 — directStream)에서만. 공유(ShareManager::downloadShare)도 이 함수를 쓰는데, 로그인 안 한 공유 방문자가
+        //   쿠키를 직접 넣어 서버 파일 쓰기(진단 로그 — 5MB 넘으면 비움)를 일으킬 수 있었다(재검토에서 발견).
+        if ($this->dsDiagAllowed && ($_COOKIE['fs_dsdiag'] ?? '') === '1') {
+            $dgEnd = microtime(true);
+            $dgSend = $dgEnd - $dgFirst;
+            $dgRow = [
+                'mode' => 'pipe', 'i' => $i, 'ss' => round($ss, 3), 'len' => round($cut - $ss, 3),
+                'boot' => (int)round(($dgSpawn - $dgT0) * 1000), 'first' => (int)round(($dgFirst - $dgSpawn) * 1000),
+                // ★ (2026-10-12) boot 세부(ms) — pre: PHP 시작·로그인·권한, idx: 키프레임 목록(idxHit 메모리), ff: ffmpeg 위치(ffHit 메모리), sp: 짧은 경로(spHit 메모리)
+                'pre' => (int)round(($dgIn - $dgT0) * 1000), 'idx' => (int)round(($dgIdx - $dgIn) * 1000), 'idxHit' => $dgIdxHit,
+                'ff' => (int)round(($dgFf1 - $dgFf0) * 1000), 'ffHit' => $dgFfHit, 'sp' => (int)round(($dgSp - $dgFf1) * 1000), 'spHit' => $dgSpHit,
+                'send' => (int)round($dgSend * 1000), 'kb' => (int)round($dgBytes / 1024), 'abort' => $dgAbort,
+                'rd' => (int)round($dgRd * 1000), 'rdMax' => (int)round($dgRdMax * 1000), 'wr' => (int)round($dgWr * 1000), 'wrMax' => (int)round($dgWrMax * 1000), 'n' => $dgN,
+                'kbps' => $dgSend > 0.001 ? (int)round($dgBytes * 8 / 1024 / $dgSend) : null,
+            ];
+            if ($i === 0 || $i % 20 === 0) $dgRow['env'] = $this->dsDiagEnv();
+            if ($dsFileFail !== null) $dgRow['fileFail'] = $dsFileFail;   // ★ (2026-10-13) 파일 방식이 안 돼 파이프로 보낸 경우 그 까닭
+            $dgRow['pick'] = $dsPick !== '' ? $dsPick : 'auto';
+            $this->dsDiagWrite('ds_seg_srv', $dgRow);
+            if ($dsAutoRes !== null) $this->dsDiagWrite('ds_auto', $dsAutoRes);
+        }
         exit;
     }
 
@@ -5994,9 +6261,24 @@ class FileManager {
             header('Expires: 0');
         }
         
+        // ★ (2026-10-13) 진단 — 브라우저 진단이 켜졌고(쿠키 fs_dsdiag=1) 로그인한 요청만, 요청 하나마다 받은 범위·보낸 양·읽기(rd)·내보내기(wr) 시간을
+        //   진단 로그에(원본 스트리밍과 같은 기준으로 일반재생(미리보기 inline)·일반 다운로드 경로 속도를 비교하려고 — 펜닐). 기록만, 보내는 데이터 그대로.
+        //   다운로드(첨부)·전체 파일(readfile)은 끝까지 보낸 뒤 한 줄(중간에 끊으면 PHP 가 멈춰 줄이 안 남을 수 있음).
+        $dgDl = (($_COOKIE['fs_dsdiag'] ?? '') === '1' && $this->auth && $this->auth->isLoggedIn());
+        $dgDlT0 = microtime(true);
+        $dgDlLog = function (string $mode, int $sent, float $rd, float $wr, int $n, bool $abort) use ($dgDl, $dgDlT0, $start, $end, $filesize, $speedLimit, $inline, $mimeType) {
+            if (!$dgDl) return;
+            $t = microtime(true) - $dgDlT0;
+            $this->dsDiagWrite('dl_srv', ['mode' => $mode, 'inline' => $inline, 'mime' => $mimeType, 'range' => isset($_SERVER['HTTP_RANGE']) ? (string)$_SERVER['HTTP_RANGE'] : '-', 'start' => $start, 'end' => $end, 'size' => $filesize,
+                'kb' => (int)round($sent / 1024), 'ms' => (int)round($t * 1000), 'rd' => (int)round($rd * 1000), 'wr' => (int)round($wr * 1000), 'n' => $n, 'abort' => $abort,
+                'kbps' => $t > 0.001 ? (int)round($sent * 8 / 1024 / $t) : null, 'limit' => $speedLimit,
+                'pre' => isset($_SERVER['REQUEST_TIME_FLOAT']) ? (int)round(($dgDlT0 - (float)$_SERVER['REQUEST_TIME_FLOAT']) * 1000) : null, 'env' => $this->dsDiagEnv()]);
+        };
+
         // 무제한 속도 + 전체 파일 요청 = readfile() 사용 (가장 빠름)
         if ($speedLimit <= 0 && !$isPartial) {
-            readfile($fullPath);
+            $dgSent = readfile($fullPath);
+            $dgDlLog('readfile', (int)$dgSent, 0.0, 0.0, 1, connection_aborted() ? true : false);
             exit;
         }
         
@@ -6033,6 +6315,7 @@ class FileManager {
                     }
                 }
             }
+            $dgDlLog('limited', (int)$totalSent, 0.0, 0.0, 0, connection_aborted() ? true : false);   // ★ (2026-10-13) 진단 — 속도 제한(QoS)이 걸린 경우도 기록(limit = MB/s)
         } else {
             // 무제한 속도 (부분 요청)
             $chunkSize = 1048576; // 1MB 청크
@@ -6040,13 +6323,17 @@ class FileManager {
             //   아이폰 동영상의 구간 요청(Range: bytes=0- — 파일 전체)을 트랜스코딩 전환 등으로 끊어도 서버가 1.5GB 를 계속 읽고 보내려 할 수 있었다
             //   (펜닐 로그: 원본 다운로드가 열려 있는 동안만 다른 작은 요청의 서버 처리가 3~7초). 속도 제한 갈래와 같게 connection_aborted() 확인 +
             //   조각마다 flush(PHP 는 내보내다 실패할 때 끊김을 안다). 보내는 데이터는 같다.
+            $dgRd = 0.0; $dgWr = 0.0; $dgN = 0; $dgSent = 0;   // ★ (2026-10-13) 진단 — 재는 것만
             while ($remaining > 0 && !feof($fp) && !connection_aborted()) {
                 $chunk = min($chunkSize, $remaining);
-                echo fread($fp, $chunk);
+                $dgR0 = microtime(true); $dgBuf = fread($fp, $chunk); $dgW0 = microtime(true); $dgRd += $dgW0 - $dgR0;
+                echo $dgBuf;
                 $remaining -= $chunk;
                 flush();
+                $dgWr += microtime(true) - $dgW0; $dgN++; $dgSent += strlen((string)$dgBuf); $dgBuf = null;
             }
             flush();
+            $dgDlLog('range', $dgSent, $dgRd, $dgWr, $dgN, connection_aborted() ? true : false);
         }
         
         fclose($fp);

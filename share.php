@@ -656,6 +656,9 @@ if (!headers_sent()) {
         .video-play-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 72px; height: 72px; border-radius: 50%; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 12; transition: opacity 0.25s, transform 0.15s; border: 2px solid rgba(255,255,255,0.6); opacity: 0; pointer-events: none; }
         .video-play-overlay:hover { background: rgba(0,0,0,0.75); transform: translate(-50%, -50%) scale(1.08); }
         .video-play-overlay:active { transform: translate(-50%, -50%) scale(0.95); }
+        /* ★ (2026-10-12) 새 플레이어 스킨이 붙기 전(fsvs-pending) 가운데 버튼 숨김 — 스킨 CSS(fs-video-skin.css)는 페이지 아래쪽에서 읽혀 처음 그릴 때
+           아직 없으므로 같은 규칙을 여기(머리)에도 둔다. 스킨이 붙거나 꺼져 있으면 연결 코드가 표시를 뗀다. */
+        .player-wrap.fsvs-pending:not(.fsvs-on) .video-play-overlay { visibility: hidden !important; }
         .player-wrap.playing .video-play-overlay { pointer-events: auto; }
         .player-wrap.playing:hover .video-play-overlay { opacity: 0.6; }
         .player-wrap.playing:hover .video-play-overlay:hover { opacity: 1; }
@@ -691,16 +694,26 @@ if (!headers_sent()) {
             pointer-events: none;
             z-index: 13;
         }
-        .video-seek-overlay.show { animation: seekFlash 0.6s ease-out forwards; }
-        .video-seek-left { left: 16px; }
-        .video-seek-right { right: 16px; }
-        @keyframes seekFlash {
-            0% { opacity: 0; transform: translateY(-50%) scale(0.8); }
-            20% { opacity: 1; transform: translateY(-50%) scale(1.1); }
-            40% { opacity: 1; transform: translateY(-50%) scale(1); }
+        .video-seek-overlay.show { animation: seekFlash 1.2s ease-out forwards; }   /* ★ (2026-10-12 밤) 0.6 → 1.2초 — 천천히 눌러도 누적이 이어지게(펜닐) */
+        /* ★ (2026-10-12) 유튜브처럼 누적(+5 → +10 → +15) — 이어 누르면 보인 채로 0.8초(fsSeekFeedback). 글자가 길어지면 가로만 늘어남(−5 는 원래 48px 원). */
+        .video-seek-overlay { min-width: 48px; width: auto; padding: 0 10px; box-sizing: border-box; border-radius: 24px; white-space: nowrap; }
+        .video-seek-overlay.show.again { animation: seekFlashAgain 1.2s ease-out forwards; }   /* ★ (2026-10-12 밤) 0.8 → 1.2초 */
+        @keyframes seekFlashAgain {
+            0% { opacity: 1; transform: translateY(-50%) scale(1.06); }
+            8% { opacity: 1; transform: translateY(-50%) scale(1); }
+            70% { opacity: 1; transform: translateY(-50%) scale(1); }
             100% { opacity: 0; transform: translateY(-50%) scale(1); }
         }
-        @media (max-width: 1024px) { .video-seek-overlay { display: none !important; } }
+        .video-seek-left { left: 16px; }
+        .video-seek-right { right: 16px; }
+        @keyframes seekFlash {   /* ★ (2026-10-12 밤) 1.2초에 맞춤 — 나타나기·튀기는 종전과 같은 실제 시간, 끝 0.36초 동안 사라짐 */
+            0% { opacity: 0; transform: translateY(-50%) scale(0.8); }
+            10% { opacity: 1; transform: translateY(-50%) scale(1.1); }
+            20% { opacity: 1; transform: translateY(-50%) scale(1); }
+            70% { opacity: 1; transform: translateY(-50%) scale(1); }
+            100% { opacity: 0; transform: translateY(-50%) scale(1); }
+        }
+        /* ★ (2026-10-12) 좁은 '터치 기기'에서만 숨기던 규칙 → ★ (2026-10-13) 휴대폰에서도 보이게 뺌(펜닐 요청 — 탐색기와 같음) */
         .stream-badge { position: absolute; top: 10px; left: 10px; font-size: 11px; font-weight: bold; padding: 3px 8px; border-radius: 3px; z-index: 10; pointer-events: none; color: #fff; opacity: 0.9; transition: opacity 0.3s; }
         .stream-badge .encoder-info { font-weight: bold; font-size: 11px; opacity: 0.85; margin-left: 2px; }
         .stream-badge.transcode { background: rgba(255, 152, 0, 0.85); }
@@ -1593,7 +1606,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             </div>
             
             <?php elseif ($isVideo): ?>
-            <div class="player-wrap<?php if ($needsTranscode): ?> has-initial-overlay<?php endif; ?>" id="player-wrap">
+            <?php /* ★ (2026-10-12) fsvs-pending — 새 플레이어 스킨이 붙기 전(약 0.2초) 원래 모양 가운데 버튼이 잠깐 보이지 않게 숨김(fs-video-skin.css). 스킨이 붙으면 떼고, 스킨을 꺼 두었거나 못 읽으면 아래 연결 코드가 바로 뗀다. */ ?>
+            <div class="player-wrap fsvs-pending<?php if ($needsTranscode): ?> has-initial-overlay<?php endif; ?>" id="player-wrap">
                 <?php if ($needsTranscode): ?>
                 <?php
                     $codecLabel = strtoupper($videoCodec ?: $ext);
@@ -1924,6 +1938,42 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
     <?php endif; ?>
     <?php if (!empty($isStreamable)): ?>
     <script src="assets/vendor/hls-1.5.7.min.js"></script>
+    <?php
+    // ★ (2026-10-11) 이퀄라이저(음악용·동영상용 따로, fs-eq.js) — 공유 페이지는 로그인이 없어 이 브라우저에만 저장된다(같은 브라우저면 탐색기 설정과 공유).
+    //   음악 플레이어(fs-audio-player.js)와 동영상 스킨이 쓰므로 둘보다 먼저 싣는다. 방문자 언어로 번역한 글자만 넣는다(JSON_HEX_TAG 등 — 스킨과 같은 방식).
+    $__eqI18n = [
+        'close' => __('close', '닫기'),
+        'eq_title' => __('eq_title', '이퀄라이저'),
+        'eq_on' => __('eq_on', '켬'),
+        'eq_off' => __('eq_off', '끔'),
+        'eq_preset' => __('eq_preset', '프리셋'),
+        'eq_reset' => __('eq_reset', '초기화'),
+        'eq_note_music' => __('eq_note_music', '음악용 설정'),
+        'eq_note_video' => __('eq_note_video', '동영상용 설정'),
+        'eq_custom' => __('eq_custom', '사용자 설정'),
+        'eq_p_flat' => __('eq_p_flat', '플랫'),
+        'eq_p_classical' => __('eq_p_classical', '클래식'),
+        'eq_p_club' => __('eq_p_club', '클럽'),
+        'eq_p_dance' => __('eq_p_dance', '댄스'),
+        'eq_p_fullbass' => __('eq_p_fullbass', '저음 강조'),
+        'eq_p_fullbasstreble' => __('eq_p_fullbasstreble', '저음·고음 강조'),
+        'eq_p_fulltreble' => __('eq_p_fulltreble', '고음 강조'),
+        'eq_p_headphones' => __('eq_p_headphones', '헤드폰'),
+        'eq_p_largehall' => __('eq_p_largehall', '대형 홀'),
+        'eq_p_live' => __('eq_p_live', '라이브'),
+        'eq_p_party' => __('eq_p_party', '파티'),
+        'eq_p_pop' => __('eq_p_pop', '팝'),
+        'eq_p_reggae' => __('eq_p_reggae', '레게'),
+        'eq_p_rock' => __('eq_p_rock', '록'),
+        'eq_p_ska' => __('eq_p_ska', '스카'),
+        'eq_p_soft' => __('eq_p_soft', '소프트'),
+        'eq_p_softrock' => __('eq_p_softrock', '소프트 록'),
+        'eq_p_techno' => __('eq_p_techno', '테크노')
+    ];
+    ?>
+    <script nonce="<?= $cspNonce ?>">window.LANG_STRINGS = Object.assign(window.LANG_STRINGS || {}, <?= json_encode($__eqI18n, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?>);</script>
+    <link rel="stylesheet" href="assets/css/fs-eq.css?v=<?= substr(md5_file(__DIR__ . '/assets/css/fs-eq.css'), 0, 10) ?>">
+    <script src="assets/js/fs-eq.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-eq.js'), 0, 10) ?>"></script>
     <?php if (!empty($isAudio) || !empty($isFolderAudioPlaylist)): ?>
     <!-- FSAudioPlayer (메인 미리보기와 동일 클래스, 별도 파일로 분리됨) -->
     <!-- 단일 audio 파일 OR 폴더 stream(다중 트랙) 모두 필요 -->
@@ -1991,6 +2041,44 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
     <script src="assets/js/fs-video-skin.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-video-skin.js'), 0, 10) ?>"></script>
     <?php endif; ?>
     <script nonce="<?= $cspNonce ?>">
+    // ★ (2026-10-12) 방향키·±5초 버튼 이동 표시 — 유튜브처럼 누적(펜닐 요청). 탐색기 App._seekFeedback(app.js)과 같은 규칙.
+    //   표시가 남아 있는 동안(마지막으로 누른 뒤 1.2초 — 10-12 밤, 종전 0.6·0.8초) 같은 방향을 다시 누르면 +5 → +10 → +15 로 쌓이고 보인 채로 유지(.again),
+    //   시간이 지나거나 반대 방향을 누르면 처음부터. 빠르기 표시(data-chev): 천천히 1 · 0.35초 안에 다시(누르고 있기 포함) 2 → 화살표가 밀리며 합쳐지는 움직임(스킨 CSS). 표시만 — 이동량은 호출한 쪽.
+    function fsSeekFeedback(back, ev) {
+        try {
+            const el = document.querySelector(back ? '.video-seek-left' : '.video-seek-right');
+            if (!el) return;
+            const other = document.querySelector(back ? '.video-seek-right' : '.video-seek-left');
+            if (other && other._fsSeek) { other._fsSeek = null; other.classList.remove('show', 'again'); }
+            const now = performance.now();
+            const st = el._fsSeek;
+            const cont = !!(st && now < st.end);
+            const gap = cont ? now - st.last : Infinity;
+            const chev = gap < 350 ? 2 : 1;   // ★ (2026-10-12) 꾹 누르기 3개(›››)는 펜닐 요청으로 뺌 — 자동 반복도 빠른 연타라 2개
+            const sum = (cont ? st.sum : 0) + 5;
+            el._fsSeek = { sum: sum, last: now, end: now + 1200 };   // ★ (2026-10-12 밤) 표시가 남는 1.2초 동안 누적(종전 0.6·0.8초 — 천천히 누르면 끊김)
+            el.textContent = (back ? '−' : '+') + sum;
+            el.setAttribute('data-chev', String(chev));
+            el.classList.remove('show', 'again');
+            // ★ (2026-10-13) 플레이어 크기와 상관없이 표시하되, 가운데 버튼(±5초·재생)과 겹치거나 플레이어 높이가 모자라 잘리면 그때만 안 보임(펜닐 요청).
+            //   움직임을 뗀 상태(위 줄)로 실제 자리를 재서 판단 — 글자가 길어져(+100 등) 겹치게 되면 그때부터 안 보임. 숨긴 버튼(준비 중 등)은 겹침에서 뺌.
+            {
+                const wrap = el.parentElement, r = el.getBoundingClientRect(), wr = wrap ? wrap.getBoundingClientRect() : null;
+                let blocked = !wr || r.width === 0 || r.top < wr.top || r.bottom > wr.bottom || r.left < wr.left || r.right > wr.right;
+                if (!blocked) wrap.querySelectorAll('.video-play-overlay').forEach(b => {
+                    if (blocked) return;
+                    const cs = getComputedStyle(b);
+                    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+                    const br = b.getBoundingClientRect();
+                    if (br.width > 0 && r.left < br.right + 4 && r.right > br.left - 4 && r.top < br.bottom && r.bottom > br.top) blocked = true;
+                });
+                if (blocked) { el._fsSeek = null; return; }
+            }
+            void el.offsetWidth;   // 애니메이션 재시작
+            el.classList.add('show');
+            if (cont) el.classList.add('again');
+        } catch (x) {}
+    }
     (function() {
         const player = document.getElementById('stream-player');
         if (!player) return;
@@ -2061,8 +2149,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     const dur = player.duration;
                     const target = player.currentTime + (back ? -5 : 5);
                     player.currentTime = Math.max(0, (isFinite(dur) && dur > 0) ? Math.min(dur, target) : target);
-                    const fb = document.querySelector(back ? '.video-seek-left' : '.video-seek-right');
-                    if (fb) { fb.classList.remove('show'); void fb.offsetWidth; fb.classList.add('show'); }
+                    fsSeekFeedback(back, e);   // ★ (2026-10-12) 누적 표시도 키보드와 같게
                 };
                 btn.addEventListener('click', seek);
                 btn.addEventListener('touchend', seek);
@@ -3726,6 +3813,16 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 let _shareControlsTimer = null;
                 wrap.addEventListener('touchstart', (e) => {
                     if (wrap.classList.contains('playing')) {
+                        // ★ (2026-10-13) 조작 줄이 보일 때 ±5/재생 버튼을 누르면 숨기지 않고 3초 타이머만 다시 시작 (연속 탭 시 두 번에 한 번만 이동하던 문제)
+                        const ov = (e.target && e.target.closest) ? e.target.closest('.video-play-overlay') : null;
+                        if (ov && wrap.contains(ov) && wrap.classList.contains('show-controls')) {
+                            if (_shareControlsTimer) clearTimeout(_shareControlsTimer);
+                            _shareControlsTimer = setTimeout(() => {
+                                wrap.classList.remove('show-controls');
+                                _shareControlsTimer = null;
+                            }, 3000);
+                            return;
+                        }
                         wrap.classList.toggle('show-controls');
                         if (_shareControlsTimer) clearTimeout(_shareControlsTimer);
                         if (wrap.classList.contains('show-controls')) {
@@ -3995,15 +4092,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 // ←→: 5초 이동 + 시킹 오버레이 시각 피드백 (메인 패턴 동일)
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                     const seekAmount = e.key === 'ArrowLeft' ? -5 : 5;
-                    player.currentTime = Math.max(0, Math.min(player.duration || 0, player.currentTime + seekAmount));
+                    // ★ (2026-10-12) 길이를 아직 모를 때(NaN) '|| 0' 이 상한 0 이 되어 처음으로 튀었다 — ±5초 버튼과 같게 길이가 유한할 때만 상한.
+                    const _vdur = player.duration;
+                    const _vtgt = player.currentTime + seekAmount;
+                    player.currentTime = Math.max(0, (isFinite(_vdur) && _vdur > 0) ? Math.min(_vdur, _vtgt) : _vtgt);
                     
-                    // 오버레이 피드백 표시
-                    const overlay = document.querySelector(e.key === 'ArrowLeft' ? '.video-seek-left' : '.video-seek-right');
-                    if (overlay) {
-                        overlay.classList.remove('show');
-                        void overlay.offsetWidth;  // reflow 트리거 → 애니메이션 재시작
-                        overlay.classList.add('show');
-                    }
+                    // 오버레이 피드백 표시 — ★ (2026-10-12) 유튜브처럼 누적·화살표 개수(fsSeekFeedback)
+                    fsSeekFeedback(e.key === 'ArrowLeft', e);
                     e.preventDefault();
                     return;
                 }
@@ -4248,7 +4343,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     // ←→: 5초 이동
                     if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                         const seekAmount = e.key === 'ArrowLeft' ? -5 : 5;
-                        audio.currentTime = Math.max(0, Math.min(audio.duration || 0, audio.currentTime + seekAmount));
+                        // ★ (2026-10-12) 길이를 아직 모를 때(NaN) 처음으로 튀지 않게 — 길이가 유한할 때만 상한(동영상 방향키와 같게)
+                        const _adur = audio.duration;
+                        const _atgt = audio.currentTime + seekAmount;
+                        audio.currentTime = Math.max(0, (isFinite(_adur) && _adur > 0) ? Math.min(_adur, _atgt) : _atgt);
                         e.preventDefault();
                         return;
                     }
@@ -4928,7 +5026,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             const player = document.getElementById('stream-player');
             const wrap = document.getElementById('player-wrap');
             // <video> 에만 붙인다(음악 공유의 #stream-player 는 <audio>) — 방어용
-            if (!player || player.tagName !== 'VIDEO' || !wrap || !window.FSVideoSkin) return;
+            if (!player || player.tagName !== 'VIDEO' || !wrap || !window.FSVideoSkin) { if (wrap) wrap.classList.remove('fsvs-pending'); return; }   // ★ (2026-10-12) 스킨 없으면 원래 버튼 그대로
             // ★ (2026-09-23) 기본 켜짐 — ?vskin=0 으로 끄고(기억) ?vskin=1 로 다시 켠다. 저장소를 못 쓰면 켜짐.
             const enabled = () => {
                 try {
@@ -5056,11 +5154,16 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 try {
                     // ★ (2026-09-23) 스트리밍에도 붙는다. 단 첫 화면의 '변환 시작' 덮개가 있는 동안엔 붙지 않는다
                     //   (덮개를 눌러야 변환이 시작되므로, 그 위를 덮으면 재생을 시작할 수 없다).
-                    if (!enabled() || wrap.classList.contains('has-initial-overlay')) { window.FSVideoSkin.detach(wrap); return; }
+                    if (!enabled() || wrap.classList.contains('has-initial-overlay')) { window.FSVideoSkin.detach(wrap); if (!enabled()) wrap.classList.remove('fsvs-pending'); return; }   // ★ (2026-10-12) 꺼 두면 원래 버튼 그대로
                     if (!wrap._fsvs) window.FSVideoSkin.attach({ video: player, wrap: wrap, ctx: ctx });
-                } catch (e) {}
+                } catch (e) { wrap.classList.remove('fsvs-pending'); }   // ★ (2026-10-12) 붙이기 실패 시 가운데 버튼이 숨은 채 남지 않게
             };
             tryAttach();
+            // ★ (2026-10-12) fsvs-pending 안전장치 — 5초가 지나도 스킨이 안 붙었으면 표시를 떼서 원래 가운데 버튼이 보이게.
+            //   '변환 시작' 덮개가 있는 동안은 덮개가 가운데를 가리고, 덮개를 누르면 곧바로 붙으므로 그때는 떼지 않는다.
+            setTimeout(function () {
+                try { if (!wrap.classList.contains('fsvs-on') && !wrap.classList.contains('has-initial-overlay')) wrap.classList.remove('fsvs-pending'); } catch (e) {}
+            }, 5000);
             // 트랜스코딩 → 일반 재생으로 되돌아온 경우 다시 붙인다(떼어지는 쪽은 부품이 스스로 감시)
             player.addEventListener('loadedmetadata', tryAttach);
             player.addEventListener('play', tryAttach);   // 덮개를 눌러 변환이 시작된 뒤 붙는다

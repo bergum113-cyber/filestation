@@ -52,7 +52,9 @@
         subs:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 12h8M12 9v6"/></svg>',
         chevR: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>',
         chevL: '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>',
-        check: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'
+        check: '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+        // ★ (2026-10-11) 이퀄라이저(세로 막대 3개 + 손잡이)
+        eq:    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4v16M12 4v16M18 4v16"/><circle cx="6" cy="14" r="2" fill="currentColor"/><circle cx="12" cy="8" r="2" fill="currentColor"/><circle cx="18" cy="16" r="2" fill="currentColor"/></svg>'
     };
 
     const fmt = (s) => {
@@ -125,7 +127,9 @@
         // ★ (2026-10-08) 열려 있는 동안 wrap 에 fsvs-menu-open — 공유 페이지가 설정 창을 플레이어 위로 넘치게 보이도록(overflow) 쓴다
         // ★ (2026-10-09) 설정 창은 목록형(유튜브처럼) — menuPage: 'main'(목록) 또는 하위 목록 이름. 닫으면 처음(목록)으로.
         let menuPage = 'main';
-        const setMenuOpen = (open) => { menu.hidden = !open; menu.style.display = open ? '' : 'none'; wrap.classList.toggle('fsvs-menu-open', !!open); if (!open) menuPage = 'main'; };
+        let eqPanel = null;   // ★ (2026-10-11) ⚙ › 이퀄라이저 화면(fs-eq.js) — 다시 그리거나 닫을 때 설정 변경 알림을 해제
+        const dropEqPanel = () => { if (eqPanel) { try { eqPanel.destroy(); } catch (e) {} eqPanel = null; } };
+        const setMenuOpen = (open) => { menu.hidden = !open; menu.style.display = open ? '' : 'none'; wrap.classList.toggle('fsvs-menu-open', !!open); if (!open) { menuPage = 'main'; dropEqPanel(); } };
         menu.classList.add('fsvs-lst');
         setMenuOpen(false);
         const bar = el('div', 'fsvs-bar');
@@ -155,7 +159,7 @@
         const bSpeed = btn('fsvs-speedchip', '1x', T('playback_speed', '재생 속도'));
         const bLoop = btn('fsvs-loop', ICON.loop, '');
         const bAb = btn('fsvs-ab', 'A-B', '');
-        const bCc = btn('fsvs-cc', 'CC', '');
+        const bCc = btn('fsvs-cc', '<span class="fsvs-cc-box">CC</span>', '');   // ★ (2026-10-12 밤) 글자를 상자에 담음 — 켜짐: 흰 상자에 어두운 CC, 꺼짐: 테두리 상자(펜닐 첨부 그림, CSS)
         // ★ (2026-10-07) 동영상 정보(ⓘ) — 페이지가 ctx.showInfo 를 줄 때만(탐색기). 공유 페이지는 숨김.
         const bInfo = btn('fsvs-info', ICON.info, T('vi_dlg_title', '동영상 정보') + ' (I)');
         const hasInfo = typeof ctx.showInfo === 'function';
@@ -226,6 +230,7 @@
             } catch (e) {}
         };
         wrap.classList.add('fsvs-on');
+        wrap.classList.remove('fsvs-pending');   // ★ (2026-10-12) 붙기 전 가운데 버튼 숨김 표시를 뗀다 — 이제부터 스킨 규칙(준비 중이면 숨김 등)이 맡음
         document.body.classList.add('fsvs-active');
 
         // 조작부 안의 클릭이 기존 wrap/video 핸들러(탭으로 재생 토글 등)로 새지 않게 한다
@@ -552,6 +557,80 @@
         on(prog, 'pointercancel', spHide);
         on(prog, 'pointerleave', () => { if (!dragging) spHide(); });
         cleanups.push(spHide);
+        // ★ (2026-10-12) 탐색 중 미리보기 장면(펜닐 요청: 연속 탐색 때 화면이 '탁탁탁' 바뀌지 않고 로딩이 끝나야 보임).
+        //   아직 받지 않은 위치로 이동하면(방향키·±5초 버튼·재생바 누름 모두 — 영상의 seeking 으로 받음) 진짜 화면이 올 때까지 영상 위에
+        //   재생바 미리보기와 같은 장면(서버 videoFrameFile — 작은 그림, 이미 받은 것은 브라우저에 있음)을 띄우고, 이동이 끝나면(seeked) 바로 걷는다.
+        //   · 받아 둔 구간 안 이동은 즉시 끝나므로 띄우지 않는다. 0.12초 안에 끝나는 이동도 깜빡이지 않게 띄우지 않는다(이미 떠 있으면 바로 바꿈).
+        //   · 그 위치 장면이 없으면 받은 장면 중 12초 이내로 가장 가까운 것을 먼저, 그 위치 장면은 재생바 미리보기의 로더로 우선 요청(spWant) →
+        //     오면 바꿈. 가까운 것이 없으면 직전 장면을 그대로 둔다(이동 중임을 보여줌).
+        //   · 장면 위치는 재생바 미리보기와 같은 규칙(아래 skKeyFor — spShow 의 규칙을 그대로 옮김, 원래 코드는 그대로).
+        //   · 장면 주소가 없으면(보관함 등) 아무것도 안 함. 영상 바로 뒤에 넣어 자막·가운데 버튼·이동 표시·조작 줄은 모두 위에 그대로 보인다.
+        const sk = document.createElement('img');
+        sk.className = 'fsvs-seekframe'; sk.alt = ''; sk.draggable = false; sk.decoding = 'async'; sk.hidden = true;
+        try { if (video.parentNode) video.insertAdjacentElement('afterend', sk); } catch (e) {}
+        cleanups.push(() => { try { sk.remove(); } catch (e) {} });
+        let skKey = null, skTimer = null, skSafety = null, skReqTimer = null;
+        const skKeyFor = (tt, d) => {   // spShow 와 같은 장면 위치 규칙
+            const step = d <= 120 ? 1 : (d <= 300 ? 2 : (d <= 1800 ? 5 : 10));
+            spAcc = d <= 600;
+            let key = Math.floor(tt / step) * step;
+            const kk = spAcc ? null : spKeysEnsure();
+            if (kk && (!kk.d || Math.abs(kk.d - d) < 3)) {
+                let lo = 0, hi = kk.t.length - 1, bi = 0;
+                while (lo <= hi) { const mid = (lo + hi) >> 1; if (kk.t[mid] <= tt + 0.001) { bi = mid; lo = mid + 1; } else hi = mid - 1; }
+                key = kk.r[bi];
+            }
+            return key;
+        };
+        const skBuffered = (t) => {
+            try { const b = video.buffered; for (let i = 0; i < b.length; i++) { if (t >= b.start(i) - 0.05 && t <= b.end(i) - 0.15) return true; } } catch (e) {}
+            return false;
+        };
+        const skPaint = () => {   // 그 위치 장면 → 없으면 12초 이내 가장 가까운 장면 → 없으면 지금 그림 그대로
+            if (skKey === null) return;
+            let u = spDone.get(skKey) || null;
+            if (!u) { const n = spNearest(skKey); if (n !== null && Math.abs(n - skKey) <= 12) u = spDone.get(n) || null; }
+            if (u) { if (sk.getAttribute('src') !== u) sk.src = u; sk.hidden = false; }
+        };
+        const skHide = () => {
+            if (skTimer) { clearTimeout(skTimer); skTimer = null; }
+            if (skSafety) { clearTimeout(skSafety); skSafety = null; }
+            if (skReqTimer) { clearTimeout(skReqTimer); skReqTimer = null; }
+            skKey = null; sk.hidden = true;
+        };
+        on(video, 'seeking', () => {
+            try {
+                if (skBuffered(video.currentTime || 0)) { skHide(); return; }
+                const d = total();
+                if (!(d > 0)) return;
+                const tt = Math.min(Math.max(0, absNow()), Math.max(0, d - 0.5));
+                if (!canSeekTo(tt)) return;
+                const key = skKeyFor(tt, d);
+                if (!frameUrl(key)) return;
+                skKey = key;
+                // ★ (2026-10-12 밤) 그 위치 장면 새로 만들기는 이동이 0.7초 넘게 안 끝날 때만 요청 — 조각 2초 뒤 이동은 0.64~0.8초에 끝나는데
+                //   장면을 서버에서 새로 만드는 데 0.7~1.2초가 걸려(펜닐 로그 21:56 seekprev load 709~1192ms) 대부분 진짜 화면보다 늦게 와
+                //   서버 ffmpeg 일만 늘렸다(펜닐: 서버 부담 없이). 이미 받아 둔 장면(재생바 미리보기)은 그대로 바로 쓰고, 느린 회선 등으로 이동이
+                //   길어질 때만 새로 받는다. 연속 이동이면 마지막 위치 기준으로 다시 잰다.
+                if (skReqTimer) { clearTimeout(skReqTimer); skReqTimer = null; }
+                if (!spDone.has(key) && spLoadingKey !== key) {
+                    skReqTimer = setTimeout(() => {
+                        skReqTimer = null;
+                        if (skKey === key && video.seeking && !spDone.has(key) && spLoadingKey !== key) { spWant = key; spPump(); }
+                    }, 700);
+                }
+                if (skSafety) clearTimeout(skSafety);
+                skSafety = setTimeout(skHide, 15000);   // 이동이 끝났다는 알림을 못 받아도 15초 뒤 걷음
+                if (!sk.hidden) { skPaint(); return; }   // 이미 떠 있으면(연속 탐색) 바로 바꿈
+                if (skTimer) clearTimeout(skTimer);
+                skTimer = setTimeout(() => { skTimer = null; if (skKey !== null && video.seeking) skPaint(); }, 120);
+            } catch (e) {}
+        });
+        on(spLoader, 'load', () => { try { if (skKey !== null && video.seeking) skPaint(); } catch (e) {} });   // 원래 처리(spDone 저장) 뒤에 등록됨
+        on(video, 'seeked', skHide);
+        on(video, 'emptied', skHide);
+        on(video, 'loadstart', skHide);
+        cleanups.push(skHide);
         // ★ (2026-09-23) 방향키는 여기서 처리하지 않는다. 탐색기·공유 모두 문서 전체에서 이미 ←/→ ±5초를
         //   처리하고(이동 표시도 보여줌), 여기서도 처리하면 진행바에 초점이 있을 때 ±10초로 두 번 이동했다.
 
@@ -758,6 +837,7 @@
             if (menuEscape()) { e.preventDefault(); e.stopImmediatePropagation(); }
         }, true);
         function buildMenu() {
+            dropEqPanel();
             menu.textContent = '';
             const sels = ((ctx.selects && ctx.selects()) || []).filter((sel) => sel && sel.options && sel.options.length >= 2);
             const hasAudioSel = sels.some((s) => selKind(s) === 'audio');
@@ -810,6 +890,13 @@
                 }));
                 return;
             }
+            // ★ (2026-10-11) 이퀄라이저 — 동영상용 설정(음악과 따로 — 켬/끔·프리셋·10밴드). 바꾸면 곧바로 소리에 반영·저장되고 목록은 다시 그리지 않는다(밀고 있는 막대 유지).
+            if (page === 'eq' && window.FSEQ && FSEQ.supported) {
+                backHead(T('eq_title', '이퀄라이저'));
+                eqPanel = FSEQ.buildPanel({ cls: 'fseq-in-menu', profile: 'video' });
+                menu.append(eqPanel.el);
+                return;
+            }
             if (page === 'subset' && ccOn) {
                 backHead(T('fsvs_sub_settings', '자막 설정'));
                 const v = subVals();
@@ -851,6 +938,7 @@
             if (naOk) { const on_ = na.tracks.find((t) => t.on); navRow(ICON.vol, T('audio_track', '오디오'), on_ ? String(on_.label || '') : '', 'naudio'); }
             if (stOk) { const on_ = st.tracks.find((t) => t.on); navRow(ICON.subf, T('fsvs_sub_file', '자막 파일'), on_ ? String(on_.label || '') : '', 'subfile'); }
             if (ccOn) { const v = subVals(); navRow(ICON.subs, T('fsvs_sub_settings', '자막 설정'), v.size + ' · ' + v.pos + ' · ' + v.sync, 'subset'); }
+            if (window.FSEQ && FSEQ.supported) navRow(ICON.eq, T('eq_title', '이퀄라이저'), FSEQ.summary('video'), 'eq');   // ★ (2026-10-11) 아이폰 등 지원 안 하면 줄 없음
         }
         on(document, 'pointerdown', (e) => { if (!menu.hidden && !menu.contains(e.target) && e.target !== bSet && e.target !== bSpeed && !bSet.contains(e.target)) { setMenuOpen(false); render(); } });
 
@@ -1123,6 +1211,11 @@
             render();
         }, 500);
         cleanups.push(() => clearInterval(watch));
+
+        // ★ (2026-10-11) 이퀄라이저 — 이 영상을 FSEQ 에 알린다. EQ 를 켰을 때만(그리고 오디오 처리기가 돌 수 있을 때만) 소리를 필터로 돌리고,
+        //   끈 사람은 아무것도 바뀌지 않는다(동영상용 설정 기준). 떼어낼 때 필터를 빼되 소리 경로는 스피커로 바로 이어 둔다(이미 돌린 소리는 그 경로로만 나옴).
+        try { if (window.FSEQ && FSEQ.supported) { FSEQ.bindMedia(video); cleanups.push(() => { try { FSEQ.unbindMedia(video); } catch (e) {} }); } } catch (e) {}
+        cleanups.push(dropEqPanel);
 
         const api = {
             video, wrap,
