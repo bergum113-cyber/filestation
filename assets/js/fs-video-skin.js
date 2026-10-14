@@ -39,6 +39,9 @@
         mute:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>',
         loop:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3l3 3-3 3"/><path d="M4 11V9.5A3.5 3.5 0 017.5 6H20"/><path d="M7 21l-3-3 3-3"/><path d="M20 13v1.5a3.5 3.5 0 01-3.5 3.5H4"/></svg>',
         gear:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
+        // ★ (2026-10-14) 조작 줄 설정 버튼 전용 톱니바퀴 — 유튜브·Plyr·넷플릭스 등 대부분이 설정 = 톱니바퀴(펜닐 지시). 같은 선 굵기(1.8)·크기(22px).
+        //   위 gear(가로 막대)는 ⚙ 메뉴 안 '화질' 줄 아이콘으로 그대로 씀(유튜브도 화질 줄은 조절 막대 모양).
+        cog:   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
         pip:   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor"/></svg>',
         prev:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><rect x="5.5" y="5" width="2.6" height="14" rx="1.3"/><path d="M19 7.1v9.8a1.3 1.3 0 0 1-2 1.1l-7.4-4.9a1.3 1.3 0 0 1 0-2.2L17 6a1.3 1.3 0 0 1 2 1.1z"/></svg>',
         next:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><rect x="15.9" y="5" width="2.6" height="14" rx="1.3"/><path d="M5 7.1v9.8a1.3 1.3 0 0 0 2 1.1l7.4-4.9a1.3 1.3 0 0 0 0-2.2L7 6a1.3 1.3 0 0 0-2 1.1z"/></svg>',
@@ -164,10 +167,12 @@
         const bInfo = btn('fsvs-info', ICON.info, T('vi_dlg_title', '동영상 정보') + ' (I)');
         const hasInfo = typeof ctx.showInfo === 'function';
         if (!hasInfo) bInfo.style.display = 'none';
-        const bSet = btn('fsvs-set', ICON.gear, T('settings', '설정'));
+        const bSet = btn('fsvs-set', ICON.cog, T('settings', '설정'));   // ★ (2026-10-14) 가로 막대 → 톱니바퀴(위 ICON.cog)
         const bPip = btn('fsvs-pip', ICON.pip, T('pip', 'PIP 작은 창'));
         const bFs = btn('fsvs-fs', ICON.fs, T('fullscreen', '전체화면'));
-        row.append(bPrev, bPlay, bNext, bVol, vol, time, spacer, bSpeed, bLoop, bAb, bCc, bInfo, bSet, bPip, bFs);
+        // ★ (2026-10-14) 정보(ⓘ)를 자막(CC) 앞으로 — 유튜브·Plyr·Video.js 처럼 자막·설정·PIP·전체화면을 오른쪽 끝에 붙여 두고 추가 기능(반복·A-B·정보)은 그 앞에(펜닐 승인).
+        //   종전: … 반복 · A-B · CC · 정보 · 설정 …(정보가 자막과 설정 사이를 끊음). 좁을 때 접히는 순서(collapsible: 정보 → A-B → 반복 → 스피커)는 그대로.
+        row.append(bPrev, bPlay, bNext, bVol, vol, time, spacer, bSpeed, bLoop, bAb, bInfo, bCc, bSet, bPip, bFs);
         bar.append(prog, row);
         // ★ (2026-09-23) 가운데 재생 버튼은 만들지 않는다 — 기존 플레이어의 가운데 버튼으로 충분하고
         //   겹침이 생겼다(펜닐 확인). 재생/일시정지는 조작 줄의 버튼과 기존 가운데 버튼으로 한다.
@@ -242,6 +247,117 @@
         on(bVol, 'click', () => { video.muted = !video.muted; });
         on(vol, 'input', () => { video.volume = parseFloat(vol.value); if (video.volume > 0 && video.muted) video.muted = false; });
         on(vol, 'input', showVolOsd);   // ★ (2026-10-08) 막대를 키보드·마우스·터치 어느 것으로 움직여도 음량 표시(바로 위에서 음량을 바꾼 뒤라 새 값으로 그림)
+        // ★ (2026-10-14) 음량 막대 — 마우스가 있는 기기(PC)는 평소 숨기고 스피커나 막대에 마우스를 올리면 옆으로 펼친다(유튜브처럼, 펜닐 요청).
+        //   스피커 누름 = 음소거/해제(종전 그대로). 키보드로 막대에 오면(Tab) 펼침, 막대를 끄는 동안은 마우스가 벗어나도 유지,
+        //   마우스가 벗어나면 0.3초 뒤 접힘(스피커 ↔ 막대 사이를 옮기는 동안 접히지 않게). 휴대폰(600px 이하)·아이폰/아이패드는 종전처럼 막대 없음(CSS),
+        //   마우스 올림이 없는 터치 기기(태블릿 등)는 종전처럼 막대가 늘 보임. 펼칠 때 줄 오른쪽 빈 공간이 모자라면(촘촘한 줄) 버튼을 밀지 않게
+        //   막대를 시간 글자 위로 겹쳐 띄움(fsvs-vol-float). 접힌 동안 막대 폭은 0 이라 줄 맞추기(fitRow)는 막대 없이 잰다.
+        const volHoverDev = !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
+        if (volHoverDev) root.classList.add('fsvs-volhide');
+        let volCloseT = 0, volDrag = false, volHover = false;
+        let volHH = 16;   // 가로 막대 높이(바탕 여백 제외) — 세로 팝업이 틀에 안 들어가 가로 띄움으로 바꿀 때 위치 계산용(volOpen 에서 잼)
+        // 막대를 줄 안에 펼치는 데 필요한 빈 공간 — 펼친 막대 64px + 좌우 여백 8px + 시간 글자와 오른쪽 버튼 사이 최소 12px(CSS .fsvs-spacer min-width, 2026-10-14)
+        //   ★ (2026-10-14 밤) 막대 88 → 64px(펜닐: 너무 김 — 유튜브 약 52px·Plyr 60~100px). CSS .fsvs-vol-open 폭과 같이 맞춤.
+        const VOL_NEED = 64 + 8 + 12;
+        // ★ (2026-10-14 밤) 자리가 모자랄 때(띄움) 가로로 시간 글자를 덮던 것 → 스피커 위 세로 팝업(숫자 표시, 펜닐 첨부 그림·승인).
+        //   세로 입력 막대(writing-mode: vertical-lr)는 2024년부터 Chrome 124·Safari 17.4·Firefox 가 지원 — 실제로 세로로 그려지는지
+        //   한 번 재서(세로면 기본 높이 > 폭) 안 되는 옛 브라우저는 종전 가로 띄움을 그대로 쓴다.
+        const volVertOk = volHoverDev && (() => {
+            try {
+                const t = document.createElement('input'); t.type = 'range';
+                t.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden;writing-mode:vertical-lr;';
+                document.body.appendChild(t); const r = t.getBoundingClientRect(); t.remove();
+                return r.height > r.width;
+            } catch (e) { return false; }
+        })();
+        const volNum = el('div', 'fsvs-volnum');   // 세로 팝업 바탕판 + 위쪽 숫자(0~100) — 막대 뒤에 깔림(CSS). 마우스 올림은 스피커·막대와 같이 취급(아래)
+        volNum.setAttribute('aria-hidden', 'true');   // ★ (2026-10-15) 화면 낭독기가 막대 값(aria)과 숫자를 두 번 읽지 않게 — 보이는 모양·동작은 그대로
+        vol.after(volNum);
+        const volNumSet = () => { volNum.textContent = String(Math.round((video.muted ? 0 : video.volume) * 100)); };
+        on(video, 'volumechange', () => { if (row.classList.contains('fsvs-vol-open')) volNumSet(); });
+        const volKbFocus = () => { try { return vol.matches(':focus-visible'); } catch (e) { return true; } };
+        const volClose = () => { row.classList.remove('fsvs-vol-open'); vol.classList.remove('fsvs-vol-float', 'fsvs-vol-vert'); vol.style.left = ''; vol.style.top = ''; volNum.style.left = ''; volNum.style.top = ''; };
+        const volOpen = () => {
+            clearTimeout(volCloseT);
+            if (!root.classList.contains('fsvs-volhide') || bVol.classList.contains('fsvs-collapsed') || row.classList.contains('fsvs-vol-open')) return;
+            // ★ (2026-10-14) 닫히는 중(폭 88→0 전환 0.15초)에 다시 올리면 아직 남은 막대 폭만큼 빈 공간이 작게 재져 자리가 있어도 띄웠다
+            //   (재검토 실측: 공유 660px, 떼고 0.33초 뒤 재진입). 지금 줄 안에 남아 있는 막대 폭·여백을 더해 '닫힌 상태' 기준으로 잰다 — 다 닫힌 뒤엔 0 이라 종전과 같음.
+            let volLeft = 0;
+            if (vol.getClientRects().length) { const vcs = getComputedStyle(vol); volLeft = vol.getBoundingClientRect().width + (parseFloat(vcs.marginLeft) || 0) + (parseFloat(vcs.marginRight) || 0); }
+            const float = spacer.getBoundingClientRect().width + volLeft < VOL_NEED;
+            if (!vol.classList.contains('fsvs-vol-vert')) volHH = vol.getBoundingClientRect().height || volHH;   // 아직 펼치기 전(가로·바탕 여백 없음)
+            if (float) {
+                vol.classList.add('fsvs-vol-float');
+                if (volVertOk) vol.classList.add('fsvs-vol-vert');
+                volPlace(volHH);   // 가로 띄움에서만 씀(세로 팝업이 틀에 안 들어갈 때 포함)
+            }
+            volNumSet();
+            row.classList.add('fsvs-vol-open');
+        };
+        // 띄운 막대 위치 — 스피커 바로 오른쪽, 세로 가운데(띄울 때 위아래 안쪽 여백 6px 씩, CSS). h = 바탕 여백을 뺀 막대 높이.
+        //   세로 팝업(fsvs-vol-vert)은 스피커 바로 위 가운데 — 바탕판 40×130(volNum, 위 30px 에 숫자) 안의 위 30·왼쪽 10 자리에 막대 20×88(CSS)이고
+        //   아래쪽 4px 를 스피커 버튼 위 가장자리(아이콘 밖 빈 곳)에 겹쳐, 스피커 → 팝업으로 올라갈 때 틈(재생바 위)을 지나지 않게 한다.
+        function volPlace(h) {
+            const op = vol.offsetParent || row, pr = op.getBoundingClientRect(), br = bVol.getBoundingClientRect();
+            if (vol.classList.contains('fsvs-vol-vert')) {
+                const x = Math.round(br.left - pr.left + br.width / 2 - 20), y = Math.round(br.top - pr.top - 130 + 4);
+                // ★ (2026-10-14 밤) 팝업 위끝이 잘라내는 틀(overflow 가 visible 아닌 상위 — 공유 .player-wrap·탐색기 틀) 위로 넘으면 가로 띄움으로.
+                //   공유는 작은 영상을 원래 크기로 보여 틀이 낮다(320×180 → 틀 180px). 틀 165px 에서 5px·130px 에서 40px 잘렸다(재검토 실측).
+                //   ★ (2026-10-15) 화면 위끝(0)도 경계로 — 페이지를 스크롤해 플레이어 위쪽이 화면 밖이면 팝업 위(숫자·큰 음량 쪽)가 화면 밖으로 나갔다(재검토 실측 −66px).
+                if (pr.top + y >= Math.max(volClipTop(), 0)) {
+                    vol.style.left = (x + 10) + 'px'; vol.style.top = (y + 30) + 'px';
+                    volNum.style.left = x + 'px'; volNum.style.top = y + 'px';   // 바탕판(숫자 포함)
+                    return;
+                }
+                vol.classList.remove('fsvs-vol-vert'); volNum.style.left = ''; volNum.style.top = '';
+                h = volHH;
+            }
+            vol.style.left = Math.round(br.right - pr.left + 2) + 'px';
+            vol.style.top = Math.round(br.top - pr.top + (br.height - (h + 12)) / 2) + 'px';
+        }
+        // 잘라내는 상위 틀의 위끝(화면 좌표) — overflow 가 visible 이 아닌 조상 중 가장 아래 위끝. 문서(body·html)는 스크롤이라 제외. 없으면 -Infinity(제한 없음).
+        function volClipTop() {
+            let t = -Infinity;
+            for (let e = vol.parentElement; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+                const cs = getComputedStyle(e);
+                if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') t = Math.max(t, e.getBoundingClientRect().top);
+            }
+            return t;
+        }
+        // ★ (2026-10-14) 펼친 채로 줄 배치가 바뀔 때(시간 글자 자릿수 9:59→10:00·창 크기) 다시 판단 — 펼칠 때 한 번만 정해
+        //   빈 공간이 딱 맞던 폭(실측 632px)에서 시간이 한 자리 늘면 맨 오른쪽 버튼이 6px 잘렸다(재검토에서 발견).
+        //   fitRow 가 막대를 접힌 크기(0)로 잰 직후(.fsvs-fitting 이 붙어 있는 동안) 부른다 — sp = 접힌 상태의 빈 공간.
+        //   막대 전환(폭 0→88)이 다시 재생되지 않게 잠깐 끄고, fitRow 가 .fsvs-fitting 을 뗀 뒤 volRefitDone 으로 되돌린다.
+        let volRefitNoAnim = false;
+        function volRefit(sp) {
+            if (!row.classList.contains('fsvs-vol-open')) return;
+            if (bVol.classList.contains('fsvs-collapsed')) { volClose(); return; }   // 스피커가 접히면 막대도 닫음(CSS 로도 숨겨짐)
+            const float = sp < VOL_NEED;
+            const h = vol.classList.contains('fsvs-vol-vert') ? volHH : vol.getBoundingClientRect().height - (vol.classList.contains('fsvs-vol-float') ? 12 : 0);   // 세로 팝업이면 가로 높이(volHH)
+            vol.style.transition = 'none'; volRefitNoAnim = true;
+            vol.classList.toggle('fsvs-vol-float', float);
+            vol.classList.toggle('fsvs-vol-vert', float && volVertOk);
+            if (float) volPlace(h); else { vol.style.left = ''; vol.style.top = ''; volNum.style.left = ''; volNum.style.top = ''; }
+        }
+        function volRefitDone() {
+            if (!volRefitNoAnim) return;
+            volRefitNoAnim = false;
+            void vol.offsetWidth;          // 전환 없이 새 크기를 먼저 확정한 뒤
+            vol.style.transition = '';     // 원래 전환(CSS) 으로 되돌림
+        }
+        const volCloseSoon = () => {
+            clearTimeout(volCloseT);
+            volCloseT = setTimeout(() => { if (volDrag || volHover || (document.activeElement === vol && volKbFocus())) return; volClose(); }, 300);
+        };
+        cleanups.push(() => { clearTimeout(volCloseT); volClose(); root.classList.remove('fsvs-volhide'); try { volNum.remove(); } catch (e) {} });
+        [bVol, vol, volNum].forEach((n) => {
+            on(n, 'mouseenter', () => { volHover = true; volOpen(); });
+            on(n, 'mouseleave', () => { volHover = false; volCloseSoon(); });
+        });
+        on(vol, 'pointerdown', () => { volDrag = true; volOpen(); });
+        on(document, 'pointerup', () => { if (volDrag) { volDrag = false; volCloseSoon(); } });
+        on(vol, 'focus', volOpen);
+        on(vol, 'blur', volCloseSoon);
 
         // ── 시간축 ★ (2026-09-23) 스트리밍 지원 ─────────────────────────────────
         //   트랜스코딩·HLS 는 서버가 변환하면서 조각을 붙이므로 브라우저가 아는 길이가 늘어나거나 무한대이고,
@@ -983,7 +1099,9 @@
                 b.classList.add('fsvs-collapsed');
             }
             if (_dg) logFit(_dg);
+            volRefit(spacer.getBoundingClientRect().width);   // ★ (2026-10-14) 볼륨 막대가 펼쳐져 있으면 붙여 둘지 띄울지 다시 판단(위 volRefit)
             row.classList.remove('fsvs-fitting');
+            volRefitDone();
         }
         // ★ (2026-09-26) 진단 기록 — 배치 결과와 화면 수치. 조작 줄 오른쪽 끝이 잘라내는 상위 요소(overflow)의 오른쪽 끝보다 크면
         //   '보이는 폭보다 넓게 잡혀 넘침을 감지하지 못함'을 뜻한다. 각 버튼의 실제 폭도 남긴다.

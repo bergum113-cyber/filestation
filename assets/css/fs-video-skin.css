@@ -121,7 +121,7 @@
     -webkit-touch-callout: none;
 }
 .fsvs-row .fsvs-play { width: 40px; height: 40px; border-radius: 20px; background: rgba(255,255,255,0.1); }
-.fsvs-volrange { pointer-events: auto; width: 88px; accent-color: #FFFFFF; margin: 0 6px 0 2px; }
+.fsvs-volrange { pointer-events: auto; width: 64px; accent-color: #FFFFFF; margin: 0 6px 0 2px; }   /* ★ (2026-10-14 밤) 88 → 64px — 늘 보이는 터치 기기(태블릿 등)도 PC 펼침 폭과 같게(펜닐 승인) */
 .fsvs-time { margin-left: 10px; font-size: 13px; color: var(--fsvs-muted); white-space: nowrap; }
 .fsvs-spacer { flex: 1; }
 .fsvs-root .fsvs-speedchip { height: 26px; min-width: 0; padding: 0 10px; border-radius: 13px; font-size: 13px; font-weight: 700; background: var(--fsvs-on-bg); border-color: var(--fsvs-on-bd); margin-right: 4px; }
@@ -620,3 +620,57 @@ body.fsvs-active .fsvs-on .video-seek-overlay.show[data-chev="2"]::before { anim
 @keyframes fsvsChevMergeLs { 0% { transform: translateX(13px); opacity: 1; } 100% { transform: translateX(0); opacity: 0; } }
 @keyframes fsvsChevNudgeRs { 0% { transform: translateX(0); } 45% { transform: translateX(4px); } 100% { transform: translateX(0); } }
 @keyframes fsvsChevNudgeLs { 0% { transform: translateX(0); } 45% { transform: translateX(-4px); } 100% { transform: translateX(0); } }
+
+/* ★ (2026-10-14) 음량 막대 — 마우스가 있는 기기(.fsvs-volhide — 스킨 JS 가 '(hover: hover) and (pointer: fine)' 일 때 붙임)는 평소 접어 두고,
+   스피커·막대에 마우스를 올리거나 키보드로 막대에 오면(.fsvs-vol-open) 옆으로 펼친다(유튜브처럼, 펜닐 요청). 펼친 크기·여백은 종전과 같음(88px).
+   휴대폰(600px 이하)·아이폰/아이패드의 '막대 숨김'(위 규칙, !important)은 그대로. 줄 맞추기(fitRow)를 재는 동안(.fsvs-fitting)은 접힌 크기로 잼.
+   줄 오른쪽 빈 공간이 모자라면(.fsvs-vol-float) 버튼을 밀지 않게 시간 글자 위로 겹쳐 띄우고 어두운 바탕을 깐다(위치는 JS 가 스피커 바로 오른쪽으로).
+   스피커가 자리가 모자라 ⚙ 로 접히면(fsvs-collapsed) 막대도 숨김(마우스를 올릴 곳이 없음). */
+.fsvs-root.fsvs-volhide .fsvs-volrange { width: 0; margin: 0; opacity: 0; transition: width .15s ease, margin .15s ease, opacity .15s ease; }
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange { width: 64px; margin: 0 6px 0 2px; opacity: 1; }   /* ★ (2026-10-14 밤) 88 → 64px(펜닐: 너무 김), JS VOL_NEED 와 같이 */
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-fitting .fsvs-volrange { width: 0 !important; margin: 0 !important; }
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-float {
+    position: absolute; z-index: 3; box-sizing: content-box; padding: 6px 10px; margin: 0;
+    background: rgba(20, 20, 24, 0.82); border-radius: 14px; transition: opacity .15s ease;
+}
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-float:not(.fsvs-vol-vert) ~ .fsvs-time { visibility: hidden; }   /* 띄운 막대 밑으로 시간 글자가 비치지 않게 — 닫히면 바로 다시 보임 */
+.fsvs-root.fsvs-volhide .fsvs-vol.fsvs-collapsed + .fsvs-volrange { display: none; }
+
+/* ★ (2026-10-14) 조작 줄 아이콘 간격 — 넓고 고르지 않던 것 정리(펜닐: 간격이 너무 넓고 이상해 보임, 승인).
+   실측(종전): 아이콘끼리 20px(버튼 40px − 그림 22px), A-B·CC 옆만 23~25px(상자 52·48px 고정 최소폭) · 휴대폰 촘촘 줄 10px 과 14px 섞임.
+   ① 아이콘 버튼 40 → 36px(PC·태블릿 — 600px 이하 휴대폰 규칙과 같은 폭) → 아이콘끼리 16px. 촘촘 줄(fsvs-tight, 32px)·재생 버튼(40px 원)·속도 칩(자체 크기)은 그대로.
+   ② A-B·CC 는 고정 최소폭 대신 '글자/상자 + 양쪽 7px'(촘촘 줄 5px) → 아이콘 버튼과 같은 간격(16px · 촘촘 10px). 글자 크기·굵기는 그대로.
+   ③ CC 마우스 올림·꺼짐 바탕(상자 감쌈) — 버튼이 좁아져 좌우 안쪽 7 → 3px(위아래 7px·모서리 7px 그대로, 상자보다 조금 넓게).
+   마우스 올림 네모(28×28)·이전/다음/음량 원·켜짐 표시는 종전 규칙 그대로(버튼 안에 들어감). 줄 맞추기(fitRow)는 실제 폭을 재므로 그대로 따라옴. */
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn:not(.fsvs-speedchip) { min-width: 36px; }
+.fsvs-root .fsvs-row .fsvs-ab, .fsvs-root .fsvs-row .fsvs-cc { min-width: 0; padding: 0 7px; }
+.fsvs-root .fsvs-row.fsvs-tight .fsvs-ab, .fsvs-root .fsvs-row.fsvs-tight .fsvs-cc { padding: 0 5px; }
+.fsvs-root .fsvs-row .fsvs-btn.fsvs-cc:not(.fsvs-play):not(.fsvs-speedchip):not(.fsvs-prev):not(.fsvs-next):not(.fsvs-vol)::before { left: 3px; right: 3px; }
+/* ④ 시간 글자와 오른쪽 버튼 사이 최소 12px — 버튼이 좁아져 공유 휴대폰 390px 에서 시간이 위로 안 올라가고 반복 아이콘에 5px 로 붙었다(실측).
+   빈칸이 12px 보다 모자라면 줄 맞추기(fitRow)가 종전처럼 촘촘하게 → 시간 위로 → 접기 순으로 처리. 볼륨 막대 띄움 기준도 +12(fs-video-skin.js VOL_NEED). */
+.fsvs-root .fsvs-row .fsvs-spacer { min-width: 12px; }
+/* ⑤ 이전·다음·음량의 마우스 올림 원 — 버튼이 36px 로 좁아져 PC 에서 26×30 세로 타원이 됐다(실측) → 좌우 안쪽 4 → 2px 로 종전과 같은 32×32 원.
+   PC 폭(601px 이상)·보통 줄만. 600px 이하·촘촘 줄은 원래 모양 그대로(손대지 않음). */
+@media (min-width: 601px) {
+    .fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-prev::before,
+    .fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-next::before,
+    .fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-vol::before { left: 2px; right: 2px; }
+}
+
+/* ★ (2026-10-14 밤) 음량 막대 세로 팝업 — 줄에 자리가 모자랄 때(fsvs-vol-float) 가로로 시간 글자를 덮던 것 대신 스피커 위에 세로로(펜닐 첨부 그림·승인).
+   JS 가 세로 입력 막대 지원을 재서 될 때만 fsvs-vol-vert 를 붙임(안 되면 위의 가로 띄움 그대로). 아래 = 0, 위 = 100(direction: rtl).
+   팝업 40×130(바탕판 .fsvs-volnum, 위 30px 에 숫자) 안에 막대 20×88 을 위 30·왼쪽 10 자리에 — 위치는 JS volPlace(스피커 위 가운데).
+   막대에 안쪽 여백을 주면 세로 막대는 트랙이 여백까지 그려져 숫자를 덮어(실측) 여백 없이 크기만 준다. 시간 글자는 가리지 않음. */
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-float.fsvs-vol-vert {
+    writing-mode: vertical-lr; direction: rtl;
+    width: 20px; height: 88px; padding: 0; margin: 0;
+    background: transparent; border-radius: 0; z-index: 4;
+}
+/* 바탕판·숫자 — 세로 입력 막대에는 바탕색이 그려지지 않아(실측: 막대만 보이고 숫자가 뒤 화면 글자와 겹침) 팝업 전체(40×130)를 이 요소가 그린다.
+   막대(z 4) 뒤(z 3)에 깔림. 바탕판에도 마우스 올림을 걸어(JS) 막대 옆 여백에 손이 있어도 닫히지 않게. */
+.fsvs-root .fsvs-volnum { display: none; }
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-vert + .fsvs-volnum {
+    display: block; position: absolute; z-index: 3; box-sizing: border-box; width: 40px; height: 130px; padding-top: 8px;
+    background: rgba(20, 20, 24, 0.82); border-radius: 12px; text-align: center;
+    font-size: 12px; line-height: 16px; font-weight: 600; color: #FFFFFF; cursor: default;
+}

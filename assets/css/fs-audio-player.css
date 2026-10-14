@@ -2255,4 +2255,12 @@
 }
 .fap.fap-skin-ap-fixed .fap-controls { justify-content: space-between !important; gap: 2px !important; padding-left: 39px; padding-right: 39px; }
 .fap:not(.fap-lyrics-na):not(.fap-lyrics-keep) .fap-controls > .fap-btn-lyrics[style*="display: none"],
-.fap:not(.fap-lyrics-na):not(.fap-lyrics-keep) .fap-controls > .fap-btn-lyrics[style*="display:none"] { visibility: visible; opacity: .35; order: 0; }
+.fap:not(.fap-lyrics-na):not(.fap-lyrics-keep) .fap-controls > .fap-btn-lyrics[style*="display:none"] { visibility: visible; opacity: .6; order: 0; position: relative; }
+/* ★ (2026-10-14 저녁) 가사 없음 표시 — 흐리게(35%)만으로는 꺼진 버튼(A-B·셔플 등 회색·연한 색)과 구별이 안 됐다(펜닐 제보, APlayer Fixed 등).
+   아이콘 위에 버튼과 같은 색(currentColor)의 사선 + 흐리게 60% — '사용 불가' 표시(음소거 스피커처럼)라 스킨 색과 상관없이 구별. 자리·간격·눌림 없음 그대로.
+   이 버튼엔 원래 덧그림(::after)이 없음(확인 — A-B·반복 한 곡만 각자 버튼에 씀). */
+.fap:not(.fap-lyrics-na):not(.fap-lyrics-keep) .fap-controls > .fap-btn-lyrics[style*="display: none"]::after,
+.fap:not(.fap-lyrics-na):not(.fap-lyrics-keep) .fap-controls > .fap-btn-lyrics[style*="display:none"]::after {
+    content: ''; position: absolute; left: 50%; top: 50%; width: 22px; height: 2px; border-radius: 1px;
+    background: currentColor; transform: translate(-50%, -50%) rotate(-45deg); pointer-events: none;
+}
