@@ -1175,10 +1175,22 @@ class FSAudioPlayer {
                 r.classList.remove('fap-narrow', 'fap-xnarrow');
                 const _dg = (window._hlsDiag && typeof window._diagLog === 'function') ? { cw: c.clientWidth } : null;
                 if (_dg) _dg.sw0 = c.scrollWidth;
+                // ★ (2026-10-14) 줄의 안쪽 여백까지 넘는지도 본다 — 종전엔 scrollWidth 만 봐서, 안쪽 여백이 있는 줄(Terminal 16px, 오늘부터 APlayer Fixed 16px —
+                //   시간 글자와 같은 시작점)에서 버튼이 여백 안으로만 넘치면 못 알아챘다(실측: 탐색기 휴대폰 375·390 Terminal 이 끝 시간 글자보다 6~7px 넘침,
+                //   scrollWidth = clientWidth). 보이는 칸(숨김 칸 포함 — display:none 만 뺌)의 폭 + 간격을 여백 뺀 폭과 비교. 여백 없는 스킨은 종전과 같음.
+                const _over = () => {
+                    if (c.scrollWidth > c.clientWidth + 1) return true;
+                    const cs = getComputedStyle(c);
+                    const avail = c.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0);
+                    let w = 0, n = 0;
+                    for (const el of c.children) { if (getComputedStyle(el).display === 'none') continue; w += el.getBoundingClientRect().width; n++; }
+                    w += Math.max(0, n - 1) * (parseFloat(cs.columnGap) || 0);
+                    return w > avail + 1;
+                };
                 if (c.clientWidth > 0) {
-                    if (c.scrollWidth > c.clientWidth + 1) r.classList.add('fap-narrow');
+                    if (_over()) r.classList.add('fap-narrow');
                     if (_dg) _dg.sw1 = c.scrollWidth;
-                    if (c.scrollWidth > c.clientWidth + 1) r.classList.add('fap-xnarrow');
+                    if (_over()) r.classList.add('fap-xnarrow');
                 }
                 // ★ (2026-09-26) 진단 기록(hlsdiag=1, 탐색기) — 크기별로 제대로 되는지 실제 기기 수치로 확인(펜닐 요청). 동작 변경 없음.
                 if (_dg) {

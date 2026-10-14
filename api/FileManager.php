@@ -3903,7 +3903,9 @@ class FileManager {
         //   임시 폴더(data/ds_tmp)를 못 쓰거나 경로에 영문·숫자 밖의 글자(한글 등 — 셸 명령 인코딩)가 있으면 시스템 임시 폴더, 그것도 안 되면 파이프.
         //   파일 방식에서 ffmpeg 를 못 띄우거나 결과가 비면 같은 요청 안에서 파이프 방식으로 다시(아직 응답을 보내기 전이라 안전).
         $dsFileMode = false; $dsFileFail = null; $dsAuto = null; $dsAutoRes = null; $dsPick = '';
-        if (!$isHevc && $ds === 'segment') {
+        // ★ (2026-10-14) HEVC(조각 mp4 — 조각·초기화 조각)도 같은 자동 선택에 포함(펜닐 승인). 종전엔 H.264 조각만 — HEVC 는 ffmpeg 출력을 파이프로 끝까지 받은 뒤
+        //   보내는 구조라 윈도우에선 같은 이유로 느렸을 것(재보진 않음). 파이프/파일 출력 내용은 바이트 단위로 같음(실측 — ftyp·moov·moof·mdat·mfra 동일).
+        if ($ds === 'segment' || ($ds === 'init' && $isHevc)) {
             $dsPick = ($this->dsDiagAllowed && ($_COOKIE['fs_dsdiag'] ?? '') === '1') ? (string)($_COOKIE['fs_dsmode'] ?? '') : '';
             // ★ (2026-10-13 오전) 운영체제로 고정하지 않고 이 서버에서 잰 값으로 자동 선택(dsAutoPick — 정하기 전엔 두 방식 번갈아, 같으면 윈도우 파일·나머지 파이프).
             //   진단 &dsmode=file/pipe 는 종전처럼 강제(잰 값으로는 쓰임).
@@ -3924,8 +3926,9 @@ class FileManager {
         }
         if ($dsTmpDir !== null) {
             // 남은 임시 파일 정리(10분 넘은 것 — 비정상 종료 대비, 가끔만)
-            if (mt_rand(1, 20) === 1) { foreach ((array)@glob($dsTmpDir . DIRECTORY_SEPARATOR . 'seg_*.ts') as $old) { if (is_file($old) && @filemtime($old) < time() - 600) @unlink($old); } }
-            $dsTmp = $dsTmpDir . DIRECTORY_SEPARATOR . 'seg_' . bin2hex(random_bytes(8)) . '.ts';
+            if (mt_rand(1, 20) === 1) { foreach ((array)@glob($dsTmpDir . DIRECTORY_SEPARATOR . 'seg_*') as $old) {   // ★ (2026-10-14) .ts·.mp4(HEVC) 모두
+                if (is_file($old) && @filemtime($old) < time() - 600) @unlink($old); } }
+            $dsTmp = $dsTmpDir . DIRECTORY_SEPARATOR . 'seg_' . bin2hex(random_bytes(8)) . ($isHevc ? '.mp4' : '.ts');
             register_shutdown_function(function () use ($dsTmp) { if (is_file($dsTmp)) @unlink($dsTmp); });
             $cmdFile = preg_replace('/ pipe:1$/', ' -y ' . $this->escapeShellPath($dsTmp), $cmd, 1);
             $null = PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null';
@@ -3945,6 +3948,55 @@ class FileManager {
             if ($rc === null) $dsFileFail = 'start';
             elseif ($sz <= 0) $dsFileFail = 'rc' . (int)$rc . '_sz0';
             if ($dsFileFail !== null && is_file($dsTmp)) @unlink($dsTmp);
+        }
+        if ($dsTmpDir !== null && $dsFileFail === null && $isHevc) {
+            // ★ (2026-10-14) HEVC 파일 방식 — 파이프 방식(아래)과 같은 처리(fmp4Split 로 시작 시각 바로잡기 → 초기화 조각 또는 영상 조각)를 메모리 덩어리 대신
+            //   임시 파일에서 읽어서 한다(메모리에 조각 전체를 올리지 않으므로 파이프 방식의 memory_limit 크기 제한도 해당 없음). 보낸 뒤 바로 지움.
+            $fh = @fopen($dsTmp, 'rb');
+            if (!$fh) { @unlink($dsTmp); $fail(500, 'segment_failed'); }
+            $total = $sz; $BLK = 1024000;
+            $get = function (int $o, int $n) use ($fh, $total): string {   // 위치·길이로 읽기
+                if ($o < 0 || $n <= 0 || $o >= $total) return '';
+                $n = min($n, $total - $o);
+                if (@fseek($fh, $o) !== 0) return '';
+                $out = '';
+                while ($n > 0) { $b = fread($fh, min($n, 1048576)); if ($b === false || $b === '') break; $out .= $b; $n -= strlen($b); }
+                return $out;
+            };
+            $parts = Mp4KeyIndex::fmp4Split($get, $total, 10.0);
+            if ($parts === null) { fclose($fh); @unlink($dsTmp); $fail(500, 'segment_failed'); }
+            while (ob_get_level()) ob_end_clean();
+            header('Content-Type: video/mp4');
+            header('Cache-Control: no-store');
+            ignore_user_abort(true);
+            $dgW0 = microtime(true); $sent = 0; $abort = false;
+            if ($ds === 'init') {
+                header('Content-Length: ' . strlen($parts['init']));
+                echo $parts['init']; $sent = strlen($parts['init']);
+            } else {
+                header('Content-Length: ' . $parts['fragLen']);
+                foreach ($parts['parts'] as $pt) {
+                    if ($pt[0] === 's') { echo $pt[1]; @flush(); $sent += strlen($pt[1]); continue; }
+                    for ($p = $pt[1], $end = $pt[1] + $pt[2]; $p < $end; $p += $BLK) {
+                        $buf = $get($p, min($BLK, $end - $p)); echo $buf; @flush(); $sent += strlen($buf);
+                        if (connection_aborted()) { $abort = true; break 2; }
+                    }
+                }
+            }
+            $dgW1 = microtime(true);
+            fclose($fh);
+            @unlink($dsTmp);
+            $dsAutoRes = $this->dsAutoRecord($useApcu, 'file', ($dgFfEnd - $dgSpawn) * 1000, $sz);
+            if ($this->dsDiagAllowed && ($_COOKIE['fs_dsdiag'] ?? '') === '1') {
+                $this->dsDiagWrite('ds_seg_srv', [
+                    'mode' => 'file', 'codec' => 'hevc', 'ds' => $ds, 'i' => $i, 'ss' => round($ss, 3), 'len' => round($cut - $ss, 3),
+                    'boot' => (int)round(($dgSpawn - $dgT0) * 1000), 'ffms' => (int)round(($dgFfEnd - $dgSpawn) * 1000), 'rc' => $rc,
+                    'send' => (int)round(($dgW1 - $dgW0) * 1000), 'kb' => (int)round($sent / 1024), 'rawKb' => (int)round($sz / 1024), 'abort' => $abort,
+                    'total' => (int)round(($dgW1 - $dgT0) * 1000), 'pick' => $dsPick !== '' ? $dsPick : 'auto',
+                ]);
+                if ($dsAutoRes !== null) $this->dsDiagWrite('ds_auto', $dsAutoRes);
+            }
+            exit;
         }
         if ($dsTmpDir !== null && $dsFileFail === null) {
             while (ob_get_level()) ob_end_clean();
@@ -4012,6 +4064,25 @@ class FileManager {
             if ($cur !== '') $blocks[] = $cur;
             $cur = '';
             @fclose($pipes[1]); @proc_close($process);
+            $dgHvEnd = microtime(true);
+            // ★ (2026-10-14) HEVC 파이프 — 자동 선택용 잰 값(ffmpeg 시작 → 출력 끝, 다 받은 뒤 보내므로 회선 영향 없음)·파일 방식 실패 + 파이프 성공이면 환경 문제로 저장
+            //   (H.264 파이프와 같은 규칙). 결과가 없으면 아래 fmp4Split 이 종전처럼 오류 응답.
+            if ($total > 0) {
+                if ($dsFileFail === null) $dsAutoRes = $this->dsAutoRecord($useApcu, 'pipe', ($dgHvEnd - $dgSpawn) * 1000, $total);
+                elseif ($dsFileFail !== 'cached') {
+                    if ($useApcu) @apcu_store('fs_ds_nofile|' . PHP_OS_FAMILY, $dsFileFail, 600);
+                    $this->dsAutoForcePipe($useApcu, $dsFileFail);
+                }
+            }
+            if ($this->dsDiagAllowed && ($_COOKIE['fs_dsdiag'] ?? '') === '1') {
+                $dgHvRow = ['mode' => 'pipe', 'codec' => 'hevc', 'ds' => $ds, 'i' => $i, 'ss' => round($ss, 3), 'len' => round($cut - $ss, 3),
+                    'boot' => (int)round(($dgSpawn - $dgT0) * 1000), 'pipeMs' => (int)round(($dgHvEnd - $dgSpawn) * 1000), 'rawKb' => (int)round($total / 1024),   // rawKb: ffmpeg 출력 크기(보낸 양 아님)
+                   
+                    'pick' => $dsPick !== '' ? $dsPick : 'auto'];
+                if ($dsFileFail !== null) $dgHvRow['fileFail'] = $dsFileFail;
+                $this->dsDiagWrite('ds_seg_srv', $dgHvRow);
+                if ($dsAutoRes !== null) $this->dsDiagWrite('ds_auto', $dsAutoRes);
+            }
             $get = function (int $o, int $n) use (&$blocks, $BLK, $total): string {   // 위치·길이로 읽기(덩어리 경계에 걸쳐도 이어 붙임)
                 if ($o < 0 || $n <= 0 || $o >= $total) return '';
                 $n = min($n, $total - $o); $out = '';
