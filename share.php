@@ -1938,6 +1938,43 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
     <?php endif; ?>
     <?php if (!empty($isStreamable)): ?>
     <script src="assets/vendor/hls-1.5.7.min.js"></script>
+    <script nonce="<?= $cspNonce ?>">
+    // === hls.js 정리(destroy) 시점 보정 ★ (2026-10-15) ===
+    // hls.js 의 오류(ERROR)·기타 알림 처리 '안에서' hls.destroy() 를 부르면, hls.js 가 그 알림을 보낸 함수의 나머지를 이어서 실행하다
+    // 이미 비워진 내부 값을 써 'Cannot read properties of null (reading trigger)' 예외가 난다(트랜스코딩 HLS 에서 코덱 미지원·
+    // bufferAppendError 등 치명 오류 → SW 재시도·MMS 대체로 넘어갈 때 실측, hls.js 1.5.x StreamController._bufferInitSegment).
+    // 2026-09-30 직접 재생 경로는 각자 setTimeout 으로 미뤄 고쳤지만 트랜스코딩·화질 변경 경로(여러 곳)는 그대로였다.
+    // → 알림 처리 중(trigger 실행 중)에 부른 destroy 만 그 처리가 끝난 다음 순간(setTimeout 0)으로 미루고, 그사이 그 인스턴스의 알림은
+    //   더 보내지 않는다(곧바로 정리했을 때 리스너가 없어지는 것과 같은 결과 — 같은 오류로 대체 재생이 두 번 실행되는 일 없음).
+    // 알림 밖에서 부른 destroy(창 닫기·중단 등)는 종전처럼 즉시. 두 번 불러도 한 번만 예약. 미뤄진 정리의 미디어 분리는 hls.js 가
+    // video.src 가 바뀌었으면(대체 재생이 이미 새 주소를 넣음) 건드리지 않는다(hls.js 'src was changed by a third party - skip cleanup').
+    (function fsHlsSafeDestroy() {
+        try {
+            if (typeof Hls === 'undefined' || !Hls.prototype || Hls.prototype.__fsSafeDestroy) return;
+            const P = Hls.prototype, origTrigger = P.trigger, origDestroy = P.destroy;
+            if (typeof origTrigger !== 'function' || typeof origDestroy !== 'function') return;
+            P.__fsSafeDestroy = true;
+            P.trigger = function () {
+                if (this.__fsDestroyPending && !this.__fsDestroyNow) return false;   // 정리 예약된 인스턴스 — 알림 중지
+                this.__fsDepth = (this.__fsDepth || 0) + 1;
+                try { return origTrigger.apply(this, arguments); } finally { this.__fsDepth--; }
+            };
+            P.destroy = function () {
+                if (!this.__fsDestroyNow && (this.__fsDepth || 0) > 0) {
+                    if (!this.__fsDestroyPending) {
+                        this.__fsDestroyPending = true;
+                        const self = this;
+                        setTimeout(() => { self.__fsDestroyNow = true; try { origDestroy.call(self); } catch (e) {} }, 0);
+                    }
+                    return;
+                }
+                if (this.__fsDestroyPending && !this.__fsDestroyNow) return;   // 이미 예약됨
+                this.__fsDestroyNow = true;
+                return origDestroy.apply(this, arguments);
+            };
+        } catch (e) {}
+    })();
+    </script>
     <?php
     // ★ (2026-10-11) 이퀄라이저(음악용·동영상용 따로, fs-eq.js) — 공유 페이지는 로그인이 없어 이 브라우저에만 저장된다(같은 브라우저면 탐색기 설정과 공유).
     //   음악 플레이어(fs-audio-player.js)와 동영상 스킨이 쓰므로 둘보다 먼저 싣는다. 방문자 언어로 번역한 글자만 넣는다(JSON_HEX_TAG 등 — 스킨과 같은 방식).

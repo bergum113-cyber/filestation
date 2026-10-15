@@ -41,7 +41,9 @@
         gear:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>',
         // ★ (2026-10-14) 조작 줄 설정 버튼 전용 톱니바퀴 — 유튜브·Plyr·넷플릭스 등 대부분이 설정 = 톱니바퀴(펜닐 지시). 같은 선 굵기(1.8)·크기(22px).
         //   위 gear(가로 막대)는 ⚙ 메뉴 안 '화질' 줄 아이콘으로 그대로 씀(유튜브도 화질 줄은 조절 막대 모양).
-        cog:   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
+        //   ★ (2026-10-15) 그림이 칸을 거의 꽉 채워(실측 20×20px — 다른 선 아이콘 15~17px) 커 보였다(펜닐 제보) → 보는 영역을 넓혀(viewBox −2~26) 약 16px 로,
+        //   선은 그만큼 가늘어지지 않게 2.1(화면에서 다른 아이콘의 1.8 과 같은 굵기 약 1.65px).
+        cog:   '<svg viewBox="-2 -2 28 28" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
         pip:   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="11" width="7" height="6" rx="1" fill="currentColor"/></svg>',
         prev:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><rect x="5.5" y="5" width="2.6" height="14" rx="1.3"/><path d="M19 7.1v9.8a1.3 1.3 0 0 1-2 1.1l-7.4-4.9a1.3 1.3 0 0 1 0-2.2L17 6a1.3 1.3 0 0 1 2 1.1z"/></svg>',
         next:  '<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><rect x="15.9" y="5" width="2.6" height="14" rx="1.3"/><path d="M5 7.1v9.8a1.3 1.3 0 0 0 2 1.1l7.4-4.9a1.3 1.3 0 0 0 0-2.2L7 6a1.3 1.3 0 0 0-2 1.1z"/></svg>',
@@ -1031,10 +1033,15 @@
             bClose.addEventListener('click', () => { setMenuOpen(false); render(); });
             head.append(bClose);
             menu.append(head);
-            // ★ (2026-09-23) 자리가 모자라 조작 줄에서 접힌 버튼(fitRow) — 상태와 함께 목록 맨 위에
+            // ★ (2026-10-15) 목록 순서 정리(펜닐 요청 — 유튜브 PC 처럼 ⚙ 위로 펼치는 메뉴는 켬/끔·부가 기능을 위에, 자주 바꾸는 선택(속도·자막·오디오·화질)을
+            //   아래에 두고 가장 자주 쓰는 화질을 ⚙ 에 가장 가까운 맨 아래로). 두 묶음 사이에 얇은 구분선. 줄 자체(아이콘·글자·동작)는 종전 그대로.
+            //   위 묶음: 동영상 정보 · 이 영상만 반복 · 구간 반복 · (스피커가 접혔을 때) 음소거 · 이퀄라이저
+            //   아래 묶음: 재생 속도 · 자막 파일 · 자막 설정 · 오디오 · 재생 방식 · 화질
+            //   종전: 정보 · 음소거 · 반복 · 구간 반복 · 재생 속도 · (화질/재생 방식/오디오 — 상자 순서) · 자막 파일 · 자막 설정 · 이퀄라이저.
+            // ★ (2026-09-23) 자리가 모자라 조작 줄에서 접힌 버튼(fitRow) — 상태와 함께 목록 맨 위에(2026-10-15 부터 반복·구간 반복·정보는 늘 여기)
             const folded = collapsible.filter((b) => b.classList.contains('fsvs-collapsed'));
+            const rowsBefore = menu.querySelectorAll('.fsvs-mrow').length;
             if (folded.includes(bInfo)) actRow(ICON.info, T('vi_dlg_title', '동영상 정보'), '', () => { setMenuOpen(false); try { ctx.showInfo(); } catch (e) {} });
-            if (folded.includes(bVol)) toggleRow(ICON.vol, T('mute', '음소거'), video.muted || video.volume === 0, () => { video.muted = !video.muted; });
             if (folded.includes(bLoop)) toggleRow(ICON.loop, T('video_loop_one', '이 영상만 반복'), !!(ctx.isLoop ? ctx.isLoop() : video.loop), () => { if (ctx.toggleLoop) ctx.toggleLoop(); announce('loop'); });
             if (folded.includes(bAb)) {
                 const ab_ = (ctx.abState && ctx.abState()) || {};
@@ -1043,18 +1050,23 @@
                 const abIco = '<b class="fsvs-mab">A-B</b>';
                 actRow(abIco, T('video_ab', '구간 반복') + ((a && b) ? ' ' + fmt(ab_.a) + ' ~ ' + fmt(ab_.b) : (a ? ' A ' + fmt(ab_.a) : '')), val.replace(/^.*?:\s*/, ''), () => { if (ctx.clickAb) ctx.clickAb(); announce('ab'); }, true);
             }
+            if (folded.includes(bVol)) toggleRow(ICON.vol, T('mute', '음소거'), video.muted || video.volume === 0, () => { video.muted = !video.muted; });
+            if (window.FSEQ && FSEQ.supported) navRow(ICON.eq, T('eq_title', '이퀄라이저'), FSEQ.summary('video'), 'eq');   // ★ (2026-10-11) 아이폰 등 지원 안 하면 줄 없음
+            if (menu.querySelectorAll('.fsvs-mrow').length > rowsBefore) menu.append(el('div', 'fsvs-msep'));   // 위 묶음이 있을 때만 구분선(아래 묶음은 재생 속도가 늘 있음)
             navRow(ICON.speed, T('playback_speed', '재생 속도'), rateLabel(video.playbackRate).replace(' (1x)', ''), 'speed');
-            sels.forEach((sel) => {
+            if (stOk) { const on_ = st.tracks.find((t) => t.on); navRow(ICON.subf, T('fsvs_sub_file', '자막 파일'), on_ ? String(on_.label || '') : '', 'subfile'); }
+            if (ccOn) { const v = subVals(); navRow(ICON.subs, T('fsvs_sub_settings', '자막 설정'), v.size + ' · ' + v.pos + ' · ' + v.sync, 'subset'); }
+            const selRow = (sel) => {
                 const k = selKind(sel);
                 const cur = sel.options[sel.selectedIndex];
                 navRow(k === 'audio' ? ICON.vol : (k === 'mode' ? ICON.mode : ICON.gear),
                     k === 'audio' ? T('audio_track', '오디오') : (k === 'mode' ? T('playback_mode', '재생 방식') : T('quality', '화질')),
                     cur ? cur.textContent : '', 'sel', () => { menuSelRef = sel; });
-            });
+            };
+            sels.filter((x) => selKind(x) === 'audio').forEach(selRow);
             if (naOk) { const on_ = na.tracks.find((t) => t.on); navRow(ICON.vol, T('audio_track', '오디오'), on_ ? String(on_.label || '') : '', 'naudio'); }
-            if (stOk) { const on_ = st.tracks.find((t) => t.on); navRow(ICON.subf, T('fsvs_sub_file', '자막 파일'), on_ ? String(on_.label || '') : '', 'subfile'); }
-            if (ccOn) { const v = subVals(); navRow(ICON.subs, T('fsvs_sub_settings', '자막 설정'), v.size + ' · ' + v.pos + ' · ' + v.sync, 'subset'); }
-            if (window.FSEQ && FSEQ.supported) navRow(ICON.eq, T('eq_title', '이퀄라이저'), FSEQ.summary('video'), 'eq');   // ★ (2026-10-11) 아이폰 등 지원 안 하면 줄 없음
+            sels.filter((x) => selKind(x) === 'mode').forEach(selRow);
+            sels.filter((x) => selKind(x) === 'quality').forEach(selRow);
         }
         on(document, 'pointerdown', (e) => { if (!menu.hidden && !menu.contains(e.target) && e.target !== bSet && e.target !== bSpeed && !bSet.contains(e.target)) { setMenuOpen(false); render(); } });
 
@@ -1084,6 +1096,19 @@
             collapsible.forEach((b) => b.classList.remove('fsvs-collapsed'));
             row.classList.remove('fsvs-tight', 'fsvs-timeup');
             if (!W) { row.classList.remove('fsvs-fitting'); if (_dg) logFit(_dg); return; }
+            // ★ (2026-10-15) 촘촘/시간 위로는 '이 페이지에서 나올 수 있는 버튼'이 다 있다고 치고 정한다 — 같은 화면 폭이면 재생 방식·자막 유무와 상관없이
+            //   간격·시간 위치가 같게(펜닐 제보: 휴대폰 세로에서 일반 재생/스트리밍·자막 있음/없음마다 아이콘 간격과 재생시간 위치가 달라짐 — 실측 390px:
+            //   A-B·CC 다 있으면 촘촘 + 시간 위로, 스트리밍(A-B 없음)은 촘촘·시간 줄 안, 목록 없는 스트리밍은 보통 간격). 잠깐 보이게 하는 것은 재생 방식에 따라
+            //   숨는 A-B(스트리밍)와 파일에 따라 숨는 자막(CC)뿐 — 목록(이전·다음)은 폴더·공유 단위로 같고, 정보(ⓘ)·PIP 는 페이지·브라우저 단위로 같고,
+            //   속도 칩은 배속을 바꿀 때만 잠깐 나와 넣지 않는다. 같은 동기 계산 안에서 되돌리므로 화면에 보이지 않고, 접기(아래)는 실제 보이는 버튼으로만 한다.
+            // ★ (2026-10-15) 반복·구간 반복(A-B)·동영상 정보는 화면 크기와 상관없이 항상 ⚙ 메뉴 맨 위('더 보기' 줄)로 — PC·휴대폰, 탐색기·공유, 일반 재생·
+            //   트랜스코딩 공통(펜닐 지시: 유튜브도 반복·통계는 설정 메뉴 안). 메뉴 줄(buildMenu 의 folded)은 이 접힘 표시로 그대로 나오고, 원래 안 보이는
+            //   버튼(스트리밍의 A-B·공유의 정보)은 접지 않아 메뉴에도 안 나온다(종전 규칙과 같음). 남는 조작 줄: 이전·재생·다음·스피커·시간 | 속도 칩·CC·⚙·PIP·⛶.
+            //   그래도 시간이 줄에 안 들어가면 종전처럼 촘촘하게 → 시간 위로 → 스피커 접기 순.
+            [bInfo, bAb, bLoop].forEach((b) => { if (b.style.display !== 'none') b.classList.add('fsvs-collapsed'); });
+            const reserve = [];   // A-B 는 이제 늘 메뉴라 미리 넣어 잴 필요 없음 — 파일에 따라 숨는 CC 만
+            if (typeof ctx.hasCc === 'function' && bCc.style.display === 'none') reserve.push(bCc);
+            reserve.forEach((b) => { b.style.display = ''; });
             if (_dg) _dg.sw0 = row.scrollWidth;          // 보통일 때 필요한 폭
             // ★ (2026-09-26) 자리가 모자라면 먼저 버튼을 촘촘하게(간격 0·버튼 32px·재생 36px·시간 11px — 약 66px 확보) —
             //   종전엔 곧바로 접어 같은 파일도 화면 폭에 따라 보이는 아이콘이 달랐다(펜닐 제보). 그래도 모자랄 때만 접는다.
@@ -1092,6 +1117,7 @@
             // ★ (2026-09-26) 그래도 모자라면 버튼을 접기 전에 시간 표시를 조작 줄 위(진행 막대 위 왼쪽)로 옮긴다(약 70px 확보) —
             //   '좁으면 다른 위치에'(펜닐 요청). 조작 줄이 숨겨지면 함께 숨겨진다(조작 줄 안의 요소).
             if (row.scrollWidth > W + 1) row.classList.add('fsvs-timeup');
+            reserve.forEach((b) => { b.style.display = 'none'; });   // ★ (2026-10-15) 위 '나올 수 있는 버튼' 되돌림 — 접기는 실제 보이는 버튼으로
             if (_dg) _dg.sw2 = row.scrollWidth;          // 시간 표시를 위로 옮긴 뒤
             for (const b of collapsible) {
                 if (row.scrollWidth <= W + 1) break;
@@ -1263,6 +1289,11 @@
                 try { bNext.disabled = !(ctx.canNext && ctx.canNext()); } catch (e) { bNext.disabled = true; }
             }
             setActive(bSet, !menu.hidden);
+            // ★ (2026-10-15) 반복·구간 반복이 ⚙ 메뉴로 들어가(위 fitRow) 조작 줄에서 켜짐이 안 보이게 됐다 → ⚙ 아이콘 오른쪽 위에 작은 점.
+            //   구간 반복(A 만 지정 포함, 버튼이 쓰이는 재생 방식일 때만) = 호박색, 이 영상만 반복만 = 흰색. 둘 다 꺼지면 사라짐. 동작은 그대로(표시만).
+            bSet.classList.toggle('fsvs-dot-ab', !!(abVis && hasA));
+            bSet.classList.toggle('fsvs-dot-loop', !!loopOn && !(abVis && hasA));
+            bSet.setAttribute('aria-label', T('settings', '설정') + ((abVis && hasA) ? ' · ' + T('video_ab', '구간 반복') : '') + (loopOn ? ' · ' + T('video_loop_one', '이 영상만 반복') : ''));
             fitRow();
             syncCenter();
         }

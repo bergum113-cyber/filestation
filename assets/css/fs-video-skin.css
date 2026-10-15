@@ -674,3 +674,16 @@ body.fsvs-active .fsvs-on .video-seek-overlay.show[data-chev="2"]::before { anim
     background: rgba(20, 20, 24, 0.82); border-radius: 12px; text-align: center;
     font-size: 12px; line-height: 16px; font-weight: 600; color: #FFFFFF; cursor: default;
 }
+
+/* ★ (2026-10-15) ⚙ 메뉴 묶음 구분선 — 위(켬/끔·부가 기능)와 아래(속도·자막·오디오·화질) 사이(fs-video-skin.js buildMenu). */
+.fsvs-root .fsvs-menu .fsvs-msep { height: 1px; margin: 4px 14px; background: rgba(255, 255, 255, 0.12); pointer-events: none; }
+
+/* ★ (2026-10-15) ⚙ 상태 점 — 반복·구간 반복이 메뉴로 들어가 조작 줄에서 켜짐이 안 보여서(fs-video-skin.js render). 구간 반복 = 호박색, 반복 = 흰색.
+   아이콘(22px) 오른쪽 위 바깥쪽 가장자리에 6px(어두운 테두리로 영상 위에서도 보이게). 누르는 영역·마우스 올림 바탕(::before)은 그대로. */
+.fsvs-root .fsvs-row .fsvs-set.fsvs-dot-ab::after,
+.fsvs-root .fsvs-row .fsvs-set.fsvs-dot-loop::after {
+    content: ''; position: absolute; top: 50%; left: 50%; width: 6px; height: 6px; margin: -12px 0 0 6px; border-radius: 50%;
+    box-shadow: 0 0 0 1.5px rgba(16, 18, 26, 0.9); pointer-events: none;
+}
+.fsvs-root .fsvs-row .fsvs-set.fsvs-dot-ab::after { background: var(--fsvs-ab); }
+.fsvs-root .fsvs-row .fsvs-set.fsvs-dot-loop::after { background: #FFFFFF; }

@@ -3489,6 +3489,12 @@ class FileManager {
         $probeCmd2 = escapeshellarg($ffmpeg) . ' -i ' . $inputPath . ' 2>&1';
         $probeOut2 = shell_exec($probeCmd2) ?? '';
         $isH264Input = (bool)preg_match('/Video:\s*h264/i', $probeOut2);
+        // ★ (2026-10-15) 음성 없는 영상 — 받는 쪽(MMS: MediaSource)이 'avc1 + mp4a' 형식으로 고정이라 영상만 보내면 붙지 않는다.
+        //   음성을 고르지 않았고 원본에 음성이 없을 때만 무음 음성 트랙을 함께 만든다(위 조사 결과로 판단 — 추가 조사 없음).
+        if (!isset($_GET['audio'])) {
+            $silentMap = $this->ffNoAudioSilentMap($probeOut2);
+            if ($silentMap !== '') $audioMap = $silentMap;
+        }
         
         if (isset($_GET['sw'])) {
             // 명시적 SW 요청
@@ -4188,6 +4194,17 @@ class FileManager {
      * segment: .ts 세그먼트 서빙
      * stop: ffmpeg 종료 + 파일 정리
      */
+    /**
+     * ★ (2026-10-15) 음성 없는 영상용 무음 음성 매핑 — ffmpeg -i 조사 결과에 영상은 있고 음성이 없으면 무음(anullsrc, 48kHz 스테레오)을 두 번째 입력으로
+     * 넣고 영상과 함께 매핑(-shortest: 영상 길이에서 끝). 그 밖(음성 있음·조사 실패·영상 없음)은 '' — 호출부는 종전 매핑을 그대로 쓴다.
+     * mp4 의 음성 줄은 'Stream #0:1[0x2](eng): Audio: …', mkv 는 'Stream #0:1(eng): Audio: …' — 번호 뒤 ':' 전까지 아무 글자.
+     */
+    private function ffNoAudioSilentMap(string $probeOut): string {
+        if ($probeOut === '' || !preg_match('/Stream #\d+:\d+[^:\n]*: Video:/', $probeOut)) return '';
+        if (preg_match('/Stream #\d+:\d+[^:\n]*: Audio:/', $probeOut)) return '';
+        return ' -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=48000 -map 0:v:0 -map 1:a:0 -shortest';
+    }
+
     public function hlsStream(int $storageId, string $path): void {
         $action = $_GET['hls_action'] ?? 'start';
         $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
@@ -4834,7 +4851,10 @@ class FileManager {
         $seekArg = $seekSec > 0 ? ' -ss ' . $seekSec : '';
         
         // 오디오 트랙
-        $audioMap = ' -map 0:v:0 -map 0:a:0';
+        // ★ (2026-10-15) 첫 음성을 '있으면'(0:a:0?) — 음성 없는 영상은 ffmpeg 가 'Stream map 0:a:0 matches no streams' 로 바로 끝나 HLS 가
+        //   재생 목록 404 → SW 재시도도 실패했다(소리 없는 HEVC·AVI 는 아예 재생 불가, 실측). 음성이 있으면 종전과 같은 명령.
+        //   ? 가 셸에서 파일 이름 패턴으로 풀리지 않게 따옴표.
+        $audioMap = ' -map 0:v:0 -map "0:a:0?"';
         if (isset($_GET['audio'])) {
             $audioIdx = (int)$_GET['audio'];
             $audioMap = ' -map 0:v:0 -map 0:' . $audioIdx;
@@ -15657,6 +15677,10 @@ class FileManager {
             $audioMap = ' -map 0:v:0 -map 0:' . $audioIdx;
         } else {
             $audioMap = ' -map 0:v:0 -map 0:a:0';
+            // ★ (2026-10-15) 음성 없는 영상 — 탐색기 MMS 와 같게 무음 음성 트랙(받는 쪽 형식이 'avc1 + mp4a' 고정). 이 경로엔 원본 조사가 없어
+            //   음성을 고르지 않았을 때만 한 번 조사(ffmpeg -i, 탐색기 MMS 가 늘 하는 것과 같은 조사).
+            $silentMap = $this->ffNoAudioSilentMap((string)(shell_exec(escapeshellarg($ffmpeg) . ' -i ' . $inputPath . ' 2>&1') ?? ''));
+            if ($silentMap !== '') $audioMap = $silentMap;
         }
         
         // iOS 감지
@@ -16237,7 +16261,7 @@ class FileManager {
         }
         $inputPath = $this->escapeShellPath($ffmpegInput);
         
-        $audioMap = ' -map 0:v:0 -map 0:a:0';
+        $audioMap = ' -map 0:v:0 -map "0:a:0?"';   // ★ (2026-10-15) 음성 없는 영상도 HLS 가 되게 — 탐색기 HLS 와 같은 이유·같은 방식
         if (isset($_GET['audio'])) {
             $audioIdx = (int)$_GET['audio'];
             $audioMap = ' -map 0:v:0 -map 0:' . $audioIdx;
