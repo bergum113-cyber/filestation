@@ -3823,11 +3823,17 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 // ★ (2026-10-01) 숨겨진 가운데 버튼(재생·±5초)은 첫 탭에 '보이기만' — 탐색기 App._bindFirstTapGuard 와 같은 처리(설명은 그쪽).
                 //   닿는 순간 숨겨진 상태였는지 아래 기존 터치 처리보다 먼저(캡처) 기억 → 그 탭의 touchend·click 이 가운데 버튼이면 버튼까지 보내지 않고 보이기만.
                 (function (w) {
-                    let hiddenAtStart = false, startAt = 0, hideTimer = null;
-                    w.addEventListener('touchstart', () => {
-                        // 숨김 판단은 사용자가 실제로 본 상태(가운데 버튼의 계산된 투명도) — 넓은 터치 화면은 :hover 로 보일 수 있다(탐색기와 같음)
+                    let hiddenAtStart = false, startAt = 0, hideTimer = null, markAt = -1e9;
+                    // 숨김 판단은 사용자가 실제로 본 상태(가운데 버튼의 계산된 투명도) — 넓은 터치 화면은 :hover 로 보일 수 있다(탐색기와 같음)
+                    const mark = () => {
                         const ov = w.querySelector('.video-play-overlay');
                         hiddenAtStart = w.classList.contains('playing') && (!ov || +getComputedStyle(ov).opacity < 0.1);
+                    };
+                    // ★ (2026-10-21 밤) 손가락이 닿는 첫 신호(pointerdown 캡처)에서 판단 — 가운데 버튼을 스킨 조작 줄과 한 몸으로 묶으면서 같은 탭에서 스킨이 먼저 깨어나
+                    //   가운데 버튼이 보이게 되므로(탐색기 App._bindFirstTapGuard 설명과 같음). pointer 신호가 없는 브라우저는 종전처럼 touchstart 에서.
+                    w.addEventListener('pointerdown', () => { mark(); markAt = performance.now(); }, { capture: true, passive: true });
+                    w.addEventListener('touchstart', () => {
+                        if (performance.now() - markAt > 400) mark();
                         startAt = Date.now();
                     }, { capture: true, passive: true });
                     const guard = (e) => {
@@ -3841,7 +3847,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             w.classList.add('show-controls');
                             clearTimeout(hideTimer);
                             const shownAt = Date.now();
-                            hideTimer = setTimeout(() => { if (startAt <= shownAt) w.classList.remove('show-controls'); }, 3000);   // 그 사이 다른 터치가 있었으면 기존 처리에 맡김
+                            // ★ (2026-10-21 밤) 스킨이 켜져 있으면 스킨 숨김 상태를 따름(아래 fsvs-idlechange) — 탐색기와 같음
+                            if (!w.classList.contains('fsvs-on')) hideTimer = setTimeout(() => { if (startAt <= shownAt) w.classList.remove('show-controls'); }, 3000);   // 그 사이 다른 터치가 있었으면 기존 처리에 맡김
                         }
                     };
                     w.addEventListener('touchend', guard, true);
@@ -3850,6 +3857,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 let _shareControlsTimer = null;
                 const _shareShowLater = () => {
                     if (_shareControlsTimer) clearTimeout(_shareControlsTimer);
+                    // ★ (2026-10-21 밤) 스킨이 켜져 있으면 자기 3초 대신 스킨 숨김 상태를 따름(아래 fsvs-idlechange) — 조작 줄과 같은 순간 숨김(탐색기와 같음)
+                    if (wrap.classList.contains('fsvs-on')) { _shareControlsTimer = null; return; }
                     _shareControlsTimer = setTimeout(() => {
                         wrap.classList.remove('show-controls');
                         _shareControlsTimer = null;
@@ -3861,13 +3870,34 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 //   '보이는 중 ±5/재생 버튼은 숨기지 않고 3초만 다시' 는 아래 keep 이 조작부 전체로 넓혀 그대로 포함. 자막 글자는 pointer-events:none 이라 영상으로 감.
                 //   숨겨진 가운데 버튼의 첫 탭은 위 첫 탭 처리가 '보이기만'(그 touchend 는 위에서 막혀 keep 까지 안 옴 — 그 처리의 3초가 맡음).
                 const _shareIsSurface = (t) => !!(t && t.closest) && (t === wrap || !!t.closest('video'));
+                // ★ (2026-10-21 밤) 스킨이 켜져 있으면 가운데 버튼·배지(show-controls)를 스킨 조작 줄과 한 몸으로 — 보이는 동안(재생 중) 보이고 숨으면 같이 숨음.
+                //   영상 탭 판단은 손가락이 닿는 순간 보였는지(pointerdown 캡처). 탐색기 App._bindShowControlsTouch 와 같은 규칙·같은 이유(재검토 실측). 스킨이 없으면 종전.
+                const _shareSynced = () => wrap.classList.contains('fsvs-on');
+                const _shareVisibleNow = () => wrap.classList.contains('show-controls') && !(_shareSynced() && wrap.classList.contains('fsvs-idle'));
+                let _shareVisAtStart = false, _shareVisAt = -1e9;
+                wrap.addEventListener('pointerdown', () => { _shareVisAtStart = _shareVisibleNow(); _shareVisAt = performance.now(); }, { capture: true, passive: true });
                 wrap.addEventListener('touchstart', (e) => {
+                    if (performance.now() - _shareVisAt > 400) _shareVisAtStart = _shareVisibleNow();
                     if (wrap.classList.contains('playing') && _shareIsSurface(e.target)) {
+                        if (_shareSynced()) {
+                            if (_shareControlsTimer) { clearTimeout(_shareControlsTimer); _shareControlsTimer = null; }
+                            if (_shareVisAtStart) { wrap.classList.remove('show-controls'); try { wrap.dispatchEvent(new CustomEvent('fsvs-hidenow', { detail: { evt: e } })); } catch (x) {} }
+                            else wrap.classList.add('show-controls');
+                            return;
+                        }
                         wrap.classList.toggle('show-controls');
                         if (wrap.classList.contains('show-controls')) _shareShowLater();
                         else if (_shareControlsTimer) { clearTimeout(_shareControlsTimer); _shareControlsTimer = null; }
                     }
                 }, { passive: true });
+                wrap.addEventListener('fsvs-idlechange', (ev) => {
+                    if (!ev.detail) return;
+                    if (_shareControlsTimer) { clearTimeout(_shareControlsTimer); _shareControlsTimer = null; }
+                    if (ev.detail.idle) wrap.classList.remove('show-controls');
+                    else if (wrap.classList.contains('playing')) wrap.classList.add('show-controls');
+                });
+                // 다시 재생될 때 조작 줄이 보이는 중이면 가운데·배지도 함께(공유의 playing 표시는 'playing' 신호에서 붙음)
+                wrap.addEventListener('playing', () => { setTimeout(() => { if (_shareSynced() && !wrap.classList.contains('fsvs-idle') && wrap.classList.contains('playing')) wrap.classList.add('show-controls'); }, 0); }, true);
                 // 캡처 단계 — ±5초 버튼 등은 touchend 를 stopPropagation 하므로(탐색기와 같은 이유)
                 const _shareKeep = (e) => {
                     if (!wrap.classList.contains('playing') || !wrap.classList.contains('show-controls')) return;
@@ -3911,7 +3941,19 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 if (window.__fsKbNav && ae && ae !== document.body && wrap.contains(ae) && ae.matches && ae.matches(':focus-visible')) return;
                 wrap.classList.add('fs-idle');
             };
-            const showUI = () => { wrap.classList.remove('fs-idle'); clearTimeout(hideTimer); hideTimer = setTimeout(hideUI, 2500); };
+            // ★ (2026-10-21 밤) 스킨이 켜져 있으면 자기 2.5초 대신 스킨 숨김 상태(fsvs-idlechange)를 그대로 따름 — 조작 줄과 같은 순간(탐색기 App._fsIdleStart 와 같음).
+            //   [종전 실측] 전체화면에서 재생바를 끌면 가운데·배지가 먼저 숨었다(끄는 동안 이 타이머가 안 늘어남). 스킨이 없으면 종전 타이머.
+            const fsSynced = () => wrap.classList.contains('fsvs-on');
+            const showUI = () => {
+                clearTimeout(hideTimer);
+                if (fsSynced()) { hideTimer = null; if (!wrap.classList.contains('fsvs-idle')) wrap.classList.remove('fs-idle'); return; }
+                wrap.classList.remove('fs-idle'); hideTimer = setTimeout(hideUI, 2500);
+            };
+            wrap.addEventListener('fsvs-idlechange', (ev) => {
+                if (!fsSynced() || !ev.detail) return;
+                if (ev.detail.idle) { if (isFsNow()) wrap.classList.add('fs-idle'); }
+                else wrap.classList.remove('fs-idle');
+            });
             wrap.addEventListener('mousemove', () => {
                 if (isFsNow()) showUI();
             });
@@ -3933,7 +3975,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 if (isFull) {
                     player.style.maxHeight = '100vh';
                     player.style.height = '100vh';
-                    hideTimer = setTimeout(hideUI, 2500);
+                    if (!fsSynced()) hideTimer = setTimeout(hideUI, 2500);   // ★ (2026-10-21 밤) 스킨이 켜져 있으면 스킨 상태를 따름(위)
                 } else {
                     player.style.maxHeight = '';
                     player.style.height = '';

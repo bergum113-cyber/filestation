@@ -16981,3 +16981,11 @@ body.video-pseudo-fs {
    (app.js showConfirmModal), 틀 전체 테두리는 쓸모가 없어 끈다. 안쪽 버튼(Tab 으로 이동)의 포커스 표시는 그대로. */
 #modal-confirm:focus,
 #modal-confirm:focus-visible { outline: none; }
+
+/* ★ (2026-10-21 밤) 몰입 모드(휴대폰 가로·좁은 창) — 마우스가 헤더·푸터 위에 있는 동안은 그 줄을 유지(동영상 재생 중 헤더·푸터가 플레이어 조작부와 함께 숨게 바뀌어,
+   좁은 PC 창에서 닫기·다운로드를 누르려 할 때 손 밑에서 숨지 않게 — app.js _setupPreviewImmersive). 마우스 기기만(터치는 탭 뒤 :hover 가 남아 계속 떠 있을 수 있어 제외).
+   보이는 상태에서 마우스를 올린 동안에만 해당(숨은 상태는 누를 수 없어 :hover 도 생기지 않음 — 창 안에서 움직이면 먼저 함께 보임). */
+@media (orientation: landscape) and (max-width: 1024px) and (hover: hover) and (pointer: fine) {
+    .modal-preview.preview-immersive .modal-header:hover { opacity: 1; pointer-events: auto; }
+    .modal-preview.preview-immersive .modal-footer.preview-footer:hover { display: flex !important; }
+}

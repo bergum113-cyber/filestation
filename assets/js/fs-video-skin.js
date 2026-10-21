@@ -1310,13 +1310,38 @@
             document.addEventListener('pointerdown', () => { window.__fsKbNav = false; }, true);
         }
         const kbFocusInside = () => { try { const ae = document.activeElement; return !!(window.__fsKbNav && ae && ae !== document.body && wrap.contains(ae) && ae.matches && ae.matches(':focus-visible')); } catch (x) { return false; } };
-        const wake = () => {
-            wrap.classList.remove('fsvs-idle');
-            clearTimeout(idleTimer);
-            idleTimer = setTimeout(() => { if (!video.paused && menu.hidden && !dragging && !kbFocusInside()) wrap.classList.add('fsvs-idle'); }, 2500);
+        // ★ (2026-10-21 밤) 숨김 상태를 한곳에서 바꾸고 바뀔 때마다 틀에 'fsvs-idlechange'(detail.idle) 를 알린다 — 휴대폰 가운데 버튼·배지·목록(show-controls)과
+        //   전체화면 숨김(fs-idle, app.js·share.php)이 자기 타이머 대신 이 상태를 그대로 따라 모두 같은 순간 나타나고 숨게(펜닐 요청: 연동 숨김 타이밍을 자연스럽게).
+        //   [종전 실측] 타이머가 셋(조작 줄 2.5초·휴대폰 가운데 3초·전체화면 2.5초 — 다시 세는 계기도 제각각)이라 휴대폰 탭 뒤 조작 줄 2.6초·가운데 3.1초로 따로 숨고,
+        //   보이는 중 다시 탭하면 가운데만 숨고 조작 줄은 2.6초 남았으며, 전체화면에서 재생바를 끌면 가운데·배지가 먼저 숨었다.
+        //   'fsvs-hidenow'(detail.evt = 그 탭의 이벤트) — 휴대폰에서 보이는 중 다시 탭(숨기기)하면 조작 줄도 바로 숨김. 같은 탭의 touchstart 로 다시 보이지 않게
+        //   그 이벤트만 무시(시간으로 막으면 빠른 두 번 탭에서 꼬임).
+        let hideEvt = null;
+        const canIdle = () => !video.paused && menu.hidden && !dragging && !kbFocusInside();
+        const setIdle = (v) => {
+            v = !!v;
+            if (wrap.classList.contains('fsvs-idle') === v) return;
+            wrap.classList.toggle('fsvs-idle', v);
+            try { wrap.dispatchEvent(new CustomEvent('fsvs-idlechange', { detail: { idle: v } })); } catch (x) {}
         };
+        const wake = () => {
+            setIdle(false);
+            clearTimeout(idleTimer);
+            idleTimer = setTimeout(() => { if (canIdle()) setIdle(true); }, 2500);
+        };
+        const wakeEv = (e) => { if (e && e === hideEvt) return; wake(); };
+        on(wrap, 'fsvs-hidenow', (e) => {
+            try {
+                hideEvt = (e && e.detail && e.detail.evt) || null;
+                if (!canIdle()) return;
+                clearTimeout(idleTimer);
+                setIdle(true);
+            } catch (x) {}
+        });
+        // 'fsvs-wakenow' — 플레이어 틀 밖(휴대폰 가로 몰입 모드의 영상 양옆 여백 등)을 탭했을 때 바깥 처리(app.js 몰입 모드)가 '보이기'를 요청
+        on(wrap, 'fsvs-wakenow', () => wake());
         on(wrap, 'pointermove', wake, { passive: true });
-        on(wrap, 'touchstart', wake, { passive: true });
+        on(wrap, 'touchstart', wakeEv, { passive: true });
         on(wrap, 'keydown', wake);
         // ★ (2026-10-21) 마우스를 움직이지 않고 누르기만 해도 다시 보임 — PC 에서 숨을 때 가운데 버튼·배지 등도 함께 숨고 누르지 못하게 되면서(fs-video-skin.css
         //   같은 날짜 규칙, 전체화면 fs-idle 과 같은 방식) 제자리 클릭에 아무 반응이 없었다(실측). 첫 클릭엔 조작부가 보이고, 보이는 버튼을 누르면 동작.
@@ -1331,11 +1356,19 @@
             try {
                 if (e.pointerType !== 'mouse' || e.buttons) return;
                 if (video.paused || !menu.hidden || dragging) return;
+                // ★ (2026-10-21 밤) 휴대폰 가로·좁은 창의 몰입 모드(탐색기 .preview-immersive)는 미리보기 창 전체가 플레이어 화면이고 위·아래 헤더·푸터가 조작부와 함께
+                //   숨고 보여서, 틀 밖(헤더의 닫기·다운로드 등)으로 옮기는 순간 바로 숨기면 그 버튼에 닿을 수 없다(재검토 실측) — 여기선 바로 숨기지 않고 2.5초 타이머에 맡김
+                //   (창 안 움직임은 app.js 몰입 모드가 다시 보이게 함).
+                if (wrap.closest('.preview-immersive')) return;
                 if (kbFocusInside()) return;
                 clearTimeout(idleTimer);
-                wrap.classList.add('fsvs-idle');
+                setIdle(true);
             } catch (x) {}
         }, { passive: true });
+        // ★ (2026-10-21 밤) 재생바를 놓을 때(·취소) 2.5초를 새로 센다 — 손가락·마우스를 움직이지 않고 2.5초 넘게 누르고 있다 놓으면 그 사이 숨김 검사가
+        //   '끄는 중'으로 건너뛰어진 뒤 다시 예약되지 않아 조작 줄이 계속 보였다(재검토). 위 endDrag 보다 뒤에 걸려 끄기 상태가 풀린 뒤 실행.
+        on(prog, 'pointerup', () => wake());
+        on(prog, 'pointercancel', () => wake());
         // ★ (2026-10-09) 포커스가 플레이어 밖(문서 본문·미리보기 창)에 있어도 단축키(스페이스·방향키 등)를 누르면 숨은 조작 줄을 다시 보인다.
         //   종전엔 위 wrap 의 keydown 만 있어 포커스가 플레이어 안 버튼에 있을 때만 떴다(탐색기는 미리보기 창으로 포커스가 옮겨져 두 번째 키부터 안 뜸,
         //   공유는 버튼 포커스를 빼는 테두리 수정 뒤 같은 상태). 플레이어가 화면에 보일 때만, 입력칸 입력·조합 키(Ctrl/⌘+)·수정 키 단독은 제외.
@@ -1371,7 +1404,7 @@
         //   그 순간 곧바로 다시 그려 재생 버튼·가운데 버튼(syncCenter)을 실제 상태에 맞춘다.
         ['play', 'pause', 'ended', 'timeupdate', 'durationchange', 'loadedmetadata', 'progress', 'volumechange', 'ratechange', 'seeked', 'emptied', 'loadstart'].forEach((ev) => on(video, ev, render));
         on(video, 'play', wake);
-        on(video, 'pause', () => wrap.classList.remove('fsvs-idle'));
+        on(video, 'pause', () => setIdle(false));   // ★ (2026-10-21 밤) setIdle — 따라가는 쪽(전체화면 숨김 등)에도 알림
 
         // ── 감시: 스트리밍 전환·요소 교체·모달 닫힘이면 물러난다 ─────────────────
         const watch = setInterval(() => {
