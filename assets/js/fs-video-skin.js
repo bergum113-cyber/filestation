@@ -1300,14 +1300,42 @@
 
         // ── 자동 숨김 (재생 중 2.5초간 움직임이 없으면) ─────────────────────────
         let idleTimer = null;
+        // ★ (2026-10-21) 키보드(Tab)로 조작부 안 버튼을 고른 동안(:focus-visible — 마우스로 누른 버튼은 해당 없음)은 숨기지 않는다(펜닐 승인).
+        //   종전엔 2.5초 뒤 고른 버튼까지 숨어 포커스 위치가 안 보였다(실측 — 같은 날 PC 숨김 확대로 가운데·±5초 버튼까지). 유튜브와 같게.
+        //   '키보드로 고름'은 Tab 으로 포커스를 옮긴 경우만(window.__fsKbNav — 마우스를 누르면 해제). :focus-visible 만으로 보면 마우스로 누른 버튼(전체화면 등)에서
+        //   →·스페이스 같은 단축키를 눌러도 크롬이 그 버튼을 :focus-visible 로 바꿔 계속 안 숨었다(실측). 탐색기·공유 전체화면 숨김(app.js·share.php)도 같은 값을 읽음.
+        if (!window.__fsKbNavBound) {
+            window.__fsKbNavBound = true;
+            document.addEventListener('keydown', (e) => { if (e.key === 'Tab') window.__fsKbNav = true; }, true);
+            document.addEventListener('pointerdown', () => { window.__fsKbNav = false; }, true);
+        }
+        const kbFocusInside = () => { try { const ae = document.activeElement; return !!(window.__fsKbNav && ae && ae !== document.body && wrap.contains(ae) && ae.matches && ae.matches(':focus-visible')); } catch (x) { return false; } };
         const wake = () => {
             wrap.classList.remove('fsvs-idle');
             clearTimeout(idleTimer);
-            idleTimer = setTimeout(() => { if (!video.paused && menu.hidden && !dragging) wrap.classList.add('fsvs-idle'); }, 2500);
+            idleTimer = setTimeout(() => { if (!video.paused && menu.hidden && !dragging && !kbFocusInside()) wrap.classList.add('fsvs-idle'); }, 2500);
         };
         on(wrap, 'pointermove', wake, { passive: true });
         on(wrap, 'touchstart', wake, { passive: true });
         on(wrap, 'keydown', wake);
+        // ★ (2026-10-21) 마우스를 움직이지 않고 누르기만 해도 다시 보임 — PC 에서 숨을 때 가운데 버튼·배지 등도 함께 숨고 누르지 못하게 되면서(fs-video-skin.css
+        //   같은 날짜 규칙, 전체화면 fs-idle 과 같은 방식) 제자리 클릭에 아무 반응이 없었다(실측). 첫 클릭엔 조작부가 보이고, 보이는 버튼을 누르면 동작.
+        on(wrap, 'pointerdown', wake, { passive: true });
+        // ★ (2026-10-21) 포커스가 조작부 안으로 들어오거나(Tab) 밖으로 나가면 다시 보이고 2.5초를 새로 센다 — 나간 뒤엔 위 조건대로 숨음.
+        on(wrap, 'focusin', wake);
+        on(wrap, 'focusout', wake);
+        // ★ (2026-10-21) 마우스가 플레이어 밖으로 나가면 2.5초를 기다리지 않고 바로 숨김(유튜브처럼, 펜닐 승인). 숨김 조건은 위 타이머와 같고
+        //   (재생 중·⚙ 메뉴 닫힘·재생바 끄는 중 아님), 마우스만(터치는 손을 뗄 때도 pointerleave 가 와서 제외) · 버튼을 누른 채 나가는 중(음량 막대 끌기 등)이나
+        //   키보드로 조작 줄 안 버튼에 포커스가 있을 때(:focus-visible)는 종전처럼 타이머에 맡김. 다시 들어오면 위 pointermove 로 바로 보임.
+        on(wrap, 'pointerleave', (e) => {
+            try {
+                if (e.pointerType !== 'mouse' || e.buttons) return;
+                if (video.paused || !menu.hidden || dragging) return;
+                if (kbFocusInside()) return;
+                clearTimeout(idleTimer);
+                wrap.classList.add('fsvs-idle');
+            } catch (x) {}
+        }, { passive: true });
         // ★ (2026-10-09) 포커스가 플레이어 밖(문서 본문·미리보기 창)에 있어도 단축키(스페이스·방향키 등)를 누르면 숨은 조작 줄을 다시 보인다.
         //   종전엔 위 wrap 의 keydown 만 있어 포커스가 플레이어 안 버튼에 있을 때만 떴다(탐색기는 미리보기 창으로 포커스가 옮겨져 두 번째 키부터 안 뜸,
         //   공유는 버튼 포커스를 빼는 테두리 수정 뒤 같은 상태). 플레이어가 화면에 보일 때만, 입력칸 입력·조합 키(Ctrl/⌘+)·수정 키 단독은 제외.

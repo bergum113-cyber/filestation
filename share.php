@@ -3848,28 +3848,34 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     w.addEventListener('click', guard, true);
                 })(wrap);
                 let _shareControlsTimer = null;
+                const _shareShowLater = () => {
+                    if (_shareControlsTimer) clearTimeout(_shareControlsTimer);
+                    _shareControlsTimer = setTimeout(() => {
+                        wrap.classList.remove('show-controls');
+                        _shareControlsTimer = null;
+                    }, 3000);
+                };
+                // ★ (2026-10-21) 탐색기(app.js App._bindShowControlsTouch)와 같게 — 영상·영상 틀의 빈 곳(검은 여백)을 탭하면 보이기/숨기기, 조작부(가운데·±5초 버튼,
+                //   화질 선택, 자막 조절, 조작 줄·메뉴 등)를 누르면 보이는 중이면 그대로 두고 3초를 다시 센다(펜닐 승인).
+                //   [종전] 틀 어디를 탭해도 보이기/숨기기라, 가운데 버튼이 보이는 중에 ⚙·조작 줄을 탭하면 가운데 버튼이 꺼졌다(재검토 실측). 2026-10-13 의
+                //   '보이는 중 ±5/재생 버튼은 숨기지 않고 3초만 다시' 는 아래 keep 이 조작부 전체로 넓혀 그대로 포함. 자막 글자는 pointer-events:none 이라 영상으로 감.
+                //   숨겨진 가운데 버튼의 첫 탭은 위 첫 탭 처리가 '보이기만'(그 touchend 는 위에서 막혀 keep 까지 안 옴 — 그 처리의 3초가 맡음).
+                const _shareIsSurface = (t) => !!(t && t.closest) && (t === wrap || !!t.closest('video'));
                 wrap.addEventListener('touchstart', (e) => {
-                    if (wrap.classList.contains('playing')) {
-                        // ★ (2026-10-13) 조작 줄이 보일 때 ±5/재생 버튼을 누르면 숨기지 않고 3초 타이머만 다시 시작 (연속 탭 시 두 번에 한 번만 이동하던 문제)
-                        const ov = (e.target && e.target.closest) ? e.target.closest('.video-play-overlay') : null;
-                        if (ov && wrap.contains(ov) && wrap.classList.contains('show-controls')) {
-                            if (_shareControlsTimer) clearTimeout(_shareControlsTimer);
-                            _shareControlsTimer = setTimeout(() => {
-                                wrap.classList.remove('show-controls');
-                                _shareControlsTimer = null;
-                            }, 3000);
-                            return;
-                        }
+                    if (wrap.classList.contains('playing') && _shareIsSurface(e.target)) {
                         wrap.classList.toggle('show-controls');
-                        if (_shareControlsTimer) clearTimeout(_shareControlsTimer);
-                        if (wrap.classList.contains('show-controls')) {
-                            _shareControlsTimer = setTimeout(() => {
-                                wrap.classList.remove('show-controls');
-                                _shareControlsTimer = null;
-                            }, 3000);
-                        }
+                        if (wrap.classList.contains('show-controls')) _shareShowLater();
+                        else if (_shareControlsTimer) { clearTimeout(_shareControlsTimer); _shareControlsTimer = null; }
                     }
                 }, { passive: true });
+                // 캡처 단계 — ±5초 버튼 등은 touchend 를 stopPropagation 하므로(탐색기와 같은 이유)
+                const _shareKeep = (e) => {
+                    if (!wrap.classList.contains('playing') || !wrap.classList.contains('show-controls')) return;
+                    if (_shareIsSurface(e.target)) return;
+                    _shareShowLater();
+                };
+                wrap.addEventListener('touchend', _shareKeep, { capture: true, passive: true });
+                wrap.addEventListener('touchcancel', _shareKeep, { capture: true, passive: true });
             }
             
             // 더블클릭으로 전체화면 (wrap 우선 - 오버레이 유지, iOS 폴백: 네이티브)
@@ -3893,16 +3899,35 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 }
             });
             // 전체화면 시 마우스/터치 비활동 → 배지/오디오 숨김
+            // ★ (2026-10-21) 키보드로 조작해도 다시 보이고, 멈춤·키보드(Tab)로 버튼을 고른 동안(window.__fsKbNav + :focus-visible — fs-video-skin.js 설명)은 숨기지 않음 — 탐색기(app.js 전체화면 처리)와 같은 수정
+            //   (실측: 전체화면에서 →·m·스페이스를 누르면 조작 줄만 나오고 가운데 버튼·배지는 계속 숨음, 스페이스로 멈춰도 가운데 재생 버튼이 안 보임).
+            //   멈추면 바로 보이고 다시 재생하면 2.5초 뒤 숨음, 제자리에서 누르기만 해도(pointerdown) 보임. 전체화면이 아닐 땐 종전처럼 아무 일도 안 함.
             let hideTimer = null;
-            const hideUI = () => { wrap.classList.add('fs-idle'); };
+            const isFsNow = () => !!(document.fullscreenElement || document.webkitFullscreenElement);
+            const hideUI = () => {
+                const v = wrap.querySelector('video');
+                if (v && (v.paused || v.ended)) return;
+                const ae = document.activeElement;
+                if (window.__fsKbNav && ae && ae !== document.body && wrap.contains(ae) && ae.matches && ae.matches(':focus-visible')) return;
+                wrap.classList.add('fs-idle');
+            };
             const showUI = () => { wrap.classList.remove('fs-idle'); clearTimeout(hideTimer); hideTimer = setTimeout(hideUI, 2500); };
             wrap.addEventListener('mousemove', () => {
-                if (document.fullscreenElement || document.webkitFullscreenElement) showUI();
+                if (isFsNow()) showUI();
             });
             // 모바일: 전체화면에서 터치 시 UI 표시
             wrap.addEventListener('touchstart', () => {
-                if (document.fullscreenElement || document.webkitFullscreenElement) showUI();
+                if (isFsNow()) showUI();
             }, { passive: true });
+            wrap.addEventListener('pointerdown', () => { if (isFsNow()) showUI(); }, { passive: true });
+            wrap.addEventListener('focusin', () => { if (isFsNow()) showUI(); });
+            wrap.addEventListener('focusout', () => { if (isFsNow()) showUI(); });
+            wrap.addEventListener('pause', () => { if (isFsNow()) { clearTimeout(hideTimer); wrap.classList.remove('fs-idle'); } }, true);
+            wrap.addEventListener('play', () => { if (isFsNow()) showUI(); }, true);
+            document.addEventListener('keydown', (e) => {
+                if (!isFsNow() || e.ctrlKey || e.metaKey || e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') return;
+                showUI();
+            }, true);
             document.addEventListener('fullscreenchange', () => {
                 const isFull = !!(document.fullscreenElement || document.webkitFullscreenElement);
                 if (isFull) {

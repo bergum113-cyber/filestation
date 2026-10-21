@@ -649,7 +649,7 @@ body.fsvs-active .fsvs-on .video-seek-overlay.show[data-chev="2"]::before { anim
 /* ④ 시간 글자와 오른쪽 버튼 사이 최소 12px — 버튼이 좁아져 공유 휴대폰 390px 에서 시간이 위로 안 올라가고 반복 아이콘에 5px 로 붙었다(실측).
    빈칸이 12px 보다 모자라면 줄 맞추기(fitRow)가 종전처럼 촘촘하게 → 시간 위로 → 접기 순으로 처리. 볼륨 막대 띄움 기준도 +12(fs-video-skin.js VOL_NEED). */
 .fsvs-root .fsvs-row .fsvs-spacer { min-width: 12px; }
-/* ⑤ 이전·다음·음량의 마우스 올림 원 — 버튼이 36px 로 좁아져 PC 에서 26×30 세로 타원이 됐다(실측) → 좌우 안쪽 4 → 2px 로 종전과 같은 32×32 원.
+/* ⑤ 이전·다음·음량의 마우스 올림 원 — 버튼이 36px 로 좁아져 PC 에서 26×30 세로 타원이 됐다(실측) → 좌우 안쪽 4 → 2px 로 종전과 같은 30×30 원.
    PC 폭(601px 이상)·보통 줄만. 600px 이하·촘촘 줄은 원래 모양 그대로(손대지 않음). */
 @media (min-width: 601px) {
     .fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-prev::before,
@@ -687,3 +687,43 @@ body.fsvs-active .fsvs-on .video-seek-overlay.show[data-chev="2"]::before { anim
 }
 .fsvs-root .fsvs-row .fsvs-set.fsvs-dot-ab::after { background: var(--fsvs-ab); }
 .fsvs-root .fsvs-row .fsvs-set.fsvs-dot-loop::after { background: #FFFFFF; }
+
+/* ★ (2026-10-17) 왼쪽 묶음(이전·재생·다음·음량·시간) 간격만 줄임 — 펜닐: 아이콘 크기는 그대로, 오른쪽(CC·⚙·PIP·전체화면) 간격은 괜찮음.
+   실측(그림 사이 빈칸, PC): 왼쪽 30·26·25·24px ↔ 오른쪽 19·21·22px. 버튼 칸 폭만 줄여 오른쪽과 비슷하게.
+   ① 이전·다음·음량 36 → 30px, 재생 40 → 34px(높이 40 그대로) ② 시간 앞 여백 PC 10·600px 이하 4 → 7px(촘촘 줄 2px 는 그대로).
+   ③ 마우스 올림 원은 칸이 좁아져도 종전 크기 30×30 원 그대로(버튼 투명 테두리 1px 안쪽 기준 — 이전·다음·음량은 좌우 안쪽 −1px, 재생은 1px). 그림(svg) 크기·오른쪽 규칙·촘촘 줄(fsvs-tight)은 손대지 않음.
+   줄 맞추기(fitRow)·음량 띄움 판단은 실제 폭을 재므로 그대로 따라옴. */
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-prev,
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-next,
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-vol { min-width: 30px; width: 30px; padding: 0; }
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-play { min-width: 34px; width: 34px; padding: 0; }
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-prev::before,
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-next::before,
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-vol::before { top: 4px; bottom: 4px; left: -1px; right: -1px; }
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-play::before { top: 4px; bottom: 4px; left: 1px; right: 1px; }
+.fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-time { margin-left: 7px; }   /* PC 10·휴대폰 4 → 7px 공통(음량 그림과 시간 글자 사이 PC 18·휴대폰 16px — 오른쪽 간격과 비슷하게) */
+/* ④ (2026-10-17 밤, 재검토 후 펜닐 승인) 터치 기기 누르는 영역 — 위에서 이전·다음·음량 칸이 36 → 30px(재생 40 → 34px)로 좁아져
+   권장 터치 크기(44px)보다 더 작아짐. 보이는 간격·아이콘·마우스 올림 원은 그대로 두고, 투명한 ::after 를 버튼 밖으로 좌우 1px 씩 넓혀
+   버튼 사이 빈칸(줄 gap 2px — 지금은 눌러도 아무 반응 없음)까지 누를 수 있게 → 칸 30 → 32px·재생 34 → 36px. 옆 버튼 영역과 겹치지 않음.
+   좌우 −2px 인 까닭: 버튼에 투명 테두리 1px 이 있어 절대 위치 기준(테두리 안쪽)이 버튼 바깥보다 1px 안 — −1px 이면 테두리 끝까지만 덮어 넓어지지 않았다(실측).
+   터치(굵은 포인터)·보통 줄만 — 촘촘 줄(gap 0)은 메울 빈칸이 없어 제외, PC 는 그대로. 이 네 버튼은 ::after 를 따로 쓰지 않음(⚙ 점만 ::after). */
+@media (pointer: coarse) {
+    .fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-prev::after,
+    .fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-play::after,
+    .fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-next::after,
+    .fsvs-root .fsvs-row:not(.fsvs-tight) .fsvs-btn.fsvs-vol::after { content: ''; position: absolute; top: 0; bottom: 0; left: -2px; right: -2px; }
+}
+
+/* ★ (2026-10-21) PC(마우스) — 재생 중 마우스를 멈추면 조작 줄과 함께 가운데 버튼·±5초·배지·재생 시간 표시·목록 버튼도 숨김(유튜브처럼, 펜닐 요청).
+   [종전 실측] 마우스를 영상 위에 둔 채 가만히 있으면 2.5초 뒤 조작 줄만 숨고(fsvs-idle) 위 다섯은 마우스 올림(:hover) 규칙으로 계속 보였다
+   — 공유는 커서까지 숨어(fsvs-idle cursor:none) 버튼만 떠 있는 상태. 탐색기·공유 × 일반·HLS·MSE 모두 같았고, 전체화면은 원래 다 숨음(fs-idle).
+   [처리] 조작 줄이 숨는 표시(fsvs-idle — 재생 중·⚙ 메뉴 닫힘·재생바 끄는 중 아님일 때만 붙고, 마우스 움직임·키 입력·멈춤이면 바로 떨어짐)에 맞춰
+   함께 숨기고 누르지 못하게(전체화면 fs-idle 규칙과 같은 방식·같은 0.3초 전환). 숨은 버튼이 마우스를 받지 않아 커서도 함께 숨는다.
+   마우스 기기만 — 휴대폰·태블릿은 탭 3초 규칙(show-controls)이 따로 있어 그대로. 목록 패널(열린 경우)은 플레이어 밖이라 보는 중 사라지지 않게 제외. */
+@media not all and (pointer: coarse) {
+    body.fsvs-active .fsvs-on.playing.fsvs-idle .video-play-overlay,
+    body.fsvs-active .fsvs-on.playing.fsvs-idle .video-stream-badge,
+    body.fsvs-active .fsvs-on.playing.fsvs-idle .stream-badge,
+    body.fsvs-active .fsvs-on.playing.fsvs-idle .transcode-duration,
+    body.fsvs-active .fsvs-on.playing.fsvs-idle .fs-vp-toggle { opacity: 0 !important; pointer-events: none !important; transition: opacity 0.3s; }
+}

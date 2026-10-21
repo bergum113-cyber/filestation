@@ -38563,24 +38563,7 @@ const App = {
                 // 모바일: 터치 시 컨트롤 표시/숨김 토글 (3초 후 자동 숨김)
                 if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
                     App._bindFirstTapGuard(wrap);   // ★ (2026-10-01) 숨겨진 가운데 버튼은 첫 탭에 보이기만(App._bindFirstTapGuard 설명)
-                    let _mobileControlsTimer = null;
-                    wrap.addEventListener('touchstart', (e) => {
-                        // 전체화면 버튼이나 오디오 셀렉트 터치는 무시
-                        if (e.target.closest('.video-fullscreen-btn') || e.target.closest('.video-audio-select')) return;
-                        // video controls 영역 터치
-                        if (e.target.closest('video')) {
-                            if (wrap.classList.contains('playing')) {
-                                wrap.classList.toggle('show-controls');
-                                if (_mobileControlsTimer) clearTimeout(_mobileControlsTimer);
-                                if (wrap.classList.contains('show-controls')) {
-                                    _mobileControlsTimer = setTimeout(() => {
-                                        wrap.classList.remove('show-controls');
-                                        _mobileControlsTimer = null;
-                                    }, 3000);
-                                }
-                            }
-                        }
-                    }, { passive: true });
+                    App._bindShowControlsTouch(wrap);   // ★ (2026-10-21) 영상 탭 보이기/숨기기 + 3초 숨김 — 틀 하나에 한 번만(App._bindShowControlsTouch 설명)
                 }
             }
         }
@@ -38793,29 +38776,14 @@ const App = {
                     if (document.fullscreenElement) {
                         fsBtn.innerHTML = '⛶';
                         
-                        // 비활동 시 모든 오버레이 + 커서 숨김 (2.5초)
-                        wrap.classList.remove('fs-idle');
-                        let _fsHideTimer = setTimeout(() => wrap.classList.add('fs-idle'), 2500);
-                        const _fsShowUI = () => { 
-                            wrap.classList.remove('fs-idle'); 
-                            clearTimeout(_fsHideTimer); 
-                            _fsHideTimer = setTimeout(() => wrap.classList.add('fs-idle'), 2500); 
-                        };
-                        wrap.addEventListener('mousemove', _fsShowUI);
-                        wrap.addEventListener('click', _fsShowUI);
-                        wrap.addEventListener('touchstart', _fsShowUI, { passive: true });
-                        wrap._fsCleanup = () => { 
-                            wrap.removeEventListener('mousemove', _fsShowUI); 
-                            wrap.removeEventListener('click', _fsShowUI);
-                            wrap.removeEventListener('touchstart', _fsShowUI); 
-                            clearTimeout(_fsHideTimer); 
-                        };
+                        // 비활동 시 모든 오버레이 + 커서 숨김 (2.5초) — ★ (2026-10-21) 공용 App._fsIdleStart(설명은 그쪽)
+                        App._fsIdleStart(wrap);
                     } else {
                         fsBtn.innerHTML = '⛶';
                         wrap.classList.remove('fs-idle');
                         wrap.classList.remove('pseudo-fullscreen');
                         document.body.classList.remove('video-pseudo-fs');
-                        if (wrap._fsCleanup) { wrap._fsCleanup(); wrap._fsCleanup = null; }
+                        App._fsIdleStop();   // ★ (2026-10-21) 이 틀이든 다음 영상 등으로 바뀐 옛 틀이든 붙어 있는 전체화면 처리를 정리
                     }
                 };
                 document.addEventListener('fullscreenchange', App._videoFsChangeHandler);
@@ -41376,21 +41344,10 @@ const App = {
         vid.addEventListener('pause', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); this._positionTranscodeDuration(wrap, vid); });
         vid.addEventListener('ended', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); });
         
-        // 모바일 터치 컨트롤
+        // 모바일 터치 컨트롤 — ★ (2026-10-21) 틀 하나에 한 번만(App._bindShowControlsTouch 설명). 트랜스코딩 전환 때 이 함수가 같은 틀에 두세 번 불려
+        //   탭 처리가 겹쳐 붙던 것(영상 한 번 탭에 보이기/숨기기가 3번 바뀜 — 실측)을 막는다.
         if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
-            let _mobileTimer = null;
-            wrap.addEventListener('touchstart', (e) => {
-                if (e.target.closest('.video-fullscreen-btn') || e.target.closest('.video-audio-select')) return;
-                if (e.target.closest('video')) {
-                    if (wrap.classList.contains('playing')) {
-                        wrap.classList.toggle('show-controls');
-                        if (_mobileTimer) clearTimeout(_mobileTimer);
-                        if (wrap.classList.contains('show-controls')) {
-                            _mobileTimer = setTimeout(() => { wrap.classList.remove('show-controls'); _mobileTimer = null; }, 3000);
-                        }
-                    }
-                }
-            }, { passive: true });
+            App._bindShowControlsTouch(wrap);
         }
         
         // 전체화면 버튼 (기존 것 제거 후 재생성)
@@ -41480,18 +41437,15 @@ const App = {
         App._videoFsChangeHandler = () => {
             if (document.fullscreenElement) {
                 fsBtn.innerHTML = '⛶';
-                wrap.classList.remove('fs-idle');
-                let _t = setTimeout(() => wrap.classList.add('fs-idle'), 2500);
-                const _show = () => { wrap.classList.remove('fs-idle'); clearTimeout(_t); _t = setTimeout(() => wrap.classList.add('fs-idle'), 2500); };
-                wrap.addEventListener('mousemove', _show);
-                wrap.addEventListener('click', _show);
-                wrap.addEventListener('touchstart', _show, { passive: true });
-                wrap._fsCleanup = () => { wrap.removeEventListener('mousemove', _show); wrap.removeEventListener('click', _show); wrap.removeEventListener('touchstart', _show); clearTimeout(_t); };
+                // ★ (2026-10-21) 미리보기를 처음 열 때의 전체화면 처리와 같은 공용 App._fsIdleStart — 종전엔 트랜스코딩으로 영상 요소가 바뀐 뒤 이 함수가
+                //   전체화면 처리를 옛 방식(마우스·클릭·터치만, 멈춤 무시)으로 다시 덮어써, 같은 날 고친 '전체화면 키보드·멈춤' 이 탐색기 트랜스코딩에선
+                //   빠져 있었다(재검토 실측: HLS 전체화면에서 →·스페이스를 눌러도 가운데 버튼·배지가 안 나옴).
+                App._fsIdleStart(wrap);
             } else {
                 fsBtn.innerHTML = '⛶';
                 wrap.classList.remove('fs-idle', 'pseudo-fullscreen');
                 document.body.classList.remove('video-pseudo-fs');
-                if (wrap._fsCleanup) { wrap._fsCleanup(); wrap._fsCleanup = null; }
+                App._fsIdleStop();
             }
         };
         document.addEventListener('fullscreenchange', App._videoFsChangeHandler);
@@ -42292,6 +42246,113 @@ const App = {
     //   방법: 닿는 순간 숨겨진 상태였는지 기존 터치 처리보다 먼저(캡처) 기억 → 그 탭의 touchend·click 이 가운데 버튼으로 가면 버튼까지 보내지 않고
     //   컨트롤만 보이게(3초 뒤 숨김). 보이는 상태에서 시작한 탭·멈춤 상태는 그대로. 1초 넘게 지난 click(마우스 등)은 해당 없음.
     //   숨겨진 재생 버튼을 탭해 바로 일시정지하던 원래 동작도 '보이기만'으로 바뀐다(펜닐 승인). 공유 페이지는 share.php 에 같은 처리.
+    // ★ (2026-10-21) 휴대폰 탐색기 — 재생 중 가운데 버튼·배지·목록 버튼(show-controls) 보이기/숨기기를 한곳에서(펜닐 제보: 재생 중 탐색 뒤 자동으로 안 숨겨지고
+    //   화면을 터치해야 숨겨짐). [원인 실측] ① 숨겨진 가운데 버튼을 첫 탭(아래 _bindFirstTapGuard)으로 보이게 한 뒤 3초 안에 재생바 끌기·±5초·⚙ 를 누르면
+    //   첫 탭 처리는 '다른 터치가 있었으니 기존 처리에 맡김'으로 숨기기를 건너뛰는데, 기존 처리는 영상(video)을 터치할 때만 반응해 아무도 숨기지 않았다
+    //   (일반·트랜스코딩 모두, 공유는 틀 어디든 받아서 해당 없음). ② 영상 탭으로 보이게 한 뒤 ±5초를 이어 누르면 첫 탭 3초 뒤 누르는 중에도 사라졌다.
+    //   ③ 트랜스코딩 전환 때 _bindVideoPlayerEvents 가 같은 틀에 두세 번 불려 탭 처리가 겹쳐 붙었다(한 번 탭에 3번 바뀜 — 홀수라 우연히 맞았지만
+    //   두 번 붙으면 탭이 안 먹음). [처리] 영상 탭 보이기/숨기기는 종전 그대로(재생 중일 때만·전체화면 버튼·음성 선택은 제외)이되 틀 하나에 한 번만 붙이고,
+    //   3초 숨김 타이머를 틀 하나에 하나로 모았다. 보이는 동안 영상 밖(가운데·±5초 버튼, 재생바·조작 줄, 배지, 목록)을 누르고 떼면 3초를 다시 센다 —
+    //   마지막 터치 3초 뒤 숨김(공유 2026-10-13 ±5초 연속 탭 처리와 같은 동작). 숨겨진 상태의 첫 탭은 _bindFirstTapGuard 가 그대로 처리(그 터치는 여기까지 안 옴).
+    //   멈춤·끝나면 숨기는 기존 pause·ended 처리, PC(마우스) 동작은 그대로.
+    // ★ (2026-10-21) 탐색기 전체화면 비활동 숨김(fs-idle) — 미리보기를 처음 열 때와 트랜스코딩으로 영상 요소가 바뀐 뒤(_bindVideoPlayerEvents) 두 곳이 함께 쓴다.
+    //   · 마우스 움직임·클릭·제자리 누름·터치·키 입력(Ctrl/⌘ 조합·수정 키 단독 제외)·포커스 들고 남이면 보이고 2.5초 뒤 숨김(펜닐 승인 — 유튜브처럼).
+    //   · 멈춤·끝남·Tab 으로 버튼을 고른 동안(window.__fsKbNav + :focus-visible — fs-video-skin.js 설명)은 숨기지 않고, 멈추면 바로 보이고 다시 재생하면 2.5초 뒤 숨음.
+    //     영상 요소가 바뀌어도 되도록 매번 틀 안 영상을 읽고, 영상 신호(pause·play)는 틀에서 캡처로 받는다.
+    //   · 정리 함수를 App._fsIdleCleanupFn 한 곳에 둬, 전체화면이 어떤 경로로 풀리든(다음 영상으로 틀이 바뀌며 풀리는 경우 포함) 옛 틀까지 정리한다.
+    //     [재검토 실측] 종전엔 틀마다 정리 함수를 둬, 전체화면에서 다음 영상으로 넘어가면 옛 틀의 문서 keydown 처리가 남았다(8 → 9개, 옛 영상 틀을 붙잡음).
+    //     키를 눌렀을 때 틀이 이미 문서에서 떨어져 있으면 스스로 정리.
+    _fsIdleStop() {
+        const f = App._fsIdleCleanupFn;
+        App._fsIdleCleanupFn = null;
+        if (f) { try { f(); } catch (e) {} }
+    },
+    _fsIdleStart(wrap) {
+        App._fsIdleStop();
+        if (!wrap) return;
+        // ★ (2026-10-21) 이 동영상 틀이 전체화면일 때만(틀 자체·틀을 감싼 요소·틀 안 요소). 전체화면 변경 처리(App._videoFsChangeHandler)는 문서 전체에
+        //   걸려 있어, 동영상을 닫은 뒤 이미지 전체화면(_imgFullscreen — modal-body)을 켜도 이미 문서에서 떨어진 옛 동영상 틀에 숨김·키 처리가 걸렸다
+        //   (재검토 실측: 문서 keydown 처리 +1, 키를 누르거나 나오면 정리됐지만 불필요). 관계없는 전체화면이면 아무것도 걸지 않는다.
+        const fe = document.fullscreenElement;
+        if (!wrap.isConnected || (fe && fe !== wrap && !fe.contains(wrap) && !wrap.contains(fe))) return;
+        wrap.classList.remove('fs-idle');
+        const _fsHide = () => {
+            const v = wrap.querySelector('video');
+            if (v && (v.paused || v.ended)) return;
+            const ae = document.activeElement;
+            if (window.__fsKbNav && ae && ae !== document.body && wrap.contains(ae) && ae.matches && ae.matches(':focus-visible')) return;
+            wrap.classList.add('fs-idle');
+        };
+        let _fsHideTimer = setTimeout(_fsHide, 2500);
+        const _fsShowUI = () => {
+            wrap.classList.remove('fs-idle');
+            clearTimeout(_fsHideTimer);
+            _fsHideTimer = setTimeout(_fsHide, 2500);
+        };
+        const _fsKey = (e) => {
+            if (!wrap.isConnected) { App._fsIdleStop(); return; }
+            if (!document.fullscreenElement || e.ctrlKey || e.metaKey || e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') return;
+            _fsShowUI();
+        };
+        const _fsPause = () => { clearTimeout(_fsHideTimer); wrap.classList.remove('fs-idle'); };
+        wrap.addEventListener('mousemove', _fsShowUI);
+        wrap.addEventListener('click', _fsShowUI);
+        wrap.addEventListener('pointerdown', _fsShowUI, { passive: true });
+        wrap.addEventListener('touchstart', _fsShowUI, { passive: true });
+        wrap.addEventListener('focusin', _fsShowUI);
+        wrap.addEventListener('focusout', _fsShowUI);
+        wrap.addEventListener('pause', _fsPause, true);
+        wrap.addEventListener('play', _fsShowUI, true);
+        document.addEventListener('keydown', _fsKey, true);
+        App._fsIdleCleanupFn = () => {
+            wrap.removeEventListener('mousemove', _fsShowUI);
+            wrap.removeEventListener('click', _fsShowUI);
+            wrap.removeEventListener('pointerdown', _fsShowUI, { passive: true });
+            wrap.removeEventListener('touchstart', _fsShowUI, { passive: true });
+            wrap.removeEventListener('focusin', _fsShowUI);
+            wrap.removeEventListener('focusout', _fsShowUI);
+            wrap.removeEventListener('pause', _fsPause, true);
+            wrap.removeEventListener('play', _fsShowUI, true);
+            document.removeEventListener('keydown', _fsKey, true);
+            clearTimeout(_fsHideTimer);
+        };
+    },
+
+    _showControlsLater(wrap) {
+        clearTimeout(wrap._fsShowCtlTimer);
+        wrap._fsShowCtlTimer = setTimeout(() => { wrap._fsShowCtlTimer = null; wrap.classList.remove('show-controls'); }, 3000);
+    },
+    _bindShowControlsTouch(wrap) {
+        if (!wrap || wrap._fsShowCtlBound) return;
+        wrap._fsShowCtlBound = true;
+        // ★ (2026-10-21) '영상 탭'으로 보는 곳 = 영상·영상 상자(.video-sub-wrapper, 자막 조절 버튼 제외)·영상 틀의 빈 곳(검은 여백 — 대상이 틀 자체).
+        //   [재검토 실측] 종전엔 영상(video)만이라 휴대폰 세로 전체화면에서 위아래 검은 여백을 탭하면 조작 줄만 나오고 가운데 버튼·배지는 안 나왔다
+        //   (오늘 이전부터 — 공유는 틀 어디든 받아 해당 없음). 자막 글자는 pointer-events:none 이라 원래 영상으로 감. 가운데·±5초·목록 버튼, 자막 조절,
+        //   알림, 조작 줄·메뉴(.fsvs-root) 등 조작부는 여기 해당하지 않아 종전처럼 아래 keep 이 3초만 다시 셈. 전체화면 버튼·음성 선택은 종전대로 무시.
+        const isSurface = (t) => !!(t && t.closest) && (t === wrap || (!!t.closest('.video-sub-wrapper') && !t.closest('.subtitle-controls')) || (!!t.closest('video') && !t.closest('.subtitle-controls')));
+        wrap.addEventListener('touchstart', (e) => {
+            // 전체화면 버튼이나 오디오 셀렉트 터치는 무시
+            if (e.target.closest('.video-fullscreen-btn') || e.target.closest('.video-audio-select')) return;
+            // video controls 영역 터치
+            if (isSurface(e.target)) {
+                if (wrap.classList.contains('playing')) {
+                    wrap.classList.toggle('show-controls');
+                    if (wrap.classList.contains('show-controls')) App._showControlsLater(wrap);
+                    else { clearTimeout(wrap._fsShowCtlTimer); wrap._fsShowCtlTimer = null; }
+                }
+            }
+        }, { passive: true });
+        const keep = (e) => {
+            if (!wrap.classList.contains('playing') || !wrap.classList.contains('show-controls')) return;
+            if (isSurface(e.target)) return;   // 영상 탭(빈 곳 포함)은 위 touchstart 가 보이기/숨기기
+            App._showControlsLater(wrap);
+        };
+        // 캡처 단계 — ±5초 버튼(_bindVideoSeekButtons)·첫 탭 처리는 touchend 를 stopPropagation 해 버블 단계로는 안 온다(실측: ±5초를 이어 눌러도
+        //   다시 세지 않아 영상 탭 3초 뒤 사라짐). 같은 틀에 붙은 처리끼리는 stopPropagation 으로 막히지 않아 그 처리들도 종전 그대로 실행된다.
+        wrap.addEventListener('touchend', keep, { capture: true, passive: true });
+        wrap.addEventListener('touchcancel', keep, { capture: true, passive: true });   // 화면 밀기(스크롤)로 터치가 취소돼도 3초 다시 셈
+    },
+
     _bindFirstTapGuard(wrap) {
         if (!wrap || wrap._firstTapGuard) return;
         wrap._firstTapGuard = true;
