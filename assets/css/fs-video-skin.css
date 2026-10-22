@@ -529,7 +529,7 @@ body.fsvs-active .fsvs-on .video-play-overlay:hover { transform: translate(-50%,
 body.fsvs-active .fsvs-on .video-play-overlay:active { transform: translate(-50%, -50%) scale(0.95); }   /* 위 :hover 와 같은 강도라 뒤에 둔 이 규칙이 누르는 동안 이긴다 */
 body.fsvs-active .fsvs-on .video-play-overlay svg { filter: none; }
 body.fsvs-active .fsvs-on .video-play-overlay:not(.video-seek-btn) svg { width: 60px; height: 60px; flex: none; }   /* 그림 칸 안 여백이 커서 실제 삼각형·막대는 약 30px */
-body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn svg { width: 40px; height: 40px; flex: none; }
+body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn svg { width: 32px; height: 32px; flex: none; }   /* ★ (2026-10-22) 40 → 32px(약 0.8배) — 펜닐: 세 버튼 크기가 같아 보여 거슬림(PC·휴대폰). 바탕 원을 없앤 뒤 보이는 그림 높이가 ±5초 33·재생 34px 로 거의 같았다(실측) → ±5초 26px 로 재생이 중심, 양옆은 보조(넷플릭스·유튜브 모바일처럼 재생이 가장 크게). 누르는 칸 44px·위치는 그대로, 안의 '5' 는 약 11px */
 /* 조작 줄 — 재생 버튼만: 늘 깔린 원 바탕 없음, 아이콘 그림자 없음, 커지지 않음
    ★ (2026-10-12 저녁) 마우스 올림 원 바탕은 원복 — 이전 곡·다음 곡 버튼과 같은 크기(안쪽 4px)·같은 색으로(펜닐 요청). 종전엔 ::before 를 아예 꺼 올려도 원이 없었다. */
 .fsvs-root .fsvs-row .fsvs-play { background: transparent; transform: none; }
@@ -704,6 +704,11 @@ body.fsvs-active .fsvs-on .video-seek-overlay.show[data-chev="2"]::before { anim
     display: block; position: absolute; z-index: 3; box-sizing: border-box; width: 40px; height: 130px; padding-top: 8px;
     background: rgba(20, 20, 24, 0.82); border-radius: 12px; text-align: center;
     font-size: 12px; line-height: 16px; font-weight: 600; color: #FFFFFF; cursor: default;
+}
+/* ★ (2026-10-22) 팝업 아래 ~ 스피커 사이 보이지 않는 다리 — 팝업을 재생바 위로 올리며 생긴 빈틈(높이는 JS volPlace 가 --fsvs-vbr 로)을 마우스가 지나도
+   팝업(바탕판)에 올라 있는 것으로 쳐서 닫히지 않고 그 아래 재생바에도 걸리지 않게. 그림 없음. */
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-vert + .fsvs-volnum::after {
+    content: ''; position: absolute; left: 0; right: 0; top: 100%; height: var(--fsvs-vbr, 0px);
 }
 
 /* ★ (2026-10-15) ⚙ 메뉴 묶음 구분선 — 위(켬/끔·부가 기능)와 아래(속도·자막·오디오·화질) 사이(fs-video-skin.js buildMenu). */

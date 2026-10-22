@@ -12926,6 +12926,17 @@ body:has(#login-screen.active) .pending-notification {
     color: var(--danger);
 }
 
+/* ★ (2026-10-23) 즐겨찾기·최근 파일 줄 간격 줄임 — 펜닐 요청(마우스 올림 칸·위아래 공간이 너무 넓음, 적당한 간격은 유지).
+   종전 한 줄 55px(줄 안쪽 여백 위아래 5 + 링크 칸 여백 위아래 10(.menu-list a — 스토리지 목록과 같은 규칙) + 글자 20 + 줄 사이 5)를
+   PC 33px(링크 칸 위아래 6 + 글자 20 + 줄 사이 1)로, 손가락으로 누르는 기기는 누르기 쉬운 크기를 지켜 41px(링크 칸 위아래 10).
+   글자 크기·아이콘·말줄임·× 버튼·선택/마우스 올림 바탕은 그대로, 줄 좌우 안쪽 여백만 10 → 4px(링크 칸에 좌우 8px 가 있어 글자 위치는 비슷).
+   스토리지·게시판 목록과 '더 보기'·'기록 삭제' 줄은 그대로. */
+.menu-list .favorite-item, .menu-list .recent-file-item { padding: 0 4px; min-height: 0; margin-bottom: 1px; }
+.menu-list .favorite-item a, .menu-list .recent-file-item a { padding: 6px 8px; }
+@media (pointer: coarse) {
+    .menu-list .favorite-item a, .menu-list .recent-file-item a { padding: 10px 8px; }
+}
+
 /* 사이드바 섹션 토글 */
 .section-toggle {
     cursor: pointer;

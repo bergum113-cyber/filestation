@@ -245,9 +245,26 @@
 
         // ── 재생·음량 ────────────────────────────────────────────────────────
         const togglePlay = () => { if (video.paused || video.ended) { const p = video.play(); if (p && p.catch) p.catch(() => {}); } else video.pause(); };
+        // ★ (2026-10-22) 음량·음소거·재생 속도 기억 — 펜닐 요청(음악 플레이어처럼 껐다 켜도 유지, PC·휴대폰, 탐색기·공유 공통).
+        //   음악 플레이어(fap-volume 등)와 같은 방식 — 계정이 아니라 이 기기·이 브라우저(localStorage 'fs_video_prefs' = { v: 음량 0~1, m: 음소거, r: 속도 }),
+        //   음악과는 따로(음악은 작게·영상은 크게 듣는 경우가 많아). 저장은 사람이 바꿀 때만(이 막대·스피커·⚙ 음소거/속도·↑↓ 키 — 아래) — 'volumechange' 로
+        //   저장하지 않는 이유: 미리보기를 닫거나 넘길 때 앱이 소리를 끊으려고 음량 0·음소거로 만드는데(app.js 정리 처리) 그것까지 저장되면 다음에 소리가 안 남.
+        //   불러오기는 스킨을 붙일 때(트랜스코딩 전환으로 영상 요소가 바뀌면 다시 붙으며 다시 적용). 속도는 defaultPlaybackRate 도 맞춰 화질·음성 변경으로
+        //   영상을 다시 읽어도(load) 유지. 아이폰·아이패드는 브라우저가 음량을 못 바꾸게 해(기기 버튼) 음량은 건너뛰고 음소거·속도만. 저장소를 못 쓰면(시크릿 등) 종전처럼.
+        const PREF_KEY = 'fs_video_prefs';
+        const prefIOS = root.classList.contains('fsvs-ios');
+        const prefRead = () => { try { const o = JSON.parse(localStorage.getItem(PREF_KEY) || 'null'); return (o && typeof o === 'object') ? o : {}; } catch (e) { return {}; } };
+        const prefSave = (patch) => { try { localStorage.setItem(PREF_KEY, JSON.stringify(Object.assign(prefRead(), patch))); } catch (e) {} };
+        const prefSaveVol = () => prefSave(prefIOS ? { m: !!video.muted } : { v: Math.round(Math.max(0, Math.min(1, Number(video.volume) || 0)) * 100) / 100, m: !!video.muted });
+        try {
+            const p0 = prefRead();
+            if (!prefIOS && typeof p0.v === 'number' && isFinite(p0.v) && p0.v >= 0 && p0.v <= 1) video.volume = p0.v;
+            if (typeof p0.m === 'boolean') video.muted = p0.m;
+            if (typeof p0.r === 'number' && isFinite(p0.r) && p0.r >= 0.25 && p0.r <= 4) { video.defaultPlaybackRate = p0.r; video.playbackRate = p0.r; }
+        } catch (e) {}
         on(bPlay, 'click', togglePlay);
-        on(bVol, 'click', () => { video.muted = !video.muted; });
-        on(vol, 'input', () => { video.volume = parseFloat(vol.value); if (video.volume > 0 && video.muted) video.muted = false; });
+        on(bVol, 'click', () => { video.muted = !video.muted; prefSaveVol(); });
+        on(vol, 'input', () => { video.volume = parseFloat(vol.value); if (video.volume > 0 && video.muted) video.muted = false; prefSaveVol(); });
         // ★ (2026-10-22) 얇은 음량 막대(CSS)의 채움 길이 — 크롬·엣지·사파리는 막대 칸이 채운 만큼을 따로 그리지 못해 --fsvs-vp(0~100%)로 넘긴다
         //   (파이어폭스는 ::-moz-range-progress 가 스스로 그림). 끄는 중·키보드로 바꿀 때도 바로 맞게 input 때마다, 그 밖엔 render 에서.
         const volFill = () => { const f = Math.max(0, Math.min(1, parseFloat(vol.value) || 0)); vol.style.setProperty('--fsvs-vp', (f * 100).toFixed(1) + '%'); };
@@ -306,7 +323,17 @@
         function volPlace(h) {
             const op = vol.offsetParent || row, pr = op.getBoundingClientRect(), br = bVol.getBoundingClientRect();
             if (vol.classList.contains('fsvs-vol-vert')) {
-                const x = Math.round(br.left - pr.left + br.width / 2 - 20), y = Math.round(br.top - pr.top - 130 + 4);
+                // ★ (2026-10-22) 팝업을 재생바 위로 올림 — 펜닐: 팝업이 스피커 아이콘에 딱 붙어 보임(실측 빈틈 5px, 첨부한 다른 플레이어들은 팝업 아래끝이
+                //   재생바 선에 닿고 스피커는 그 아래로 떨어져 있음). 아래끝 = 재생바 선(track) 위 2px. 그 아래 ~ 스피커 칸 위 4px(종전 겹침 자리)는
+                //   보이지 않는 다리(volNum::after, 높이 --fsvs-vbr)로 이어 스피커 → 팝업으로 올라갈 때 닫히거나 재생바에 걸리지 않게(종전과 같은 이유).
+                //   재생바 선이 스피커 위에 없으면(숨김 등) 종전 자리.
+                //   낮은 플레이어에서 올린 자리가 위로 넘치면 종전 자리(스피커에 붙임)로 한 번 더 — 종전에 세로로 뜨던 높이는 그대로 세로로(그래도 넘치면 아래 가로 띄움).
+                const tr = track.getBoundingClientRect();
+                const oldBot = Math.round(br.top - pr.top + 4);
+                let bot = (tr.height > 0 && tr.bottom <= br.top + 1) ? Math.round(tr.top - 2 - pr.top) : oldBot;
+                if (bot < oldBot && pr.top + bot - 130 < Math.max(volClipTop(), 0)) bot = oldBot;
+                const x = Math.round(br.left - pr.left + br.width / 2 - 20), y = bot - 130;
+                volNum.style.setProperty('--fsvs-vbr', Math.max(0, oldBot - bot) + 'px');
                 // ★ (2026-10-14 밤) 팝업 위끝이 잘라내는 틀(overflow 가 visible 아닌 상위 — 공유 .player-wrap·탐색기 틀) 위로 넘으면 가로 띄움으로.
                 //   공유는 작은 영상을 원래 크기로 보여 틀이 낮다(320×180 → 틀 180px). 틀 165px 에서 5px·130px 에서 40px 잘렸다(재검토 실측).
                 //   ★ (2026-10-15) 화면 위끝(0)도 경계로 — 페이지를 스크롤해 플레이어 위쪽이 화면 밖이면 팝업 위(숫자·큰 음량 쪽)가 화면 밖으로 나갔다(재검토 실측 −66px).
@@ -974,6 +1001,8 @@
                 backHead(T('playback_speed', '재생 속도'));
                 SPEEDS.forEach((v) => optRow(rateLabel(v), Math.abs(video.playbackRate - v) < 0.001, () => {
                     if (ctx.setSpeed) ctx.setSpeed(v); else video.playbackRate = v;
+                    try { video.defaultPlaybackRate = v; } catch (e) {}   // ★ (2026-10-22) 화질·음성 변경으로 다시 읽어도 유지 + 기억(위 PREF_KEY 설명)
+                    prefSave({ r: v });
                     announce('speed', v);
                     goPage('main');
                 }));
@@ -1054,7 +1083,7 @@
                 const abIco = '<b class="fsvs-mab">A-B</b>';
                 actRow(abIco, T('video_ab', '구간 반복') + ((a && b) ? ' ' + fmt(ab_.a) + ' ~ ' + fmt(ab_.b) : (a ? ' A ' + fmt(ab_.a) : '')), val.replace(/^.*?:\s*/, ''), () => { if (ctx.clickAb) ctx.clickAb(); announce('ab'); }, true);
             }
-            if (folded.includes(bVol)) toggleRow(ICON.vol, T('mute', '음소거'), video.muted || video.volume === 0, () => { video.muted = !video.muted; });
+            if (folded.includes(bVol)) toggleRow(ICON.vol, T('mute', '음소거'), video.muted || video.volume === 0, () => { video.muted = !video.muted; prefSaveVol(); });   // ★ (2026-10-22) 음소거 기억
             if (window.FSEQ && FSEQ.supported) navRow(ICON.eq, T('eq_title', '이퀄라이저'), FSEQ.summary('video'), 'eq');   // ★ (2026-10-11) 아이폰 등 지원 안 하면 줄 없음
             if (menu.querySelectorAll('.fsvs-mrow').length > rowsBefore) menu.append(el('div', 'fsvs-msep'));   // 위 묶음이 있을 때만 구분선(아래 묶음은 재생 속도가 늘 있음)
             navRow(ICON.speed, T('playback_speed', '재생 속도'), rateLabel(video.playbackRate).replace(' (1x)', ''), 'speed');
@@ -1434,7 +1463,7 @@
 
         const api = {
             video, wrap,
-            showVolume: showVolOsd,   // ★ (2026-10-05) 음량 표시 — FSVideoSkin.showVolume(wrap)
+            showVolume: () => { showVolOsd(); prefSaveVol(); },   // ★ (2026-10-05) 음량 표시 — FSVideoSkin.showVolume(wrap) · ★ (2026-10-22) 탐색기·공유의 ↑↓ 키가 음량을 바꾼 뒤 부르므로 여기서 기억
             showMessage: showMsgOsd,  // ★ (2026-10-08) 짧은 알림 — FSVideoSkin.showMessage(wrap, 글자, opt)
             menuEscape,               // ★ (2026-10-09) Esc — 설정 창이 열려 있으면 그 창만(FSVideoSkin.menuEscape(wrap))
             destroy() {

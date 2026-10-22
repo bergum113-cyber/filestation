@@ -11556,6 +11556,10 @@ const App = {
     
     // 파일 로드
     async loadFiles(addHistory = false) {
+        // ★ (2026-10-23) 이동 회차 — 아래 '사이드바에서 파일 클릭 시 자동 선택' 예약(0.05·0.4·0.8초 뒤)이 그사이 다른 곳으로 이동했으면 아무것도 안 하게.
+        //   펜닐 제보: 최근 파일을 빠르게 연달아 누르면 앞 파일의 0.8초 확인이 이미 바뀐 폴더에서 돌아 '파일을 찾을 수 없습니다: (앞 파일)' 이 떴다(시험 재현 —
+        //   0.15~0.7초 간격에서 1~2개, 1.2초 간격은 0개). 이름이 같은 다른 파일을 잘못 고를 수도 있었다. 폴더를 불러올 때마다(새로 고침 포함) 하나씩 올린다.
+        this._loadSeq = (this._loadSeq || 0) + 1;
         // [PerfDebug] 성능 측정 (평상시 비활성, 느려질 때 콘솔에서 활성화:  window._perfDebug = true)
         const _perfStart = window._perfDebug ? performance.now() : 0;
         const _perfLog = window._perfDebug
@@ -11729,6 +11733,8 @@ const App = {
         if (this._pendingSelectFile) {
             const fileName = this._pendingSelectFile;
             this._pendingSelectFile = null;
+            const _selSeq = this._loadSeq;   // ★ (2026-10-23) 이 이동의 회차 — 예약이 돌 때 다르면(그사이 다른 이동) 건너뜀(맨 위 _loadSeq 설명)
+            const _selLive = () => this._loadSeq === _selSeq;
             const doSelect = () => {
                 const fileEl = document.querySelector(`.file-item[data-name="${CSS.escape(fileName)}"]`);
                 if (fileEl) {
@@ -11740,11 +11746,12 @@ const App = {
             };
             const doScroll = (el, behavior) => { if (el) el.scrollIntoView({ behavior, block: 'center' }); };
             // 즉시 선택 + 스크롤
-            setTimeout(() => { const el = doSelect(); doScroll(el, 'auto'); }, 50);
+            setTimeout(() => { if (!_selLive()) return; const el = doSelect(); doScroll(el, 'auto'); }, 50);
             // 레이아웃 안정 후 재스크롤
-            setTimeout(() => { const el = document.querySelector(`.file-item[data-name="${CSS.escape(fileName)}"]`); doScroll(el, 'auto'); }, 400);
+            setTimeout(() => { if (!_selLive()) return; const el = document.querySelector(`.file-item[data-name="${CSS.escape(fileName)}"]`); doScroll(el, 'auto'); }, 400);
             // 썸네일 로드 후 최종 보정 + 파일 못 찾으면 안내
             setTimeout(() => {
+                if (!_selLive()) return;
                 const el = document.querySelector(`.file-item[data-name="${CSS.escape(fileName)}"]`);
                 if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
                 else { this.toast(t('file_not_found', '파일을 찾을 수 없습니다.') + ': ' + fileName, 'warning'); }
@@ -43426,8 +43433,12 @@ const App = {
                         };
                         updateSyncDisplay();
                         
-                        // ★ (2026-09-10) 자막 On/Off — 기본 켜짐, 저장하지 않는다(영상마다 초기화).
+                        // ★ (2026-09-10) 자막 On/Off — 기본 켜짐.
                         //   video._subEnabled 를 단일 상태로 두고, 표시 경로 두 곳이 모두 이 값을 본다.
+                        // ★ (2026-10-23) 켬·끔을 이 브라우저에 기억(localStorage 'fs_sub_on' = '0' 이면 꺼짐, 공유와 같은 칸) — 펜닐 요청(종전: 저장 안 함, 영상마다 켜짐).
+                        //   저장은 사람이 켜고 끌 때만(아래 _toggleSub — 자막 버튼·⚙·스킨 CC 모두 여기로). 불러오기(꺼짐 적용)는 여기가 아니라 아래 자막 타이머를
+                        //   만든 뒤 — 여기서 꺼짐으로 _applySubEnabled 를 부르면 아직 정의 전인 setTrackMode 를 불러 오류가 나고(바깥 catch 가 삼켜) 타이머가
+                        //   안 만들어져, 다시 켜도 자막이 안 나왔다(시험에서 발견). 저장값이 없거나 저장소를 못 쓰면 종전처럼 켜짐.
                         video._subEnabled = true;
                         //   버튼은 자막 컨트롤 줄(.sub-toggle) 한 곳이다. 이 줄은 자막 파일이 있을 때
                         //   생성되고 표시 조건이 hover·재생상태뿐이라 자막 ON/OFF 와 무관하므로,
@@ -43453,6 +43464,7 @@ const App = {
                             if (e) e.stopPropagation();
                             video._subEnabled = (video._subEnabled === false);
                             _applySubEnabled();
+                            try { if (video._subEnabled === false) localStorage.setItem('fs_sub_on', '0'); else localStorage.removeItem('fs_sub_on'); } catch (x) {}   // ★ (2026-10-23) 켬·끔 기억(위 설명)
                             // ★ (2026-10-08) 켜짐/꺼짐을 화면에 1초(음량 표시 자리 — 펜닐 요청, VLC·mpv·유튜브처럼). 스킨이 없으면 아무것도 안 함.
                             try {
                                 const _on = video._subEnabled !== false;
@@ -43461,6 +43473,7 @@ const App = {
                         };
                         subToggleBtn.onclick = _toggleSub;
                         _applySubEnabled();
+                        video._subApplyEnabled = _applySubEnabled;   // ★ (2026-10-23) 아래 '꺼짐 기억 적용'에서 버튼 모양·트랙까지 맞추려고
 
                         subCtrl.querySelector('.sub-size-down').onclick = (e) => {
                             e.stopPropagation();
@@ -43717,6 +43730,14 @@ const App = {
                     
                     video._subTimer = subTimer;
                     video._subOverlay = overlay;
+                    // ★ (2026-10-23) 자막 꺼짐 기억 적용 — 타이머·setTrackMode 가 모두 준비된 뒤(위 '켬·끔 기억' 설명). 타이머가 꺼짐을 보고 그리지 않고,
+                    //   버튼 모양·아이폰 전체화면 트랙은 _applySubEnabled 가 맞춘다(자막 컨트롤을 이번에 만들지 않았으면 그 영상 요소에 남은 것).
+                    try {
+                        if (localStorage.getItem('fs_sub_on') === '0' && video._subEnabled !== false) {
+                            video._subEnabled = false;
+                            if (typeof video._subApplyEnabled === 'function') video._subApplyEnabled();
+                        }
+                    } catch (eSo) {}
                     // ★ (2026-10-08) '자막 있음' 알림 — 재생이 시작될 때 한 번(펜닐 요청). 자막 글자가 하나 이상일 때만.
                     if (cues.length > 0) { try { this._armSubNotice(video, sub.name, storageId); } catch (x) {} }
                     break;   // ★ (2026-10-08) 하나만 쓴다 — 나머지는 받지 않음
@@ -49548,6 +49569,42 @@ const App = {
     },
     
     // 사이드바 항목: 싱글클릭/탭=선택+이동 (PC/모바일 동일)
+    // ★ (2026-10-23) 최근 파일·즐겨찾기에서 위치로 갈 때 — 펜닐 제보: ① 다른 스토리지의 파일로 가면 그 스토리지의 보기(그리드·목록)·정렬이 아니라
+    //   보던 스토리지의 것으로 보였고 ② 게시판을 연 채 누르면 뒤에서는 이동했지만 게시판 화면이 그대로 덮어 안 움직인 것처럼 보였다(시험으로 재현).
+    //   종전엔 currentStorage 만 바꾸고 바로 navigate 해서 스토리지를 바꿀 때 하는 처리를 거치지 않았다.
+    //   검색 결과에서 위치로 가기(navigateToSearchResult)와 같은 방식: 게시판을 닫고(기록은 navigate 가 남김), 검색 중이면 검색 상태만 정리하고,
+    //   스토리지가 실제로 바뀔 때만 그 스토리지의 보기·정렬을 복원. 같은 스토리지 안의 이동은 보기·정렬 그대로(종전과 같음).
+    //   사이드바 스토리지 선택 표시는 건드리지 않는다 — 메뉴 목록 클릭 처리(.menu-list click)가 누른 최근 파일·즐겨찾기 줄을 선택 표시하고
+    //   스토리지 표시를 지우는 원래 설계라(그 처리가 이 뒤에 돈다), 여기서 켜도 곧 지워진다.
+    _sidebarGoStorage(storageId) {
+        if (this.boardInlineMode) { try { this.exitBoardView(false); } catch (e) {} }
+        if (this.isSearchMode) {
+            this.isSearchMode = false;
+            this.searchQuery = '';
+            this.searchState = { query: '', filters: {}, page: 1, totalPages: 1, total: 0 };
+            $('#search-input').val('');
+            $('#mobile-search-input').val('');
+            $('#search-result-header').hide();
+            $('#search-pagination').hide();
+            $('#search-filters').hide();
+            $('#search-filter-toggle').removeClass('active');
+            $('#mobile-filter-toggle').removeClass('active');
+            $('.mobile-search-bar').removeClass('active');
+            // ★ (2026-10-23) 필터 입력값도 비움 — 검색 결과에서 위치로 가기·검색 종료(exitSearchMode)와 같게(재검토에서 빠진 것 발견).
+            //   안 비우면 숨은 필터가 다음 검색에 조용히 그대로 적용됐다(doSearch 가 이 입력칸들을 읽음). exitSearchMode 를 부르지 않는 건
+            //   그 끝의 loadFiles 가 뒤따르는 navigate 와 겹쳐 폴더를 두 번 불러오기 때문.
+            $('#filter-type').val('all');
+            $('#filter-date-from').val('');
+            $('#filter-date-to').val('');
+            $('#filter-size-min').val('');
+            $('#filter-size-max').val('');
+            try { sessionStorage.removeItem('webhard_search'); } catch (e) {}
+        }
+        const prev = this.currentStorage;
+        this.currentStorage = storageId;
+        if (String(prev) !== String(storageId)) this._restoreStorageSettings(storageId);
+    },
+
     _sidebarItemEvents(el, onSelect, onOpen) {
         el.addEventListener('click', (e) => {
             e.preventDefault();
@@ -49619,13 +49676,12 @@ const App = {
                     this.toast(t('storage_not_found', '스토리지를 찾을 수 없습니다.'), 'warning');
                     return;
                 }
+                this._sidebarGoStorage(storageId);   // ★ (2026-10-23) 게시판·검색 닫기 + 그 스토리지의 보기·정렬·사이드바 표시(_sidebarGoStorage 설명)
                 if (isDir) {
-                    this.currentStorage = storageId;
                     this.navigate(path);
                 } else {
                     const fileName = path.split('/').pop();
                     const folderPath = path.substring(0, path.lastIndexOf('/')) || '';
-                    this.currentStorage = storageId;
                     this.navigate(folderPath, true, fileName);
                 }
             });
@@ -49787,7 +49843,7 @@ const App = {
                 }
                 const fileName = path.split('/').pop();
                 const folderPath = path.substring(0, path.lastIndexOf('/')) || '';
-                this.currentStorage = storageId;
+                this._sidebarGoStorage(storageId);   // ★ (2026-10-23) 게시판·검색 닫기 + 그 스토리지의 보기·정렬·사이드바 표시(_sidebarGoStorage 설명)
                 this.navigate(folderPath, true, fileName);
             });
         });

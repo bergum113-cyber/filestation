@@ -4685,8 +4685,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             }
             return '';
         };
-        let subSize = 1.1;
-        let subBottom = 8;
+        // ★ (2026-10-22) 자막 크기·위치 기억 — 탐색기와 같은 저장 칸(이 브라우저 localStorage 'subSize'·'subBottom', 펜닐 요청: 저장할 수 있는 것 다).
+        //   종전엔 공유만 열 때마다 기본값(1.1em·8%)이었다. 범위는 공유 버튼 범위(크기 0.6~2.5em·위치 0~40%) — 탐색기에서 더 크게(최대 4.0em) 맞춘 값은 2.5 로.
+        //   저장값이 없으면 종전 기본값 그대로. 싱크(초)는 영상마다 다른 값이라 공유에선 기억하지 않음(종전 그대로).
+        const _ssNum = (k, lo, hi, d) => { try { const r = localStorage.getItem(k); if (r === null) return d; const n = parseFloat(r); return isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; } catch (e) { return d; } };
+        const _ssSave = (k, v) => { try { localStorage.setItem(k, String(Math.round(v * 100) / 100)); } catch (e) {} };
+        let subSize = _ssNum('subSize', 0.6, 2.5, 1.1);
+        let subBottom = _ssNum('subBottom', 0, 40, 8);
         
         if (subOverlay) {
             subOverlay.style.fontSize = subSize + 'em';
@@ -4712,11 +4717,14 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         };
         
         // 자막 액션 함수들 (기존 ctrl-btn + floating 패널 공유)
-        // ★ (2026-09-10) 자막 On/Off — 기본 켜짐, 저장하지 않는다(영상마다 초기화).
+        // ★ (2026-09-10) 자막 On/Off — 기본 켜짐(★ 2026-10-23 부터 켬·끔을 기억 — 아래 fs_sub_on).
         //   표시 경로가 둘이라 두 곳 모두 이 값을 본다:
         //     ①일반 재생  : timeupdate 핸들러가 subOverlay 를 갱신
         //     ②iOS 전체화면: 네이티브 textTracks (webkitbeginfullscreen 에서 showing)
         let subEnabled = true;
+        // ★ (2026-10-23) 켬·끔을 이 브라우저에 기억(localStorage 'fs_sub_on' = '0' 이면 꺼짐, 탐색기와 같은 칸) — 펜닐 요청(종전: 저장 안 함, 영상마다 켜짐).
+        //   저장값이 없거나 저장소를 못 쓰면 종전처럼 켜짐. 저장은 사람이 켜고 끌 때만(subActions.toggle — 자막 버튼·스킨 CC 모두 여기로).
+        try { if (localStorage.getItem('fs_sub_on') === '0') subEnabled = false; } catch (e) {}
         let _subFromUser = false;   // ★ (2026-10-08) 보는 사람이 자막 파일을 직접 골랐는지 — 그러면 '자막 있음' 알림(자동으로 찾은 자막용)을 띄우지 않음
         // ★ (2026-09-23) 새 껍데기가 자막 유무·켜짐·싱크를 읽도록 읽기 전용 창구를 연다(동작 변경 없음).
         //   껍데기 연결 코드는 이 함수 밖에 있어 subCues·subEnabled·subSyncOffset 를 직접 볼 수 없다.
@@ -4768,9 +4776,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             }
         };
 
+        // ★ (2026-10-23) 꺼짐을 기억한 채 열면 자막 버튼 모양(꺼짐 표시)도 처음부터 맞춘다 — 페이지 스크립트가 다 정의된 뒤(applySubEnabled 가 쓰는 값들) 한 번.
+        //   켜짐(기본)이면 종전과 같아 부르지 않는다. 자막 표시는 그리는 곳(일반 재생·아이폰 전체화면)이 subEnabled 를 보고 이미 막는다.
+        if (!subEnabled) setTimeout(() => { try { applySubEnabled(); } catch (e) {} }, 0);
         const subActions = {
             toggle: () => {
                 subEnabled = !subEnabled; applySubEnabled();
+                try { if (subEnabled) localStorage.removeItem('fs_sub_on'); else localStorage.setItem('fs_sub_on', '0'); } catch (x) {}   // ★ (2026-10-23) 켬·끔 기억(위 subEnabled 설명)
                 // ★ (2026-10-08) 켜짐/꺼짐을 화면에 1초(음량 표시 자리 — 탐색기와 같음). 스킨이 없으면 아무것도 안 함.
                 try {
                     if (subCues.length > 0 && window.FSVideoSkin && typeof window.FSVideoSkin.showMessage === 'function') {
@@ -4781,19 +4793,23 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             sizeDown: () => {
                 subSize = Math.max(0.6, subSize - 0.1);
                 if (subOverlay) subOverlay.style.fontSize = subSize + 'em';
+                _ssSave('subSize', subSize);   // ★ (2026-10-22) 기억(위 _ssNum 설명)
             },
             sizeUp: () => {
                 subSize = Math.min(2.5, subSize + 0.1);
                 if (subOverlay) subOverlay.style.fontSize = subSize + 'em';
+                _ssSave('subSize', subSize);
             },
             posUp: () => {
                 subBottom = Math.min(40, subBottom + 2);
                 if (subOverlay) subOverlay.style.bottom = subBottom + '%';
+                _ssSave('subBottom', subBottom);
                 if (window._shareRebuildNativeCues) window._shareRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 반영
             },
             posDown: () => {
                 subBottom = Math.max(0, subBottom - 2);
                 if (subOverlay) subOverlay.style.bottom = subBottom + '%';
+                _ssSave('subBottom', subBottom);
                 if (window._shareRebuildNativeCues) window._shareRebuildNativeCues();   // ★ (2026-09-28) 아이폰 전체화면 자막에도 반영
             },
             syncDown: () => {
