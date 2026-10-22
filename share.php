@@ -1330,6 +1330,7 @@ if (!headers_sent()) {
                 
                 // 네이티브 포맷이라도 코덱/크기 체크 (ffprobe)
                 $videoCodec = '';
+                $audioCodec = '';   // ★ (2026-10-22) 음성 코덱 — 브라우저가 못 푸는 음성(AC-3 등)이면 화면에서 트랜스코딩으로 넘기는 데 씀(data-acodec)
                 $videoResolution = '';
                 $fileSize = $share['size'] ?? 0;
                 $_shareAudioCount = 0;   // ★ (2026-09-26) 음성 개수(아래 조사 블록에서 셈 — 조사하지 않으면 0)
@@ -1387,6 +1388,9 @@ if (!headers_sent()) {
                                     $_codecLog('videoCodec 추출: ' . $videoCodec);
                                 } else {
                                     $_codecLog('videoCodec 추출 실패');
+                                }
+                                if (preg_match('/Stream\s+#\d+:\d+.*Audio:\s*(\w+)/i', (string)$_probeOut, $_am)) {
+                                    $audioCodec = strtolower($_am[1]);   // ★ (2026-10-22) 첫 음성의 코덱(탐색기 getMediaInfo 의 audio_codec 과 같은 식)
                                 }
                                 if (preg_match('/(\d{2,5})x(\d{2,5})/', $_probeOut, $_rm)) {
                                     $videoResolution = $_rm[1] . 'x' . $_rm[2];
@@ -1635,7 +1639,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
-                <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" <?php if (in_array($ext ?? '', ['mp4', 'm4v', 'mov'], true)): ?>data-keys-url="<?= htmlspecialchars($streamUrl . '&vk=1') ?>"<?php endif; ?> data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" style="min-height:220px;background:#111;">
+                <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" <?php if (in_array($ext ?? '', ['mp4', 'm4v', 'mov'], true)): ?>data-keys-url="<?= htmlspecialchars($streamUrl . '&vk=1') ?>"<?php endif; ?> data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" data-acodec="<?= htmlspecialchars((string)($audioCodec ?? '')) ?>" style="min-height:220px;background:#111;">
                 </video>
                 <div class="play-overlay" id="play-overlay">
                     <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
@@ -1664,7 +1668,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
-                <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" <?php if (in_array($ext ?? '', ['mp4', 'm4v', 'mov'], true)): ?>data-keys-url="<?= htmlspecialchars($streamUrl . '&vk=1') ?>"<?php endif; ?> data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>"<?php if (!empty($fastNative)): ?> data-direct-url="<?= htmlspecialchars($streamUrl . '&ds=playlist') ?>" data-native-src="<?= htmlspecialchars($streamUrl) ?>" data-direct-codec="<?= htmlspecialchars((string)($videoCodec ?? '')) ?>" data-audio-count="<?= (int)($_shareAudioCount ?? 0) ?>"<?php endif; ?>>
+                <video controls playsinline webkit-playsinline preload="metadata" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" <?php if (in_array($ext ?? '', ['mp4', 'm4v', 'mov'], true)): ?>data-keys-url="<?= htmlspecialchars($streamUrl . '&vk=1') ?>"<?php endif; ?> data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" data-vcodec="<?= htmlspecialchars((string)($videoCodec ?? '')) ?>" data-acodec="<?= htmlspecialchars((string)($audioCodec ?? '')) ?>"<?php if (!empty($fastNative)): ?> data-direct-url="<?= htmlspecialchars($streamUrl . '&ds=playlist') ?>" data-native-src="<?= htmlspecialchars($streamUrl) ?>" data-direct-codec="<?= htmlspecialchars((string)($videoCodec ?? '')) ?>" data-audio-count="<?= (int)($_shareAudioCount ?? 0) ?>"<?php endif; ?>>
                     <?php if (empty($fastNative)): ?><source src="<?= htmlspecialchars($streamUrl) ?>" type="video/mp4"><?php endif; ?>
                 </video>
                 <div class="video-play-overlay" id="share-play-pause">
@@ -2195,6 +2199,19 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         
         
         <?php if (!empty($needsTranscode)): ?>
+        // ★ (2026-10-22) 트랜스코딩 페이지의 ⚙ 재생방식 '일반재생' — 이 브라우저가 음성 코덱을 못 풀면(AC-3·DTS 등) 셀렉트를 지운다.
+        //   서버는 영상 코덱만 보고 셀렉트를 그려($canPlayNative), 휴대폰 500MB 초과·음성 여러 개·'트랜스코딩' 선택으로 열린 이 페이지에서
+        //   '일반재생' 을 고르면 원본이 소리 없이 재생됐다(재검토 시험). 일반 재생 페이지의 미리 묻기(_shareCodecNet ①)·탐색기
+        //   App._acodecUnsupported 와 같은 목록·방식. 셀렉트를 쓰는 곳은 모두 없을 때를 거르고, 바인딩(아래 화질 UI)보다 먼저 지운다.
+        (function _shareTcAcodecNet() {
+            const sel = document.getElementById('share-playback-mode');
+            if (!sel) return;
+            const c = { ac3: 'ac-3', eac3: 'ec-3', dts: 'dtsc', alac: 'alac', truehd: 'mlpa' }[(player.dataset.acodec || '').toLowerCase()];
+            if (!c) return;
+            let bad = false;
+            try { bad = document.createElement('video').canPlayType('audio/mp4; codecs="' + c + '"') === ''; } catch (e) {}
+            if (bad) sel.remove();
+        })();
         // === 트랜스코딩 (MMS/MSE/직접 src 자동 선택) ===
         const status = document.getElementById('transcode-status');
         const overlay = document.getElementById('play-overlay');
@@ -3286,7 +3303,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     try { console.warn('[ShareFastNative] 빠른 시작 중단:', why); } catch (e) {}
                     if (player._directHls) { try { player._directHls.destroy(); } catch (e) {} player._directHls = null; }
                     // ★ (2026-09-30) HEVC 는 종전 일반재생도 못 풀 가능성이 커 트랜스코딩으로(일반재생 실패 전환과 같은 함수)
-                    if (isHevc && typeof window._shareTriggerTranscode === 'function') { window._shareTriggerTranscode(); return; }
+                    if (isHevc && typeof window._shareTriggerTranscode === 'function') { player._nativeBad = true; window._shareTriggerTranscode(); return; }   // ★ (2026-10-22) _nativeBad: 화질 CASE 3 설명
                     if (!nativeSrc) return;
                     // ★ (2026-10-08) 보던 위치(이어 보기로 옮긴 위치 포함)를 일반 재생에서도 이어서 — 탐색기의 _vpPending 과 같은 역할.
                     //   종전엔 원본을 새로 넣으면 0초부터 시작했다(이어 보기는 이미 '사용함'으로 표시돼 다시 적용되지 않음).
@@ -3522,7 +3539,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 }
                 
                 // CASE 3: 트랜스코딩 → 네이티브 (original 선택)
-                if (newQuality === 'original' && isTranscoding) {
+                // ★ (2026-10-22) 이 브라우저가 원본을 제대로 못 트는 영상(코덱 문제로 트랜스코딩 — player._nativeBad)은 원본 파일로 돌아가지 않고
+                //   아래 CASE 4 로 원본 화질 트랜스코딩. 종전엔 480p 등으로 바꿨다가 '원본' 을 고르면 못 푸는 원본으로 돌아가 멈추고 무음이었다(재검토 시험).
+                if (newQuality === 'original' && isTranscoding && !player._nativeBad) {
                     // console.log('[ShareQualityChange] transcode → native at', absoluteTime.toFixed(1) + 's');
                     
                     // 기존 HLS 정리
@@ -3548,7 +3567,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     player.removeAttribute('src');
                     try { player.load(); } catch(e) {}
                     
-                    const _origUrl = '<?= htmlspecialchars($streamUrl, ENT_QUOTES) ?>';
+                    // ★ (2026-10-22) JS 문자열이라 json_encode(위 _qToken 등과 같은 방식) — 종전 htmlspecialchars 는 & 를 &amp; 로 바꿔
+                    //   'share.php?t=…&amp;download=1&amp;stream=1' 이 그대로 주소가 됐고, 서버는 영상 대신 공유 페이지(HTML)를 돌려줘 화질을 바꿨다가
+                    //   '원본' 으로 돌아오면 0초에서 멈추고 화면·소리가 없었다(재검토 시험 — v5.8.9 이전부터). <script> 안은 HTML 엔티티가 풀리지 않는다.
+                    const _origUrl = <?= json_encode($streamUrl, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?>;
                     const src = document.createElement('source');
                     src.src = _origUrl;
                     src.type = 'video/mp4';
@@ -3775,6 +3797,85 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 <?php endif; ?>
             };
             window._shareTriggerTranscode = _triggerTranscodeFallback;   // ★ (2026-09-30) 일반재생 빠른 시작(HEVC)이 못 풀면 여기로
+
+            // ★ (2026-10-22) 일반 재생인데 코덱을 못 풀어 '영상 없이 소리만'·'영상만(소리 없음)'일 때도 트랜스코딩으로 — 탐색기와 같은 규칙.
+            //   종전엔 오류(error)가 날 때만 넘겨, 오류 없이 영상이나 소리만 빠지는 경우(AV1 을 못 푸는 기기의 AV1, 크롬의 AC-3·DTS 음성 등)는
+            //   '일반 재생' 그대로 검은 화면·무음으로 남았다(재검토 시험에서 확인). 빠른 시작(서버가 조각으로 보냄·음성은 AAC 로 바꿔 보냄) 중엔 그쪽 확인이 맡는다.
+            (function _shareCodecNet() {
+                const vcodec = (player.dataset.vcodec || '').toLowerCase();
+                const acodec = (player.dataset.acodec || '').toLowerCase();
+                const busy = () => _nativeFallbackDone || player._directOn || !!player.dataset.qualityTranscoding || !!window._shareNativeHls || !!window._shareNativeHlsSession;
+                // 넘긴 뒤 ⚙ 재생방식 셀렉트를 내린다 — 이 브라우저는 이 영상을 일반 재생으로 제대로 못 트므로 '일반재생'을 고르면 새로고침 뒤 다시
+                //   트랜스코딩으로 넘어갈 뿐이었다(재검토). 탐색기가 코덱 미지원이면 셀렉트를 두지 않는 것, 서버가 일반 재생 불가($canPlayNative 거짓)면
+                //   셀렉트를 그리지 않는 것과 같게 요소를 지운다(이 셀렉트를 쓰는 곳은 모두 없을 때를 거른다). 실제로 넘어간 때만(_nativeFallbackDone).
+                const go = () => {
+                    player._nativeBad = true;   // 화질 '원본' 이 원본 파일로 돌아가지 않게(화질 CASE 3 설명)
+                    _triggerTranscodeFallback();
+                    if (_nativeFallbackDone) { const s = document.getElementById('share-playback-mode'); if (s) s.remove(); }
+                };
+                // ① 음성 코덱을 미리 묻기 — 못 풀어도 오류 없이 소리만 빠지는 코덱만(탐색기 App._acodecUnsupported 와 같은 목록·설명).
+                //   빠른 시작이 붙는 영상(data-direct-url)은 서버가 음성을 AAC 로 바꾸므로 묻지 않는다.
+                const acMap = { ac3: 'ac-3', eac3: 'ec-3', dts: 'dtsc', alac: 'alac', truehd: 'mlpa' };
+                let acBad = false;
+                if (acMap[acodec] && !player.dataset.directUrl) {
+                    try { acBad = document.createElement('video').canPlayType('audio/mp4; codecs="' + acMap[acodec] + '"') === ''; } catch (e) {}
+                }
+                if (acBad) {
+                    // 페이지 스크립트가 다 정의된 뒤에 넘긴다(오류 전환이 쓰는 함수들이 아래에서 정의됨)
+                    setTimeout(() => { if (!busy()) { try { console.warn('[ShareCodecNet] 음성 코덱 미지원 → 트랜스코딩:', acodec); } catch (e) {} go(); } }, 0);
+                    return;
+                }
+                // ② 영상 없이 소리만 — 서버가 영상 코덱을 알려 준(영상 트랙이 있는) 파일인데 영상 정보에 화면 크기가 없으면.
+                //   영상 정보 직후 0 이어도 1.5초 뒤 다시 본다(그사이 풀리면 그대로). 소리만 있는 파일(영상 코덱 없음)은 해당 없음.
+                //   이 스크립트보다 영상 정보가 먼저 준비될 수 있어(이어 보기 모듈 설명 — 실측 118ms) 이미 준비돼 있으면 바로 한 번 본다.
+                if (vcodec) {
+                    let vTimer = null;
+                    const vCheck = () => {
+                        if (busy() || player.videoWidth > 0 || player.videoHeight > 0) return;
+                        clearTimeout(vTimer);
+                        vTimer = setTimeout(() => {
+                            if (busy() || player.videoWidth > 0 || player.videoHeight > 0) return;
+                            if (!(player.readyState >= 1)) return;   // 그사이 소스가 바뀌는 중
+                            try { console.warn('[ShareCodecNet] 영상 못 품(화면 0x0) → 트랜스코딩:', vcodec); } catch (e) {}
+                            go();
+                        }, 1500);
+                    };
+                    player.addEventListener('loadedmetadata', vCheck);
+                    if (player.readyState >= 1) vCheck();
+                }
+                // ③ 재생 중 음성을 하나도 못 풀면(위 목록 밖 코덱) — 크롬·엣지(webkitAudioDecodedByteCount)만. 탐색기 App._bindAudioDecodeNet 과 같은 조건:
+                //   이탈 없이 2.5초 실제 재생 뒤 한 번, 흔히 풀리는 코덱(AAC·MP3·MP2·Opus·FLAC·Vorbis·PCM)·음성 없는 파일은 보지 않음.
+                const good = ['aac', 'mp3', 'mp2', 'opus', 'flac', 'vorbis'];
+                if (acodec && good.indexOf(acodec) < 0 && acodec.indexOf('pcm_') !== 0) {
+                    let acc = 0, last = null, done = false;
+                    const reset = () => { last = null; };
+                    const onTime = () => {
+                        if (done) return;
+                        if (busy()) { acc = 0; last = null; return; }
+                        if (player.paused || player.seeking) { last = null; return; }
+                        const t = player.currentTime;
+                        if (last !== null && t > last && t - last < 1) acc += t - last;
+                        last = t;
+                        if (acc < 2.5) return;
+                        done = true;
+                        player.removeEventListener('timeupdate', onTime); player.removeEventListener('seeking', reset);
+                        if (typeof player.webkitAudioDecodedByteCount !== 'number' || player.webkitAudioDecodedByteCount > 0) return;
+                        try { console.warn('[ShareCodecNet] 음성을 못 품(무음) → 트랜스코딩:', acodec); } catch (e) {}
+                        // 보던 위치부터 이어서 — 이어 보기(_shareVpTc)가 변환 시작 위치를 넣는 것과 같은 방식(seek= · _qualitySeekOffset).
+                        //   이미 위치가 들어 있으면(이어 보기·화질 변경) 그대로 둔다. _shareVpTc 는 seek= 가 있으면 손대지 않는다.
+                        const at = Number(player.currentTime) || 0;
+                        if (at >= 1 && !/[?&]seek=/.test(player.dataset.hlsUrl || '') && !((player._qualitySeekOffset || 0) > 0)) {
+                            const add = (u) => (u ? String(u) + '&seek=' + at.toFixed(2) : u);
+                            if (player.dataset.hlsUrl) player.dataset.hlsUrl = add(player.dataset.hlsUrl);
+                            if (player.dataset.transcodeUrl) player.dataset.transcodeUrl = add(player.dataset.transcodeUrl);
+                            player._qualitySeekOffset = at;
+                        }
+                        go();
+                    };
+                    player.addEventListener('timeupdate', onTime);
+                    player.addEventListener('seeking', reset);
+                }
+            })();
             
             // 네이티브 비디오 에러 시 전환
             player.addEventListener('error', (e) => {
@@ -3782,6 +3883,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 const err = player.error;
                 // MEDIA_ERR_SRC_NOT_SUPPORTED(4) 또는 MEDIA_ERR_DECODE(3)
                 if (err && (err.code === 4 || err.code === 3)) {
+                    player._nativeBad = true;   // ★ (2026-10-22) 코덱 문제 — 화질 '원본' 이 원본 파일로 돌아가지 않게(화질 CASE 3 설명)
                     _triggerTranscodeFallback();
                 }
             });

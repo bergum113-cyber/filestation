@@ -293,6 +293,15 @@ body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn { width: 44px; heig
 body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn svg { width: 22px; height: 22px; }
 body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn-back { left: calc(50% - 50px - clamp(24px, 4%, 40px)); }
 body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn-fwd { left: calc(50% + 50px + clamp(24px, 4%, 40px)); }
+/* ★ (2026-10-22) PC(마우스) 가운데 버튼 간격 넓힘 — 펜닐 요청(PC 는 5초 뒤로·재생·5초 앞으로 사이가 좁음, 휴대폰은 그대로).
+   위 규칙(휴대폰·PC 공통)은 버튼 사이 빈틈 = 영상 폭 4%(24~40px)라 PC 에서 실측 공유 29px·탐색기 38~40px 였다.
+   PC 는 7%(24~72px)로: 공유(720px) 약 50px · 탐색기 1366 창(952px) 약 67px · 1920 창·전체화면 72px. 아주 좁은 틀(약 340px 이하)은
+   종전과 같은 24px 에서 시작해 버튼이 영상 밖으로 밀리거나 겹치지 않는다(어느 폭에서나 종전 이상). 50px = 재생 버튼 반(28) + ±5초 버튼 반(22).
+   조건은 위 재생바 간격 규칙과 같은 '터치(굵은 포인터) 기기가 아니면'. 크기·세로 위치·표시 규칙은 그대로, 가로 위치만. */
+@media not all and (pointer: coarse) {
+    body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn-back { left: calc(50% - 50px - clamp(24px, 7%, 72px)); }
+    body.fsvs-active .fsvs-on .video-play-overlay.video-seek-btn-fwd { left: calc(50% + 50px + clamp(24px, 7%, 72px)); }
+}
 /* ★ (2026-09-26) 조작 줄 촘촘하게(fitRow — 자리가 모자랄 때 접기 전에). 휴대폰 규칙(버튼 36px·재생 40px·시간 12px)보다 우선하도록 선택자를 강하게. */
 .fsvs-root .fsvs-row.fsvs-tight { gap: 0; }
 .fsvs-root .fsvs-row.fsvs-tight .fsvs-btn { min-width: 32px; }

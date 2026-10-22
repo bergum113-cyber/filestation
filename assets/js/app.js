@@ -37320,6 +37320,8 @@ const App = {
                                 // 트랜스코딩 URL 만들기 (mp4/webm/ogg도 강제 트랜스코딩)
                                 const _transcodeUrl = `api.php?action=transcode&storage_id=${storageId}&path=${encodeURIComponent(item.path)}`;
                                 _v.setAttribute('data-transcode-base', _transcodeUrl);
+                                // ★ (2026-10-22) 코덱 문제(DECODE·SRC_NOT_SUPPORTED)면 화질 '원본' 이 원본 파일로 돌아가지 않게(화질 변경 처리 설명) — 네트워크 오류(2)는 제외
+                                if (e.code === 3 || e.code === 4) _v._nativeBad = true;
                                 
                                 // 이전 src 정리 + 새 비디오 요소 교체 (안정성)
                                 try {
@@ -38102,9 +38104,17 @@ const App = {
                 // ★ 재생방식 셀렉트 '트랜스코딩' 선택 시 강제 트랜스코딩 (500MB 이하도) — 1회성
                 const _forceTrans = !!this._forceTranscode;
                 this._forceTranscode = false;
-                const shouldTranscode = needsTranscodeByCodec || needsTranscodeBySize || needsTranscodeByAudio || _forceTrans;
+                // ★ (2026-10-22) 음성 코덱을 이 브라우저가 못 풀면(AC-3·DTS 등 — 크롬·엣지는 오류 없이 소리만 빠짐) 처음부터 트랜스코딩(음성을 AAC 로).
+                //   일반재생 빠른 시작이 되는 영상(H.264 mp4 등)은 서버가 음성을 이미 AAC 로 바꿔 보내므로 그쪽(원본 화질)을 그대로 쓴다 — 조건은 아래 _fastOk 와 같음.
+                //   코덱 미지원과 같은 취급이라 '일반재생'을 골라도(_forceNative) 트랜스코딩.
+                const _acFastExt = (item.name || item.path || '').split('.').pop().toLowerCase();
+                const _acFastHls = (window.Hls && Hls.isSupported()) || !!document.createElement('video').canPlayType('application/vnd.apple.mpegurl');
+                const _acFastOk = !item._vaultBlobUrl && _acFastExt === 'mp4' && _acFastHls && ((info.video_codec || '').toLowerCase() === 'h264' || _hevcFast);
+                const needsTranscodeByAcodec = !needsTranscodeByCodec && !_acFastOk && this._acodecUnsupported(info.audio_codec);
+                { const _pvA = document.querySelector('#preview-content .preview-video'); if (_pvA) _pvA._acodec = info.audio_codec || ''; }   // 재생 중 확인(App._bindAudioDecodeNet)용
+                const shouldTranscode = needsTranscodeByCodec || needsTranscodeByAcodec || needsTranscodeBySize || needsTranscodeByAudio || _forceTrans;
                 // ★ (2026-09-26) 진단 기록(동작 변경 없음) — 일반 재생/스트리밍 결정과 그 근거
-                try { window._diagLog && window._diagLog('preview_decision', { shouldTranscode, byCodec: needsTranscodeByCodec, bySize: needsTranscodeBySize, byAudio: needsTranscodeByAudio, forceNative: _forceNative, forceTrans: _forceTrans, isMobileDevice, fileSize, audioCount: _audioCount, ua: navigator.userAgent.slice(0, 90), platform: navigator.platform, touchPts: navigator.maxTouchPoints, ontouchend: ('ontouchend' in document) }); } catch (x) {}
+                try { window._diagLog && window._diagLog('preview_decision', { shouldTranscode, byCodec: needsTranscodeByCodec, byAcodec: needsTranscodeByAcodec, bySize: needsTranscodeBySize, byAudio: needsTranscodeByAudio, forceNative: _forceNative, forceTrans: _forceTrans, isMobileDevice, fileSize, audioCount: _audioCount, ua: navigator.userAgent.slice(0, 90), platform: navigator.platform, touchPts: navigator.maxTouchPoints, ontouchend: ('ontouchend' in document) }); } catch (x) {}
                 
                 if (!shouldTranscode) {
                     // ★ (2026-09-30) 일반재생 빠른 시작 — H.264·음성 1개 mp4 는 원본을 다시 인코딩하지 않고 키프레임 조각으로 받아(FileManager::directStream)
@@ -38157,6 +38167,10 @@ const App = {
                 let transcodeReason = '';
                 if (needsTranscodeByCodec) {
                     transcodeReason = `${codecName} → ${isKo3 ? '실시간 변환 재생' : 'Transcoding'}`;
+                } else if (needsTranscodeByAcodec) {
+                    // ★ (2026-10-22) 음성 코덱 미지원 사유
+                    const _acName = String(info.audio_codec || '').toUpperCase();
+                    transcodeReason = isKo3 ? `${_acName} 음성 → 실시간 변환 재생` : `${_acName} audio → Transcoding`;
                 } else if (needsTranscodeByAudio && !needsTranscodeBySize) {
                     // ★ (2026-09-26) 다국어 사유 — 배지 글자(기존 사유 글자와 같은 방식: 한국어/영어)
                     transcodeReason = isKo3 ? `다국어(음성 ${_audioCount}개) → 스트리밍 재생` : `Multi-audio(${_audioCount}) → Streaming`;
@@ -38204,6 +38218,8 @@ const App = {
                             try { newVid.pause(); } catch(e) {}
                         }
                     });
+                    // ★ (2026-10-22) 코덱(영상·음성) 미지원으로 트랜스코딩 — 화질 '원본' 이 원본 파일로 돌아가지 않게(화질 변경 처리의 video._nativeBad 설명)
+                    if (needsTranscodeByCodec || needsTranscodeByAcodec) newVid._nativeBad = true;
                     oldVid.parentNode.replaceChild(newVid, oldVid);
                     // wrapper에 not-ready 클래스도 추가 (안전망 — replaceChild 후 wrapper가 바뀌었을 경우 대비)
                     const _newWrap = newVid.closest('.video-player-wrap');
@@ -38221,7 +38237,7 @@ const App = {
                 //   mp4 한정 — webm/ogg 등 다른 네이티브 포맷에는 셀렉트 미표시(펜닐님 요청).
                 //   크기 무관(500MB 이하도) — 작은 mp4가 버벅일 때 트랜스코딩 선택 가능하도록(펜닐님 요청).
                 const _navExt = (item.name || item.path || '').split('.').pop().toLowerCase();
-                this._showNativeBtn = (!needsTranscodeByCodec && _navExt === 'mp4'); // PC+모바일 공통
+                this._showNativeBtn = (!needsTranscodeByCodec && !needsTranscodeByAcodec && _navExt === 'mp4'); // PC+모바일 공통 (★ 2026-10-22 음성 코덱 미지원도 일반재생 불가라 제외)
                 const wrap = document.querySelector('.video-player-wrap');
                 if (wrap && !wrap.querySelector('#video-audio-select')) {
                     const audioDiv = document.createElement('div');
@@ -38443,6 +38459,7 @@ const App = {
                             vid.removeAttribute('src');
                             vid.querySelectorAll('source').forEach(s => s.remove());
                             vid.load();
+                            vid._nativeBad = true;   // ★ (2026-10-22) 화질 '원본' 이 원본 파일로 돌아가지 않게(화질 변경 처리 설명)
                             // 트랜스코딩으로 전환
                             const _storageId = App.currentPreviewStorageId || App.currentStorage;
                             const _path = App.currentPreviewPath;
@@ -38556,6 +38573,7 @@ const App = {
                     if ((e.code === 3 || e.code === 4) && !vid.dataset.transcodeBase && !vid._autoTranscodeAttempted) {
                         vid._autoTranscodeAttempted = true;
                         vid._switchingToTranscode = true;
+                        vid._nativeBad = true;   // ★ (2026-10-22) 화질 '원본' 이 원본 파일로 돌아가지 않게(화질 변경 처리 설명)
                         
                         if (badge) {
                             badge.className = 'video-stream-badge';
@@ -38614,6 +38632,40 @@ const App = {
                     }
                 });
                 
+                // ★ (2026-10-22) 일반 재생인데 음성을 못 풀어 소리가 안 나면(미리 묻는 목록 밖의 코덱) 트랜스코딩으로 — 위 오류 전환과 같은 순서,
+                //   보던 위치는 이어 보기의 넘김 값(_vpPending → _startTranscode 의 tc_carry)으로 이어서. 확인 조건은 App._bindAudioDecodeNet 설명.
+                App._bindAudioDecodeNet(vid, () => vid._acodec,
+                    () => !vid.isConnected || !!vid.dataset.transcodeBase || !!vid.getAttribute('data-transcode-base') || !!vid._switchingToTranscode || !!vid._autoTranscodeAttempted || !!App._directActive || !!vid._hlsInstance,
+                    (c) => {
+                        const _storageId = App.currentPreviewStorageId || App.currentStorage;
+                        const _path = App.currentPreviewPath;
+                        if (!_storageId || !_path) return;
+                        vid._autoTranscodeAttempted = true;
+                        vid._switchingToTranscode = true;
+                        const _at = vid.currentTime || 0;
+                        const badge = wrap.querySelector('.video-stream-badge');
+                        if (badge) {
+                            const isKo4 = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+                            badge.className = 'video-stream-badge';
+                            badge.innerHTML = '⏳ ' + (isKo4 ? '음성 코덱 미지원(' + c.toUpperCase() + ') → 트랜스코딩 전환 중...' : 'Unsupported audio (' + c.toUpperCase() + ') → switching to transcode...');
+                        }
+                        vid.pause();
+                        vid.removeAttribute('src');
+                        vid.querySelectorAll('source').forEach(s => s.remove());
+                        vid.load();
+                        if (_at >= 1) vid._vpPending = _at;
+                        // ★ (2026-10-22) 이 브라우저는 이 영상을 일반 재생으로 소리 내지 못하므로 ⚙ 재생방식(일반재생) 셀렉트를 내린다 —
+                        //   미리 묻기로 넘어갈 때(needsTranscodeByAcodec)와 같게. _startTranscode 입구의 _ensureQualityNativeBtn 이 남은 셀렉트를 지운다.
+                        App._showNativeBtn = false;
+                        vid._nativeBad = true;   // 화질 '원본' 이 원본 파일로 돌아가지 않게(화질 변경 처리 설명)
+                        const _transcodeUrl = `api.php?action=transcode&storage_id=${_storageId}&path=${encodeURIComponent(_path)}`;
+                        vid.dataset.transcodeBase = _transcodeUrl;
+                        setTimeout(() => {
+                            vid._switchingToTranscode = false;
+                            App._startTranscode(_transcodeUrl, _storageId, _path);
+                        }, 200);
+                    });
+
                 // 모바일: 터치 시 컨트롤 표시/숨김 토글 (3초 후 자동 숨김)
                 if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
                     App._bindFirstTapGuard(wrap);   // ★ (2026-10-01) 숨겨진 가운데 버튼은 첫 탭에 보이기만(App._bindFirstTapGuard 설명)
@@ -40753,6 +40805,46 @@ const App = {
             return !!document.createElement('video').canPlayType(T);
         } catch (e) { return false; }
     },
+    // ★ (2026-10-22) 이 브라우저가 이 음성 코덱을 못 푸나 — 못 풀어도 오류 없이 영상만(소리 없이) 재생되는 코덱만 미리 묻는다
+    //   (크롬·엣지 시험: AC-3·E-AC-3·DTS·ALAC·TrueHD 는 오류 없이 소리만 빠짐, 사파리는 AC-3·E-AC-3·ALAC 를 푼다).
+    //   목록에 없는 코덱(AAC·MP3·Opus·FLAC·PCM 등)은 묻지 않는다 — PCM 은 브라우저가 '못 함'이라 답해도 실제로는 재생돼 잘못 넘길 수 있다.
+    //   목록 밖에서 소리가 안 나는 경우는 재생 중 확인(App._bindAudioDecodeNet)이 받는다.
+    _acodecUnsupported(codec) {
+        const m = { ac3: 'ac-3', eac3: 'ec-3', dts: 'dtsc', alac: 'alac', truehd: 'mlpa' };
+        const c = m[String(codec || '').toLowerCase()];
+        if (!c) return false;
+        try { return document.createElement('video').canPlayType('audio/mp4; codecs="' + c + '"') === ''; } catch (e) { return false; }
+    },
+    // ★ (2026-10-22) 일반 재생 중 음성을 하나도 못 풀면(소리 없음) 트랜스코딩으로 — 크롬·엣지(webkitAudioDecodedByteCount)에서만 확인 가능.
+    //   이탈 없이 2.5초를 실제로 재생한 뒤 한 번만 본다(이동 직후·멈춤은 세지 않음 — 음성을 아직 못 받은 순간을 '못 품'으로 보지 않게).
+    //   흔히 쓰이고 실제로 풀리는 코덱(AAC·MP3·MP2·Opus·FLAC·Vorbis·PCM)은 보지 않는다(음성 시작이 늦은 파일 등 잘못 넘기는 일 방지).
+    //   원본 스트리밍(App._directActive)은 서버가 음성을 AAC 로 바꿔 보내고, 트랜스코딩 중·음성 없는 파일은 해당 없음.
+    //   onFail: 넘기는 함수(탐색기·공유가 각자 자기 전환 처리를 넘긴다). 영상(v)마다 한 번만 붙는다.
+    _bindAudioDecodeNet(v, getCodec, skip, onFail) {
+        if (!v || v._acodecNetBound) return;
+        v._acodecNetBound = true;
+        const good = ['aac', 'mp3', 'mp2', 'opus', 'flac', 'vorbis'];
+        let acc = 0, last = null, done = false;
+        const reset = () => { last = null; };
+        const onTime = () => {
+            if (done) return;
+            if (skip()) { acc = 0; last = null; return; }   // 원본 스트리밍·트랜스코딩 중엔 세지 않음(원본 스트리밍 실패로 일반 재생이 되면 그때부터 셈)
+            if (v.paused || v.seeking) { last = null; return; }
+            const t = v.currentTime;
+            if (last !== null && t > last && t - last < 1) acc += t - last;
+            last = t;
+            if (acc < 2.5) return;
+            done = true;
+            v.removeEventListener('timeupdate', onTime); v.removeEventListener('seeking', reset);
+            if (typeof v.webkitAudioDecodedByteCount !== 'number' || v.webkitAudioDecodedByteCount > 0) return;
+            const c = String(getCodec() || '').toLowerCase();
+            if (!c || good.indexOf(c) >= 0 || c.indexOf('pcm_') === 0) return;
+            try { window._diagLog && window._diagLog('native_no_audio_to_transcode', { acodec: c, t: Math.round(t * 10) / 10 }); } catch (e) {}
+            onFail(c);
+        };
+        v.addEventListener('timeupdate', onTime);
+        v.addEventListener('seeking', reset);
+    },
     // ★ (2026-09-30) 원본 스트리밍(탐색 가능) — 서버 direct_stream(FileManager::directStream)의 전체 조각 목록(VOD)을 hls.js 로 재생.
     //   원본 화질 그대로(-c:v copy), 조각은 서버가 요청 때 만들어 흘려보냄(임시 파일 없음). 정리 누수가 없도록 기존과 같은 video._hlsInstance 에 넣는다
     //   (미리보기 닫기·다음 영상·트랜스코딩 전환이 모두 이것으로 정리). 스킨은 스트리밍으로 보지만 시각 보정 0·seekable = 전체 길이라 어디로든 탐색.
@@ -40834,6 +40926,7 @@ const App = {
                 if (badgeParent) { badgeParent.className = 'video-stream-badge'; badgeParent.textContent = '⏳ ' + (isKo ? '코덱 미지원 → 트랜스코딩 전환 중...' : 'Unsupported codec → switching to transcode...'); }
                 const tcUrl = 'api.php?action=transcode&storage_id=' + encodeURIComponent(storageId) + '&path=' + encodeURIComponent(path);
                 video.dataset.transcodeBase = tcUrl;
+                video._nativeBad = true;   // ★ (2026-10-22) 원본도 못 푸는 영상 — 화질 '원본' 이 원본 파일로 돌아가지 않게(화질 변경 처리 설명)
                 App._startTranscode(tcUrl, storageId, path);
             }, 1500);
         };
@@ -41098,7 +41191,10 @@ const App = {
             //   네이티브 선시도 흔적으로 true 고정될 수 있어, 트랜스코딩 중 원본 클릭이 잘못 네이티브로 감.
             //   재생방식 '트랜스코딩'이면 원본도 트랜스코딩 원본화질(CASE 4), '일반재생'이면 네이티브(CASE 3).
             const _pbModeSel = document.querySelector('#video-quality-select .playback-mode-select');
-            const nativeMode = _pbModeSel ? (_pbModeSel.value === 'native') : _origNativeMode;
+            // ★ (2026-10-22) 이 브라우저가 원본을 제대로 못 트는 영상(코덱 미지원으로 트랜스코딩 — video._nativeBad)은 네이티브로 보지 않는다 →
+            //   '원본' 은 CASE 3(원본 파일로 복귀) 대신 CASE 4(원본 화질 트랜스코딩). 종전엔 HEVC 등을 480p 로 바꿨다가 '원본' 을 고르면 못 푸는
+            //   원본으로 돌아가 검은 화면·소리만(또는 무음)이 됐다(재검토 시험 — 오늘 이전부터의 동작). 표시는 아래 CASE 4 가 '실시간 스트리밍' 으로.
+            const nativeMode = !video._nativeBad && (_pbModeSel ? (_pbModeSel.value === 'native') : _origNativeMode);
             
             // CASE 1: 네이티브 → 네이티브 (original 유지) → 변화 없음
             if (nativeMode && newQuality === 'original' && !isCurrentlyTranscoding) {
