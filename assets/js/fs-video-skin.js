@@ -248,6 +248,10 @@
         on(bPlay, 'click', togglePlay);
         on(bVol, 'click', () => { video.muted = !video.muted; });
         on(vol, 'input', () => { video.volume = parseFloat(vol.value); if (video.volume > 0 && video.muted) video.muted = false; });
+        // ★ (2026-10-22) 얇은 음량 막대(CSS)의 채움 길이 — 크롬·엣지·사파리는 막대 칸이 채운 만큼을 따로 그리지 못해 --fsvs-vp(0~100%)로 넘긴다
+        //   (파이어폭스는 ::-moz-range-progress 가 스스로 그림). 끄는 중·키보드로 바꿀 때도 바로 맞게 input 때마다, 그 밖엔 render 에서.
+        const volFill = () => { const f = Math.max(0, Math.min(1, parseFloat(vol.value) || 0)); vol.style.setProperty('--fsvs-vp', (f * 100).toFixed(1) + '%'); };
+        on(vol, 'input', volFill);
         on(vol, 'input', showVolOsd);   // ★ (2026-10-08) 막대를 키보드·마우스·터치 어느 것으로 움직여도 음량 표시(바로 위에서 음량을 바꾼 뒤라 새 값으로 그림)
         // ★ (2026-10-14) 음량 막대 — 마우스가 있는 기기(PC)는 평소 숨기고 스피커나 막대에 마우스를 올리면 옆으로 펼친다(유튜브처럼, 펜닐 요청).
         //   스피커 누름 = 음소거/해제(종전 그대로). 키보드로 막대에 오면(Tab) 펼침, 막대를 끄는 동안은 마우스가 벗어나도 유지,
@@ -1241,6 +1245,7 @@
             const _volIco = (video.muted || video.volume === 0) ? ICON.mute : ICON.vol;
             if (bVol._fsvsIco !== _volIco) { bVol._fsvsIco = _volIco; bVol.innerHTML = _volIco; }   // 위와 같은 이유
             if (document.activeElement !== vol) vol.value = String(video.muted ? 0 : video.volume);
+            volFill();   // ★ (2026-10-22) 얇은 음량 막대 채움(위 volFill 설명)
 
             const rate = video.playbackRate || 1;
             bSpeed.style.display = Math.abs(rate - 1) > 0.001 ? '' : 'none';

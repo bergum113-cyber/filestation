@@ -644,6 +644,28 @@ body.fsvs-active .fsvs-on .video-seek-overlay.show[data-chev="2"]::before { anim
 }
 .fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-float:not(.fsvs-vol-vert) ~ .fsvs-time { visibility: hidden; }   /* 띄운 막대 밑으로 시간 글자가 비치지 않게 — 닫히면 바로 다시 보임 */
 .fsvs-root.fsvs-volhide .fsvs-vol.fsvs-collapsed + .fsvs-volrange { display: none; }
+/* ★ (2026-10-22) 음량 막대 얇게 — 펜닐 요청(다른 플레이어처럼). 종전엔 브라우저 기본 막대(accent-color 흰색)라 막대가 약 6~8px·손잡이 16px 로 굵었다.
+   유튜브처럼 막대 3px·손잡이 12px. 요소 크기(가로 64·세로 16px)는 그대로라 누르는 영역·줄 배치·펼침/띄움 계산(JS volPlace 등)은 종전과 같다.
+   채운 부분(흰색)은 JS 가 넘기는 --fsvs-vp(0~100%), 나머지는 반투명 흰색. 파이어폭스는 ::-moz-range-progress 로 스스로 채운다.
+   세로 팝업(fsvs-vol-vert, 아래 = 0)은 같은 굵기로 방향만 세로(아래에서 위로 채움). */
+.fsvs-root .fsvs-volrange { -webkit-appearance: none; appearance: none; height: 16px; background: transparent; cursor: pointer; }
+.fsvs-root .fsvs-volrange::-webkit-slider-runnable-track {
+    height: 3px; border-radius: 2px; border: 0;
+    background: linear-gradient(to right, #FFFFFF var(--fsvs-vp, 100%), rgba(255, 255, 255, 0.3) var(--fsvs-vp, 100%));
+}
+.fsvs-root .fsvs-volrange::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -4.5px; border: 0; border-radius: 50%;
+    background: #FFFFFF; box-shadow: 0 0 2px rgba(0, 0, 0, 0.4);
+}
+.fsvs-root .fsvs-volrange::-moz-range-track { height: 3px; border: 0; border-radius: 2px; background: rgba(255, 255, 255, 0.3); }
+.fsvs-root .fsvs-volrange::-moz-range-progress { height: 3px; border-radius: 2px; background: #FFFFFF; }
+.fsvs-root .fsvs-volrange::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: #FFFFFF; box-shadow: 0 0 2px rgba(0, 0, 0, 0.4); }
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-vert::-webkit-slider-runnable-track {
+    width: 3px; height: 100%; background: linear-gradient(to top, #FFFFFF var(--fsvs-vp, 100%), rgba(255, 255, 255, 0.3) var(--fsvs-vp, 100%));
+}
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-vert::-webkit-slider-thumb { margin-top: 0; margin-left: -4.5px; }
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-vert::-moz-range-track { width: 3px; height: 100%; }
+.fsvs-root.fsvs-volhide .fsvs-row.fsvs-vol-open .fsvs-volrange.fsvs-vol-vert::-moz-range-progress { width: 3px; height: auto; }
 
 /* ★ (2026-10-14) 조작 줄 아이콘 간격 — 넓고 고르지 않던 것 정리(펜닐: 간격이 너무 넓고 이상해 보임, 승인).
    실측(종전): 아이콘끼리 20px(버튼 40px − 그림 22px), A-B·CC 옆만 23~25px(상자 52·48px 고정 최소폭) · 휴대폰 촘촘 줄 10px 과 14px 섞임.
