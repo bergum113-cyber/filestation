@@ -35842,7 +35842,9 @@ const App = {
         $('#theme-css').remove();
         
         // 새 테마 CSS 적용 (모든 테마에 적용)
-        $('head').append(`<link id="theme-css" rel="stylesheet" href="assets/themes/${theme}/theme.css">`);
+        // ★ (2026-10-23) 테마 파일 버전(index.php 가 넘긴 수정 시각) — 고쳐 올린 테마를 브라우저가 옛 파일로 쓰지 않게(index.php 설명)
+        const _tv = (window.FS_THEME_VER && window.FS_THEME_VER[theme]) || '';
+        $('head').append(`<link id="theme-css" rel="stylesheet" href="assets/themes/${theme}/theme.css${_tv ? '?v=' + encodeURIComponent(_tv) : ''}">`);
         
         // 선택 표시 업데이트
         $('.theme-item').removeClass('active');

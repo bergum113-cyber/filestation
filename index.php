@@ -130,11 +130,23 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
     <link rel="stylesheet" href="assets/css/fs-eq.css?v=<?php echo substr(md5_file(__DIR__ . '/assets/css/fs-eq.css'), 0, 10); ?>">
     <link rel="stylesheet" href="assets/lib/viewerjs/viewer.min.css">
     <!-- 테마 깜빡임 방지: localStorage에서 테마 즉시 로드 -->
+    <?php
+    // ★ (2026-10-23) 테마 파일 주소에 버전(파일 수정 시각) — 다른 CSS·JS 처럼 테마 파일을 고쳐 올리면 브라우저가 옛 파일 대신 바로 새 파일을 받게.
+    //   종전엔 버전이 없어 강력 새로 고침 전까지 옛 테마가 남을 수 있었다(다크 테마 헤더 아이콘 수정 때 발견). 테마는 사람이 고르므로(localStorage)
+    //   모든 테마의 값을 한 번에 넘기고(이름 → 수정 시각), 고를 때(app.js setTheme)도 같은 값을 붙인다. 테마 폴더 이름은 영문·숫자·-·_ 만.
+    $_themeVer = [];
+    foreach ((glob(__DIR__ . '/assets/themes/*/theme.css') ?: []) as $_tf) {
+        $_tn = basename(dirname($_tf));
+        if (preg_match('/^[a-zA-Z0-9_-]+$/', $_tn)) $_themeVer[$_tn] = (string)(@filemtime($_tf) ?: 0);
+    }
+    ?>
     <script>
+    window.FS_THEME_VER = <?php echo json_encode((object)$_themeVer, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
     (function() {
         var theme = localStorage.getItem('theme') || 'default';
         if (/^[a-zA-Z0-9_-]+$/.test(theme)) {
-            document.write('<link id="theme-css" rel="stylesheet" href="assets/themes/' + theme + '/theme.css">');
+            var v = window.FS_THEME_VER && window.FS_THEME_VER[theme];
+            document.write('<link id="theme-css" rel="stylesheet" href="assets/themes/' + theme + '/theme.css' + (v ? '?v=' + v : '') + '">');
         }
     })();
     </script>
@@ -440,7 +452,9 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
             <!-- 헤더 -->
             <header class="header">
                 <div class="header-left">
-                    <button id="mobile-menu-btn" class="mobile-menu-btn">☰</button>
+                    <?php /* ★ (2026-10-23) '☰' 글자 → 그림 아이콘(24px, 설정·로그아웃 아이콘과 같은 선 그림·회색) — 펜닐: 모바일에서 작아 보임. 글자는 기기 글꼴마다
+                             굵기·크기가 달랐고(아이폰은 가늘고 작게), 글자색이 지정되지 않아 아이폰에선 브라우저 기본색(파랑)으로 나왔다. 색·크기는 style.css .mobile-menu-btn */ ?>
+                    <button id="mobile-menu-btn" class="mobile-menu-btn" aria-label="<?php echo $currentLang === 'en' ? 'Menu' : '메뉴'; ?>" title="<?php echo $currentLang === 'en' ? 'Menu' : '메뉴'; ?>"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
                     <?php if ($logoImage): ?>
                     <span class="logo" style="cursor:pointer;"><img src="<?= htmlspecialchars($logoImage) ?>" alt="Logo" class="header-logo"> <span class="logo-text"><?= htmlspecialchars($siteName) ?></span></span>
                     <span class="header-version" style="font-size:10px;color:#999;margin-left:4px;vertical-align:middle;">v<?php echo APP_VERSION; ?></span>

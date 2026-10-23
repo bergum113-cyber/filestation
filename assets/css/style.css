@@ -9332,6 +9332,11 @@ body.is-mobile #board-detail-search {
     padding: 4px 8px;
 }
 
+/* ★ (2026-10-23) 모바일 메뉴 버튼 — 그림 아이콘(index.php, 24px)으로 바꾸며 색을 설정·로그아웃 아이콘(.btn-icon)과 같은 회색으로 지정
+   (지정하지 않으면 아이폰은 버튼 글자색 기본값인 파랑으로 그림). 아이콘을 버튼 가운데에. 보이기·여백은 아래 모바일 규칙 그대로. */
+.mobile-menu-btn { color: #555; line-height: 0; }
+.mobile-menu-btn svg { display: block; width: 24px; height: 24px; }
+
 /* 모바일 검색 바 */
 .mobile-search-bar {
     display: none;
@@ -10691,6 +10696,16 @@ tr:hover,
 .sidebar .menu-list a:hover {
     background-color: rgba(0,0,0,0.05);
 }
+/* ★ (2026-10-23) 즐겨찾기·최근 파일 — 마우스 올림 바탕을 선택 바탕과 같은 상자(줄 전체)로. 펜닐: 선택과 마우스 올림의 크기가 다름.
+   위 규칙이 줄(li)과 그 안 링크 칸(a) 둘 다에 바탕을 깔아, 올리면 오른쪽 × 자리를 뺀 좁고 더 둥근 링크 칸(8px)이 겹쳐 진하게 보였다
+   (실측 PC 줄 184×32·링크 155×32). 이 두 목록에서만 링크 칸 바탕을 빼고 줄 바탕을 두 겹이던 진하기에 가깝게(0.05 → 0.06),
+   선택·올림 모서리를 6px 로 같게. 스토리지·게시판 등 다른 사이드바 메뉴는 그대로. */
+.sidebar .menu-list .favorite-item a:hover, .sidebar .menu-list .recent-file-item a:hover { background-color: transparent; }
+.sidebar .menu-list .favorite-item:hover, .sidebar .menu-list .recent-file-item:hover { background-color: rgba(0,0,0,0.06); }
+.sidebar .menu-list .favorite-item, .sidebar .menu-list .recent-file-item { border-radius: 6px; }
+/*   선택된 줄에 올렸을 때는 원래 의도(.favorite-item.active:hover — 조금 진한 파랑)대로 — 위 공통 규칙(.sidebar .menu-list li:hover)이 더 강해
+     종전엔 회색으로 덮였고, 위 줄 규칙도 더 강해 파랑을 덮으므로 같은 강도로 다시 지정. */
+.sidebar .menu-list .favorite-item.active:hover, .sidebar .menu-list .recent-file-item.active:hover { background-color: rgba(0, 120, 215, 0.22); }
 
 /* 사이드바 슬라이드 애니메이션은 유지 */
 .sidebar {

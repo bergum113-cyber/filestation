@@ -2820,3 +2820,24 @@ hr[style*="dashed"] {
 .board-pg-nav { color: var(--theme-text-muted); }
 .board-pg-nav:hover { background: var(--theme-hover); color: var(--theme-primary); }
 .board-pg-disabled { color: var(--theme-border) !important; }
+
+/* ★ (2026-10-23) 헤더 아이콘(메뉴·알림·설정·로그아웃) — 밝게. 펜닐 승인(재검토 발견: 다크 테마 헤더가 짙은 남색인데 아이콘이 회색 #555 라 흐릿했다).
+   위쪽 .btn-icon(글자색 var(--theme-text)) 규칙이 style.css 의 '.header-right .btn-icon'(더 강함, #555)에 덮였고, 모바일 메뉴 아이콘도 같은 회색.
+   같은 강도로 다시 지정 — 평소 흐린 글자색(--theme-text-muted), 올리면 밝은 글자색(--theme-text)·옅은 밝은 바탕(밝은 테마의 '올리면 진하게'와 같은 방향). */
+.header-right .btn-icon,
+.mobile-menu-btn { color: var(--theme-text-muted); }
+.header-right .btn-icon:hover { color: var(--theme-text); background: rgba(255, 255, 255, 0.08); }
+
+/* ★ (2026-10-23) 사이드바 메뉴(즐겨찾기·최근 파일·게시판·관리 등) 마우스 올림 바탕 — 보이게. 펜닐 승인(재검토 발견: 공통 규칙이 검은색 5~6% 라
+   짙은 남색 사이드바에서 거의 안 보였다 — 오늘 이전부터). 스토리지 목록 올림(style.css #storage-list a:hover)과 같은 방식 — 사이드바 글자색 6%
+   (color-mix 를 모르는 오래된 브라우저는 앞 줄의 흰색 6%). 즐겨찾기·최근 파일은 줄 전체(링크 칸 바탕 없음 — style.css 와 같음), 선택된 줄 올림(파랑)은 그대로. */
+.sidebar .menu-list li:hover,
+.sidebar .menu-list a:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+    background-color: color-mix(in srgb, var(--sidebar-text) 6%, transparent);
+}
+.sidebar .menu-list .favorite-item:hover,
+.sidebar .menu-list .recent-file-item:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+    background-color: color-mix(in srgb, var(--sidebar-text) 6%, transparent);
+}
