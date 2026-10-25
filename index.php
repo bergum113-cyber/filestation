@@ -144,6 +144,10 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
     window.FS_THEME_VER = <?php echo json_encode((object)$_themeVer, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
     (function() {
         var theme = localStorage.getItem('theme') || 'default';
+        // ★ (2026-10-25) 민트 테마 제거 → 가장 가까운 미쿠로 자동 전환(저장값도 바꿔 다음부터 바로 미쿠). 저장소를 못 쓰는 환경이면 이번 화면만 미쿠
+        // ★ (2026-10-25) 민트 전체도 제거 → 미쿠 전체로
+        var _themeMove = { 'mint': 'miku', 'mint-full': 'miku-full', 'dark-color': 'dark-side', 'dark-full': 'dark' };   // ★ (2026-10-25 저녁) 다크 컬러 → 다크 사이드, 다크 전체 → 다크
+        if (_themeMove[theme]) { theme = _themeMove[theme]; try { localStorage.setItem('theme', theme); } catch (e) {} }
         if (/^[a-zA-Z0-9_-]+$/.test(theme)) {
             var v = window.FS_THEME_VER && window.FS_THEME_VER[theme];
             document.write('<link id="theme-css" rel="stylesheet" href="assets/themes/' + theme + '/theme.css' + (v ? '?v=' + v : '') + '">');
@@ -289,8 +293,8 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                 
                 <!-- SSO 로그인 버튼 -->
                 <div id="sso-buttons" style="display:none;margin-top:12px;">
-                    <div style="text-align:center;color:#999;font-size:12px;margin:8px 0;">
-                        <span style="background:#fff;padding:0 10px;">OR</span>
+                    <div style="text-align:center;color:var(--fs-text-3, #999);font-size:12px;margin:8px 0;">
+                        <span style="background:var(--fs-surface, #fff);padding:0 10px;">OR</span>
                     </div>
                     <button id="sso-ldap-btn" class="btn btn-block" style="display:none;background:#2c3e50;color:#fff;margin-bottom:6px;" onclick="App.showLdapLoginForm()">
                         🔐 LDAP / AD <?php echo $currentLang === 'en' ? 'Login' : '로그인'; ?>
@@ -305,7 +309,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                 
                 <!-- LDAP 로그인 폼 -->
                 <form id="ldap-login-form" style="display:none;">
-                    <p style="text-align:center;font-size:13px;color:#666;margin-bottom:10px;">🔐 LDAP / Active Directory</p>
+                    <p style="text-align:center;font-size:13px;color:var(--fs-text-2, #666);margin-bottom:10px;">🔐 LDAP / Active Directory</p>
                     <input type="text" id="ldap-username" placeholder="<?php echo $currentLang === 'en' ? 'Domain Username' : '도메인 계정'; ?>" required>
                     <input type="password" id="ldap-password" placeholder="<?php echo $currentLang === 'en' ? 'Password' : '비밀번호'; ?>" required>
                     <label class="remember-me">
@@ -320,7 +324,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                 <form id="twofa-form" style="display:none;">
                     <!-- OTP 입력 -->
                     <div id="twofa-otp-section">
-                        <p style="text-align:center; margin-bottom:15px; color:#666;">
+                        <p style="text-align:center; margin-bottom:15px; color:var(--fs-text-2, #666);">
                             🔐 <?php echo $currentLang === 'en' ? 'Enter the 6-digit code from your authenticator app' : '인증 앱의 6자리 코드를 입력하세요'; ?>
                         </p>
                         <input type="text" id="twofa-code" placeholder="000000" maxlength="6" 
@@ -328,13 +332,13 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                style="text-align:center; font-size:24px; letter-spacing:5px;" required
                                oninput="this.value = this.value.replace(/[^0-9]/g, '')">
                         <p style="text-align:center; margin:15px 0 10px 0;">
-                            <a href="#" id="show-backup-code" style="font-size:13px; color:#666;"><?php echo $currentLang === 'en' ? 'Login with backup code' : '백업 코드로 로그인'; ?></a>
+                            <a href="#" id="show-backup-code" style="font-size:13px; color:var(--fs-text-2, #666);"><?php echo $currentLang === 'en' ? 'Login with backup code' : '백업 코드로 로그인'; ?></a>
                         </p>
                     </div>
                     
                     <!-- 백업 코드 입력 -->
                     <div id="twofa-backup-section" style="display:none;">
-                        <p style="text-align:center; margin-bottom:15px; color:#666;">
+                        <p style="text-align:center; margin-bottom:15px; color:var(--fs-text-2, #666);">
                             🔑 <?php echo $currentLang === 'en' ? 'Enter your backup code' : '백업 코드를 입력하세요'; ?>
                         </p>
                         <input type="text" id="twofa-backup-code" placeholder="1234-5678" maxlength="9" 
@@ -342,7 +346,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                style="text-align:center; font-size:24px; letter-spacing:3px;"
                                oninput="this.value = this.value.replace(/[^0-9\-]/g, '')">
                         <p style="text-align:center; margin:15px 0 10px 0;">
-                            <a href="#" id="show-otp-code" style="font-size:13px; color:#666;"><?php echo $currentLang === 'en' ? 'Login with OTP code' : 'OTP 코드로 로그인'; ?></a>
+                            <a href="#" id="show-otp-code" style="font-size:13px; color:var(--fs-text-2, #666);"><?php echo $currentLang === 'en' ? 'Login with OTP code' : 'OTP 코드로 로그인'; ?></a>
                         </p>
                     </div>
                     
@@ -356,9 +360,9 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                     <?php echo $currentLang === 'en' ? 'Sign up to become an administrator.' : '회원가입하시면 관리자 계정이 됩니다.'; ?>
                 </div>
                 <div class="login-links" id="forgot-password-wrap" style="display:none;">
-                    <a href="#" id="show-forgot-username" style="font-size:13px; color:#888;"><?php echo $currentLang === 'en' ? 'Forgot username?' : '아이디를 잊으셨나요?'; ?></a>
-                    <span style="font-size:13px; color:#ccc;"> | </span>
-                    <a href="#" id="show-forgot-password" style="font-size:13px; color:#888;"><?php _e('forgot_password'); ?></a>
+                    <a href="#" id="show-forgot-username" style="font-size:13px; color:var(--fs-text-3, #888);"><?php echo $currentLang === 'en' ? 'Forgot username?' : '아이디를 잊으셨나요?'; ?></a>
+                    <span style="font-size:13px; color:var(--fs-text-4, #ccc);"> | </span>
+                    <a href="#" id="show-forgot-password" style="font-size:13px; color:var(--fs-text-3, #888);"><?php _e('forgot_password'); ?></a>
                 </div>
                 <div class="login-links" id="signup-link-wrap" style="display:none;">
                     <span><?php _e('no_account'); ?></span> <a href="#" id="show-signup"><?php _e('register'); ?></a>
@@ -453,14 +457,15 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
             <header class="header">
                 <div class="header-left">
                     <?php /* ★ (2026-10-23) '☰' 글자 → 그림 아이콘(24px, 설정·로그아웃 아이콘과 같은 선 그림·회색) — 펜닐: 모바일에서 작아 보임. 글자는 기기 글꼴마다
-                             굵기·크기가 달랐고(아이폰은 가늘고 작게), 글자색이 지정되지 않아 아이폰에선 브라우저 기본색(파랑)으로 나왔다. 색·크기는 style.css .mobile-menu-btn */ ?>
-                    <button id="mobile-menu-btn" class="mobile-menu-btn" aria-label="<?php echo $currentLang === 'en' ? 'Menu' : '메뉴'; ?>" title="<?php echo $currentLang === 'en' ? 'Menu' : '메뉴'; ?>"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+                             굵기·크기가 달랐고(아이폰은 가늘고 작게), 글자색이 지정되지 않아 아이폰에선 브라우저 기본색(파랑)으로 나왔다. 색·크기는 style.css .mobile-menu-btn
+                             ★ (2026-10-23) 펜닐: 설정·로그아웃보다 두꺼움 → 20px·선 1.8(실제 1.5px, 설정·로그아웃 18px·선 2 와 같은 굵기), 세 줄 길이 15px(설정 아이콘 폭 정도) */ ?>
+                    <button id="mobile-menu-btn" class="mobile-menu-btn" aria-label="<?php echo $currentLang === 'en' ? 'Menu' : '메뉴'; ?>" title="<?php echo $currentLang === 'en' ? 'Menu' : '메뉴'; ?>"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
                     <?php if ($logoImage): ?>
                     <span class="logo" style="cursor:pointer;"><img src="<?= htmlspecialchars($logoImage) ?>" alt="Logo" class="header-logo"> <span class="logo-text"><?= htmlspecialchars($siteName) ?></span></span>
-                    <span class="header-version" style="font-size:10px;color:#999;margin-left:4px;vertical-align:middle;">v<?php echo APP_VERSION; ?></span>
+                    <span class="header-version" style="font-size:10px;color:var(--fs-text-3, #999);margin-left:4px;vertical-align:middle;">v<?php echo APP_VERSION; ?></span>
                     <?php else: ?>
                     <span class="logo" style="cursor:pointer;">📁 <span class="logo-text"><?= htmlspecialchars($siteName) ?></span></span>
-                    <span class="header-version" style="font-size:10px;color:#999;margin-left:4px;vertical-align:middle;">v<?php echo APP_VERSION; ?></span>
+                    <span class="header-version" style="font-size:10px;color:var(--fs-text-3, #999);margin-left:4px;vertical-align:middle;">v<?php echo APP_VERSION; ?></span>
                     <?php endif; ?>
                 </div>
                 <div class="header-center">
@@ -475,11 +480,11 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                     <div class="search-hint"><?php echo $currentLang === 'en' ? '🔍 Integrated: fast (indexed) | ⚙️ Filter: real-time (no index needed)' : '🔍 통합검색: 빠름 (인덱스) | ⚙️ 필터 검색: 실시간 (인덱스 불필요)'; ?></div>
                 </div>
                 <div class="header-right">
-                    <button id="mobile-search-btn" class="mobile-search-btn">🔍</button>
+                    <button id="mobile-search-btn" class="mobile-search-btn" aria-label="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>" title="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
                     <div class="digital-clock" id="digital-clock"></div>
                     <span id="user-name" class="user-welcome"></span>
                     <div class="header-notify-wrap" id="header-notify-wrap" style="display:none;">
-                        <button id="btn-notify" class="btn-icon" title="<?php echo $currentLang === 'en' ? 'Notifications' : '알림'; ?>">🔔<span class="notify-badge" id="notify-badge">0</span></button>
+                        <button id="btn-notify" class="btn-icon" title="<?php echo $currentLang === 'en' ? 'Notifications' : '알림'; ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg><span class="notify-badge" id="notify-badge">0</span></button>
                     </div>
                     <button id="btn-settings" class="btn-icon" title="<?php _e('settings'); ?>"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
                     <button id="btn-logout" class="btn-icon" title="<?php _e('logout'); ?>"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
@@ -536,7 +541,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             <span class="toggle-icon">+</span> ⭐ <?php _e('favorites'); ?>
                         </h3>
                         <ul class="menu-list collapsible" id="favorites-list" style="display:none;">
-                            <li class="empty-message" style="color:#999;font-size:12px;padding:5px 10px;"><?php _e('no_favorites'); ?></li>
+                            <li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;"><?php _e('no_favorites'); ?></li>
                         </ul>
                         
                         <!-- 최근 파일 섹션 -->
@@ -545,7 +550,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             <span class="toggle-icon">+</span> 🕐 <?php _e('recent_files'); ?>
                         </h3>
                         <ul class="menu-list collapsible" id="recent-files-list" style="display:none;">
-                            <li class="empty-message" style="color:#999;font-size:12px;padding:5px 10px;"><?php _e('no_recent_files'); ?></li>
+                            <li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;"><?php _e('no_recent_files'); ?></li>
                         </ul>
                         
                         <div id="admin-section" style="display:none;">
@@ -641,6 +646,8 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                     <div id="mobile-location-bar" class="mobile-location-bar"></div>
                     
                     <!-- 툴바 -->
+                    <?php /* ★ (2026-10-23) 툴바·머리줄 버튼의 이모지(⚡📤📁🔄🔀📋📥🗑️ ▦☰ 🔍🔔) → 선 그림 아이콘(class="fs-ico", Feather/Lucide 모양, 설정·로그아웃과 같은 선 굵기 2·글자색 따라감) — 펜닐: 테마와 연동.
+                             이모지는 기기 글꼴이 그리는 컬러 그림이라 테마색을 못 따르고 기기마다 모양이 달랐다. 크기·정렬은 style.css .fs-ico */ ?>
                     <div class="toolbar">
                         <div class="toolbar-left">
                             <div class="nav-buttons" style="display:inline-flex;gap:1px;align-items:center;margin-right:4px;">
@@ -656,13 +663,13 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             <div id="breadcrumb" class="breadcrumb"></div>
                         </div>
                         <div class="toolbar-center">
-                            <button id="btn-paste" class="btn btn-primary" style="display:none;">📋 <?php _e('paste'); ?></button>
-                            <button id="btn-download-selected" class="btn btn-primary" style="display:none;">📥 <?php echo $currentLang === 'en' ? 'Download' : '다운로드'; ?></button>
-                            <button id="btn-delete-selected" class="btn btn-danger" style="display:none;">🗑️ <?php echo $currentLang === 'en' ? 'Delete Selected' : '선택 삭제'; ?></button>
+                            <button id="btn-paste" class="btn btn-primary" style="display:none;"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg> <?php _e('paste'); ?></button>
+                            <button id="btn-download-selected" class="btn btn-primary" style="display:none;"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> <?php echo $currentLang === 'en' ? 'Download' : '다운로드'; ?></button>
+                            <button id="btn-delete-selected" class="btn btn-danger" style="display:none;"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> <?php echo $currentLang === 'en' ? 'Delete Selected' : '선택 삭제'; ?></button>
                         </div>
                         <div class="toolbar-right">
                             <div class="action-dropdown" id="toolbar-action-dropdown">
-                                <button id="btn-toolbar-action" class="btn">⚡ <?php echo $currentLang === 'en' ? 'Actions' : '작업'; ?> ▾</button>
+                                <button id="btn-toolbar-action" class="btn"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> <?php echo $currentLang === 'en' ? 'Actions' : '작업'; ?> ▾</button>
                                 <div id="toolbar-action-menu" class="toolbar-action-menu">
                                     <div class="action-option" data-action="open">📂 <?php echo $currentLang === 'en' ? 'Open' : '열기'; ?></div>
                                     <div class="action-option" data-action="preview">👁️ <?php echo $currentLang === 'en' ? 'Preview' : '미리보기'; ?></div>
@@ -697,16 +704,16 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             </div>
                             <div class="upload-dropdown">
                                 <div class="upload-drag-hint"><?php echo $currentLang === 'en' ? '💡 Drag & Drop supported (files/folders)' : '💡 드래그 앤 드롭 (파일/폴더) 지원'; ?></div>
-                                <button id="btn-upload" class="btn btn-primary">📤 <?php _e('upload'); ?> ▾</button>
+                                <button id="btn-upload" class="btn btn-primary"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> <?php _e('upload'); ?> ▾</button>
                                 <div id="upload-menu" class="upload-menu">
                                     <div class="upload-option" data-type="file">📄 <?php echo $currentLang === 'en' ? 'Upload Files' : '파일 업로드'; ?></div>
                                     <div class="upload-option" data-type="folder">📁 <?php echo $currentLang === 'en' ? 'Upload Folder' : '폴더 업로드'; ?></div>
                                 </div>
                             </div>
-                            <button id="btn-new-folder" class="btn">📁 <?php _e('new_folder'); ?></button>
-                            <button id="btn-index-sync" class="btn" style="display:none;" title="<?php echo $currentLang === 'en' ? 'Sync Index' : '인덱스 동기화'; ?>">🔄 <?php echo $currentLang === 'en' ? 'Sync' : '동기화'; ?></button>
+                            <button id="btn-new-folder" class="btn"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg> <?php _e('new_folder'); ?></button>
+                            <button id="btn-index-sync" class="btn" style="display:none;" title="<?php echo $currentLang === 'en' ? 'Sync Index' : '인덱스 동기화'; ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> <?php echo $currentLang === 'en' ? 'Sync' : '동기화'; ?></button>
                             <div class="sort-dropdown">
-                                <button id="btn-sort" class="btn-icon" title="<?php _e('sort_by'); ?>">🔀</button>
+                                <button id="btn-sort" class="btn-icon" title="<?php _e('sort_by'); ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 16 4 4 4-4"/><path d="M7 20V4"/><path d="m21 8-4-4-4 4"/><path d="M17 4v16"/></svg></button>
                                 <div id="sort-menu" class="sort-menu">
                                     <div class="sort-option active" data-sort="name">📝 <?php echo $currentLang === 'en' ? 'Name' : '이름'; ?> <span class="sort-arrow">▲</span></div>
                                     <div class="sort-option" data-sort="date">📅 <?php echo $currentLang === 'en' ? 'Date' : '날짜'; ?> <span class="sort-arrow"></span></div>
@@ -714,8 +721,8 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                     <div class="sort-option" data-sort="type">📂 <?php echo $currentLang === 'en' ? 'Type' : '유형'; ?> <span class="sort-arrow"></span></div>
                                 </div>
                             </div>
-                            <button id="btn-view-grid" class="btn-icon active" title="<?php _e('grid_view'); ?>">▦</button>
-                            <button id="btn-view-list" class="btn-icon" title="<?php _e('list_view'); ?>">☰</button>
+                            <button id="btn-view-grid" class="btn-icon active" title="<?php _e('grid_view'); ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></button>
+                            <button id="btn-view-list" class="btn-icon" title="<?php _e('list_view'); ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
                         </div>
                     </div>
                     
@@ -746,7 +753,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                 <div id="board-inline-breadcrumb" class="breadcrumb"></div>
                             </div>
                             <div class="toolbar-center">
-                                <span id="board-inline-count" style="color:#999;font-size:13px;"></span>
+                                <span id="board-inline-count" style="color:var(--fs-text-3, #999);font-size:13px;"></span>
                             </div>
                             <div class="toolbar-right">
                                 <select id="board-search-type" title="<?php echo $currentLang === 'en' ? 'Search filter' : '검색 조건'; ?>">
@@ -757,8 +764,8 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                     <option value="author"><?php echo $currentLang === 'en' ? 'Author' : '작성자이름'; ?></option>
                                 </select>
                                 <div style="position:relative;display:inline-flex;align-items:center;">
-                                    <span style="position:absolute;left:8px;color:#aaa;font-size:13px;pointer-events:none;">🔍</span>
-                                    <input type="text" id="board-inline-search" placeholder="<?php echo $currentLang === 'en' ? 'Search...' : '검색...'; ?>" style="width:180px;height:32px;font-size:12px;padding:6px 10px 6px 28px;border:1px solid var(--theme-border,var(--border,#ddd));border-radius:16px;outline:none;background:var(--theme-hover,var(--bg-secondary,#f8f9fa));color:var(--theme-text,#333);transition:border-color 0.2s,width 0.2s;" onfocus="this.style.borderColor='var(--theme-primary,var(--primary,#667eea))';this.style.width='220px'" onblur="this.style.borderColor='';this.style.width='180px'">
+                                    <span style="position:absolute;left:8px;color:var(--fs-text-3, #aaa);font-size:13px;pointer-events:none;">🔍</span>
+                                    <input type="text" id="board-inline-search" placeholder="<?php echo $currentLang === 'en' ? 'Search...' : '검색...'; ?>" style="width:180px;height:32px;font-size:12px;padding:6px 10px 6px 28px;border:1px solid var(--theme-border,var(--border,var(--fs-border-2, #ddd)));border-radius:16px;outline:none;background:var(--fs-board-search-bg,var(--theme-hover,var(--bg-secondary,var(--fs-surface-2, #f8f9fa))));color:var(--theme-text,var(--fs-text, #333));transition:border-color 0.2s,width 0.2s;" onfocus="this.style.borderColor='var(--theme-primary,var(--primary,#667eea))';this.style.width='220px'" onblur="this.style.borderColor='';this.style.width='180px'">
                                 </div>
                                 <button id="btn-board-inline-write" class="btn btn-primary btn-board-write" onclick="App.showBoardWriteForm()" style="display:none;">✏️ <?php echo $currentLang === 'en' ? 'Write' : '글쓰기'; ?></button>
                             </div>
@@ -766,7 +773,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                         <!-- 게시글 목록 (스크롤 영역) -->
                         <div id="board-list-scroll-wrap" style="flex:1;overflow-y:auto;min-height:0;">
                         <div id="board-inline-list" class="file-list" style="display:block;"></div>
-                        <div id="board-inline-empty" style="display:none;text-align:center;padding:60px 20px;color:var(--theme-text-muted,#999);">
+                        <div id="board-inline-empty" style="display:none;text-align:center;padding:60px 20px;color:var(--theme-text-muted,var(--fs-text-3, #999));">
                             <div style="font-size:48px;margin-bottom:10px;">📝</div>
                             <p><?php echo $currentLang === 'en' ? 'No posts yet' : '게시글이 없습니다'; ?></p>
                         </div>
@@ -787,20 +794,20 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                 <label><?php echo $currentLang === 'en' ? 'Attachments' : '첨부파일'; ?></label>
                                 <div id="board-post-attachments" style="margin-bottom:8px;"></div>
                                 <div style="display:flex;gap:8px;align-items:stretch;">
-                                    <div id="board-file-drop" style="flex:1;padding:16px;border:2px dashed var(--border-color,#ddd);border-radius:8px;text-align:center;color:#999;font-size:13px;cursor:pointer;" onclick="document.getElementById('board-file-input').click();">
+                                    <div id="board-file-drop" style="flex:1;padding:16px;border:2px dashed var(--border-color,var(--fs-border-2, #ddd));border-radius:8px;text-align:center;color:var(--fs-text-3, #999);font-size:13px;cursor:pointer;" onclick="document.getElementById('board-file-input').click();">
                                         📎 <?php echo $currentLang === 'en' ? 'Click or drag files' : '클릭 또는 파일 끌어놓기'; ?>
                                     </div>
-                                    <button type="button" class="btn" onclick="App.openStorageFilePicker()" style="padding:8px 14px;font-size:12px;white-space:nowrap;border-radius:8px;border:2px dashed var(--border-color,#ddd);background:none;color:#999;cursor:pointer;">
+                                    <button type="button" class="btn" onclick="App.openStorageFilePicker()" style="padding:8px 14px;font-size:12px;white-space:nowrap;border-radius:8px;border:2px dashed var(--border-color,var(--fs-border-2, #ddd));background:none;color:var(--fs-text-3, #999);cursor:pointer;">
                                         📂 <?php echo $currentLang === 'en' ? 'From Storage' : '스토리지에서'; ?>
                                     </button>
                                 </div>
                                 <input type="file" id="board-file-input" multiple style="display:none;" onchange="App.uploadBoardFiles(this.files)">
                                 <div id="board-upload-progress" style="display:none;margin-top:8px;">
-                                    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#666;">
+                                    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--fs-text-2, #666);">
                                         <div class="spinner-small"></div>
                                         <span id="board-upload-progress-text"><?php echo $currentLang === 'en' ? 'Uploading...' : '업로드 중...'; ?></span>
                                     </div>
-                                    <div style="margin-top:4px;height:4px;background:#e0e0e0;border-radius:2px;overflow:hidden;">
+                                    <div style="margin-top:4px;height:4px;background:var(--fs-surface-3, #e0e0e0);border-radius:2px;overflow:hidden;">
                                         <div id="board-upload-progress-bar" style="width:0%;height:100%;background:var(--primary,#667eea);border-radius:2px;transition:width 0.3s;"></div>
                                     </div>
                                 </div>
@@ -809,8 +816,8 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                 <input type="hidden" id="board-post-pinned">
                                 <label style="display:inline-flex !important;align-items:center;gap:6px;cursor:pointer;font-size:14px;"><input type="checkbox" id="board-post-notice" style="margin:0;width:auto !important;" onchange="document.getElementById('board-notice-color-wrap').style.display=this.checked?'inline-flex':'none'"> <?php echo $currentLang === 'en' ? '🔔 Notice' : '🔔 공지'; ?></label>
                                 <span id="board-notice-color-wrap" style="display:none;align-items:center;gap:6px;margin-left:12px;">
-                                    <label style="font-size:13px;color:var(--theme-text-muted,#888);"><?php echo $currentLang === 'en' ? 'Color' : '색상'; ?></label>
-                                    <input type="color" id="board-notice-color" value="#e74c3c" style="width:32px;height:26px;padding:0;border:1px solid var(--border-color,#ddd);border-radius:4px;cursor:pointer;">
+                                    <label style="font-size:13px;color:var(--theme-text-muted,var(--fs-text-3, #888));"><?php echo $currentLang === 'en' ? 'Color' : '색상'; ?></label>
+                                    <input type="color" id="board-notice-color" value="#e74c3c" style="width:32px;height:26px;padding:0;border:1px solid var(--border-color,var(--fs-border-2, #ddd));border-radius:4px;cursor:pointer;">
                                 </span>
                             </div>
                             <div style="text-align:right;margin-top:12px;">
@@ -834,7 +841,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             <span id="transfer-title">📤 <?php _e('uploading'); ?>...</span>
                             <button id="transfer-cancel" class="btn-icon" title="<?php _e('cancel'); ?>">✕</button>
                         </div>
-                        <div class="vpn-warning" id="vpn-warning" style="background:#fff3cd;color:#856404;padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:8px;">
+                        <div class="vpn-warning" id="vpn-warning" style="background:var(--fs-tint-warn, #fff3cd);color:var(--fs-fg-warn, #856404);padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:8px;">
                             ⚠️ <?php echo $currentLang === 'en' ? 'Upload speed may be significantly slower when using VPN. If speed is slow, please disconnect VPN.' : 'VPN 사용 시 업로드 속도가 현저히 느려질 수 있습니다. 속도가 느리다면 VPN을 종료해주세요.'; ?>
                         </div>
                         
@@ -843,7 +850,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                         
                         <!-- 단일 전송용 (다운로드/복사/이동/삭제) -->
                         <div id="single-transfer-area">
-                            <div id="transfer-path" style="display:none;font-size:12px;color:#555;margin-bottom:4px;line-height:1.5;">
+                            <div id="transfer-path" style="display:none;font-size:12px;color:var(--fs-text-2, #555);margin-bottom:4px;line-height:1.5;">
                                 <div id="transfer-path-from" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
                                 <div id="transfer-path-to" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></div>
                             </div>
@@ -919,7 +926,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                         <label><?php echo $currentLang === 'en' ? 'Confirm Password' : '비밀번호 확인'; ?></label>
                         <input type="password" id="vault-create-password2" placeholder="<?php echo $currentLang === 'en' ? 'Re-enter password' : '비밀번호 재입력'; ?>">
                     </div>
-                    <div style="padding:8px 12px;background:var(--bg-warning,#fff3cd);border-radius:6px;font-size:0.85em;color:var(--text-warning,#856404);margin-top:8px;">
+                    <div style="padding:8px 12px;background:var(--bg-warning,var(--fs-tint-warn, #fff3cd));border-radius:6px;font-size:0.85em;color:var(--text-warning,var(--fs-fg-warn, #856404));margin-top:8px;">
                         ⚠️ <?php echo $currentLang === 'en' ? 'WARNING: If you forget your password, files cannot be recovered. The server does not store your password.' : '경고: 비밀번호를 잊으면 파일을 복구할 수 없습니다. 서버는 비밀번호를 저장하지 않습니다.'; ?>
                     </div>
                 </div>
@@ -941,7 +948,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                         <label><?php echo $currentLang === 'en' ? 'Password' : '비밀번호'; ?></label>
                         <input type="password" id="vault-unlock-password" placeholder="<?php echo $currentLang === 'en' ? 'Enter password' : '비밀번호 입력'; ?>">
                     </div>
-                    <div id="vault-unlock-error" style="display:none;padding:8px 12px;background:var(--bg-danger,#f8d7da);border-radius:6px;font-size:0.85em;color:var(--text-danger,#721c24);margin-top:8px;"></div>
+                    <div id="vault-unlock-error" style="display:none;padding:8px 12px;background:var(--bg-danger,var(--fs-tint-err, #f8d7da));border-radius:6px;font-size:0.85em;color:var(--text-danger,var(--fs-fg-err, #721c24));margin-top:8px;"></div>
                     <div id="vault-unlock-progress" style="display:none;margin-top:12px;">
                         <div style="display:flex;align-items:center;gap:8px;">
                             <div class="spinner-small"></div>
@@ -986,9 +993,9 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             <label><?php echo $currentLang === 'en' ? 'Path' : '경로'; ?></label>
                             <input type="text" id="storage-path" placeholder="<?php echo $currentLang === 'en' ? 'D:\\Files or /data/nas' : 'D:\\Files 또는 /data/nas'; ?>">
                         </div>
-                        <details style="margin-top:4px;margin-bottom:12px;font-size:12px;color:#555;">
-                            <summary style="cursor:pointer;color:#2980b9;font-weight:500;">📦 Docker <?php echo $currentLang === 'en' ? 'volume mount guide' : '볼륨 마운트 가이드'; ?></summary>
-                            <div style="background:#f5f5f5;padding:10px 12px;border-radius:6px;margin-top:6px;font-size:12px;line-height:1.7;color:#333;">
+                        <details style="margin-top:4px;margin-bottom:12px;font-size:12px;color:var(--fs-text-2, #555);">
+                            <summary style="cursor:pointer;color:var(--fs-fg-info, #2980b9);font-weight:500;">📦 Docker <?php echo $currentLang === 'en' ? 'volume mount guide' : '볼륨 마운트 가이드'; ?></summary>
+                            <div style="background:var(--fs-surface-2, #f5f5f5);padding:10px 12px;border-radius:6px;margin-top:6px;font-size:12px;line-height:1.7;color:var(--fs-text, #333);">
                                 
                                 <?php if ($currentLang === 'en'): ?>
                                 
@@ -998,7 +1005,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                                 </div>
                                 
                                 <div style="margin-bottom:8px;"><b>Example 1: Host folder</b></div>
-                                <div style="background:#e8f4fd;padding:8px;border-radius:4px;margin-bottom:4px;font-size:11px;">
+                                <div style="background:var(--fs-tint-info, #e8f4fd);padding:8px;border-radius:4px;margin-bottom:4px;font-size:11px;">
                                     If you add <code>volumes: - E:/movies:/mnt/storage/movies</code> in docker-compose.yml,<br>
                                     enter <b>/mnt/storage/movies</b> here → <code>E:\movies</code> becomes an external storage.
                                 </div>
@@ -1011,7 +1018,7 @@ services:
       - D:/photos:/mnt/storage/photos      # Another drive</pre>
                                 
                                 <div style="margin-bottom:8px;"><b>Example 2: NAS (Synology, etc.) via SMB</b></div>
-                                <div style="background:#e8f4fd;padding:8px;border-radius:4px;margin-bottom:4px;font-size:11px;">
+                                <div style="background:var(--fs-tint-info, #e8f4fd);padding:8px;border-radius:4px;margin-bottom:4px;font-size:11px;">
                                     ① Mount the NAS share on host first<br>
                                     ② Add the mount path to docker-compose.yml<br>
                                     ③ Enter the container path here
@@ -1037,7 +1044,7 @@ services:
 username=admin
 password=mypass</pre>
 
-                                <div style="margin-top:10px;background:#fff3cd;padding:8px;border-radius:4px;font-size:11px;">
+                                <div style="margin-top:10px;background:var(--fs-tint-warn, #fff3cd);padding:8px;border-radius:4px;font-size:11px;">
                                     ⚠️ After changing docker-compose.yml, run <code>docker compose down && docker compose up -d</code> to apply.
                                 </div>
                                 
@@ -1049,7 +1056,7 @@ password=mypass</pre>
                                 </div>
                                 
                                 <div style="margin-bottom:8px;"><b>예시 1: 호스트 폴더 연결</b></div>
-                                <div style="background:#e8f4fd;padding:8px;border-radius:4px;margin-bottom:4px;font-size:11px;">
+                                <div style="background:var(--fs-tint-info, #e8f4fd);padding:8px;border-radius:4px;margin-bottom:4px;font-size:11px;">
                                     docker-compose.yml에 <code>volumes: - E:/movies:/mnt/storage/movies</code> 추가 후,<br>
                                     위 경로란에 <b>/mnt/storage/movies</b> 입력 → <code>E:\movies</code> 폴더가 외부 스토리지로 추가됩니다.
                                 </div>
@@ -1062,7 +1069,7 @@ services:
       - D:/photos:/mnt/storage/photos      # 다른 드라이브</pre>
                                 
                                 <div style="margin-bottom:8px;"><b>예시 2: NAS (시놀로지 등) SMB 연결</b></div>
-                                <div style="background:#e8f4fd;padding:8px;border-radius:4px;margin-bottom:4px;font-size:11px;">
+                                <div style="background:var(--fs-tint-info, #e8f4fd);padding:8px;border-radius:4px;margin-bottom:4px;font-size:11px;">
                                     ① 호스트에서 NAS 공유 폴더를 먼저 마운트<br>
                                     ② docker-compose.yml에 마운트 경로 추가<br>
                                     ③ 위 경로란에 컨테이너 경로 입력
@@ -1088,7 +1095,7 @@ services:
 username=admin
 password=mypass</pre>
 
-                                <div style="margin-top:10px;background:#fff3cd;padding:8px;border-radius:4px;font-size:11px;">
+                                <div style="margin-top:10px;background:var(--fs-tint-warn, #fff3cd);padding:8px;border-radius:4px;font-size:11px;">
                                     ⚠️ docker-compose.yml 수정 후 <code>docker compose down && docker compose up -d</code> 실행해야 적용됩니다.
                                 </div>
                                 
@@ -1099,7 +1106,7 @@ password=mypass</pre>
                     
                     <!-- SMB 옵션 -->
                     <div id="storage-smb-options" class="storage-options" style="display:none;">
-                        <div style="background:#e8f4fd;padding:8px 12px;border-radius:6px;margin-bottom:12px;font-size:12px;color:#1a5276;line-height:1.6;">
+                        <div style="background:var(--fs-tint-info, #e8f4fd);padding:8px 12px;border-radius:6px;margin-bottom:12px;font-size:12px;color:var(--fs-fg-info, #1a5276);line-height:1.6;">
                             <?php if ($currentLang === 'en'): ?>
                                 💡 <b>Windows:</b> Connects via <code>net use</code> automatically.<br>
                                 🐧 <b>Linux/Docker:</b> Uses <code>mount.cifs</code>. Requires <code>cap_add: [SYS_ADMIN, DAC_READ_SEARCH]</code> in docker-compose.yml and <code>cifs-utils</code> installed.<br>
@@ -1266,14 +1273,14 @@ password=mypass</pre>
                             </div>
                         </div>
                         <div style="margin-top:5px;">
-                            <span id="storage-used-size" style="color:#666;font-size:0.9em;"></span>
+                            <span id="storage-used-size" style="color:var(--fs-text-2, #666);font-size:0.9em;"></span>
                         </div>
-                        <div style="margin-top:12px;padding:10px;background:var(--bg-light, #f8f9fa);border-radius:6px;">
+                        <div style="margin-top:12px;padding:10px;background:var(--bg-light, var(--fs-surface-2, #f8f9fa));border-radius:6px;">
                             <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;margin:0;">
                                 <input type="checkbox" id="storage-calc-usage" style="width:16px;height:16px;">
                                 <span><?php echo $currentLang === 'en' ? 'Calculate current usage on save' : '저장 시 현재 사용량 계산'; ?></span>
                             </label>
-                            <div style="color:#e67e22;font-size:0.85em;margin-top:6px;display:none;" id="calc-usage-warning">
+                            <div style="color:var(--fs-fg-warn, #e67e22);font-size:0.85em;margin-top:6px;display:none;" id="calc-usage-warning">
                                 <?php echo $currentLang === 'en' ? '⚠️ Large storage may take a long time' : '⚠️ 대용량 스토리지는 시간이 오래 걸릴 수 있습니다'; ?>
                             </div>
                         </div>
@@ -1294,7 +1301,7 @@ password=mypass</pre>
                             <label title="<?php echo $currentLang === 'en' ? 'Create external share links' : '외부 공유 링크 생성'; ?>"><input type="checkbox" id="bulk-share"> <?php echo $currentLang === 'en' ? 'Share' : '공유'; ?></label>
                             <button class="btn btn-sm" id="btn-apply-bulk-perm"><?php echo $currentLang === 'en' ? 'Apply' : '적용'; ?></button>
                         </div>
-                        <div class="permission-bulk" style="margin-top:4px;background:#f0f7ff;border:1px dashed #90caf9;padding:6px 10px;border-radius:4px;">
+                        <div class="permission-bulk" style="margin-top:4px;background:var(--fs-tint-info, #f0f7ff);border:1px dashed var(--fs-tint-info-border, #90caf9);padding:6px 10px;border-radius:4px;">
                             <span style="font-weight:600;font-size:12px;"><?php echo $currentLang === 'en' ? '🆕 New User Default:' : '🆕 신규회원 기본:'; ?></span>
                             <label title="<?php echo $currentLang === 'en' ? 'Show on website' : '웹사이트에 표시'; ?>"><input type="checkbox" id="def-perm-visible"> <?php echo $currentLang === 'en' ? 'Web' : '웹'; ?></label>
                             <label title="<?php echo $currentLang === 'en' ? 'Show in WebDAV' : 'WebDAV에 표시'; ?>"><input type="checkbox" id="def-perm-webdav"> <?php echo $currentLang === 'en' ? 'DAV' : 'DAV'; ?></label>
@@ -1304,9 +1311,9 @@ password=mypass</pre>
                             <label title="<?php echo $currentLang === 'en' ? 'Delete files/folders' : '파일/폴더 삭제'; ?>"><input type="checkbox" id="def-perm-delete"> <?php echo $currentLang === 'en' ? 'Delete' : '삭제'; ?></label>
                             <label title="<?php echo $currentLang === 'en' ? 'Create external share links' : '외부 공유 링크 생성'; ?>"><input type="checkbox" id="def-perm-share"> <?php echo $currentLang === 'en' ? 'Share' : '공유'; ?></label>
                         </div>
-                        <p style="margin:6px 0 0;font-size:11px;color:#666;">💡 <?php echo $currentLang === 'en' ? '<b>DAV</b>: When enabled, the WebDAV guide menu appears in the user\'s sidebar.' : '<b>DAV</b>: 활성화하면 해당 사용자의 사이드바에 WebDAV 안내 메뉴가 표시됩니다.'; ?></p>
+                        <p style="margin:6px 0 0;font-size:11px;color:var(--fs-text-2, #666);">💡 <?php echo $currentLang === 'en' ? '<b>DAV</b>: When enabled, the WebDAV guide menu appears in the user\'s sidebar.' : '<b>DAV</b>: 활성화하면 해당 사용자의 사이드바에 WebDAV 안내 메뉴가 표시됩니다.'; ?></p>
                         <div class="permission-list" id="permission-list">
-                            <input type="text" id="perm-user-search" placeholder="<?php echo $currentLang === 'en' ? '🔍 Search users...' : '🔍 사용자 검색...'; ?>" style="width:100%; padding:6px 10px; margin-bottom:8px; border:1px solid var(--border,#ddd); border-radius:4px; font-size:13px; box-sizing:border-box;">
+                            <input type="text" id="perm-user-search" placeholder="<?php echo $currentLang === 'en' ? '🔍 Search users...' : '🔍 사용자 검색...'; ?>" style="width:100%; padding:6px 10px; margin-bottom:8px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:4px; font-size:13px; box-sizing:border-box;">
                             <div id="perm-user-list">
                             <!-- 유저별 권한 목록 -->
                             </div>
@@ -1316,13 +1323,13 @@ password=mypass</pre>
                     <!-- 폴더별 권한 섹션 -->
                     <div class="permission-section" style="margin-top:8px;">
                         <h4 style="margin-bottom:4px;">📁 <?php echo $currentLang === 'en' ? 'Folder Permissions' : '폴더별 권한'; ?></h4>
-                        <div style="font-size:11px;color:#888;margin:0 0 6px;line-height:1.5;">
+                        <div style="font-size:11px;color:var(--fs-text-3, #888);margin:0 0 6px;line-height:1.5;">
                             <p style="margin:0 0 4px;"><?php echo $currentLang === 'en' 
                                 ? 'Control folder access per user. Configured folders override storage permissions.' 
                                 : '사용자별 특정 폴더의 접근을 제어합니다. 설정된 폴더는 스토리지 권한보다 우선 적용됩니다.'; ?></p>
                             <details style="cursor:pointer;">
-                                <summary style="font-weight:bold;color:#555;"><?php echo $currentLang === 'en' ? '📖 Usage Guide' : '📖 사용방법'; ?></summary>
-                                <div style="margin-top:4px;padding:6px 8px;background:#f0f4ff;border-radius:4px;color:#555;">
+                                <summary style="font-weight:bold;color:var(--fs-text-2, #555);"><?php echo $currentLang === 'en' ? '📖 Usage Guide' : '📖 사용방법'; ?></summary>
+                                <div style="margin-top:4px;padding:6px 8px;background:var(--fs-tint-info, #f0f4ff);border-radius:4px;color:var(--fs-text-2, #555);">
 <?php if ($currentLang === 'en') { ?>
                                     <b>• Permission Types</b><br>
                                     &nbsp;&nbsp;✅ Visible — Show/hide folder in list<br>
@@ -1372,7 +1379,7 @@ password=mypass</pre>
                             </details>
                         </div>
                         <div id="folder-perm-list" style="margin-bottom:6px;"></div>
-                        <div style="background:#f8f9fa;padding:6px 8px;border-radius:6px;font-size:12px;">
+                        <div style="background:var(--fs-surface-2, #f8f9fa);padding:6px 8px;border-radius:6px;font-size:12px;">
                             <div class="form-row" style="gap:6px;flex-wrap:wrap;align-items:center;">
                                 <select id="fperm-user-select" style="flex:1;min-width:100px;font-size:12px;padding:3px 4px;"></select>
                                 <button class="btn btn-sm" id="btn-fperm-browse" title="<?php echo $currentLang === 'en' ? 'Browse & Add' : '폴더 찾아보기 & 추가'; ?>">📂 <?php echo $currentLang === 'en' ? 'Add Folder' : '폴더 추가'; ?></button>
@@ -1466,8 +1473,8 @@ password=mypass</pre>
                     <div class="form-group">
                         <label><?php echo $currentLang === 'en' ? 'Share with' : '공유 대상'; ?></label>
                         <input type="text" id="ishare-user-search" placeholder="<?php echo $currentLang === 'en' ? 'Search user by name...' : '사용자 이름 검색...'; ?>" autocomplete="off">
-                        <div id="ishare-user-results" style="max-height:150px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;display:none;"></div>
-                        <div id="ishare-selected-user" style="display:none;margin-top:6px;padding:8px 12px;background:#e8f4ff;border-radius:6px;"></div>
+                        <div id="ishare-user-results" style="max-height:150px;overflow-y:auto;border:1px solid var(--fs-border-2, #ddd);border-radius:6px;display:none;"></div>
+                        <div id="ishare-selected-user" style="display:none;margin-top:6px;padding:8px 12px;background:var(--fs-tint-info, #e8f4ff);border-radius:6px;"></div>
                     </div>
                     <div class="form-group" id="ishare-permission-group">
                         <label><?php echo $currentLang === 'en' ? 'Permission' : '권한'; ?></label>
@@ -1476,7 +1483,7 @@ password=mypass</pre>
                             <option value="write"><?php echo $currentLang === 'en' ? '✏️ Read & Write (Upload)' : '✏️ 읽기 + 쓰기 (업로드)'; ?></option>
                             <option value="full"><?php echo $currentLang === 'en' ? '🔓 Full (Upload, Delete, Rename)' : '🔓 전체 (업로드, 삭제, 이름변경)'; ?></option>
                         </select>
-                        <div id="ishare-perm-hint" style="font-size:12px;color:#888;margin-top:4px;"></div>
+                        <div id="ishare-perm-hint" style="font-size:12px;color:var(--fs-text-3, #888);margin-top:4px;"></div>
                     </div>
                     <div id="ishare-existing" style="display:none;margin-top:10px;">
                         <label style="font-weight:600;"><?php echo $currentLang === 'en' ? 'Currently shared with' : '현재 공유 중'; ?></label>
@@ -1539,9 +1546,9 @@ password=mypass</pre>
                 <div class="modal-body">
                     <input type="text" id="rename-input" placeholder="<?php echo $currentLang === 'en' ? 'New name' : '새 이름'; ?>">
                     <div id="rename-ext-row" style="margin-top:10px; display:none;">
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:14px; color:#666;">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:14px; color:var(--fs-text-2, #666);">
                             <input type="checkbox" id="rename-show-ext" style="width:auto; margin:0;">
-                            <?php echo $currentLang === 'en' ? 'Edit with extension' : '확장자 포함 편집'; ?> <span id="rename-ext-preview" style="color:#999;"></span>
+                            <?php echo $currentLang === 'en' ? 'Edit with extension' : '확장자 포함 편집'; ?> <span id="rename-ext-preview" style="color:var(--fs-text-3, #999);"></span>
                         </label>
                     </div>
                 </div>
@@ -1602,12 +1609,12 @@ password=mypass</pre>
                     <div style="margin-bottom:15px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                         <button class="btn btn-primary" id="btn-add-user"><?php echo $currentLang === 'en' ? '➕ Add User' : '➕ 사용자 추가'; ?></button>
                         <button class="btn" id="btn-bulk-quota">💾 <?php echo $currentLang === 'en' ? 'Bulk Quota Settings' : '일괄 용량 설정'; ?></button>
-                        <input type="text" id="users-search" placeholder="<?php echo $currentLang === 'en' ? '🔍 Search users...' : '🔍 사용자 검색...'; ?>" style="margin-left:auto; width:200px; padding:6px 10px; border:1px solid var(--border,#ddd); border-radius:4px; font-size:13px;">
+                        <input type="text" id="users-search" placeholder="<?php echo $currentLang === 'en' ? '🔍 Search users...' : '🔍 사용자 검색...'; ?>" style="margin-left:auto; width:200px; padding:6px 10px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:4px; font-size:13px;">
                     </div>
                     <div style="margin-bottom:10px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
-                        <span style="font-size:13px; color:#666;"><?php echo $currentLang === 'en' ? '🆕 New User Default Quota:' : '🆕 신규회원 기본 용량:'; ?></span>
-                        <input type="number" id="default-quota-value" min="0" value="0" style="width:70px; padding:4px 6px; border:1px solid var(--border,#ddd); border-radius:4px; font-size:13px;">
-                        <select id="default-quota-unit" style="padding:4px 6px; border:1px solid var(--border,#ddd); border-radius:4px; font-size:13px;">
+                        <span style="font-size:13px; color:var(--fs-text-2, #666);"><?php echo $currentLang === 'en' ? '🆕 New User Default Quota:' : '🆕 신규회원 기본 용량:'; ?></span>
+                        <input type="number" id="default-quota-value" min="0" value="0" style="width:70px; padding:4px 6px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:4px; font-size:13px;">
+                        <select id="default-quota-unit" style="padding:4px 6px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:4px; font-size:13px;">
                             <option value="MB">MB</option>
                             <option value="GB" selected>GB</option>
                         </select>
@@ -1657,7 +1664,7 @@ password=mypass</pre>
                             </select>
                         </div>
                     </div>
-                    <p class="text-muted" style="font-size: 12px; color: #666;">
+                    <p class="text-muted" style="font-size: 12px; color: var(--fs-text-2, #666);">
                         <?php echo $currentLang === 'en' ? '⚠️ The same quota will be applied to all users in the selected target.' : '⚠️ 선택한 대상의 모든 사용자에게 동일한 용량이 적용됩니다.'; ?>
                     </p>
                 </div>
@@ -1830,7 +1837,7 @@ password=mypass</pre>
                 </div>
                 <div class="modal-body">
                     <div id="shares-toolbar" style="display:none;margin-bottom:12px;gap:8px;align-items:center;flex-wrap:wrap;">
-                        <select id="shares-filter" style="padding:6px 10px;border:1px solid var(--border-color,#ddd);border-radius:6px;font-size:13px;">
+                        <select id="shares-filter" style="padding:6px 10px;border:1px solid var(--border-color,var(--fs-border-2, #ddd));border-radius:6px;font-size:13px;">
                             <option value="all"><?php echo $currentLang === 'en' ? 'All periods' : '전체 기간'; ?></option>
                             <option value="hour"><?php echo $currentLang === 'en' ? 'Hours (30m~12h)' : '시간 단위 (30분~12시간)'; ?></option>
                             <option value="1"><?php echo $currentLang === 'en' ? '1 day' : '1일'; ?></option>
@@ -1839,7 +1846,7 @@ password=mypass</pre>
                             <option value="unlimited"><?php echo $currentLang === 'en' ? 'Unlimited' : '무제한'; ?></option>
                             <option value="expiring"><?php echo $currentLang === 'en' ? 'Expiring soon' : '만료 임박'; ?></option>
                         </select>
-                        <select id="shares-type-filter" style="padding:6px 10px;border:1px solid var(--border-color,#ddd);border-radius:6px;font-size:13px;">
+                        <select id="shares-type-filter" style="padding:6px 10px;border:1px solid var(--border-color,var(--fs-border-2, #ddd));border-radius:6px;font-size:13px;">
                             <option value="all"><?php echo $currentLang === 'en' ? 'All types' : '전체 타입'; ?></option>
                             <option value="download"><?php echo $currentLang === 'en' ? 'Download' : '다운로드'; ?></option>
                             <option value="stream"><?php echo $currentLang === 'en' ? 'Streaming' : '스트리밍'; ?></option>
@@ -1849,7 +1856,7 @@ password=mypass</pre>
                             <input type="checkbox" id="shares-select-all"> <?php echo $currentLang === 'en' ? 'Select All' : '전체 선택'; ?>
                         </label>
                         <button id="btn-shares-delete-selected" class="btn btn-sm btn-danger" style="display:none;font-size:12px;">🗑️ <?php echo $currentLang === 'en' ? 'Delete Selected' : '선택 삭제'; ?></button>
-                        <span id="shares-count" style="margin-left:auto;font-size:12px;color:var(--text-secondary,#888);"></span>
+                        <span id="shares-count" style="margin-left:auto;font-size:12px;color:var(--text-secondary,var(--fs-text-3, #888));"></span>
                     </div>
                     <div id="shares-empty" class="empty-msg" style="display:none;"><?php echo $currentLang === 'en' ? 'No shared files' : '공유된 파일이 없습니다'; ?></div>
                     <div id="shares-list-container"></div>
@@ -1954,8 +1961,8 @@ password=mypass</pre>
                             <p class="text-muted"><?php echo $currentLang === 'en' ? 'Account info, login history, and activity logs will be deleted.' : '탈퇴 시 계정 정보, 로그인 기록, 활동 로그가 삭제됩니다.'; ?></p>
                             <button class="btn btn-danger" id="btn-withdraw-account"><?php _e('withdraw'); ?></button>
                         </div>
-                        <div class="account-danger-zone" id="withdraw-admin-notice" style="display:none; background: #f0f0f0; border-color: #ddd;">
-                            <h4 style="color: #666;">ℹ️ <?php _e('withdraw'); ?></h4>
+                        <div class="account-danger-zone" id="withdraw-admin-notice" style="display:none; background: var(--fs-surface-2, #f0f0f0); border-color: var(--fs-border-2, #ddd);">
+                            <h4 style="color: var(--fs-text-2, #666);">ℹ️ <?php _e('withdraw'); ?></h4>
                             <p class="text-muted"><?php _e('admin_no_withdraw'); ?></p>
                         </div>
                     </div>
@@ -1966,31 +1973,31 @@ password=mypass</pre>
                         <p class="text-muted" style="margin-bottom:20px;"><?php echo $currentLang === 'en' ? 'Protect your account with Google Authenticator, Authy, or similar apps.' : 'Google Authenticator, Authy 등의 앱을 사용하여 계정을 보호하세요.'; ?></p>
                         
                         <!-- 관리자 TOTP 설정 (JavaScript로 동적 표시) -->
-                        <div id="twofa-admin-settings" class="totp-admin-section" style="display:none; margin-bottom:25px; padding:15px; background:#f8f9fa; border-radius:8px; border:1px solid #e9ecef;">
-                            <h5 style="margin:0 0 15px 0; color:#495057;"><?php echo $currentLang === 'en' ? '⚙️ Admin TOTP Settings' : '⚙️ 관리자 TOTP 설정'; ?></h5>
+                        <div id="twofa-admin-settings" class="totp-admin-section" style="display:none; margin-bottom:25px; padding:15px; background:var(--fs-surface-2, #f8f9fa); border-radius:8px; border:1px solid var(--fs-border, #e9ecef);">
+                            <h5 style="margin:0 0 15px 0; color:var(--fs-text-2, #495057);"><?php echo $currentLang === 'en' ? '⚙️ Admin TOTP Settings' : '⚙️ 관리자 TOTP 설정'; ?></h5>
                             <p class="text-muted" style="font-size:13px; margin-bottom:15px;"><?php echo $currentLang === 'en' ? 'Settings used when users set up 2FA.' : '사용자들이 2단계 인증을 설정할 때 사용되는 설정입니다.'; ?></p>
                             
                             <div style="display:flex; gap:15px; flex-wrap:wrap;">
                                 <div style="flex:2; min-width:200px;">
                                     <label style="display:block; margin-bottom:5px; font-weight:500;"><?php echo $currentLang === 'en' ? 'Issuer Name (shown in QR code)' : '발급자명 (QR 코드에 표시)'; ?></label>
-                                    <input type="text" id="totp-issuer" placeholder="WebHard" style="width:100%; padding:8px; border:1px solid #ced4da; border-radius:4px;">
-                                    <div style="font-size:12px; color:#6c757d; margin-top:3px;"><?php echo $currentLang === 'en' ? 'Name used to identify accounts in authenticator apps.' : '인증 앱에서 계정을 식별하는 이름입니다.'; ?></div>
+                                    <input type="text" id="totp-issuer" placeholder="WebHard" style="width:100%; padding:8px; border:1px solid var(--fs-border-2, #ced4da); border-radius:4px;">
+                                    <div style="font-size:12px; color:var(--fs-text-2, #6c757d); margin-top:3px;"><?php echo $currentLang === 'en' ? 'Name used to identify accounts in authenticator apps.' : '인증 앱에서 계정을 식별하는 이름입니다.'; ?></div>
                                 </div>
                             </div>
                             
                             <div style="display:flex; gap:15px; flex-wrap:wrap; margin-top:15px; align-items:flex-start;">
                                 <div style="flex:2; min-width:200px;">
                                     <label style="display:block; margin-bottom:5px; font-weight:500;"><?php echo $currentLang === 'en' ? 'Encryption Key Status' : '암호화 키 상태'; ?></label>
-                                    <div style="background:#fff; padding:8px 12px; border:1px solid #ced4da; border-radius:4px;">
+                                    <div style="background:var(--fs-surface, #fff); padding:8px 12px; border:1px solid var(--fs-border-2, #ced4da); border-radius:4px;">
                                         <code id="totp-key-masked" style="font-size:13px;">-</code>
-                                        <span id="totp-key-generated" style="margin-left:10px; color:#666; font-size:12px;"></span>
+                                        <span id="totp-key-generated" style="margin-left:10px; color:var(--fs-text-2, #666); font-size:12px;"></span>
                                     </div>
-                                    <div style="font-size:12px; color:#6c757d; margin-top:3px;"><?php echo $currentLang === 'en' ? 'Used to encrypt 2FA secret keys. Auto-generated on first install.' : '2FA 비밀키를 암호화하는 데 사용됩니다. 처음 설치 시 자동 생성됩니다.'; ?></div>
+                                    <div style="font-size:12px; color:var(--fs-text-2, #6c757d); margin-top:3px;"><?php echo $currentLang === 'en' ? 'Used to encrypt 2FA secret keys. Auto-generated on first install.' : '2FA 비밀키를 암호화하는 데 사용됩니다. 처음 설치 시 자동 생성됩니다.'; ?></div>
                                 </div>
                                 <div style="flex:1; min-width:150px;">
                                     <label style="display:block; margin-bottom:5px;">&nbsp;</label>
                                     <button class="btn btn-warning btn-sm" id="btn-regenerate-totp-key"><?php echo $currentLang === 'en' ? '🔄 Regenerate Key' : '🔄 키 재생성'; ?></button>
-                                    <div style="font-size:11px; color:#d9534f; margin-top:3px;"><?php echo $currentLang === 'en' ? '⚠️ Cannot regenerate if 2FA users exist' : '⚠️ 기존 2FA 사용자가 있으면 재생성 불가'; ?></div>
+                                    <div style="font-size:11px; color:var(--fs-fg-err, #d9534f); margin-top:3px;"><?php echo $currentLang === 'en' ? '⚠️ Cannot regenerate if 2FA users exist' : '⚠️ 기존 2FA 사용자가 있으면 재생성 불가'; ?></div>
                                 </div>
                             </div>
                             
@@ -2020,11 +2027,11 @@ password=mypass</pre>
                             <div id="twofa-setup-section" style="display:none;">
                                 <h5><?php echo $currentLang === 'en' ? '1. Scan the QR code with your authenticator app' : '1. 인증 앱에서 QR 코드를 스캔하세요'; ?></h5>
                                 <div class="qr-code-area" style="text-align:center; margin:20px 0;">
-                                    <div id="twofa-qr-code" style="display:inline-block; border:1px solid #ddd; padding:10px; background:#fff; border-radius:8px;"></div>
+                                    <div id="twofa-qr-code" style="display:inline-block; border:1px solid var(--fs-border-2, #ddd); padding:10px; background:var(--fs-surface, #fff); border-radius:8px;"></div>
                                 </div>
-                                <p style="text-align:center; color:#666; font-size:12px;"><?php echo $currentLang === 'en' ? 'If you cannot scan the QR code, enter the key below manually:' : 'QR 코드를 스캔할 수 없는 경우 아래 키를 수동으로 입력하세요:'; ?></p>
+                                <p style="text-align:center; color:var(--fs-text-2, #666); font-size:12px;"><?php echo $currentLang === 'en' ? 'If you cannot scan the QR code, enter the key below manually:' : 'QR 코드를 스캔할 수 없는 경우 아래 키를 수동으로 입력하세요:'; ?></p>
                                 <div class="secret-key-area" style="text-align:center; margin:10px 0;">
-                                    <code id="twofa-secret-key" style="font-size:16px; letter-spacing:2px; padding:10px; background:#f5f5f5; display:inline-block;"></code>
+                                    <code id="twofa-secret-key" style="font-size:16px; letter-spacing:2px; padding:10px; background:var(--fs-surface-2, #f5f5f5); display:inline-block;"></code>
                                 </div>
                                 
                                 <h5 style="margin-top:20px;"><?php echo $currentLang === 'en' ? '2. Enter the 6-digit code from your authenticator app' : '2. 인증 앱에 표시된 6자리 코드를 입력하세요'; ?></h5>
@@ -2044,7 +2051,7 @@ password=mypass</pre>
                                 <div class="alert alert-info">
                                     <strong><?php echo $currentLang === 'en' ? '📋 Backup Codes' : '📋 백업 코드'; ?></strong>
                                     <p><?php echo $currentLang === 'en' ? 'Keep these codes safe. Use them to login when authenticator app is unavailable.' : '이 코드들을 안전한 곳에 보관하세요. 인증 앱을 사용할 수 없을 때 로그인에 사용할 수 있습니다.'; ?></p>
-                                    <p style="color:#c00;"><strong><?php echo $currentLang === 'en' ? '⚠️ Each code can only be used once.' : '⚠️ 각 코드는 한 번만 사용할 수 있습니다.'; ?></strong></p>
+                                    <p style="color:var(--fs-fg-err, #c00);"><strong><?php echo $currentLang === 'en' ? '⚠️ Each code can only be used once.' : '⚠️ 각 코드는 한 번만 사용할 수 있습니다.'; ?></strong></p>
                                 </div>
                                 <div id="twofa-backup-codes-list" class="backup-codes-list" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:10px; max-width:300px; margin:20px auto;"></div>
                                 <div style="text-align:center; margin-top:20px;">
@@ -2058,8 +2065,8 @@ password=mypass</pre>
                     <div id="tab-app-passwords" class="tab-content" style="display:none;">
                         <h4>🔑 <?php echo $currentLang === 'en' ? 'App Passwords' : '앱 비밀번호'; ?></h4>
                         <p class="text-muted" style="margin-bottom:10px;"><?php echo $currentLang === 'en' ? 'App passwords are used for WebDAV, network drives, and other clients that cannot use 2FA.' : '앱 비밀번호는 WebDAV, 네트워크 드라이브, TV 등 2단계 인증을 사용할 수 없는 클라이언트에서 사용합니다.'; ?></p>
-                        <div style="padding:10px 12px;background:rgba(255,152,0,0.08);border:1px solid rgba(255,152,0,0.2);border-radius:6px;margin-bottom:15px;font-size:12px;color:#666;">
-                            <p style="margin:0 0 8px;font-weight:600;color:#e65100;">⚠️ <?php echo $currentLang === 'en' ? 'Please keep your app password safe' : '앱 비밀번호를 안전하게 보관하세요'; ?></p>
+                        <div style="padding:10px 12px;background:rgba(255,152,0,0.08);border:1px solid rgba(255,152,0,0.2);border-radius:6px;margin-bottom:15px;font-size:12px;color:var(--fs-text-2, #666);">
+                            <p style="margin:0 0 8px;font-weight:600;color:var(--fs-fg-warn, #e65100);">⚠️ <?php echo $currentLang === 'en' ? 'Please keep your app password safe' : '앱 비밀번호를 안전하게 보관하세요'; ?></p>
                             <ul style="margin:0;padding-left:18px;line-height:2.0;">
                             <?php if ($currentLang === 'en'): ?>
                                 <li>App passwords are shown <b>only once</b> when created and <b>cannot be retrieved</b> later.</li>
@@ -2079,10 +2086,10 @@ password=mypass</pre>
                         </div>
                         
                         <!-- 생성된 비밀번호 표시 (한 번만) -->
-                        <div id="app-password-created" style="display:none;margin-bottom:15px;padding:15px;background:#d4edda;border:1px solid #c3e6cb;border-radius:8px;">
+                        <div id="app-password-created" style="display:none;margin-bottom:15px;padding:15px;background:var(--fs-tint-ok, #d4edda);border:1px solid var(--fs-tint-ok-border, #c3e6cb);border-radius:8px;">
                             <div style="font-weight:600;margin-bottom:8px;"><?php echo $currentLang === 'en' ? '✅ App password created! Copy it now — it won\'t be shown again.' : '✅ 앱 비밀번호가 생성되었습니다! 지금 복사하세요 — 다시 볼 수 없습니다.'; ?></div>
                             <div style="display:flex;align-items:center;gap:8px;">
-                                <code id="app-password-value" style="font-size:18px;letter-spacing:2px;padding:8px 12px;background:#fff;border-radius:4px;border:1px solid #ccc;user-select:all;"></code>
+                                <code id="app-password-value" style="font-size:18px;letter-spacing:2px;padding:8px 12px;background:var(--fs-surface, #fff);border-radius:4px;border:1px solid var(--fs-border-2, #ccc);user-select:all;"></code>
                                 <button class="btn btn-sm" id="btn-copy-app-password" style="white-space:nowrap;">📋 <?php echo $currentLang === 'en' ? 'Copy' : '복사'; ?></button>
                             </div>
                         </div>
@@ -2096,78 +2103,104 @@ password=mypass</pre>
                     <!-- 테마 탭 -->
                     <div id="tab-theme" class="tab-content" style="display:none;">
                         <h4>🎨 <?php _e('theme'); ?></h4>
+                        <?php /* ★ (2026-10-23 밤) 테마 견본 읽는 법 — 종전 견본은 두 색 사선이라 어느 색이 머리줄·사이드·탐색기·창인지 알 수 없었고,
+                                 일반 테마(예: 스카이)는 견본의 옅은 색이 실제로는 쓰이지 않아(탐색기는 흰색) 견본과 실제 화면이 달랐다.
+                                 → 견본을 작은 화면 모양(머리줄·사이드·탐색기·항목·선택·창·버튼·테두리 선)으로 바꾸고, 색은 테마별 실제 화면에서 잰 값(style.css .theme-preview-*). 아래는 그 읽는 법 */ ?>
+                        <div class="theme-legend">
+                            <div class="theme-preview theme-preview-legend" aria-hidden="true"><span class="tp-h"><?php echo $currentLang === 'en' ? 'Header' : '머리줄'; ?></span><span class="tp-s"><?php echo $currentLang === 'en' ? 'Side' : '사이드'; ?></span><span class="tp-c"><span class="tp-i"><?php echo $currentLang === 'en' ? 'Item' : '항목'; ?></span><span class="tp-i tp-sel"><?php echo $currentLang === 'en' ? 'Selected' : '선택'; ?></span><span class="tp-ctext"><?php echo $currentLang === 'en' ? 'Explorer' : '탐색기'; ?></span></span><span class="tp-m"><span class="tp-mh"><?php echo $currentLang === 'en' ? 'Window' : '창(모달)'; ?></span><span class="tp-p"><?php echo $currentLang === 'en' ? 'Button' : '버튼'; ?></span></span></div>
+                            <p class="theme-legend-note"><?php echo $currentLang === 'en' ? 'Swatches use the real screen colors — top bar = header, left = side menu, middle = explorer (file area), small boxes = file items (darker = selected), bottom right = window (modal) and button, thin outlines = line color' : '견본은 실제 화면 색 그대로 — 위 띠 = 머리줄, 왼쪽 = 사이드 메뉴, 가운데 = 탐색기(파일 칸), 작은 칸 = 파일 항목(진한 칸 = 선택), 오른쪽 아래 = 창(모달)과 버튼, 각 칸의 가는 테두리 = 선 색'; ?></p>
+                        </div>
                         <div class="theme-grid">
                             <div class="theme-item" data-theme="default">
-                                <div class="theme-preview theme-preview-default"></div>
+                                <div class="theme-preview theme-preview-default" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
                                 <span><?php echo $currentLang === 'en' ? 'Default' : '기본'; ?></span>
                             </div>
+                            <?php /* ★ (2026-10-25) 테마 구조 정리(펜닐 요청): 기본 다음 일반 9종 → 같은 순서의 전체 9종 → 다크 4종(다크·다크 컬러·다크 전체·미드나잇). 일반·전체는 가나다순.
+                                     민트 전체는 빠지고 미쿠 전체·시안 전체 추가, 로즈 전체·블루 전체는 밝은 전체 방식으로 바뀜. 민트 전체를 쓰던 사람은 미쿠 전체로 자동 전환(머리 스크립트·app.js initTheme) */ ?>
+                            <?php /* ★ (2026-10-25 저녁) 순서를 기본 → 다크 3종(다크·다크 사이드·미드나잇) → 일반 9 → 전체 9 로(펜닐 요청). 다크 컬러·다크 전체는 같아 보여 빼고 다크 사이드(일반 형태 + 다크 머리줄·사이드)로 — 두 테마를 쓰던 사람은 자동 전환 */ ?>
                             <div class="theme-item" data-theme="dark">
-                                <div class="theme-preview theme-preview-dark"></div>
+                                <div class="theme-preview theme-preview-dark" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
                                 <span><?php echo $currentLang === 'en' ? 'Dark' : '다크'; ?></span>
                             </div>
-                            <div class="theme-item" data-theme="blue">
-                                <div class="theme-preview theme-preview-blue"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Blue' : '블루'; ?></span>
+                            <div class="theme-item" data-theme="dark-side">
+                                <div class="theme-preview theme-preview-dark-side" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Dark Side' : '다크 사이드'; ?></span>
                             </div>
-                            <div class="theme-item" data-theme="mint">
-                                <div class="theme-preview theme-preview-mint"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Mint' : '민트'; ?></span>
-                            </div>
-                            <div class="theme-item" data-theme="rose">
-                                <div class="theme-preview theme-preview-rose"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Rose' : '로즈'; ?></span>
-                            </div>
-                            <div class="theme-item" data-theme="blue-full">
-                                <div class="theme-preview theme-preview-blue-full"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Blue Full' : '블루 전체'; ?></span>
-                            </div>
-                            <div class="theme-item" data-theme="mint-full">
-                                <div class="theme-preview theme-preview-mint-full"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Mint Full' : '민트 전체'; ?></span>
-                            </div>
-                            <div class="theme-item" data-theme="rose-full">
-                                <div class="theme-preview theme-preview-rose-full"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Rose Full' : '로즈 전체'; ?></span>
+                            <div class="theme-item" data-theme="midnight">
+                                <div class="theme-preview theme-preview-midnight" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Midnight' : '미드나잇'; ?></span>
                             </div>
                             <div class="theme-item" data-theme="lavender">
-                                <div class="theme-preview theme-preview-lavender"></div>
+                                <div class="theme-preview theme-preview-lavender" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
                                 <span><?php echo $currentLang === 'en' ? 'Lavender' : '라벤더'; ?></span>
                             </div>
-                            <div class="theme-item" data-theme="peach">
-                                <div class="theme-preview theme-preview-peach"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Peach' : '피치'; ?></span>
+                            <div class="theme-item" data-theme="rose">
+                                <div class="theme-preview theme-preview-rose" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Rose' : '로즈'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="miku">
+                                <div class="theme-preview theme-preview-miku" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Miku' : '미쿠'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="blue">
+                                <div class="theme-preview theme-preview-blue" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Blue' : '블루'; ?></span>
                             </div>
                             <div class="theme-item" data-theme="sky">
-                                <div class="theme-preview theme-preview-sky"></div>
+                                <div class="theme-preview theme-preview-sky" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
                                 <span><?php echo $currentLang === 'en' ? 'Sky' : '스카이'; ?></span>
                             </div>
-                            <div class="theme-item" data-theme="lavender-full">
-                                <div class="theme-preview theme-preview-lavender-full"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Lavender Full' : '라벤더 전체'; ?></span>
-                            </div>
-                            <div class="theme-item" data-theme="peach-full">
-                                <div class="theme-preview theme-preview-peach-full"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Peach Full' : '피치 전체'; ?></span>
-                            </div>
-                            <div class="theme-item" data-theme="sky-full">
-                                <div class="theme-preview theme-preview-sky-full"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Sky Full' : '스카이 전체'; ?></span>
-                            </div>
-                            <div class="theme-item" data-theme="pink">
-                                <div class="theme-preview theme-preview-pink"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Pink' : '핑크'; ?></span>
-                            </div>
-                            <div class="theme-item" data-theme="pink-full">
-                                <div class="theme-preview theme-preview-pink-full"></div>
-                                <span><?php echo $currentLang === 'en' ? 'Pink Full' : '핑크 전체'; ?></span>
+                            <div class="theme-item" data-theme="cyan">
+                                <div class="theme-preview theme-preview-cyan" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Cyan' : '시안'; ?></span>
                             </div>
                             <div class="theme-item" data-theme="pastel-blue">
-                                <div class="theme-preview theme-preview-pastel-blue"></div>
+                                <div class="theme-preview theme-preview-pastel-blue" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
                                 <span><?php echo $currentLang === 'en' ? 'Pastel Blue' : '파스텔 블루'; ?></span>
                             </div>
+                            <div class="theme-item" data-theme="peach">
+                                <div class="theme-preview theme-preview-peach" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Peach' : '피치'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="pink">
+                                <div class="theme-preview theme-preview-pink" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Pink' : '핑크'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="lavender-full">
+                                <div class="theme-preview theme-preview-lavender-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Lavender Full' : '라벤더 전체'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="rose-full">
+                                <div class="theme-preview theme-preview-rose-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Rose Full' : '로즈 전체'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="miku-full">
+                                <div class="theme-preview theme-preview-miku-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Miku Full' : '미쿠 전체'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="blue-full">
+                                <div class="theme-preview theme-preview-blue-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Blue Full' : '블루 전체'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="sky-full">
+                                <div class="theme-preview theme-preview-sky-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Sky Full' : '스카이 전체'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="cyan-full">
+                                <div class="theme-preview theme-preview-cyan-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Cyan Full' : '시안 전체'; ?></span>
+                            </div>
                             <div class="theme-item" data-theme="pastel-blue-full">
-                                <div class="theme-preview theme-preview-pastel-blue-full"></div>
+                                <div class="theme-preview theme-preview-pastel-blue-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
                                 <span><?php echo $currentLang === 'en' ? 'Pastel Blue Full' : '파스텔 블루 전체'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="peach-full">
+                                <div class="theme-preview theme-preview-peach-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Peach Full' : '피치 전체'; ?></span>
+                            </div>
+                            <div class="theme-item" data-theme="pink-full">
+                                <div class="theme-preview theme-preview-pink-full" aria-hidden="true"><span class="tp-h"></span><span class="tp-s"></span><span class="tp-c"><span class="tp-i"></span><span class="tp-i tp-sel"></span><span class="tp-i"></span></span><span class="tp-m"><span class="tp-mh"></span><span class="tp-p"></span></span></div>
+                                <span><?php echo $currentLang === 'en' ? 'Pink Full' : '핑크 전체'; ?></span>
                             </div>
                         </div>
                         
@@ -2385,7 +2418,7 @@ password=mypass</pre>
                         
                         <h3><?php echo $currentLang === 'en' ? '🔗 WebDAV Server Settings' : '🔗 WebDAV 서버 설정'; ?></h3>
                         <p class="setting-desc" style="margin-bottom:10px;"><?php echo $currentLang === 'en' ? 'Server-side settings for WebDAV. Users can access WebDAV from the sidebar menu.' : 'WebDAV 서버 측 설정입니다. 사용자는 사이드바 WebDAV 메뉴에서 접속 안내를 확인할 수 있습니다.'; ?></p>
-                        <p class="setting-desc" style="margin-bottom:10px;color:#e65100;font-size:12px;">💡 <?php echo $currentLang === 'en' ? 'The sidebar WebDAV menu is only visible to users who have the <b>WebDAV Visible</b> permission enabled in Storage Permissions.' : '사이드바 WebDAV 메뉴는 <b>스토리지 권한 설정</b>에서 해당 사용자에게 <b>WebDAV 표시</b> 권한을 활성화해야 보입니다.'; ?></p>
+                        <p class="setting-desc" style="margin-bottom:10px;color:var(--fs-fg-warn, #e65100);font-size:12px;">💡 <?php echo $currentLang === 'en' ? 'The sidebar WebDAV menu is only visible to users who have the <b>WebDAV Visible</b> permission enabled in Storage Permissions.' : '사이드바 WebDAV 메뉴는 <b>스토리지 권한 설정</b>에서 해당 사용자에게 <b>WebDAV 표시</b> 권한을 활성화해야 보입니다.'; ?></p>
                         
                         <div class="setting-notice" style="margin-top:10px;">
                             <p><strong><?php echo $currentLang === 'en' ? '⚙️ Apache Settings (Required for large files)' : '⚙️ Apache 설정 (대용량 파일 전송 시 필수)'; ?></strong></p>
@@ -2404,7 +2437,7 @@ password=mypass</pre>
                                 </li>
                             </ul>
                             
-                            <hr style="margin:12px 0;border:none;border-top:1px solid #ddd;">
+                            <hr style="margin:12px 0;border:none;border-top:1px solid var(--fs-border-2, #ddd);">
                             <p><strong><?php echo $currentLang === 'en' ? '⚙️ Nginx Settings (Synology, etc.)' : '⚙️ Nginx 설정 (Synology 등)'; ?></strong></p>
                             <ul style="margin:4px 0 8px 20px; font-size:12px;">
                                 <li><?php echo $currentLang === 'en' 
@@ -2429,7 +2462,7 @@ password=mypass</pre>
                                     : '폴더 내용이 표시되지 않으면 <code>fastcgi_param HTTP_AUTHORIZATION</code> 설정이 포함되어 있는지 확인하세요.'; ?></li>
                             </ul>
                             
-                            <hr style="margin:12px 0;border:none;border-top:1px solid #ddd;">
+                            <hr style="margin:12px 0;border:none;border-top:1px solid var(--fs-border-2, #ddd);">
                             <p><strong><?php echo $currentLang === 'en' ? '🔒 Brute Force Protection' : '🔒 브루트포스 방지'; ?></strong></p>
                             <p style="font-size:13px;"><?php echo $currentLang === 'en' 
                                 ? 'WebDAV login attempts are tracked in <code>data/webdav_attempts/</code>. After 5 failures, the IP+username is locked for 15 minutes. Delete JSON files in this folder to unlock immediately.' 
@@ -2495,7 +2528,7 @@ password=mypass</pre>
                                     $label = $currentLang === 'en' ? $opt['en'] : $opt['ko'];
                                 ?>
                                 <button type="button" class="bg-fit-btn" data-fit="<?= $val ?>"
-                                    style="padding:6px 14px;border:2px solid var(--border-color,#ddd);border-radius:6px;background:var(--bg-secondary,#f8f9fa);cursor:pointer;font-size:13px;transition:all .15s;">
+                                    style="padding:6px 14px;border:2px solid var(--border-color,var(--fs-border-2, #ddd));border-radius:6px;background:var(--bg-secondary,var(--fs-surface-2, #f8f9fa));cursor:pointer;font-size:13px;transition:all .15s;">
                                     <?= $opt['icon'] ?> <?= $label ?>
                                 </button>
                                 <?php endforeach; ?>
@@ -2587,13 +2620,13 @@ password=mypass</pre>
                                                 <div class="setting-item">
                             <label><?php echo $currentLang === 'en' ? 'ffmpeg / ffprobe Path' : 'ffmpeg / ffprobe 경로'; ?></label>
                             <div style="display:flex; gap:8px; align-items:center; margin-bottom:6px;">
-                                <span style="font-size:12px; color:#888; min-width:60px;">ffmpeg</span>
+                                <span style="font-size:12px; color:var(--fs-text-3, #888); min-width:60px;">ffmpeg</span>
                                 <input type="text" id="setting-ffmpeg-path" class="form-control" placeholder="<?php echo $currentLang === 'en' ? 'e.g. C:\\ffmpeg\\bin\\ffmpeg.exe' : '예: C:\\ffmpeg\\bin\\ffmpeg.exe'; ?>" style="flex:1;">
                                 <button type="button" class="btn btn-sm" onclick="App.testFfmpeg()"><?php echo $currentLang === 'en' ? 'Test' : '테스트'; ?></button>
                             </div>
                             <span id="ffmpeg-test-result" style="font-size:12px; margin-bottom:6px; display:block;"></span>
                             <div style="display:flex; gap:8px; align-items:center;">
-                                <span style="font-size:12px; color:#888; min-width:60px;">ffprobe</span>
+                                <span style="font-size:12px; color:var(--fs-text-3, #888); min-width:60px;">ffprobe</span>
                                 <input type="text" id="setting-ffprobe-path" class="form-control" placeholder="<?php echo $currentLang === 'en' ? 'e.g. C:\\ffmpeg\\bin\\ffprobe.exe' : '예: C:\\ffmpeg\\bin\\ffprobe.exe'; ?>" style="flex:1;">
                                 <button type="button" class="btn btn-sm" onclick="App.testFfprobe()"><?php echo $currentLang === 'en' ? 'Test' : '테스트'; ?></button>
                             </div>
@@ -2641,14 +2674,14 @@ password=mypass</pre>
                         <div class="setting-item">
                             <label><?php echo $currentLang === 'en' ? 'Server Capabilities' : '서버 환경'; ?></label>
                             <div id="thumb-capabilities" style="margin-top:5px;">
-                                <span style="color:#888; font-size:13px;"><?php echo $currentLang === 'en' ? 'Loading...' : '확인 중...'; ?></span>
+                                <span style="color:var(--fs-text-3, #888); font-size:13px;"><?php echo $currentLang === 'en' ? 'Loading...' : '확인 중...'; ?></span>
                             </div>
                         </div>
                         <div class="setting-item">
                             <button type="button" class="btn btn-sm btn-danger" id="btn-clear-thumbcache" onclick="App.clearThumbCache()">
                                 <?php echo $currentLang === 'en' ? '🗑️ Clear Thumbnail Cache' : '🗑️ 썸네일 캐시 삭제'; ?>
                             </button>
-                            <span id="thumbcache-status" style="margin-left:10px; font-size:13px; color:#888;"></span>
+                            <span id="thumbcache-status" style="margin-left:10px; font-size:13px; color:var(--fs-text-3, #888);"></span>
                             <p class="setting-desc"><?php echo $currentLang === 'en' ? 'Delete all cached thumbnails. They will be regenerated on next view.' : '캐시된 썸네일을 모두 삭제합니다. 다음 조회 시 자동으로 다시 생성됩니다.'; ?></p>
                         </div>
                         
@@ -2659,23 +2692,23 @@ password=mypass</pre>
                             <p class="setting-desc"><?php echo $currentLang === 'en' 
                                 ? 'Archive files (zip, rar, 7z, iso, etc.) can be previewed to view internal file lists. ZIP and TAR formats work with PHP built-in. For other formats (RAR, 7Z, ISO, CAB, etc.), <b>7-Zip</b> must be installed on the server.'
                                 : '압축 파일(zip, rar, 7z, iso 등)을 미리보기하여 내부 파일 목록을 확인할 수 있습니다. ZIP과 TAR 형식은 PHP 내장으로 동작합니다. 그 외 형식(RAR, 7Z, ISO, CAB 등)은 서버에 <b>7-Zip</b>이 설치되어야 합니다.'; ?></p>
-                            <table style="font-size:12px;margin-top:8px;border-collapse:collapse;color:#666;">
+                            <table style="font-size:12px;margin-top:8px;border-collapse:collapse;color:var(--fs-text-2, #666);">
                                 <tr><td style="padding:3px 15px 3px 0;"><b>PHP <?php echo $currentLang === 'en' ? 'Built-in' : '내장'; ?></b></td><td>zip, tar, gz, tgz, bz2</td></tr>
                                 <tr><td style="padding:3px 15px 3px 0;"><b>7-Zip <?php echo $currentLang === 'en' ? 'Required' : '필요'; ?></b></td><td>rar, 7z, iso, cab, wim, arj, lzh, dmg, msi <?php echo $currentLang === 'en' ? 'and more' : '외 다수'; ?></td></tr>
                                 <tr><td style="padding:3px 15px 3px 0;"><b>UnRAR <?php echo $currentLang === 'en' ? 'Optional' : '선택'; ?></b></td><td><?php echo $currentLang === 'en' ? 'rar (handles rar files that 7-Zip cannot open)' : 'rar (7-Zip이 못 읽는 rar 파일 보완)'; ?></td></tr>
                             </table>
-                            <div style="margin-top:10px;padding:8px 12px;background:rgba(33,150,243,0.06);border:1px solid rgba(33,150,243,0.15);border-radius:6px;font-size:12px;color:#666;">
+                            <div style="margin-top:10px;padding:8px 12px;background:rgba(33,150,243,0.06);border:1px solid rgba(33,150,243,0.15);border-radius:6px;font-size:12px;color:var(--fs-text-2, #666);">
                                 <p style="margin:0 0 4px;font-weight:600;">💡 <?php echo $currentLang === 'en' ? '7-Zip Installation' : '7-Zip 설치 방법'; ?></p>
                                 <p style="margin:0;">
-                                    Windows: <a href="https://www.7-zip.org/download.html" target="_blank" style="color:#1976d2;">7-zip.org</a> <?php echo $currentLang === 'en' ? 'Download and install to default path' : '에서 다운로드 후 기본 경로에 설치'; ?><br>
+                                    Windows: <a href="https://www.7-zip.org/download.html" target="_blank" style="color:var(--fs-fg-info, #1976d2);">7-zip.org</a> <?php echo $currentLang === 'en' ? 'Download and install to default path' : '에서 다운로드 후 기본 경로에 설치'; ?><br>
                                     Linux: <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">apt install 7zip</code> <?php echo $currentLang === 'en' ? 'or' : '또는'; ?> <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">yum install p7zip-full</code>
                                 </p>
                             </div>
-                            <div style="margin-top:10px;padding:8px 12px;background:rgba(158,158,158,0.06);border:1px solid rgba(158,158,158,0.18);border-radius:6px;font-size:12px;color:#666;">
+                            <div style="margin-top:10px;padding:8px 12px;background:rgba(158,158,158,0.06);border:1px solid rgba(158,158,158,0.18);border-radius:6px;font-size:12px;color:var(--fs-text-2, #666);">
                                 <p style="margin:0 0 4px;font-weight:600;">💡 <?php echo $currentLang === 'en' ? 'UnRAR Installation (optional)' : 'UnRAR 설치 방법 (선택)'; ?></p>
                                 <p style="margin:0 0 4px;"><?php echo $currentLang === 'en' ? 'Only needed for rar files that 7-Zip cannot open.' : '7-Zip으로 목록이 안 보이는 일부 rar 파일에만 필요합니다.'; ?></p>
                                 <p style="margin:0;">
-                                    Windows: <a href="https://www.win-rar.com/download.html" target="_blank" style="color:#1976d2;">win-rar.com</a> <?php echo $currentLang === 'en' ? 'Install WinRAR (includes UnRAR.exe)' : '에서 WinRAR 설치 (UnRAR.exe 포함)'; ?><br>
+                                    Windows: <a href="https://www.win-rar.com/download.html" target="_blank" style="color:var(--fs-fg-info, #1976d2);">win-rar.com</a> <?php echo $currentLang === 'en' ? 'Install WinRAR (includes UnRAR.exe)' : '에서 WinRAR 설치 (UnRAR.exe 포함)'; ?><br>
                                     Linux: <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">apt install unrar</code> <?php echo $currentLang === 'en' ? 'or' : '또는'; ?> <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">yum install unrar</code>
                                 </p>
                             </div>
@@ -2871,14 +2904,14 @@ password=mypass</pre>
                                 <input type="password" id="setting-onlyoffice-secret" class="form-control" placeholder="<?php echo $currentLang === 'en' ? 'Leave empty to disable JWT' : '비워두면 JWT 비활성화'; ?>">
                                 <p class="setting-desc"><?php echo $currentLang === 'en' ? 'Enter the same value if JWT_SECRET was set in Docker. Leave empty if JWT_ENABLED=false.' : 'Docker 실행 시 JWT_SECRET을 설정했다면 동일한 값을 입력하세요. JWT_ENABLED=false로 설치했다면 비워두세요.'; ?></p>
                                 <details style="margin-top:6px;">
-                                    <summary style="font-size:12px; color:#4a90e2; cursor:pointer; font-weight:600;"><?php echo $currentLang === 'en' ? '🔑 How to Find JWT Secret Key' : '🔑 JWT 시크릿 키 확인 방법'; ?></summary>
-                                    <div style="margin-top:6px; font-size:12px; color:#555;">
+                                    <summary style="font-size:12px; color:var(--fs-fg-info, #4a90e2); cursor:pointer; font-weight:600;"><?php echo $currentLang === 'en' ? '🔑 How to Find JWT Secret Key' : '🔑 JWT 시크릿 키 확인 방법'; ?></summary>
+                                    <div style="margin-top:6px; font-size:12px; color:var(--fs-text-2, #555);">
                                         <p style="margin-bottom:4px;"><strong><?php echo $currentLang === 'en' ? '1. Check Docker Environment Variables' : '1. Docker 환경변수에서 확인'; ?></strong></p>
-                                        <pre style="background:#f5f5f5; padding:6px 10px; border-radius:4px; font-size:11px; margin-bottom:8px;"><?php echo $currentLang === 'en' ? 'docker inspect [container_name] | grep JWT_SECRET' : 'docker inspect [컨테이너명] | grep JWT_SECRET'; ?></pre>
+                                        <pre style="background:var(--fs-surface-2, #f5f5f5); padding:6px 10px; border-radius:4px; font-size:11px; margin-bottom:8px;"><?php echo $currentLang === 'en' ? 'docker inspect [container_name] | grep JWT_SECRET' : 'docker inspect [컨테이너명] | grep JWT_SECRET'; ?></pre>
                                         <p style="margin-bottom:4px;"><strong><?php echo $currentLang === 'en' ? '2. Check Container Config File' : '2. 컨테이너 내부 설정 파일에서 확인'; ?></strong></p>
-                                        <pre style="background:#f5f5f5; padding:6px 10px; border-radius:4px; font-size:11px; margin-bottom:8px;"><?php echo $currentLang === 'en' ? 'docker exec [container_name] cat /etc/onlyoffice/documentserver/local.json | grep secret' : 'docker exec [컨테이너명] cat /etc/onlyoffice/documentserver/local.json | grep secret'; ?></pre>
+                                        <pre style="background:var(--fs-surface-2, #f5f5f5); padding:6px 10px; border-radius:4px; font-size:11px; margin-bottom:8px;"><?php echo $currentLang === 'en' ? 'docker exec [container_name] cat /etc/onlyoffice/documentserver/local.json | grep secret' : 'docker exec [컨테이너명] cat /etc/onlyoffice/documentserver/local.json | grep secret'; ?></pre>
                                         <p style="margin-bottom:4px;"><strong><?php echo $currentLang === 'en' ? '3. Check All Container Environment Variables' : '3. 실행 중인 컨테이너의 환경변수 전체 확인'; ?></strong></p>
-                                        <pre style="background:#f5f5f5; padding:6px 10px; border-radius:4px; font-size:11px;"><?php echo $currentLang === 'en' ? 'docker exec [container_name] env | grep JWT' : 'docker exec [컨테이너명] env | grep JWT'; ?></pre>
+                                        <pre style="background:var(--fs-surface-2, #f5f5f5); padding:6px 10px; border-radius:4px; font-size:11px;"><?php echo $currentLang === 'en' ? 'docker exec [container_name] env | grep JWT' : 'docker exec [컨테이너명] env | grep JWT'; ?></pre>
                                     </div>
                                 </details>
                             </div>
@@ -2891,7 +2924,7 @@ password=mypass</pre>
                             </div>
                             <div class="setting-notice">
                                 <p>📋 <strong><?php echo $currentLang === 'en' ? 'OnlyOffice Installation (Docker)' : 'OnlyOffice 설치 방법 (Docker)'; ?></strong></p>
-                                <pre style="background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:12px;"><?php echo $currentLang === 'en' ? '# With JWT Security (Recommended)' : '# JWT 보안 사용 (권장)'; ?>
+                                <pre style="background:var(--fs-surface-2, #f5f5f5); padding:10px; border-radius:4px; overflow-x:auto; font-size:12px;"><?php echo $currentLang === 'en' ? '# With JWT Security (Recommended)' : '# JWT 보안 사용 (권장)'; ?>
 
 docker run -d -p 8080:80 --restart=always \
   --shm-size=256m \
@@ -2906,8 +2939,8 @@ docker run -d -p 8080:80 --restart=always \
   onlyoffice/documentserver</pre>
                                 
                                 <p style="margin-top:15px;">🔒 <strong><?php echo $currentLang === 'en' ? 'Apache Reverse Proxy Settings' : 'Apache 리버스 프록시 설정'; ?></strong></p>
-                                <p style="font-size:12px; color:#666; margin-bottom:5px;"><?php echo $currentLang === 'en' ? 'Add before <code>&lt;/VirtualHost&gt;</code> in your domain\'s SSL(443) config file.<br>(e.g.: httpd-vhosts.conf or httpd-ssl.conf)' : '웹하드 도메인의 SSL(443) 설정 파일에서 <code>&lt;/VirtualHost&gt;</code> 바로 위에 추가하세요.<br>(예: httpd-vhosts.conf 또는 httpd-ssl.conf)'; ?></p>
-                                <pre style="background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;"><?php echo $currentLang === 'en' ? '# WebSocket Proxy' : '# WebSocket 프록시'; ?>
+                                <p style="font-size:12px; color:var(--fs-text-2, #666); margin-bottom:5px;"><?php echo $currentLang === 'en' ? 'Add before <code>&lt;/VirtualHost&gt;</code> in your domain\'s SSL(443) config file.<br>(e.g.: httpd-vhosts.conf or httpd-ssl.conf)' : '웹하드 도메인의 SSL(443) 설정 파일에서 <code>&lt;/VirtualHost&gt;</code> 바로 위에 추가하세요.<br>(예: httpd-vhosts.conf 또는 httpd-ssl.conf)'; ?></p>
+                                <pre style="background:var(--fs-surface-2, #f5f5f5); padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;"><?php echo $currentLang === 'en' ? '# WebSocket Proxy' : '# WebSocket 프록시'; ?>
 RewriteEngine On
 RewriteCond %{HTTP:Upgrade} =websocket [NC]
 RewriteRule ^/oo/(.*) ws://<?php echo $currentLang === 'en' ? 'OnlyOffice_Internal_IP' : 'OnlyOffice내부IP'; ?>:8080/$1 [P,L]
@@ -2932,14 +2965,14 @@ RewriteRule ^/oo/(.*) ws://<?php echo $currentLang === 'en' ? 'OnlyOffice_Intern
     ProxyPass http://<?php echo $currentLang === 'en' ? 'OnlyOffice_Internal_IP' : 'OnlyOffice내부IP'; ?>:8080/printfile/
     ProxyPassReverse http://<?php echo $currentLang === 'en' ? 'OnlyOffice_Internal_IP' : 'OnlyOffice내부IP'; ?>:8080/printfile/
 &lt;/Location&gt;</pre>
-                                <p style="margin-top:10px; font-size:12px; color:#666;"><?php echo $currentLang === 'en' ? '※ Replace OnlyOffice internal IP → Server IP or Docker IP, domain → actual domain. Restart Apache after configuration.<br>※ The <code>/printfile/</code> block is required for OnlyOffice editor\'s "File → Print" feature (calls <code>/printfile/...</code> path on the same domain).' : '※ OnlyOffice내부IP → 서버IP 또는 Docker IP로, 도메인 → 실제 도메인으로 변경하세요. 설정 후 Apache 재시작 필요.<br>※ <code>/printfile/</code> 블록은 OnlyOffice 편집기의 "파일 → 인쇄" 기능에 필수입니다 (인쇄 시 같은 도메인의 <code>/printfile/...</code> 경로 호출).'; ?></p>
+                                <p style="margin-top:10px; font-size:12px; color:var(--fs-text-2, #666);"><?php echo $currentLang === 'en' ? '※ Replace OnlyOffice internal IP → Server IP or Docker IP, domain → actual domain. Restart Apache after configuration.<br>※ The <code>/printfile/</code> block is required for OnlyOffice editor\'s "File → Print" feature (calls <code>/printfile/...</code> path on the same domain).' : '※ OnlyOffice내부IP → 서버IP 또는 Docker IP로, 도메인 → 실제 도메인으로 변경하세요. 설정 후 Apache 재시작 필요.<br>※ <code>/printfile/</code> 블록은 OnlyOffice 편집기의 "파일 → 인쇄" 기능에 필수입니다 (인쇄 시 같은 도메인의 <code>/printfile/...</code> 경로 호출).'; ?></p>
                                 
                                 <p style="margin-top:15px;">🖥️ <strong><?php echo $currentLang === 'en' ? 'Synology DSM Reverse Proxy Settings' : '시놀로지 DSM 리버스 프록시 설정'; ?></strong></p>
-                                <p style="font-size:12px; color:#666; margin-bottom:5px;"><?php echo $currentLang === 'en' 
+                                <p style="font-size:12px; color:var(--fs-text-2, #666); margin-bottom:5px;"><?php echo $currentLang === 'en' 
                                     ? 'DSM → Control Panel → Login Portal → Advanced → Reverse Proxy (or Application Portal → Reverse Proxy)'
                                     : 'DSM → 제어판 → 로그인 포탈 → 고급 → 역방향 프록시 (또는 응용 프로그램 포탈 → 역방향 프록시)'; ?></p>
-                                <p style="font-size:12px; color:#e67e22; margin-bottom:5px; font-weight:bold;"><?php echo $currentLang === 'en' ? '★ Method 1 (Recommended) - Subdomain' : '★ 방법1 (권장) - 서브도메인 방식'; ?></p>
-                                <pre style="background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;"><?php echo $currentLang === 'en' ? '# Source' : '# 소스'; ?>
+                                <p style="font-size:12px; color:var(--fs-fg-warn, #e67e22); margin-bottom:5px; font-weight:bold;"><?php echo $currentLang === 'en' ? '★ Method 1 (Recommended) - Subdomain' : '★ 방법1 (권장) - 서브도메인 방식'; ?></p>
+                                <pre style="background:var(--fs-surface-2, #f5f5f5); padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;"><?php echo $currentLang === 'en' ? '# Source' : '# 소스'; ?>
 
 <?php echo $currentLang === 'en' ? 'Protocol' : '프로토콜'; ?>: HTTPS
 <?php echo $currentLang === 'en' ? 'Hostname' : '호스트명'; ?>: <?php echo $currentLang === 'en' ? 'oo.your-domain.com' : 'oo.도메인.com'; ?>
@@ -2951,18 +2984,18 @@ RewriteRule ^/oo/(.*) ws://<?php echo $currentLang === 'en' ? 'OnlyOffice_Intern
 <?php echo $currentLang === 'en' ? 'Protocol' : '프로토콜'; ?>: HTTP
 <?php echo $currentLang === 'en' ? 'Hostname' : '호스트명'; ?>: localhost
 <?php echo $currentLang === 'en' ? 'Port' : '포트'; ?>: 8080</pre>
-                                <p style="font-size:12px; color:#666; margin-top:5px;"><?php echo $currentLang === 'en' 
+                                <p style="font-size:12px; color:var(--fs-text-2, #666); margin-top:5px;"><?php echo $currentLang === 'en' 
                                     ? '※ Document Server URL → <code>https://oo.your-domain.com</code><br>※ Add DNS A record for <code>oo.your-domain.com</code> pointing to the same IP<br>※ Add <code>oo.your-domain.com</code> to SSL certificate (DSM → Security → Certificate)<br>※ In Custom Header tab, add: <code>Upgrade</code> → <code>$http_upgrade</code>, <code>Connection</code> → <code>Upgrade</code> (for WebSocket)<br>※ Subdomain proxies all paths including <code>/printfile/</code>, <code>/cache/</code> → no separate config needed for print feature.'
                                     : '※ Document Server URL → <code>https://oo.도메인.com</code><br>※ DNS에 <code>oo.도메인.com</code> A레코드 추가 (같은 IP)<br>※ SSL 인증서에 <code>oo.도메인.com</code> 추가 (DSM → 보안 → 인증서)<br>※ 사용자 지정 헤더 탭에서 추가: <code>Upgrade</code> → <code>$http_upgrade</code>, <code>Connection</code> → <code>Upgrade</code> (WebSocket 지원)<br>※ 서브도메인 방식은 <code>/printfile/</code>, <code>/cache/</code> 포함 모든 경로를 프록시하므로 인쇄 기능에 추가 설정 불필요.'; ?></p>
-                                <p style="font-size:12px; color:#999; margin-top:10px; margin-bottom:3px;"><?php echo $currentLang === 'en' ? '▸ Method 2 - Subpath (/oo) — Apache only recommended' : '▸ 방법2 - 서브패스 (/oo) — Apache에서만 권장'; ?></p>
-                                <pre style="background:#f9f9f9; padding:8px; border-radius:4px; overflow-x:auto; font-size:10px; color:#888;"><?php echo $currentLang === 'en' ? '# Source' : '# 소스'; ?>: HTTPS / <?php echo $currentLang === 'en' ? 'your-domain.com' : '도메인.com'; ?> / 443 / <?php echo $currentLang === 'en' ? 'Path' : '경로'; ?>: /oo
+                                <p style="font-size:12px; color:var(--fs-text-3, #999); margin-top:10px; margin-bottom:3px;"><?php echo $currentLang === 'en' ? '▸ Method 2 - Subpath (/oo) — Apache only recommended' : '▸ 방법2 - 서브패스 (/oo) — Apache에서만 권장'; ?></p>
+                                <pre style="background:var(--fs-surface-2, #f9f9f9); padding:8px; border-radius:4px; overflow-x:auto; font-size:10px; color:var(--fs-text-3, #888);"><?php echo $currentLang === 'en' ? '# Source' : '# 소스'; ?>: HTTPS / <?php echo $currentLang === 'en' ? 'your-domain.com' : '도메인.com'; ?> / 443 / <?php echo $currentLang === 'en' ? 'Path' : '경로'; ?>: /oo
 <?php echo $currentLang === 'en' ? '# Destination' : '# 대상'; ?>: HTTP / localhost / 8080
 → Document Server URL: https://<?php echo $currentLang === 'en' ? 'your-domain.com' : '도메인.com'; ?>/oo
 <?php echo $currentLang === 'en' ? '⚠️ May cause redirect issues (404) on Synology DSM Nginx, and /printfile/ /cache/ paths need separate proxy entries' : '⚠️ 시놀로지 DSM Nginx에서 리다이렉트 문제(404) 발생 가능, /printfile/ /cache/ 경로 별도 프록시 항목 필요'; ?></pre>
                                 
                                 <p style="margin-top:15px;">🟢 <strong><?php echo $currentLang === 'en' ? 'Nginx Reverse Proxy Settings' : 'Nginx 리버스 프록시 설정'; ?></strong></p>
-                                <p style="font-size:12px; color:#666; margin-bottom:5px;"><?php echo $currentLang === 'en' ? 'Add a new server block for the OnlyOffice subdomain.' : 'OnlyOffice 서브도메인용 서버 블록을 추가하세요.'; ?></p>
-                                <pre style="background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;">server {
+                                <p style="font-size:12px; color:var(--fs-text-2, #666); margin-bottom:5px;"><?php echo $currentLang === 'en' ? 'Add a new server block for the OnlyOffice subdomain.' : 'OnlyOffice 서브도메인용 서버 블록을 추가하세요.'; ?></p>
+                                <pre style="background:var(--fs-surface-2, #f5f5f5); padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;">server {
     listen 443 ssl;
     server_name <?php echo $currentLang === 'en' ? 'oo.your-domain.com' : 'oo.도메인.com'; ?>;
 
@@ -2986,16 +3019,16 @@ RewriteRule ^/oo/(.*) ws://<?php echo $currentLang === 'en' ? 'OnlyOffice_Intern
         client_max_body_size 100m;
     }
 }</pre>
-                                <p style="font-size:12px; color:#666; margin-top:5px;"><?php echo $currentLang === 'en' 
+                                <p style="font-size:12px; color:var(--fs-text-2, #666); margin-top:5px;"><?php echo $currentLang === 'en' 
                                     ? '※ Document Server URL → <code>https://oo.your-domain.com</code><br>※ Add DNS A record for <code>oo.your-domain.com</code><br>※ Same server: use <code>127.0.0.1</code> instead of OnlyOffice internal IP<br>※ <code>location /</code> proxies all paths including <code>/printfile/</code>, <code>/cache/</code> → no separate config needed for print feature.'
                                     : '※ Document Server URL → <code>https://oo.도메인.com</code><br>※ DNS에 <code>oo.도메인.com</code> A레코드 추가<br>※ 같은 서버면 OnlyOffice내부IP 대신 <code>127.0.0.1</code> 사용<br>※ <code>location /</code> 가 <code>/printfile/</code>, <code>/cache/</code> 포함 모든 경로를 프록시하므로 인쇄 기능에 추가 설정 불필요.'; ?></p>
                                 <p style="margin-top:5px;"><?php echo $currentLang === 'en' ? 'Supported files: docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp, txt, csv, html, etc. (PDF editing requires server v8.1+)' : '지원 파일: docx, xlsx, pptx, doc, xls, ppt, odt, ods, odp, txt, csv, html 등 (PDF 편집은 서버 8.1+ 필요)'; ?></p>
 
                                 <p style="margin-top:15px;">⬆️ <strong><?php echo $currentLang === 'en' ? 'Upgrade OnlyOffice Docs Version (Docker)' : 'OnlyOffice Docs 버전 업그레이드 방법 (Docker)'; ?></strong></p>
-                                <p style="font-size:12px; color:#666; margin-bottom:5px;"><?php echo $currentLang === 'en'
+                                <p style="font-size:12px; color:var(--fs-text-2, #666); margin-bottom:5px;"><?php echo $currentLang === 'en'
                                     ? 'If PDF editing is unavailable because the server version is lower than 8.1, upgrade the Document Server. Mounting data volumes lets you upgrade without losing documents/settings.'
                                     : '서버 버전이 8.1 미만이라 PDF 편집이 안 되면 Document Server를 업그레이드하세요. 데이터 볼륨을 마운트해 두면 문서/설정 유실 없이 업그레이드됩니다.'; ?></p>
-                                <pre style="background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;"><?php echo $currentLang === 'en' ? '# 1) Back up mounted data (if volumes are mounted)' : '# 1) 마운트된 데이터 백업 (볼륨 마운트 시)'; ?>
+                                <pre style="background:var(--fs-surface-2, #f5f5f5); padding:10px; border-radius:4px; overflow-x:auto; font-size:11px;"><?php echo $currentLang === 'en' ? '# 1) Back up mounted data (if volumes are mounted)' : '# 1) 마운트된 데이터 백업 (볼륨 마운트 시)'; ?>
 docker stop onlyoffice
 docker rename onlyoffice onlyoffice-old   <?php echo $currentLang === 'en' ? '# keep old container as fallback' : '# 롤백용으로 기존 컨테이너 보존'; ?>
 
@@ -3015,7 +3048,7 @@ docker run -d -p 8080:80 --restart=always \
 
 <?php echo $currentLang === 'en' ? '# 4) After it boots (1-2 min), click "Check Version" above.' : '# 4) 부팅 완료(1~2분) 후 위의 "버전 확인" 클릭.'; ?>
 <?php echo $currentLang === 'en' ? '# 5) If OK, remove the old one:  docker rm onlyoffice-old' : '# 5) 정상 확인되면 기존 컨테이너 삭제:  docker rm onlyoffice-old'; ?></pre>
-                                <p style="font-size:12px; color:#666; margin-top:5px;"><?php echo $currentLang === 'en'
+                                <p style="font-size:12px; color:var(--fs-text-2, #666); margin-top:5px;"><?php echo $currentLang === 'en'
                                     ? '※ Always reuse the exact same JWT_SECRET, port, and -v mount paths as your current container — otherwise settings/data or JWT auth may break.<br>※ To pin a specific version instead of latest, use a tag, e.g. <code>onlyoffice/documentserver:9.3.1</code>.<br>※ If data volumes were NOT mounted before, back up first (see the ONLYOFFICE update guide).'
                                     : '※ JWT_SECRET, 포트, -v 마운트 경로는 반드시 현재 컨테이너와 동일하게 사용하세요 — 다르면 설정/데이터 또는 JWT 인증이 깨질 수 있습니다.<br>※ latest 대신 특정 버전으로 고정하려면 태그를 쓰세요. 예: <code>onlyoffice/documentserver:9.3.1</code>.<br>※ 기존에 데이터 볼륨을 마운트하지 않았다면 먼저 백업하세요 (ONLYOFFICE 업데이트 가이드 참고).'; ?></p>
                             </div>
@@ -3035,13 +3068,13 @@ docker run -d -p 8080:80 --restart=always \
                             <button class="btn btn-warning" id="btn-config-restore" onclick="document.getElementById('config-restore-input').click();">📂 <?php echo $currentLang === 'en' ? 'Restore Settings' : '설정 복원'; ?></button>
                             <input type="file" id="config-restore-input" accept=".json" style="display:none;">
                         </div>
-                        <div id="config-backup-status" style="margin-top:6px;font-size:12px;color:#666;"></div>
-                        <div style="margin-top:16px;padding:12px;background:#f8f9fa;border-radius:6px;border:1px solid #e9ecef;font-size:12px;color:#666;">
-                            <strong style="color:#555;">📋 <?php echo $currentLang === 'en' ? 'Manual Backup' : '수동 백업'; ?></strong>
+                        <div id="config-backup-status" style="margin-top:6px;font-size:12px;color:var(--fs-text-2, #666);"></div>
+                        <div style="margin-top:16px;padding:12px;background:var(--fs-surface-2, #f8f9fa);border-radius:6px;border:1px solid var(--fs-border, #e9ecef);font-size:12px;color:var(--fs-text-2, #666);">
+                            <strong style="color:var(--fs-text-2, #555);">📋 <?php echo $currentLang === 'en' ? 'Manual Backup' : '수동 백업'; ?></strong>
                             <p style="margin:6px 0 0;line-height:1.6;">
                                 <?php echo $currentLang === 'en' 
-                                    ? 'You can also manually backup by copying the <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">data/</code> folder from the FileStation installation directory.<br>To backup actual files, also copy the personal folder (<code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">users/</code>) and shared folder (<code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">shared/</code>).<br>Excluded from backup: <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">*.lock</code>, <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">file_index.db</code>, <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">trash_files/</code>, <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">*.log</code>'
-                                    : 'FileStation 설치 경로의 <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">data/</code> 폴더를 통째로 복사해도 백업됩니다.<br>실제 파일을 백업하려면 개인폴더(<code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">users/</code>)와 공유폴더(<code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">shared/</code>)도 함께 복사하세요.<br>백업 제외 항목: <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">*.lock</code>, <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">file_index.db</code>, <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">trash_files/</code>, <code style="background:#e9ecef;padding:1px 4px;border-radius:3px;">*.log</code>'; ?>
+                                    ? 'You can also manually backup by copying the <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">data/</code> folder from the FileStation installation directory.<br>To backup actual files, also copy the personal folder (<code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">users/</code>) and shared folder (<code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">shared/</code>).<br>Excluded from backup: <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">*.lock</code>, <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">file_index.db</code>, <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">trash_files/</code>, <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">*.log</code>'
+                                    : 'FileStation 설치 경로의 <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">data/</code> 폴더를 통째로 복사해도 백업됩니다.<br>실제 파일을 백업하려면 개인폴더(<code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">users/</code>)와 공유폴더(<code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">shared/</code>)도 함께 복사하세요.<br>백업 제외 항목: <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">*.lock</code>, <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">file_index.db</code>, <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">trash_files/</code>, <code style="background:var(--fs-surface-3, #e9ecef);padding:1px 4px;border-radius:3px;">*.log</code>'; ?>
                             </p>
                         </div>
                     </div>
@@ -3063,10 +3096,10 @@ docker run -d -p 8080:80 --restart=always \
                         <!-- 라벨 위치 선택 (CSS 오버레이 모드 전용) -->
                         <!--   적용 대상: 압축(zip/7z/...) + 자막(srt/smi/...) + 갤러리 라벨 오버레이 매핑 -->
                         <!--   영향 X: 자동 감지 교체로 이미지에 영구 박힌 라벨 -->
-                        <details style="margin-bottom:15px; background:#fff8e1; border:1px solid #ffe082; border-radius:6px; padding:8px 12px;">
-                            <summary style="cursor:pointer; font-size:13px; color:#795548; font-weight:bold; user-select:none;">
+                        <details style="margin-bottom:15px; background:var(--fs-tint-warn, #fff8e1); border:1px solid var(--fs-tint-warn-border, #ffe082); border-radius:6px; padding:8px 12px;">
+                            <summary style="cursor:pointer; font-size:13px; color:var(--fs-fg-err, #795548); font-weight:bold; user-select:none;">
                                 🏷️ <?php echo $currentLang === 'en' ? 'Label Overlay Position' : '라벨 오버레이 위치'; ?>
-                                <span style="font-weight:normal; color:#999; font-size:11px; margin-left:6px;"><?php echo $currentLang === 'en' ? '(applies to CSS overlay mode only)' : '(CSS 오버레이 모드 아이콘에만 적용)'; ?></span>
+                                <span style="font-weight:normal; color:var(--fs-text-3, #5f6368); font-size:11px; margin-left:6px;"><?php echo $currentLang === 'en' ? '(applies to CSS overlay mode only)' : '(CSS 오버레이 모드 아이콘에만 적용)'; ?></span>
                             </summary>
                             <div style="margin-top:10px; display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; max-width:180px;">
                                 <?php
@@ -3078,13 +3111,13 @@ docker run -d -p 8080:80 --restart=always \
                                 foreach ($_labelPositions as $_pVal => $_pIcon):
                                 ?>
                                 <button type="button" class="label-pos-btn" data-position="<?= $_pVal ?>" 
-                                        style="padding:8px 0; border:2px solid #ddd; background:#fff; border-radius:4px; cursor:pointer; font-size:16px; transition:all .15s;"
+                                        style="padding:8px 0; border:2px solid var(--fs-border-2, #ddd); background:var(--fs-surface, #fff); border-radius:4px; cursor:pointer; font-size:16px; transition:all .15s;"
                                         title="<?= $_pVal ?>">
                                     <?= $_pIcon ?>
                                 </button>
                                 <?php endforeach; ?>
                             </div>
-                            <div style="margin-top:8px; font-size:11px; color:#777;">
+                            <div style="margin-top:8px; font-size:11px; color:var(--fs-text-2, #777);">
                                 <?php echo $currentLang === 'en' ? 'Click to change. Takes effect immediately.' : '클릭하면 즉시 적용됩니다.'; ?>
                             </div>
                         </details>
@@ -3109,14 +3142,14 @@ docker run -d -p 8080:80 --restart=always \
                         </div>
                         
                         <!-- 확장자 리스트 (메인) -->
-                        <div id="icon-ext-list" style="max-height:500px; overflow-y:auto; border:1px solid #e9ecef; border-radius:6px; background:#fff;">
+                        <div id="icon-ext-list" style="max-height:500px; overflow-y:auto; border:1px solid var(--fs-border, #e9ecef); border-radius:6px; background:var(--fs-surface, #fff);">
                             <!-- JS로 채움 -->
-                            <div style="padding:40px; text-align:center; color:#aaa;">
+                            <div style="padding:40px; text-align:center; color:var(--fs-text-3, #5f6368);">
                                 <?php echo $currentLang === 'en' ? 'Loading...' : '로딩 중...'; ?>
                             </div>
                         </div>
                         
-                        <div style="margin-top:10px; font-size:12px; color:#666;">
+                        <div style="margin-top:10px; font-size:12px; color:var(--fs-text-2, #666);">
                             <span id="icon-ext-count">-</span>개 확장자 | 🎨 = 사용자 변경됨 | 하단 버튼으로 저장 필요
                         </div>
                     </div>
@@ -3136,7 +3169,7 @@ docker run -d -p 8080:80 --restart=always \
                     </div>
                     
                     <!-- 작업 추가/편집 폼 -->
-                    <div id="sync-task-form" style="display:none;background:#f8f9fa;padding:12px;border-radius:8px;margin-bottom:12px;border:1px solid #e0e0e0;">
+                    <div id="sync-task-form" style="display:none;background:var(--fs-surface-2, #f8f9fa);padding:12px;border-radius:8px;margin-bottom:12px;border:1px solid var(--fs-border, #e0e0e0);">
                         <input type="hidden" id="sync-task-id">
                         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
                             <div>
@@ -3157,25 +3190,25 @@ docker run -d -p 8080:80 --restart=always \
                                 <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;"><?php echo $currentLang === 'en' ? 'Source Storage' : '원본 스토리지'; ?></label>
                                 <select id="sync-source-storage" class="form-control" style="font-size:13px;"></select>
                                 <input type="text" id="sync-source-path" class="form-control" style="font-size:12px;margin-top:4px;" placeholder="<?php echo $currentLang === 'en' ? '/subfolder' : '/하위폴더'; ?>">
-                                <small style="color:#888;font-size:11px;line-height:1.4;display:block;margin-top:3px;"><?php echo $currentLang === 'en' ? '▸ Empty = sync entire storage<br>▸ To sync specific folder, enter: /folder name' : '▸ 비우면 = 스토리지 전체 동기화<br>▸ 특정 폴더만 하려면: /폴더명 입력'; ?></small>
+                                <small style="color:var(--fs-text-3, #888);font-size:11px;line-height:1.4;display:block;margin-top:3px;"><?php echo $currentLang === 'en' ? '▸ Empty = sync entire storage<br>▸ To sync specific folder, enter: /folder name' : '▸ 비우면 = 스토리지 전체 동기화<br>▸ 특정 폴더만 하려면: /폴더명 입력'; ?></small>
                             </div>
                             <div>
                                 <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px;"><?php echo $currentLang === 'en' ? 'Target Storage' : '대상 스토리지'; ?></label>
                                 <select id="sync-target-storage" class="form-control" style="font-size:13px;"></select>
                                 <input type="text" id="sync-target-path" class="form-control" style="font-size:12px;margin-top:4px;" placeholder="<?php echo $currentLang === 'en' ? '/subfolder' : '/하위폴더'; ?>">
-                                <small style="color:#888;font-size:11px;line-height:1.4;display:block;margin-top:3px;"><?php echo $currentLang === 'en' ? '▸ Empty = save to storage root<br>▸ To save in specific folder: /folder name' : '▸ 비우면 = 스토리지 최상위에 저장<br>▸ 특정 폴더에 저장하려면: /폴더명 입력'; ?></small>
+                                <small style="color:var(--fs-text-3, #888);font-size:11px;line-height:1.4;display:block;margin-top:3px;"><?php echo $currentLang === 'en' ? '▸ Empty = save to storage root<br>▸ To save in specific folder: /folder name' : '▸ 비우면 = 스토리지 최상위에 저장<br>▸ 특정 폴더에 저장하려면: /폴더명 입력'; ?></small>
                             </div>
                         </div>
                         <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
                             <label style="font-size:12px;"><input type="checkbox" id="sync-delete-orphan"> <?php echo $currentLang === 'en' ? 'Delete files not in source' : '원본에 없는 파일 삭제'; ?></label>
                             <label style="font-size:12px;"><input type="checkbox" id="sync-include-subdir" checked> <?php echo $currentLang === 'en' ? 'Include subfolders' : '하위 폴더 포함'; ?></label>
                         </div>
-                        <div style="margin-bottom:10px;padding:8px;background:#e8f4fd;border-radius:6px;">
+                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-tint-info, #e8f4fd);border-radius:6px;">
                             <label style="font-size:12px;font-weight:600;display:flex;align-items:center;gap:6px;margin-bottom:4px;">
                                 <input type="checkbox" id="sync-schedule-enabled">
                                 <span>🕐 <?php echo $currentLang === 'en' ? 'Auto Schedule (cron)' : '자동 예약 (cron)'; ?></span>
                             </label>
-                            <small style="color:#666;font-size:11px;display:block;margin-bottom:6px;line-height:1.4;"><?php echo $currentLang === 'en' ? '※ This only saves the schedule setting. To actually run automatically, you must register sync_cron.php in the server\'s Task Scheduler (Windows) or crontab (Linux). See the guide below.' : '※ 예약 설정만 저장됩니다. 실제 자동 실행은 서버의 작업 스케줄러(Windows) 또는 crontab(Linux)에 sync_cron.php를 등록해야 합니다. 아래 가이드를 참고하세요.'; ?></small>
+                            <small style="color:var(--fs-text-2, #666);font-size:11px;display:block;margin-bottom:6px;line-height:1.4;"><?php echo $currentLang === 'en' ? '※ This only saves the schedule setting. To actually run automatically, you must register sync_cron.php in the server\'s Task Scheduler (Windows) or crontab (Linux). See the guide below.' : '※ 예약 설정만 저장됩니다. 실제 자동 실행은 서버의 작업 스케줄러(Windows) 또는 crontab(Linux)에 sync_cron.php를 등록해야 합니다. 아래 가이드를 참고하세요.'; ?></small>
                             <div id="sync-schedule-options" style="display:none;">
                                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                                     <select id="sync-schedule-type" class="form-control" style="font-size:12px;width:auto;">
@@ -3212,7 +3245,7 @@ docker run -d -p 8080:80 --restart=always \
                                     </div>
                                 </div>
                                 <details style="margin-top:6px;">
-                                    <summary style="font-size:11px;color:#1a5276;cursor:pointer;font-weight:600;">💡 <?php echo $currentLang === 'en' ? 'Server Setup Guide (click to expand)' : '서버 설정 가이드 (클릭하여 펼치기)'; ?></summary>
+                                    <summary style="font-size:11px;color:var(--fs-fg-info, #1a5276);cursor:pointer;font-weight:600;">💡 <?php echo $currentLang === 'en' ? 'Server Setup Guide (click to expand)' : '서버 설정 가이드 (클릭하여 펼치기)'; ?></summary>
                                     <div style="margin-top:6px;font-size:11px;line-height:1.7;">
                                         
                                         <?php if ($currentLang === 'en'): ?>
@@ -3221,7 +3254,7 @@ docker run -d -p 8080:80 --restart=always \
                                             <b>📌 How it works:</b> The cron job runs <code>sync_cron.php</code> every minute. It checks scheduled tasks and only executes when the time matches. No load when idle.
                                         </div>
                                         
-                                        <div style="margin-bottom:10px;padding:8px;background:#fff;border-radius:4px;border-left:3px solid #3498db;">
+                                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-surface, #fff);border-radius:4px;border-left:3px solid #3498db;">
                                             <b>🐧 Linux (Ubuntu/Debian/CentOS)</b><br>
 <pre style="background:#2d2d2d;color:#f8f8f2;padding:6px;border-radius:4px;margin:4px 0;font-size:10px;overflow-x:auto;"># Open crontab editor
 crontab -e
@@ -3233,7 +3266,7 @@ crontab -e
 crontab -l</pre>
                                         </div>
                                         
-                                        <div style="margin-bottom:10px;padding:8px;background:#fff;border-radius:4px;border-left:3px solid #e67e22;">
+                                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-surface, #fff);border-radius:4px;border-left:3px solid #e67e22;">
                                             <b>🪟 Windows (Apache/Nginx/IIS)</b><br>
                                             Use Windows Task Scheduler:
 <pre style="background:#2d2d2d;color:#f8f8f2;padding:6px;border-radius:4px;margin:4px 0;font-size:10px;overflow-x:auto;"># Method 1: Task Scheduler (GUI)
@@ -3258,7 +3291,7 @@ schtasks /delete /tn "FileStation Sync" /f</pre>
                                             ⚠️ Make sure <code>php.exe</code> path is correct. Check with: <code>where php</code>
                                         </div>
                                         
-                                        <div style="margin-bottom:10px;padding:8px;background:#fff;border-radius:4px;border-left:3px solid #2ecc71;">
+                                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-surface, #fff);border-radius:4px;border-left:3px solid #2ecc71;">
                                             <b>🐳 Docker (Linux)</b>
 <pre style="background:#2d2d2d;color:#f8f8f2;padding:6px;border-radius:4px;margin:4px 0;font-size:10px;overflow-x:auto;"># Method 1: Host crontab (recommended)
 crontab -e
@@ -3279,7 +3312,7 @@ service cron start
 #     entrypoint: /bin/sh -c "while true; do php /var/www/html/sync_cron.php; sleep 60; done"</pre>
                                         </div>
                                         
-                                        <div style="margin-bottom:10px;padding:8px;background:#fff;border-radius:4px;border-left:3px solid #9b59b6;">
+                                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-surface, #fff);border-radius:4px;border-left:3px solid #9b59b6;">
                                             <b>🐳 Docker (Windows / Docker Desktop)</b>
 <pre style="background:#2d2d2d;color:#f8f8f2;padding:6px;border-radius:4px;margin:4px 0;font-size:10px;overflow-x:auto;"># Method 1: Windows Task Scheduler + docker exec
 schtasks /create /tn "FileStation Sync" /tr "docker exec filestation php /var/www/html/sync_cron.php" /sc minute /mo 1
@@ -3294,7 +3327,7 @@ while ($true) {
 # Method 3: docker-compose sidecar (same as Linux Docker Method 3)</pre>
                                         </div>
                                         
-                                        <div style="padding:8px;background:#fff3cd;border-radius:4px;margin-top:6px;">
+                                        <div style="padding:8px;background:var(--fs-tint-warn, #fff3cd);border-radius:4px;margin-top:6px;">
                                             <b>🔍 Verify it works:</b><br>
                                             <code>php sync_cron.php --list</code> — Show all tasks<br>
                                             <code>php sync_cron.php --task=1</code> — Test run task #1<br>
@@ -3307,7 +3340,7 @@ while ($true) {
                                             <b>📌 동작 원리:</b> cron이 매분 <code>sync_cron.php</code>를 실행하고, 예약 시간이 맞는 작업만 실행합니다. 예약 시간이 아니면 즉시 종료되어 부하가 없습니다.
                                         </div>
                                         
-                                        <div style="margin-bottom:10px;padding:8px;background:#fff;border-radius:4px;border-left:3px solid #3498db;">
+                                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-surface, #fff);border-radius:4px;border-left:3px solid #3498db;">
                                             <b>🐧 리눅스 (Ubuntu/Debian/CentOS)</b><br>
 <pre style="background:#2d2d2d;color:#f8f8f2;padding:6px;border-radius:4px;margin:4px 0;font-size:10px;overflow-x:auto;"># crontab 편집기 열기
 crontab -e
@@ -3319,7 +3352,7 @@ crontab -e
 crontab -l</pre>
                                         </div>
                                         
-                                        <div style="margin-bottom:10px;padding:8px;background:#fff;border-radius:4px;border-left:3px solid #e67e22;">
+                                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-surface, #fff);border-radius:4px;border-left:3px solid #e67e22;">
                                             <b>🪟 윈도우 (Apache/Nginx/IIS)</b><br>
                                             Windows 작업 스케줄러를 사용합니다:
 <pre style="background:#2d2d2d;color:#f8f8f2;padding:6px;border-radius:4px;margin:4px 0;font-size:10px;overflow-x:auto;"># 방법 1: 작업 스케줄러 (GUI)
@@ -3344,7 +3377,7 @@ schtasks /delete /tn "FileStation Sync" /f</pre>
                                             ⚠️ <code>php.exe</code> 경로를 확인하세요. <code>where php</code>로 확인 가능.
                                         </div>
                                         
-                                        <div style="margin-bottom:10px;padding:8px;background:#fff;border-radius:4px;border-left:3px solid #2ecc71;">
+                                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-surface, #fff);border-radius:4px;border-left:3px solid #2ecc71;">
                                             <b>🐳 리눅스 Docker</b>
 <pre style="background:#2d2d2d;color:#f8f8f2;padding:6px;border-radius:4px;margin:4px 0;font-size:10px;overflow-x:auto;"># 방법 1: 호스트 crontab (권장)
 crontab -e
@@ -3365,7 +3398,7 @@ service cron start
 #     entrypoint: /bin/sh -c "while true; do php /var/www/html/sync_cron.php; sleep 60; done"</pre>
                                         </div>
                                         
-                                        <div style="margin-bottom:10px;padding:8px;background:#fff;border-radius:4px;border-left:3px solid #9b59b6;">
+                                        <div style="margin-bottom:10px;padding:8px;background:var(--fs-surface, #fff);border-radius:4px;border-left:3px solid #9b59b6;">
                                             <b>🐳 윈도우 Docker (Docker Desktop)</b>
 <pre style="background:#2d2d2d;color:#f8f8f2;padding:6px;border-radius:4px;margin:4px 0;font-size:10px;overflow-x:auto;"># 방법 1: 윈도우 작업 스케줄러 + docker exec
 schtasks /create /tn "FileStation Sync" /tr "docker exec filestation php /var/www/html/sync_cron.php" /sc minute /mo 1
@@ -3380,7 +3413,7 @@ while ($true) {
 # 방법 3: docker-compose 사이드카 (리눅스 Docker 방법 3과 동일)</pre>
                                         </div>
                                         
-                                        <div style="padding:8px;background:#fff3cd;border-radius:4px;margin-top:6px;">
+                                        <div style="padding:8px;background:var(--fs-tint-warn, #fff3cd);border-radius:4px;margin-top:6px;">
                                             <b>🔍 동작 확인:</b><br>
                                             <code>php sync_cron.php --list</code> — 전체 작업 목록<br>
                                             <code>php sync_cron.php --task=1</code> — 1번 작업 테스트 실행<br>
@@ -3413,7 +3446,7 @@ while ($true) {
                             <span id="sync-progress-text" style="font-size:12px;white-space:pre-wrap;">0%</span>
                             <button class="btn btn-sm btn-danger" id="btn-cancel-sync"><?php echo $currentLang === 'en' ? 'Cancel' : '중지'; ?></button>
                         </div>
-                        <div style="background:#e0e0e0;border-radius:4px;height:6px;overflow:hidden;">
+                        <div style="background:var(--fs-surface-3, #e0e0e0);border-radius:4px;height:6px;overflow:hidden;">
                             <div id="sync-progress-bar" style="background:var(--primary,#667eea);height:100%;width:0%;transition:width 0.3s;border-radius:4px;"></div>
                         </div>
                     </div>
@@ -3427,7 +3460,7 @@ while ($true) {
                     <button class="modal-close">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <div style="margin-bottom:8px; padding:8px; background:#fff8e1; border:1px solid #ffe082; border-radius:6px; font-size:12px; line-height:1.5;">
+                    <div style="margin-bottom:8px; padding:8px; background:var(--fs-tint-warn, #fff8e1); border:1px solid var(--fs-tint-warn-border, #ffe082); border-radius:6px; font-size:12px; line-height:1.5;">
                         <strong><?php echo $currentLang === 'en' ? '🔔 Rebuild Reminder' : '🔔 재구축 알림'; ?></strong><br>
                         <label style="display:inline-flex; align-items:center; gap:4px; margin-top:4px; flex-wrap:wrap;">
                             <select id="index-rebuild-notify-days" class="form-control" style="width:auto; padding:2px 6px; font-size:12px;">
@@ -3444,7 +3477,7 @@ while ($true) {
                     </div>
                     <div class="index-info" style="padding:8px 12px; font-size:12px; line-height:1.5;">
                         <p style="margin:0;"><?php echo $currentLang === 'en' ? 'Search index improves file search speed. Rebuild may take time for many files.' : '검색 인덱스를 사용하면 파일 검색 속도가 대폭 향상됩니다. 파일이 많은 경우 재구축에 시간이 걸릴 수 있습니다.'; ?></p>
-                        <p style="margin:4px 0 0;font-size:11px;color:#666;"><?php echo $currentLang === 'en' ? '⚙️ <strong>Req:</strong> PHP sqlite3 extension (<code>extension=sqlite3</code> in php.ini)' : '⚙️ <strong>요구사항:</strong> PHP sqlite3 확장 (<code>extension=sqlite3</code>)'; ?></p>
+                        <p style="margin:4px 0 0;font-size:11px;color:var(--fs-text-2, #666);"><?php echo $currentLang === 'en' ? '⚙️ <strong>Req:</strong> PHP sqlite3 extension (<code>extension=sqlite3</code> in php.ini)' : '⚙️ <strong>요구사항:</strong> PHP sqlite3 확장 (<code>extension=sqlite3</code>)'; ?></p>
                     </div>
                     
                     <!-- 자동 갱신 상태 표시 -->
@@ -3469,16 +3502,16 @@ while ($true) {
                         </table>
                     </div>
                     
-                    <div id="index-scope-info" style="margin-bottom:10px; padding:8px 10px; background:#f0f7ff; border:1px solid #cce5ff; border-radius:6px; font-size:11px; color:#555; line-height:1.6;">
+                    <div id="index-scope-info" style="margin-bottom:10px; padding:8px 10px; background:var(--fs-tint-info, #f0f7ff); border:1px solid var(--fs-tint-info-border, #cce5ff); border-radius:6px; font-size:11px; color:var(--fs-text-2, #555); line-height:1.6;">
                             <strong><?php echo $currentLang === 'en' ? '📋 Index Scope' : '📋 인덱스 대상'; ?></strong><br>
                             <?php echo $currentLang === 'en' 
-                                ? '• <strong>Rebuild</strong>: All storages (incl. FTP/SFTP/SMB)<br>• <strong>Auto Sync</strong>: Local only<br><small style="color:#888;">※ FTP/SFTP/SMB excluded from auto sync. Use manual rebuild.</small>'
-                                : '• <strong>수동 재구축</strong>: 개인폴더, 공유폴더, 로컬, FTP/SFTP, SMB/CIFS<br>• <strong>자동 갱신</strong>: 개인폴더, 공유폴더, 로컬만 해당<br><small style="color:#888;">※ FTP/SFTP/SMB는 네트워크 부하로 자동 갱신에서 제외됩니다.</small>'; ?>
+                                ? '• <strong>Rebuild</strong>: All storages (incl. FTP/SFTP/SMB)<br>• <strong>Auto Sync</strong>: Local only<br><small style="color:var(--fs-text-3, #888);">※ FTP/SFTP/SMB excluded from auto sync. Use manual rebuild.</small>'
+                                : '• <strong>수동 재구축</strong>: 개인폴더, 공유폴더, 로컬, FTP/SFTP, SMB/CIFS<br>• <strong>자동 갱신</strong>: 개인폴더, 공유폴더, 로컬만 해당<br><small style="color:var(--fs-text-3, #888);">※ FTP/SFTP/SMB는 네트워크 부하로 자동 갱신에서 제외됩니다.</small>'; ?>
                             <br>
                             <strong><?php echo $currentLang === 'en' ? '🔍 Search' : '🔍 검색'; ?></strong><br>
                             <?php echo $currentLang === 'en'
-                                ? '• <strong>Integrated</strong>: Fast (index) — indexed storages only<br>• <strong>Storage filter</strong>: Real-time (no index) — slower for large storages<br><small style="color:#888;">※ Rebuild indexes for fast integrated search across all storages.</small>'
-                                : '• <strong>통합 검색</strong>: 빠름 (인덱스) — 인덱스 구축된 스토리지만<br>• <strong>필터 검색</strong>: 실시간 (인덱스 불필요) — 파일 많으면 느림<br><small style="color:#888;">※ 인덱스 재구축 시 모든 스토리지가 통합 검색에 포함됩니다.</small>'; ?>
+                                ? '• <strong>Integrated</strong>: Fast (index) — indexed storages only<br>• <strong>Storage filter</strong>: Real-time (no index) — slower for large storages<br><small style="color:var(--fs-text-3, #888);">※ Rebuild indexes for fast integrated search across all storages.</small>'
+                                : '• <strong>통합 검색</strong>: 빠름 (인덱스) — 인덱스 구축된 스토리지만<br>• <strong>필터 검색</strong>: 실시간 (인덱스 불필요) — 파일 많으면 느림<br><small style="color:var(--fs-text-3, #888);">※ 인덱스 재구축 시 모든 스토리지가 통합 검색에 포함됩니다.</small>'; ?>
                     </div>
                     
                     <div class="index-actions">
@@ -3738,7 +3771,7 @@ desktop.ini"></textarea>
                         </div>
                     </div>
                     <div id="board-manage-list"></div>
-                    <div id="board-manage-empty" style="display:none;text-align:center;padding:40px;color:#999;">
+                    <div id="board-manage-empty" style="display:none;text-align:center;padding:40px;color:var(--fs-text-3, #999);">
                         <div style="font-size:48px;margin-bottom:10px;">📋</div>
                         <p><?php echo $currentLang === 'en' ? 'No boards created yet' : '생성된 게시판이 없습니다'; ?></p>
                     </div>
@@ -3795,13 +3828,13 @@ desktop.ini"></textarea>
                             <?php echo $currentLang === 'en' ? 'Allow Comments' : '댓글 허용'; ?>
                         </label>
                     </div>
-                    <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
+                    <hr style="border:none;border-top:1px solid var(--fs-border, #eee);margin:12px 0;">
                     <div class="form-group">
                         <label><?php echo $currentLang === 'en' ? 'Allowed File Extensions' : '첨부파일 허용 확장자'; ?></label>
                         <input type="text" id="board-edit-allowed-ext" class="form-control" placeholder="">
-                        <small style="color:#999;font-size:11px;"><?php echo $currentLang === 'en' ? 'Comma separated. Empty = all allowed' : '쉼표로 구분. 비어있으면 모두 허용'; ?></small>
-                        <small style="display:block;color:#888;font-size:11px;margin-top:2px;"><?php echo $currentLang === 'en' ? 'e.g.) jpg,png,gif,pdf,zip,hwp,doc,docx,xls,xlsx' : '예) jpg,png,gif,pdf,zip,hwp,doc,docx,xls,xlsx'; ?></small>
-                        <small style="display:block;color:#c62828;font-size:11px;margin-top:4px;">🔒 <?php echo $currentLang === 'en' 
+                        <small style="color:var(--fs-text-3, #5f6368);font-size:11px;"><?php echo $currentLang === 'en' ? 'Comma separated. Empty = all allowed' : '쉼표로 구분. 비어있으면 모두 허용'; ?></small>
+                        <small style="display:block;color:var(--fs-text-3, #888);font-size:11px;margin-top:2px;"><?php echo $currentLang === 'en' ? 'e.g.) jpg,png,gif,pdf,zip,hwp,doc,docx,xls,xlsx' : '예) jpg,png,gif,pdf,zip,hwp,doc,docx,xls,xlsx'; ?></small>
+                        <small style="display:block;color:var(--fs-fg-err, #c62828);font-size:11px;margin-top:4px;">🔒 <?php echo $currentLang === 'en' 
                             ? 'Always blocked: php, phtml, php3~7, phar, jsp, asp, aspx, cgi, htaccess, user.ini' 
                             : '항상 차단: php, phtml, php3~7, phar, phps, jsp, jspx, asp, aspx, cgi, htaccess, user.ini'; ?></small>
                     </div>
@@ -3844,15 +3877,15 @@ desktop.ini"></textarea>
                         <h3>📂 <?php echo $currentLang === 'en' ? 'Select from Storage' : '스토리지에서 선택'; ?></h3>
                         <span class="close" onclick="App.hideModal('modal-storage-picker')">&times;</span>
                     </div>
-                    <div style="padding:10px 16px;border-bottom:1px solid var(--border-color,#eee);display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <div style="padding:10px 16px;border-bottom:1px solid var(--border-color,var(--fs-border, #eee));display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                         <select id="storage-picker-storage" class="form-control" style="width:auto;min-width:120px;height:32px;font-size:12px;" onchange="App.loadStoragePickerFiles()">
                         </select>
-                        <div id="storage-picker-breadcrumb" style="font-size:12px;color:#666;display:flex;align-items:center;gap:4px;flex:1;overflow-x:auto;white-space:nowrap;"></div>
+                        <div id="storage-picker-breadcrumb" style="font-size:12px;color:var(--fs-text-2, #666);display:flex;align-items:center;gap:4px;flex:1;overflow-x:auto;white-space:nowrap;"></div>
                     </div>
                     <div id="storage-picker-list" style="flex:1;overflow-y:auto;padding:8px 16px;min-height:200px;">
                     </div>
                     <div class="modal-footer" style="padding:10px 16px;display:flex;justify-content:space-between;align-items:center;">
-                        <span id="storage-picker-count" style="font-size:12px;color:#999;"></span>
+                        <span id="storage-picker-count" style="font-size:12px;color:var(--fs-text-3, #999);"></span>
                         <div style="display:flex;gap:8px;">
                             <button class="btn btn-secondary" onclick="App.hideModal('modal-storage-picker')"><?php echo $currentLang === 'en' ? 'Cancel' : '취소'; ?></button>
                             <button class="btn btn-primary" onclick="App.attachStoragePickerFiles()"><?php echo $currentLang === 'en' ? 'Attach Selected' : '선택 첨부'; ?></button>
@@ -4514,11 +4547,11 @@ desktop.ini"></textarea>
                 </div>
                 <div class="modal-body">
                     <div class="antivirus-info-box" style="border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                        <p style="margin: 0; color: #2e7d32;">
+                        <p style="margin: 0; color: var(--fs-fg-ok, #2e7d32);">
                             <strong><?php echo $currentLang === 'en' ? '⚠️ Server Antivirus Scan' : '⚠️ 서버 백신 검사'; ?></strong><br>
                             <br><?php echo $currentLang === 'en' ? 'Scans uploaded files with <strong>server-installed antivirus</strong>.' : '업로드되는 파일을 <strong>서버에 설치된 백신</strong>으로 검사합니다.'; ?><br>
                             <?php echo $currentLang === 'en' ? 'Operates independently from client PC antivirus.' : '클라이언트 PC의 백신과는 별개로 동작합니다.'; ?><br>
-                            <span style="color: #f57c00;"><?php echo $currentLang === 'en' ? '⏱️ Upload completion may be delayed due to antivirus scanning.' : '⏱️ 백신 검사로 인해 업로드 완료가 지연될 수 있습니다.'; ?></span>
+                            <span style="color: var(--fs-fg-warn, #b45309);"><?php echo $currentLang === 'en' ? '⏱️ Upload completion may be delayed due to antivirus scanning.' : '⏱️ 백신 검사로 인해 업로드 완료가 지연될 수 있습니다.'; ?></span>
                         </p>
                     </div>
                     
@@ -4573,7 +4606,7 @@ desktop.ini"></textarea>
                     </div>
                     
                     <!-- 검사 로그 섹션 -->
-                    <div id="antivirus-scan-log" style="margin-top: 25px; border-top: 1px solid #ddd; padding-top: 20px;">
+                    <div id="antivirus-scan-log" style="margin-top: 25px; border-top: 1px solid var(--fs-border-2, #ddd); padding-top: 20px;">
                         <h4 style="margin: 0 0 15px 0;"><?php echo $currentLang === 'en' ? '📋 Scan Logs' : '📋 검사 로그'; ?></h4>
                         
                         <!-- 날짜 필터 -->
@@ -4587,15 +4620,15 @@ desktop.ini"></textarea>
                                 <input type="date" id="antivirus-log-date-to" lang="<?php echo $currentLang; ?>" class="form-control" style="width: 150px; padding: 5px 8px; font-size: 13px;">
                             </div>
                             <button type="button" class="btn btn-sm btn-outline" id="btn-filter-antivirus-logs"><?php echo $currentLang === 'en' ? '🔍 Query' : '🔍 조회'; ?></button>
-                            <button type="button" class="btn btn-sm btn-outline" id="btn-delete-filtered-antivirus-logs" style="color: #f44336; border-color: #f44336;"><?php echo $currentLang === 'en' ? '🗑️ Delete Query Results' : '🗑️ 조회 결과 삭제'; ?></button>
+                            <button type="button" class="btn btn-sm btn-outline" id="btn-delete-filtered-antivirus-logs" style="color: var(--fs-fg-err, #b91c1c); border-color: #f44336;"><?php echo $currentLang === 'en' ? '🗑️ Delete Query Results' : '🗑️ 조회 결과 삭제'; ?></button>
                             <button type="button" class="btn btn-sm btn-danger" id="btn-clear-antivirus-logs"><?php echo $currentLang === 'en' ? 'Delete All' : '전체 삭제'; ?></button>
                         </div>
                         
                         <!-- 로그 통계 -->
-                        <div id="antivirus-log-stats" style="font-size: 12px; color: #666; margin-bottom: 10px;"></div>
+                        <div id="antivirus-log-stats" style="font-size: 12px; color: var(--fs-text-2, #666); margin-bottom: 10px;"></div>
                         
                         <!-- 로그 목록 -->
-                        <div id="antivirus-log-content" style="max-height: 300px; overflow-y: auto; background: #f5f5f5; padding: 10px; border-radius: 4px; font-size: 12px;"></div>
+                        <div id="antivirus-log-content" style="max-height: 300px; overflow-y: auto; background: var(--fs-surface-2, #f5f5f5); padding: 10px; border-radius: 4px; font-size: 12px;"></div>
                         
                         <!-- 페이지네이션 -->
                         <div id="antivirus-log-pagination" style="display: flex; justify-content: center; gap: 5px; margin-top: 10px;"></div>
@@ -4615,15 +4648,15 @@ desktop.ini"></textarea>
                 </div>
                 <div class="modal-body">
                     <div class="ransomware-warning-box" style="border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                        <p style="margin: 0; color: #c62828;">
+                        <p style="margin: 0; color: var(--fs-fg-err, #c62828);">
                             <strong><?php echo $currentLang === 'en' ? '🔐 Ransomware Protection Features' : '🔐 랜섬웨어 방지 기능'; ?></strong><br>
                             <?php echo $currentLang === 'en' ? 'Protects data from ransomware by blocking suspicious uploads,<br>detecting bulk operations, and managing file versions.' : '의심스러운 파일 업로드 차단, 대량 작업 감지, 파일 버전 관리로<br>랜섬웨어로부터 데이터를 보호합니다.'; ?>
                         </p>
                     </div>
                     
                     <!-- 1. 의심 확장자 차단 -->
-                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                        <h4 style="margin: 0 0 15px 0; color: #c62828;"><?php echo $currentLang === 'en' ? '🚫 Suspicious Extension Blocking' : '🚫 의심 확장자 차단'; ?></h4>
+                    <div style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-err, #c62828);"><?php echo $currentLang === 'en' ? '🚫 Suspicious Extension Blocking' : '🚫 의심 확장자 차단'; ?></h4>
                         
                         <div class="form-group">
                             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
@@ -4647,8 +4680,8 @@ desktop.ini"></textarea>
                     </div>
                     
                     <!-- 2. 대량 작업 감지 -->
-                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                        <h4 style="margin: 0 0 15px 0; color: #c62828;"><?php echo $currentLang === 'en' ? '⚠️ Mass Operation Detection & Blocking' : '⚠️ 대량 작업 감지 및 차단'; ?></h4>
+                    <div style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-err, #c62828);"><?php echo $currentLang === 'en' ? '⚠️ Mass Operation Detection & Blocking' : '⚠️ 대량 작업 감지 및 차단'; ?></h4>
                         
                         <div class="form-group">
                             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
@@ -4685,8 +4718,8 @@ desktop.ini"></textarea>
                     </div>
                     
                     <!-- 3. 파일 버전 관리 -->
-                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                        <h4 style="margin: 0 0 15px 0; color: #c62828;"><?php echo $currentLang === 'en' ? '📦 File Version Management' : '📦 파일 버전 관리'; ?></h4>
+                    <div style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-err, #c62828);"><?php echo $currentLang === 'en' ? '📦 File Version Management' : '📦 파일 버전 관리'; ?></h4>
                         
                         <div class="form-group">
                             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
@@ -4716,9 +4749,9 @@ desktop.ini"></textarea>
                     </div>
                     
                     <!-- 4. 파일 내용 검사 -->
-                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                        <h4 style="margin: 0 0 15px 0; color: #c62828;"><?php echo $currentLang === 'en' ? '🔍 File Content Scanning' : '🔍 파일 내용 검사'; ?></h4>
-                        <p style="font-size: 12px; color: #666; margin-bottom: 15px;">
+                    <div style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-err, #c62828);"><?php echo $currentLang === 'en' ? '🔍 File Content Scanning' : '🔍 파일 내용 검사'; ?></h4>
+                        <p style="font-size: 12px; color: var(--fs-text-2, #666); margin-bottom: 15px;">
                             <?php echo $currentLang === 'en' ? 'Detects encrypted content even if the filename appears normal.' : '파일명이 정상이어도 내용이 암호화된 파일을 감지합니다.'; ?>
                         </p>
                         
@@ -4729,7 +4762,7 @@ desktop.ini"></textarea>
                             </label>
                         </div>
                         
-                        <div style="border-left: 3px solid #e0e0e0; padding-left: 15px; margin-top: 15px;">
+                        <div style="border-left: 3px solid var(--fs-border, #e0e0e0); padding-left: 15px; margin-top: 15px;">
                             <div class="form-group">
                                 <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                     <input type="checkbox" id="ransomware-signature-check" style="width: 18px; height: 18px;">
@@ -4749,14 +4782,14 @@ desktop.ini"></textarea>
                     </div>
                     
                     <!-- 로그 섹션 -->
-                    <div style="border-top: 1px solid #ddd; padding-top: 20px;">
+                    <div style="border-top: 1px solid var(--fs-border-2, #ddd); padding-top: 20px;">
                         <h4 style="margin: 0 0 15px 0;"><?php echo $currentLang === 'en' ? '📋 Ransomware Protection Logs' : '📋 랜섬웨어 방지 로그'; ?></h4>
                         <div style="display: flex; gap: 10px; margin-bottom: 10px;">
                             <button type="button" class="btn btn-sm btn-outline" id="btn-load-ransomware-logs"><?php echo $currentLang === 'en' ? '🔄 Refresh Logs' : '🔄 로그 새로고침'; ?></button>
                             <button type="button" class="btn btn-sm btn-danger" id="btn-clear-ransomware-logs"><?php echo $currentLang === 'en' ? '🗑️ Delete Logs' : '🗑️ 로그 삭제'; ?></button>
                         </div>
-                        <div id="ransomware-log-stats" style="font-size: 12px; color: #666; margin-bottom: 10px;"></div>
-                        <div id="ransomware-log-content" style="max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 10px; border-radius: 4px; font-size: 12px;"></div>
+                        <div id="ransomware-log-stats" style="font-size: 12px; color: var(--fs-text-2, #666); margin-bottom: 10px;"></div>
+                        <div id="ransomware-log-content" style="max-height: 200px; overflow-y: auto; background: var(--fs-surface-2, #f5f5f5); padding: 10px; border-radius: 4px; font-size: 12px;"></div>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -4773,12 +4806,12 @@ desktop.ini"></textarea>
                     <button class="modal-close">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <div style="border-radius: 8px; padding: 15px; margin-bottom: 20px; background: #e3f2fd;">
-                        <p style="margin: 0; color: #1565c0;">
+                    <div style="border-radius: 8px; padding: 15px; margin-bottom: 20px; background: var(--fs-tint-info, #e3f2fd);">
+                        <p style="margin: 0; color: var(--fs-fg-info, #1565c0);">
                             <strong>📤 <?php echo $currentLang === 'en' ? 'Upload File Type Restrictions' : '업로드 파일 유형 제한'; ?></strong><br>
                             <?php echo $currentLang === 'en' ? 'Control which file types users can upload. Choose between allow-list or block-list mode.' : '사용자가 업로드할 수 있는 파일 유형을 제어합니다. 허용 목록 또는 차단 목록 방식을 선택하세요.'; ?>
                         </p>
-                        <p style="margin: 10px 0 0; color: #c62828; font-size: 12px;">
+                        <p style="margin: 10px 0 0; color: var(--fs-fg-err, #c62828); font-size: 12px;">
                             🔒 <?php echo $currentLang === 'en' 
                                 ? 'Always blocked (server-executable files): php, phtml, php3~7, phar, phps, jsp, jspx, asp, aspx, cgi, htaccess, user.ini — These cannot be uploaded regardless of settings.' 
                                 : '항상 차단 (서버 실행 파일): php, phtml, php3~7, phar, phps, jsp, jspx, asp, aspx, cgi, htaccess, user.ini — 설정과 관계없이 업로드할 수 없습니다.'; ?>
@@ -4786,8 +4819,8 @@ desktop.ini"></textarea>
                     </div>
                     
                     <!-- 업로드 제한 모드 -->
-                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                        <h4 style="margin: 0 0 15px 0; color: #1565c0;">📋 <?php echo $currentLang === 'en' ? 'Upload Restriction Mode' : '업로드 제한 방식'; ?></h4>
+                    <div style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-info, #1565c0);">📋 <?php echo $currentLang === 'en' ? 'Upload Restriction Mode' : '업로드 제한 방식'; ?></h4>
                         
                         <div class="form-group" style="display: flex; flex-direction: column; gap: 12px;">
                             <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
@@ -4806,8 +4839,8 @@ desktop.ini"></textarea>
                     </div>
                     
                     <!-- 허용 확장자 (화이트리스트) -->
-                    <div id="upload-allow-section" style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 20px; display: none;">
-                        <h4 style="margin: 0 0 15px 0; color: #2e7d32;">✅ <?php echo $currentLang === 'en' ? 'Allowed Extensions' : '허용 확장자'; ?></h4>
+                    <div id="upload-allow-section" style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px; margin-bottom: 20px; display: none;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-ok, #2e7d32);">✅ <?php echo $currentLang === 'en' ? 'Allowed Extensions' : '허용 확장자'; ?></h4>
                         
                         <div class="form-group">
                             <textarea id="upload-allowed-extensions" class="form-control" rows="3" placeholder="jpg, jpeg, png, gif, pdf, doc, docx, xls, xlsx, ppt, pptx, zip, mp4, mp3"></textarea>
@@ -4820,13 +4853,13 @@ desktop.ini"></textarea>
                             <button type="button" class="btn btn-sm btn-outline upload-preset-btn" data-preset="media"><?php echo $currentLang === 'en' ? '🎬 Media' : '🎬 미디어'; ?></button>
                             <button type="button" class="btn btn-sm btn-outline upload-preset-btn" data-preset="archive"><?php echo $currentLang === 'en' ? '📦 Archives' : '📦 압축'; ?></button>
                             <button type="button" class="btn btn-sm btn-outline upload-preset-btn" data-preset="all-common"><?php echo $currentLang === 'en' ? '📎 All Common Types' : '📎 일반 파일 전체'; ?></button>
-                            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('upload-allowed-extensions').value=''" style="color:#c62828;border-color:#c62828;">🗑️ <?php echo $currentLang === 'en' ? 'Clear' : '전체 삭제'; ?></button>
+                            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('upload-allowed-extensions').value=''" style="color:var(--fs-fg-err, #c62828);border-color:#c62828;">🗑️ <?php echo $currentLang === 'en' ? 'Clear' : '전체 삭제'; ?></button>
                         </div>
                     </div>
                     
                     <!-- 차단 확장자 (블랙리스트) -->
-                    <div id="upload-block-section" style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 20px; display: none;">
-                        <h4 style="margin: 0 0 15px 0; color: #c62828;">🚫 <?php echo $currentLang === 'en' ? 'Blocked Extensions' : '차단 확장자'; ?></h4>
+                    <div id="upload-block-section" style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px; margin-bottom: 20px; display: none;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-err, #c62828);">🚫 <?php echo $currentLang === 'en' ? 'Blocked Extensions' : '차단 확장자'; ?></h4>
                         
                         <div class="form-group">
                             <textarea id="upload-blocked-extensions" class="form-control" rows="3" placeholder="exe, bat, cmd, com, scr, pif, vbs, js, wsf, msi"></textarea>
@@ -4836,13 +4869,13 @@ desktop.ini"></textarea>
                         <div style="display: flex; flex-wrap: wrap; gap: 5px; margin-top: 10px;">
                             <button type="button" class="btn btn-sm btn-outline upload-block-preset-btn" data-preset="executable"><?php echo $currentLang === 'en' ? '⚠️ Executables' : '⚠️ 실행파일'; ?></button>
                             <button type="button" class="btn btn-sm btn-outline upload-block-preset-btn" data-preset="script"><?php echo $currentLang === 'en' ? '📜 Scripts' : '📜 스크립트'; ?></button>
-                            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('upload-blocked-extensions').value=''" style="color:#c62828;border-color:#c62828;">🗑️ <?php echo $currentLang === 'en' ? 'Clear' : '전체 삭제'; ?></button>
+                            <button type="button" class="btn btn-sm btn-outline" onclick="document.getElementById('upload-blocked-extensions').value=''" style="color:var(--fs-fg-err, #c62828);border-color:#c62828;">🗑️ <?php echo $currentLang === 'en' ? 'Clear' : '전체 삭제'; ?></button>
                         </div>
                     </div>
                     
                     <!-- MIME 검증 -->
-                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
-                        <h4 style="margin: 0 0 15px 0; color: #6a1b9a;">🔍 <?php echo $currentLang === 'en' ? 'MIME Type Verification' : 'MIME 타입 검증'; ?></h4>
+                    <div style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-purple, #6a1b9a);">🔍 <?php echo $currentLang === 'en' ? 'MIME Type Verification' : 'MIME 타입 검증'; ?></h4>
                         
                         <div class="form-group">
                             <label style="display: flex; align-items: flex-start; gap: 10px; cursor: pointer;">
@@ -4856,8 +4889,8 @@ desktop.ini"></textarea>
                     </div>
                     
                     <!-- 최대 파일 크기 -->
-                    <div style="border: 1px solid #ddd; border-radius: 8px; padding: 15px;">
-                        <h4 style="margin: 0 0 15px 0; color: #e65100;">📏 <?php echo $currentLang === 'en' ? 'Max File Size' : '최대 파일 크기'; ?></h4>
+                    <div style="border: 1px solid var(--fs-border-2, #ddd); border-radius: 8px; padding: 15px;">
+                        <h4 style="margin: 0 0 15px 0; color: var(--fs-fg-warn, #e65100);">📏 <?php echo $currentLang === 'en' ? 'Max File Size' : '최대 파일 크기'; ?></h4>
                         
                         <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
                             <input type="number" id="upload-max-filesize" class="form-control" style="width: 120px;" min="0" value="0">
@@ -5007,12 +5040,12 @@ desktop.ini"></textarea>
                 </div>
                 <div class="modal-body">
                     <p class="text-muted" style="margin-bottom: 10px; font-size:13px;"><?php echo $currentLang === 'en' ? 'Records of users who withdrew or were deleted by admin.' : '회원 탈퇴 또는 관리자가 삭제한 사용자 기록입니다.'; ?></p>
-                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:#f8f9fa;border-radius:6px;border:1px solid #e9ecef;flex-wrap:wrap;">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;padding:8px 12px;background:var(--fs-surface-2, #f8f9fa);border-radius:6px;border:1px solid var(--fs-border, #e9ecef);flex-wrap:wrap;">
                         <label style="font-size:12px;display:flex;align-items:center;gap:4px;">
                             <input type="checkbox" id="setting-auto-purge-deleted-modal">
                             <span><?php echo $currentLang === 'en' ? 'Auto-delete after' : '자동 삭제'; ?></span>
                         </label>
-                        <input type="number" id="setting-auto-purge-days-modal" min="1" max="9999" value="90" style="width:60px;padding:3px 6px;border:1px solid #ccc;border-radius:4px;font-size:12px;">
+                        <input type="number" id="setting-auto-purge-days-modal" min="1" max="9999" value="90" style="width:60px;padding:3px 6px;border:1px solid var(--fs-border-2, #ccc);border-radius:4px;font-size:12px;">
                         <span style="font-size:12px;"><?php echo $currentLang === 'en' ? 'days' : '일 경과 시 자동 삭제'; ?></span>
                         <button class="btn btn-sm" id="btn-save-auto-purge" style="font-size:11px;padding:3px 8px;"><?php echo $currentLang === 'en' ? 'Save' : '저장'; ?></button>
                     </div>
@@ -5034,7 +5067,7 @@ desktop.ini"></textarea>
                             <tbody id="deleted-users-tbody"></tbody>
                         </table>
                     </div>
-                    <div id="deleted-users-empty" style="display:none; text-align:center; padding:40px; color:#888;">
+                    <div id="deleted-users-empty" style="display:none; text-align:center; padding:40px; color:var(--fs-text-3, #888);">
                         <div style="font-size:48px; margin-bottom:10px;">📭</div>
                         <p><?php echo $currentLang === 'en' ? 'No deleted user records.' : '탈퇴/삭제된 사용자 기록이 없습니다.'; ?></p>
                     </div>
@@ -5051,12 +5084,12 @@ desktop.ini"></textarea>
                     <!-- 팝업 관리 섹션 -->
                     <div class="notice-section">
                         <div class="notice-section-header">
-                            <h3>📋 <?php echo $currentLang === 'en' ? 'Popup Management' : '팝업 관리'; ?> <small style="font-weight:normal; color:#888;"><?php echo $currentLang === 'en' ? 'Shown top-left after login (max 10)' : '로그인 후 왼쪽 상단에 표시 (최대 10개)'; ?></small></h3>
+                            <h3>📋 <?php echo $currentLang === 'en' ? 'Popup Management' : '팝업 관리'; ?> <small style="font-weight:normal; color:var(--fs-text-3, #888);"><?php echo $currentLang === 'en' ? 'Shown top-left after login (max 10)' : '로그인 후 왼쪽 상단에 표시 (최대 10개)'; ?></small></h3>
                             <button class="btn btn-primary btn-sm" id="btn-add-popup"><?php echo $currentLang === 'en' ? '+ Add Popup' : '+ 팝업 추가'; ?></button>
                         </div>
                         
                         <!-- 팝업 배치 설정 -->
-                        <div class="popup-layout-settings" style="background:#f8f9fa; border:1px solid #e0e0e0; border-radius:8px; padding:15px; margin-bottom:15px;">
+                        <div class="popup-layout-settings" style="background:var(--fs-surface-2, #f8f9fa); border:1px solid var(--fs-border, #e0e0e0); border-radius:8px; padding:15px; margin-bottom:15px;">
                             <div class="popup-layout-row" style="display:flex; flex-wrap:wrap; gap:20px; align-items:center;">
                                 <div>
                                     <label style="font-weight:500; margin-right:10px;"><?php echo $currentLang === 'en' ? '📐 Layout Method:' : '📐 배치 방식:'; ?></label>
@@ -5081,7 +5114,7 @@ desktop.ini"></textarea>
                                     Y <input type="number" id="popup-start-y" value="80" min="0" max="2000" style="width:70px;"> px
                                 </div>
                             </div>
-                            <div style="margin-top:6px; font-size:11px; color:#888;">
+                            <div style="margin-top:6px; font-size:11px; color:var(--fs-text-3, #888);">
                                 <?php echo $currentLang === 'en' 
                                     ? '💡 Start Position: Default coordinates for auto-layout. Each popup can override with its own X/Y position.' 
                                     : '💡 시작 좌표: 자동 배치 시 기본 좌표. 개별 팝업에 X/Y 좌표를 설정하면 해당 좌표가 우선 적용됩니다.'; ?>
@@ -5108,18 +5141,18 @@ desktop.ini"></textarea>
                                 <tbody id="popup-list"></tbody>
                             </table>
                         </div>
-                        <div id="popup-empty" style="text-align:center; padding:40px; color:#888; display:none;">
+                        <div id="popup-empty" style="text-align:center; padding:40px; color:var(--fs-text-3, #888); display:none;">
                             <div style="font-size:32px; margin-bottom:10px;">🗨️</div>
                             <p><?php echo $currentLang === 'en' ? 'No popups registered.' : '등록된 팝업이 없습니다.'; ?></p>
                             <button class="btn btn-primary" onclick="App.addPopup()"><?php echo $currentLang === 'en' ? '+ Add First Popup' : '+ 첫 팝업 추가하기'; ?></button>
                         </div>
                     </div>
                     
-                    <hr style="margin: 30px 0; border: none; border-top: 2px dashed #ddd;">
+                    <hr style="margin: 30px 0; border: none; border-top: 2px dashed var(--fs-border-2, #ddd);">
                     
                     <!-- 상단 배너 섹션 -->
                     <div class="notice-section">
-                        <h3>📣 <?php echo $currentLang === 'en' ? 'Top Banner' : '상단 배너'; ?> <small style="font-weight:normal; color:#888;"><?php echo $currentLang === 'en' ? 'One-line notice shown at top of file list' : '파일 목록 상단에 표시되는 한 줄 공지'; ?></small></h3>
+                        <h3>📣 <?php echo $currentLang === 'en' ? 'Top Banner' : '상단 배너'; ?> <small style="font-weight:normal; color:var(--fs-text-3, #888);"><?php echo $currentLang === 'en' ? 'One-line notice shown at top of file list' : '파일 목록 상단에 표시되는 한 줄 공지'; ?></small></h3>
                         
                         <table class="notice-form-table">
                             <tr>
@@ -5175,7 +5208,7 @@ desktop.ini"></textarea>
                         </table>
                     </div>
                     
-                    <div style="text-align:center; margin-top:20px; padding-top:20px; border-top:1px solid #eee;">
+                    <div style="text-align:center; margin-top:20px; padding-top:20px; border-top:1px solid var(--fs-border, #eee);">
                         <button class="btn btn-primary btn-lg" id="btn-save-notice"><?php echo $currentLang === 'en' ? '💾 Save Notice Settings' : '💾 공지 설정 저장'; ?></button>
                     </div>
                 </div>
@@ -5264,7 +5297,7 @@ desktop.ini"></textarea>
                             <input type="number" id="popup-edit-pos-y" class="form-control" value="" min="0" max="3000" placeholder="<?php echo $currentLang === 'en' ? 'Auto' : '자동'; ?>">
                         </div>
                     </div>
-                    <div style="font-size:11px; color:#888; margin-bottom:10px;">
+                    <div style="font-size:11px; color:var(--fs-text-3, #888); margin-bottom:10px;">
                         <?php echo $currentLang === 'en' 
                             ? '💡 Leave empty to use auto-layout position. Set X/Y to place this popup at a specific location.' 
                             : '💡 비워두면 자동 배치. X/Y를 입력하면 해당 위치에 고정 표시됩니다.'; ?>
@@ -5298,7 +5331,7 @@ desktop.ini"></textarea>
                     <p class="text-muted" style="margin-bottom: 15px;"><?php echo $currentLang === 'en' ? 'Terms of Service shown during registration.' : '회원가입 시 표시되는 이용약관입니다.'; ?></p>
                     
                     <!-- 활성화 체크박스 -->
-                    <div class="form-group" style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+                    <div class="form-group" style="background: var(--fs-surface-2, #f8f9fa); padding: 15px; border-radius: 8px; margin-bottom: 20px;">
                         <label class="toggle-label" style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
                             <input type="checkbox" id="terms-enabled" style="width: 18px; height: 18px;">
                             <span style="font-weight: 500;"><?php echo $currentLang === 'en' ? 'Enable Terms' : '이용약관 사용'; ?></span>
@@ -5321,7 +5354,7 @@ desktop.ini"></textarea>
             <div id="modal-preview" class="modal modal-preview resizable" style="display:none;">
                 <div class="modal-header">
                     <h2 id="preview-title"><?php echo $currentLang === 'en' ? 'Preview' : '미리보기'; ?></h2>
-                    <span id="preview-counter" style="color:#888;font-size:14px;margin-left:10px;margin-right:12px;white-space:nowrap;flex-shrink:0;"></span>
+                    <span id="preview-counter" style="color:var(--fs-text-3, #888);font-size:14px;margin-left:10px;margin-right:12px;white-space:nowrap;flex-shrink:0;"></span>
                     <button id="btn-preview-download-header" class="preview-header-dl" onclick="document.getElementById('btn-preview-download').click();" title="<?php echo $currentLang === 'en' ? 'Download' : '다운로드'; ?>">⬇️</button>
                     <button class="modal-close">&times;</button>
                 </div>
@@ -5367,7 +5400,7 @@ desktop.ini"></textarea>
                     <p id="duplicate-message"><?php echo $currentLang === 'en' ? 'The following files already exist:' : '다음 파일이 이미 존재합니다:'; ?></p>
                     <div id="duplicate-list" class="duplicate-list"></div>
                     <p class="duplicate-hint"><?php echo $currentLang === 'en' ? 'How would you like to proceed?' : '어떻게 처리하시겠습니까?'; ?></p>
-                    <div class="vpn-warning" style="background:#fff3cd;color:#856404;padding:8px 12px;border-radius:4px;font-size:12px;margin-top:12px;">
+                    <div class="vpn-warning" style="background:var(--fs-tint-warn, #fff3cd);color:var(--fs-fg-warn, #856404);padding:8px 12px;border-radius:4px;font-size:12px;margin-top:12px;">
                         <?php echo $currentLang === 'en' ? '⚠️ Upload speed may be much slower when using VPN. If slow, please disconnect VPN.' : '⚠️ VPN 사용 시 업로드 속도가 현저히 느려질 수 있습니다. 속도가 느리다면 VPN을 종료해주세요.'; ?>
                     </div>
                 </div>
@@ -5389,11 +5422,11 @@ desktop.ini"></textarea>
                         <strong><?php echo $currentLang === 'en' ? '📄 File:' : '📄 파일:'; ?></strong> <span id="version-filename">-</span>
                     </div>
                     <div id="version-list-container">
-                        <div id="version-loading" style="text-align:center; padding:30px; color:#888;">
+                        <div id="version-loading" style="text-align:center; padding:30px; color:var(--fs-text-3, #888);">
                             <div>⏳</div>
                             <p><?php echo $currentLang === 'en' ? 'Loading version list...' : '버전 목록을 불러오는 중...'; ?></p>
                         </div>
-                        <div id="version-empty" style="display:none; text-align:center; padding:30px; color:#888;">
+                        <div id="version-empty" style="display:none; text-align:center; padding:30px; color:var(--fs-text-3, #888);">
                             <div style="font-size:32px; margin-bottom:10px;">📭</div>
                             <p><?php echo $currentLang === 'en' ? 'No previous versions saved.' : '저장된 이전 버전이 없습니다.'; ?></p>
                             <small><?php echo $currentLang === 'en' ? 'File versioning can be enabled in ransomware protection settings.' : '파일 버전 관리는 랜섬웨어 방지 설정에서 활성화할 수 있습니다.'; ?></small>
@@ -5410,7 +5443,7 @@ desktop.ini"></textarea>
                         </table>
                     </div>
                 </div>
-                <div class="modal-footer" style="text-align: right; padding: 10px 15px; border-top: 1px solid #eee;">
+                <div class="modal-footer" style="text-align: right; padding: 10px 15px; border-top: 1px solid var(--fs-border, #eee);">
                     <button class="btn btn-secondary modal-close" style="padding: 6px 16px; font-size: 13px;"><?php echo $currentLang === 'en' ? 'Close' : '닫기'; ?></button>
                 </div>
             </div>
@@ -5423,7 +5456,7 @@ desktop.ini"></textarea>
         </div>
         <div class="modal-body" style="padding:12px 15px;">
             <!-- 탭 -->
-            <div style="display:flex;gap:4px;margin-bottom:15px;border-bottom:2px solid #eee;padding-bottom:8px;">
+            <div style="display:flex;gap:4px;margin-bottom:15px;border-bottom:2px solid var(--fs-border, #eee);padding-bottom:8px;">
                 <button class="btn btn-sm sso-tab active" data-tab="kerberos" onclick="App.switchSSOTab('kerberos')">🪪 Kerberos/SPNEGO</button>
                 <button class="btn btn-sm sso-tab" data-tab="ldap" onclick="App.switchSSOTab('ldap')">🏢 LDAP/AD</button>
                 <button class="btn btn-sm sso-tab" data-tab="oidc" onclick="App.switchSSOTab('oidc')">🌐 OIDC</button>
@@ -5440,7 +5473,7 @@ desktop.ini"></textarea>
                         <input type="checkbox" id="sso-kerberos-enabled">
                         <?php echo $currentLang === 'en' ? 'Enable Kerberos/SPNEGO Auto-Login' : 'Kerberos/SPNEGO 자동 로그인 활성화'; ?>
                     </label>
-                    <small style="color:#888;display:block;margin-top:4px;"><?php echo $currentLang === 'en' ? 'AD-joined Windows PCs will automatically log in without entering ID/PW. Requires Apache mod_auth_kerb (Linux) or IIS Windows Authentication.' : 'AD 조인된 Windows PC에서 ID/PW 입력 없이 자동 로그인됩니다. Apache mod_auth_kerb(Linux) 또는 IIS Windows 인증이 필요합니다.'; ?></small>
+                    <small style="color:var(--fs-text-3, #888);display:block;margin-top:4px;"><?php echo $currentLang === 'en' ? 'AD-joined Windows PCs will automatically log in without entering ID/PW. Requires Apache mod_auth_kerb (Linux) or IIS Windows Authentication.' : 'AD 조인된 Windows PC에서 ID/PW 입력 없이 자동 로그인됩니다. Apache mod_auth_kerb(Linux) 또는 IIS Windows 인증이 필요합니다.'; ?></small>
                 </div>
                 <div style="margin-bottom:10px;">
                     <label style="font-size:12px;font-weight:600;"><?php echo $currentLang === 'en' ? 'Auto-create accounts' : '계정 자동 생성'; ?></label>
@@ -5457,7 +5490,8 @@ desktop.ini"></textarea>
                     </select>
                 </div>
                 
-                <details style="margin-top:15px;background:#f0f4f8;padding:10px;border-radius:6px;">
+                <?php /* ★ (2026-10-24) 일반 테마는 --fs-surface-2 가 없어 기본 회청색(#f0f4f8)이었다 → 테마 연한 색(--fs-tint-info), 기본 테마는 종전 색 */ ?>
+                <details style="margin-top:15px;background:var(--fs-surface-2, var(--fs-tint-info, #f0f4f8));padding:10px;border-radius:6px;">
                     <summary style="font-size:12px;font-weight:600;cursor:pointer;">💡 <?php echo $currentLang === 'en' ? 'Apache Server Setup Guide' : 'Apache 서버 설정 가이드'; ?></summary>
                     <div style="font-size:11px;margin-top:6px;line-height:1.6;">
                         <p><b><?php echo $currentLang === 'en' ? '1. Install mod_auth_kerb (Apache 2.4 on Windows)' : '1. mod_auth_kerb 설치 (Apache 2.4 Windows)'; ?></b></p>
@@ -5558,13 +5592,13 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <p class="sso-desc"><?php echo $currentLang === 'en' 
                     ? 'Connect with Azure AD, Google, Keycloak, etc. Enter the Well-Known URL to auto-fill endpoints, or enter them manually.' 
                     : 'Azure AD, Google, Keycloak 등과 연동합니다. Well-Known URL을 입력하면 엔드포인트가 자동 입력되며, 수동 입력도 가능합니다.'; ?></p>
-                <div style="margin-bottom:8px;padding:8px;background:#e8f4fd;border-radius:6px;">
+                <div style="margin-bottom:8px;padding:8px;background:var(--fs-tint-info, #e8f4fd);border-radius:6px;">
                     <label class="sso-label">Well-Known URL (<?php echo $currentLang === 'en' ? 'Auto Discover' : '자동 설정'; ?>)</label>
                     <div style="display:flex;gap:6px;">
                         <input type="text" id="sso-oidc-wellknown" class="form-control" placeholder="https://login.microsoftonline.com/{tenant}/.well-known/openid-configuration" style="flex:1;">
                         <button class="btn btn-sm btn-primary" onclick="App.oidcDiscover()">🔍 <?php echo $currentLang === 'en' ? 'Discover' : '가져오기'; ?></button>
                     </div>
-                    <small style="color:#888;font-size:11px;"><?php echo $currentLang === 'en' ? 'Enter Well-Known URL to auto-fill endpoints below' : 'Well-Known URL을 입력하면 아래 엔드포인트가 자동 입력됩니다'; ?></small>
+                    <small style="color:var(--fs-text-3, #888);font-size:11px;"><?php echo $currentLang === 'en' ? 'Enter Well-Known URL to auto-fill endpoints below' : 'Well-Known URL을 입력하면 아래 엔드포인트가 자동 입력됩니다'; ?></small>
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
                     <div>
@@ -5649,8 +5683,8 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <div style="margin-top:6px;">
                     <label style="font-size:12px;"><input type="checkbox" id="sso-saml-auto-create" checked> <?php echo $currentLang === 'en' ? 'Auto create user' : '자동 계정 생성'; ?></label>
                 </div>
-                <div style="margin-top:10px;padding:8px;background:#f5f5f5;border-radius:6px;">
-                    <small style="font-size:11px;color:#666;">
+                <div style="margin-top:10px;padding:8px;background:var(--fs-surface-2, #f5f5f5);border-radius:6px;">
+                    <small style="font-size:11px;color:var(--fs-text-2, #666);">
                         📄 SP Metadata URL: <code id="sso-saml-metadata-url">api.php?action=sso_saml_metadata</code>
                         <button class="btn btn-xs" onclick="navigator.clipboard.writeText(location.origin+'/api.php?action=sso_saml_metadata');App.toast('복사됨','success');" style="margin-left:4px;">📋 <?php echo $currentLang === 'en' ? 'Copy' : '복사'; ?></button>
                     </small>
@@ -5772,8 +5806,8 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
 
 <style>
 .sso-label { display:block; font-size:11px; font-weight:600; color:#555; margin:0 0 2px; }
-.sso-tab { background:#f0f0f0; border:none; cursor:pointer; padding:5px 12px; font-size:12px; border-radius:4px; }
-.sso-tab.active { background:#667eea; color:#fff; }
+.sso-tab { background:var(--fs-surface-2, #f0f0f0); border:none; cursor:pointer; padding:5px 12px; font-size:12px; border-radius:4px; }
+.sso-tab.active { background:var(--fs-tab-on-bg, #667eea); color:var(--fs-tab-on-fg, #fff); } <?php /* ★ (2026-10-24) 테마 변수(없으면 종전 색) */ ?>
 .sso-tab-content { padding:4px 0; }
 .sso-tab-content .form-control { font-size:12px; padding:5px 8px; height:auto; width:100% !important; box-sizing:border-box; border:1px solid #ccc; border-radius:4px; }
 .sso-tab-content input[type="text"],
@@ -5782,10 +5816,10 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
 .sso-tab-content select,
 .sso-tab-content textarea { width:100% !important; box-sizing:border-box; }
 .sso-tab-content textarea.form-control { font-size:11px; padding:5px 8px; width:100% !important; box-sizing:border-box; }
-.sso-tab-content h4 { font-size:12px; font-weight:700; color:#333; margin:14px 0 6px; padding-bottom:3px; border-bottom:1px solid #eee; }
-.sso-tab-content small { font-size:11px; color:#888; }
-.sso-desc { font-size:11px; color:#888; margin:2px 0 8px; line-height:1.4; }
-.sso-section { margin-bottom:10px; padding:10px; background:#f8f9fa; border-radius:6px; border:1px solid #eee; }
+.sso-tab-content h4 { font-size:12px; font-weight:700; color:var(--fs-text, #333); margin:14px 0 6px; padding-bottom:3px; border-bottom:1px solid var(--fs-border, #eee); }
+.sso-tab-content small { font-size:11px; color:var(--fs-text-3, #888); }
+.sso-desc { font-size:11px; color:var(--fs-text-3, #888); margin:2px 0 8px; line-height:1.4; }
+.sso-section { margin-bottom:10px; padding:10px; background:var(--fs-surface-2, #f8f9fa); border-radius:6px; border:1px solid var(--fs-border, #eee); }
 .sso-tab-content div[style*="grid"] { gap:10px 8px; }
 .sso-tab-content div[style*="grid"] > div { margin-bottom:2px; }
 </style>
@@ -5797,7 +5831,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
     <div id="modal-fperm-browse" class="modal" style="display:none;">
         <div class="modal-header">
             <h2 id="fperm-browse-title">📂 /</h2>
-            <button class="fperm-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:#666;" onclick="document.getElementById('modal-fperm-browse').style.display='none';document.getElementById('fperm-modal-overlay').style.display='none'">&times;</button>
+            <button class="fperm-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:var(--fs-text-2, #666);" onclick="document.getElementById('modal-fperm-browse').style.display='none';document.getElementById('fperm-modal-overlay').style.display='none'">&times;</button>
         </div>
         <div class="modal-body" style="padding:8px 12px;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
@@ -5813,10 +5847,10 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
     <div id="modal-fperm-bulk-edit" class="modal modal-sm" style="display:none;">
         <div class="modal-header">
             <h2><?php echo $currentLang === 'en' ? '📁 Edit Folder Permissions' : '📁 폴더 권한 수정'; ?></h2>
-            <button class="fperm-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:#666;" onclick="document.getElementById('modal-fperm-bulk-edit').style.display='none';document.getElementById('fperm-modal-overlay').style.display='none'">&times;</button>
+            <button class="fperm-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:var(--fs-text-2, #666);" onclick="document.getElementById('modal-fperm-bulk-edit').style.display='none';document.getElementById('fperm-modal-overlay').style.display='none'">&times;</button>
         </div>
         <div class="modal-body">
-            <p id="fperm-bulk-edit-info" style="font-size:12px;color:#666;margin:0 0 12px;"></p>
+            <p id="fperm-bulk-edit-info" style="font-size:12px;color:var(--fs-text-2, #666);margin:0 0 12px;"></p>
             <div style="display:flex;flex-direction:column;gap:8px;">
                 <label style="font-size:13px;"><input type="checkbox" id="fperm-bulk-visible" checked> <?php echo $currentLang === 'en' ? 'Visible' : '표시'; ?></label>
                 <label style="font-size:13px;"><input type="checkbox" id="fperm-bulk-read" checked> <?php echo $currentLang === 'en' ? 'Read' : '읽기'; ?></label>
@@ -5831,10 +5865,10 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
     <div id="modal-fperm-add-user" class="modal modal-sm" style="display:none;">
         <div class="modal-header">
             <h2><?php echo $currentLang === 'en' ? '➕ Add User' : '➕ 사용자 추가'; ?></h2>
-            <button class="fperm-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:#666;" onclick="document.getElementById('modal-fperm-add-user').style.display='none';document.getElementById('fperm-modal-overlay').style.display='none'">&times;</button>
+            <button class="fperm-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:var(--fs-text-2, #666);" onclick="document.getElementById('modal-fperm-add-user').style.display='none';document.getElementById('fperm-modal-overlay').style.display='none'">&times;</button>
         </div>
         <div class="modal-body">
-            <p id="fperm-add-user-folder" style="font-size:12px;color:#666;margin:0 0 10px;"></p>
+            <p id="fperm-add-user-folder" style="font-size:12px;color:var(--fs-text-2, #666);margin:0 0 10px;"></p>
             <select id="fperm-add-user-select" style="width:100%;font-size:13px;padding:6px;"></select>
         </div>
         <div class="modal-footer">
@@ -5849,26 +5883,26 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
     <div id="modal-icon-change" class="modal" style="display:none;">
         <div class="modal-header">
             <h3>🎨 <?php echo $currentLang === 'en' ? 'Change Icon' : '아이콘 변경'; ?>: <span id="icon-change-ext" style="color:#4fc3f7; font-family:monospace;"></span></h3>
-            <button class="icon-mgr-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:#666;" onclick="App._iconMgrCloseSubModal('modal-icon-change')">&times;</button>
+            <button class="icon-mgr-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:var(--fs-text-2, #666);" onclick="App._iconMgrCloseSubModal('modal-icon-change')">&times;</button>
         </div>
         <div class="modal-body">
             <!-- 현재 아이콘 미리보기 -->
-            <div style="display:flex; align-items:center; gap:20px; margin-bottom:20px; padding:15px; background:#f8f9fa; border-radius:8px;">
+            <div style="display:flex; align-items:center; gap:20px; margin-bottom:20px; padding:15px; background:var(--fs-surface-2, #f8f9fa); border-radius:8px;">
                 <div>
-                    <div style="font-size:11px; color:#666; margin-bottom:5px;">현재 아이콘</div>
-                    <div id="icon-change-current" style="width:64px; height:64px; background:#fff; border:1px solid #ddd; border-radius:6px; display:flex; align-items:center; justify-content:center;">
-                        <span style="color:#aaa; font-size:24px;">?</span>
+                    <div style="font-size:11px; color:var(--fs-text-2, #666); margin-bottom:5px;">현재 아이콘</div>
+                    <div id="icon-change-current" style="width:64px; height:64px; background:var(--fs-surface, #fff); border:1px solid var(--fs-border-2, #ddd); border-radius:6px; display:flex; align-items:center; justify-content:center;">
+                        <span style="color:var(--fs-text-3, #aaa); font-size:24px;">?</span>
                     </div>
                 </div>
                 <div style="flex:1;">
-                    <div style="font-size:11px; color:#666; margin-bottom:5px;">확장자 정보</div>
-                    <div id="icon-change-info" style="font-size:13px; color:#333;"></div>
+                    <div style="font-size:11px; color:var(--fs-text-2, #666); margin-bottom:5px;">확장자 정보</div>
+                    <div id="icon-change-info" style="font-size:13px; color:var(--fs-text, #333);"></div>
                 </div>
             </div>
             
             <!-- 탭 -->
-            <div style="display:flex; gap:6px; border-bottom:1px solid #ddd; margin-bottom:15px;">
-                <button type="button" class="icon-change-tab active" data-ctab="upload" style="padding:8px 16px; border:none; background:none; cursor:pointer; border-bottom:3px solid #4fc3f7; color:#1976d2; font-weight:bold;">
+            <div style="display:flex; gap:6px; border-bottom:1px solid var(--fs-border-2, #ddd); margin-bottom:15px;">
+                <button type="button" class="icon-change-tab active" data-ctab="upload" style="padding:8px 16px; border:none; background:none; cursor:pointer; border-bottom:3px solid var(--fs-accent, #4fc3f7); color:var(--fs-fg-info, #1976d2); font-weight:bold;">
                     📤 <?php echo $currentLang === 'en' ? 'Upload New' : '새로 업로드'; ?>
                 </button>
                 <button type="button" class="icon-change-tab" data-ctab="existing" style="padding:8px 16px; border:none; background:none; cursor:pointer; border-bottom:3px solid transparent;">
@@ -5878,81 +5912,81 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
             
             <!-- Tab: 업로드 -->
             <div id="icon-change-panel-upload" class="icon-change-panel">
-                <div style="padding:15px; background:#fff; border:1px dashed #ccc; border-radius:8px; text-align:center;">
+                <div style="padding:15px; background:var(--fs-surface, #fff); border:1px dashed var(--fs-border-2, #ccc); border-radius:8px; text-align:center;">
                     <input type="file" id="icon-change-file" accept=".svg,.png,.jpg,.jpeg,.gif,.webp,.ico,.bmp,image/*" style="display:none;">
                     <label for="icon-change-file" style="cursor:pointer; display:block;">
-                        <div id="icon-change-preview" style="width:96px; height:96px; background:#fafafa; border:1px solid #e0e0e0; border-radius:8px; margin:0 auto 12px; display:flex; align-items:center; justify-content:center; color:#aaa; font-size:13px;">
+                        <div id="icon-change-preview" style="width:96px; height:96px; background:var(--fs-surface-2, #fafafa); border:1px solid var(--fs-border, #e0e0e0); border-radius:8px; margin:0 auto 12px; display:flex; align-items:center; justify-content:center; color:var(--fs-text-3, #aaa); font-size:13px;">
                             클릭하여 선택
                         </div>
-                        <div style="color:#1976d2; font-weight:bold;">📁 파일 선택</div>
-                        <div style="color:#888; font-size:11px; margin-top:6px;">
+                        <div style="color:var(--fs-fg-info, #1976d2); font-weight:bold;">📁 파일 선택</div>
+                        <div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:6px;">
                             SVG / PNG / JPG / GIF / WEBP / ICO / BMP (비-SVG는 자동 변환)
                         </div>
                     </label>
                 </div>
                 
                 <!-- 안내: 자동 라벨 교체 설명 (업로드 탭 전용 - 라벨 오버레이 OFF일 때 업로드 이미지에 라벨 있으면 자동 교체) -->
-                <div style="margin-top:10px; padding:10px; background:#e3f2fd; border:1px solid #bbdefb; border-radius:6px; font-size:12px; color:#1565c0;">
+                <div style="margin-top:10px; padding:10px; background:var(--fs-tint-info, #e3f2fd); border:1px solid var(--fs-tint-info-border, #bbdefb); border-radius:6px; font-size:12px; color:var(--fs-fg-info, #1565c0);">
                     💡 <strong><?php echo $currentLang === 'en' ? 'Auto Label Replacement (when Overlay is OFF)' : '자동 라벨 교체 (오버레이 체크 안 했을 때)'; ?></strong>
-                    <div style="color:#777; margin-top:3px;"><?php echo $currentLang === 'en' ? 'If the uploaded image has a label (colored bar + text), it is replaced with a yellow label showing the extension. No label detected = original kept.' : '업로드한 이미지에 라벨(색 띠 + 글자)이 있으면 자동으로 노란 라벨 + 확장자명으로 교체. 라벨이 없으면 원본 그대로 유지됩니다.'; ?></div>
+                    <div style="color:var(--fs-text-2, #777); margin-top:3px;"><?php echo $currentLang === 'en' ? 'If the uploaded image has a label (colored bar + text), it is replaced with a yellow label showing the extension. No label detected = original kept.' : '업로드한 이미지에 라벨(색 띠 + 글자)이 있으면 자동으로 노란 라벨 + 확장자명으로 교체. 라벨이 없으면 원본 그대로 유지됩니다.'; ?></div>
                 </div>
             </div>
             
             <!-- Tab: 갤러리 -->
             <div id="icon-change-panel-existing" class="icon-change-panel" style="display:none;">
-                <div id="icon-change-gallery" style="max-height:300px; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill,minmax(80px,1fr)); gap:8px; padding:10px; background:#f8f9fa; border-radius:6px;">
+                <div id="icon-change-gallery" style="max-height:300px; overflow-y:auto; display:grid; grid-template-columns:repeat(auto-fill,minmax(80px,1fr)); gap:8px; padding:10px; background:var(--fs-surface-2, #f8f9fa); border-radius:6px;">
                     <!-- JS로 채움 -->
                 </div>
                 
                 <!-- 갤러리 전용 안내: 옵션 조합별 동작 -->
-                <div style="margin-top:10px; padding:10px; background:#e3f2fd; border:1px solid #bbdefb; border-radius:6px; font-size:12px; color:#1565c0;">
+                <div style="margin-top:10px; padding:10px; background:var(--fs-tint-info, #e3f2fd); border:1px solid var(--fs-tint-info-border, #bbdefb); border-radius:6px; font-size:12px; color:var(--fs-fg-info, #1565c0);">
                     💡 <strong><?php echo $currentLang === 'en' ? 'Gallery Icon + Options' : '갤러리 아이콘 + 옵션'; ?></strong>
-                    <div style="color:#777; margin-top:3px;"><?php echo $currentLang === 'en' ? 'Options OFF: Just map the icon (no copy). Background Remove ON or raster icon: Create new custom icon by reprocessing (re-labels if needed).' : '옵션 모두 OFF: 원본 아이콘 그대로 매핑 (파일 생성 X). 배경 제거 ON 또는 라스터 아이콘: 라벨 재교체해서 새 custom 아이콘 생성.'; ?></div>
+                    <div style="color:var(--fs-text-2, #777); margin-top:3px;"><?php echo $currentLang === 'en' ? 'Options OFF: Just map the icon (no copy). Background Remove ON or raster icon: Create new custom icon by reprocessing (re-labels if needed).' : '옵션 모두 OFF: 원본 아이콘 그대로 매핑 (파일 생성 X). 배경 제거 ON 또는 라스터 아이콘: 라벨 재교체해서 새 custom 아이콘 생성.'; ?></div>
                 </div>
             </div>
             
             <!-- 공통 옵션 (업로드/갤러리 탭 모두에서 적용) -->
             <!-- 배경 제거 + 크기 맞춤 -->
-            <div style="margin-top:15px; padding:10px; background:#e8f5e9; border:1px solid #c8e6c9; border-radius:6px;">
-                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; color:#2e7d32;">
+            <div style="margin-top:15px; padding:10px; background:var(--fs-surface-2, #e8f5e9); border:1px solid var(--fs-tint-ok-border, #c8e6c9); border-radius:6px;">
+                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; color:var(--fs-fg-ok, #2e7d32);">
                     <input type="checkbox" id="icon-change-remove-bg" checked style="margin:0;">
                     <span>
                         🎨 <strong><?php echo $currentLang === 'en' ? 'Auto-remove White Background + Fit' : '흰색 배경 제거 + 아이콘 크기 맞춤'; ?></strong>
-                        <span style="color:#999; font-size:11px; margin-left:6px;"><?php echo $currentLang === 'en' ? '(PNG/JPG - transparent + auto-scale to canvas, default ON)' : '(PNG/JPG 등 업로드 시, 흰색 배경 투명 처리 + 아이콘 영역에 맞게 자동 확대/중앙 정렬. 기본 켜짐)'; ?></span>
+                        <span style="color:var(--fs-text-3, #999); font-size:11px; margin-left:6px;"><?php echo $currentLang === 'en' ? '(PNG/JPG - transparent + auto-scale to canvas, default ON)' : '(PNG/JPG 등 업로드 시, 흰색 배경 투명 처리 + 아이콘 영역에 맞게 자동 확대/중앙 정렬. 기본 켜짐)'; ?></span>
                     </span>
                 </label>
             </div>
             
             <!-- 라벨 처리 (3택 라디오) -->
-            <div id="icon-change-label-mode-box" style="margin-top:10px; padding:10px; background:#fff8e1; border:1px solid #ffe082; border-radius:6px;">
-                <div style="font-size:13px; color:#795548; font-weight:bold; margin-bottom:8px;">
+            <div id="icon-change-label-mode-box" style="margin-top:10px; padding:10px; background:var(--fs-tint-warn, #fff8e1); border:1px solid var(--fs-tint-warn-border, #ffe082); border-radius:6px;">
+                <div style="font-size:13px; color:var(--fs-fg-err, #795548); font-weight:bold; margin-bottom:8px;">
                     🏷️ <?php echo $currentLang === 'en' ? 'Label Handling' : '라벨 처리'; ?>
                 </div>
                 
                 <!-- ○ 원본 그대로 (신규) - 직접 만들어 놓은 아이콘 이미지를 그대로 쓸 때 -->
-                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:13px; color:#555; margin-bottom:6px;">
+                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:13px; color:var(--fs-text-2, #555); margin-bottom:6px;">
                     <input type="radio" name="icon-change-label-mode-radio" value="keep" style="margin:3px 0 0 0;">
                     <span>
                         <strong><?php echo $currentLang === 'en' ? 'Keep Original (don\'t touch label)' : '원본 그대로 (라벨 건드리지 않음)'; ?></strong>
-                        <span style="display:block; color:#999; font-size:11px; margin-top:2px;"><?php echo $currentLang === 'en' ? 'Use when you already prepared the icon image as-is' : '직접 만들어 놓은 아이콘 이미지를 그대로 쓸 때'; ?></span>
+                        <span style="display:block; color:var(--fs-text-3, #999); font-size:11px; margin-top:2px;"><?php echo $currentLang === 'en' ? 'Use when you already prepared the icon image as-is' : '직접 만들어 놓은 아이콘 이미지를 그대로 쓸 때'; ?></span>
                     </span>
                 </label>
                 
                 <!-- ● 자동 감지 교체 (기본값) -->
-                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:13px; color:#555; margin-bottom:6px;">
+                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:13px; color:var(--fs-text-2, #555); margin-bottom:6px;">
                     <input type="radio" name="icon-change-label-mode-radio" value="replace" checked style="margin:3px 0 0 0;">
                     <span>
                         <strong><?php echo $currentLang === 'en' ? 'Auto Detect & Replace with Extension' : '자동 감지해서 확장자로 교체'; ?></strong>
-                        <span style="display:block; color:#999; font-size:11px; margin-top:2px;"><?php echo $currentLang === 'en' ? 'Detect existing label (colored bar + text) and replace with yellow label showing the extension' : '기존 라벨(색 띠 + 글자)을 감지해서 노란 라벨 + 확장자명으로 교체. 라벨이 없으면 원본 유지'; ?></span>
+                        <span style="display:block; color:var(--fs-text-3, #999); font-size:11px; margin-top:2px;"><?php echo $currentLang === 'en' ? 'Detect existing label (colored bar + text) and replace with yellow label showing the extension' : '기존 라벨(색 띠 + 글자)을 감지해서 노란 라벨 + 확장자명으로 교체. 라벨이 없으면 원본 유지'; ?></span>
                     </span>
                 </label>
                 
                 <!-- ○ CSS 오버레이 (동적) -->
-                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:13px; color:#555;">
+                <label style="display:flex; align-items:flex-start; gap:8px; cursor:pointer; font-size:13px; color:var(--fs-text-2, #555);">
                     <input type="radio" name="icon-change-label-mode-radio" value="overlay" style="margin:3px 0 0 0;">
                     <span>
                         <strong><?php echo $currentLang === 'en' ? 'CSS Overlay (dynamic)' : 'CSS 오버레이 (동적)'; ?></strong>
-                        <span style="display:block; color:#999; font-size:11px; margin-top:2px;"><?php echo $currentLang === 'en' ? 'Show ext label on top of icon at render time. File stays clean. Use for unlabeled icons like PDF/DOC' : '파일에는 라벨을 박지 않고 렌더 시점에 확장자명 라벨을 덧씌움. 라벨 없는 빈 아이콘(PDF/DOC 등)에 사용'; ?></span>
+                        <span style="display:block; color:var(--fs-text-3, #999); font-size:11px; margin-top:2px;"><?php echo $currentLang === 'en' ? 'Show ext label on top of icon at render time. File stays clean. Use for unlabeled icons like PDF/DOC' : '파일에는 라벨을 박지 않고 렌더 시점에 확장자명 라벨을 덧씌움. 라벨 없는 빈 아이콘(PDF/DOC 등)에 사용'; ?></span>
                     </span>
                 </label>
             </div>
@@ -5969,7 +6003,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
     <div id="modal-icon-add-ext" class="modal" style="display:none;">
         <div class="modal-header">
             <h3>➕ <?php echo $currentLang === 'en' ? 'Add Extension' : '확장자 추가'; ?></h3>
-            <button class="icon-mgr-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:#666;" onclick="App._iconMgrCloseSubModal('modal-icon-add-ext')">&times;</button>
+            <button class="icon-mgr-close-btn" style="background:none;border:none;font-size:20px;cursor:pointer;padding:4px 8px;color:var(--fs-text-2, #666);" onclick="App._iconMgrCloseSubModal('modal-icon-add-ext')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="setting-item">
@@ -5977,7 +6011,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <input type="text" id="icon-add-ext-input" class="form-control" placeholder="예: epub, dwg, mobi" maxlength="16" pattern="[a-zA-Z0-9]+" style="font-family:monospace;">
                 <p class="setting-desc">영숫자 1~16자만 허용</p>
             </div>
-            <div style="margin-top:12px; padding:10px; background:#e3f2fd; border-radius:6px; font-size:12px; color:#1976d2;">
+            <div style="margin-top:12px; padding:10px; background:var(--fs-tint-info, #e3f2fd); border-radius:6px; font-size:12px; color:var(--fs-fg-info, #1976d2);">
                 💡 <?php echo $currentLang === 'en' 
                     ? 'Register only: adds extension with default icon. Select icon: opens icon picker.' 
                     : '등록만 = 기본 아이콘으로 추가 / 아이콘 선택 = 원하는 아이콘 지정'; ?>

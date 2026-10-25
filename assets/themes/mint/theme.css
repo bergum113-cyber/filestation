@@ -43,7 +43,7 @@
 }
 
 .logo {
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
 /* 검색창 */
@@ -73,11 +73,11 @@
 }
 
 .sidebar h3 {
-    color: var(--theme-primary) !important;
+    color: var(--fs-primary-text, var(--theme-primary)) !important;
 }
 
 .sidebar-section h3.section-toggle {
-    color: var(--theme-primary) !important;
+    color: var(--fs-primary-text, var(--theme-primary)) !important;
 }
 
 .sidebar-section h3.section-toggle:hover {
@@ -87,7 +87,7 @@
 
 .sidebar-section h3.section-toggle .toggle-icon {
     background: #99f6e4 !important;
-    color: var(--theme-primary) !important;
+    color: var(--fs-primary-text, var(--theme-primary)) !important;
 }
 
 .sidebar-divider {
@@ -107,7 +107,7 @@
 }
 
 .storage-item .storage-icon {
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
 .menu-list li a {
@@ -119,7 +119,8 @@
     background: #a7f3d0 !important;
 }
 
-.storage-item.active, .menu-list li.active > a {
+/* ★ (2026-10-23) 게시판 메뉴 선택(a.board-sidebar-item.active)도 같은 선택 표시 — 공통 규칙의 연파랑 바탕에 테마의 흰 메뉴 글자가 겹쳐 안 보이던 것 */
+.storage-item.active, .menu-list li.active > a, .menu-list li > a.board-sidebar-item.active {
     background: #5eead4 !important;
     color: #134e4a !important;
     font-weight: 500;
@@ -169,7 +170,7 @@
 }
 
 .breadcrumb a {
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
 /* 모달 */
@@ -180,7 +181,7 @@
 
 .modal-header {
     background: linear-gradient(135deg, #0d9488 0%, #14b8a6 100%);
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
     border-bottom: none;
 }
 
@@ -189,7 +190,7 @@
 }
 
 .modal-header .modal-close {
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
 }
 
 .modal-header .modal-close:hover {
@@ -209,7 +210,7 @@
 .modal-body table th,
 .info-table th {
     background: #e6fffa;
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
 .modal-body table tr:hover {
@@ -226,14 +227,14 @@ textarea:focus {
 
 /* 설정 탭 */
 .settings-tab.active {
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
     border-bottom-color: var(--theme-primary);
 }
 
 /* 배지/태그 */
 .search-storage {
     background: var(--theme-hover);
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
 /* 성공 배지 */
@@ -405,7 +406,7 @@ textarea:focus {
 
 .security-info-bar code {
     background: var(--theme-primary);
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
 }
 
 /* 보안 모달 헤더 */
@@ -430,7 +431,7 @@ textarea:focus {
 }
 
 .settings-status-bar .settings-link {
-    color: var(--theme-primary-hover);
+    color: var(--fs-primary-text, var(--theme-primary-hover));
 }
 
 /* 검색 인덱스 요구사항 박스 */
@@ -459,7 +460,7 @@ textarea:focus {
 }
 
 .index-auto-status a {
-    color: var(--theme-primary-hover);
+    color: var(--fs-primary-text, var(--theme-primary-hover));
 }
 
 /* ========== 게시판 테마 적용 ========== */
@@ -470,7 +471,7 @@ textarea:focus {
 .board-table tbody tr:hover { background: var(--theme-hover); }
 .board-table tbody tr.board-row-current { background: var(--theme-selected); }
 .board-col-num, .board-col-author, .board-col-date, .board-col-views { color: var(--theme-text-muted); }
-.board-comment-badge { color: var(--theme-primary); }
+.board-comment-badge { color: var(--fs-primary-text, var(--theme-primary)); }
 .board-detail-header { border-color: var(--theme-border); }
 .board-detail-header h2 { color: var(--theme-text); }
 .board-detail-meta { color: var(--theme-text-muted); }
@@ -483,8 +484,102 @@ textarea:focus {
 .cmt-header { color: var(--theme-text); }
 .cmt-item { border-color: var(--theme-border); }
 .board-pg-num { color: var(--theme-text); }
-.board-pg-num:hover { background: var(--theme-hover); color: var(--theme-primary); }
-.board-pg-current { background: var(--theme-primary); color: #fff !important; }
+.board-pg-num:hover { background: var(--theme-hover); color: var(--fs-primary-text, var(--theme-primary)); }
+.board-pg-current { background: var(--theme-primary); color: var(--fs-on-primary, #fff) !important; }
 .board-pg-nav { color: var(--theme-text-muted); }
-.board-pg-nav:hover { background: var(--theme-hover); color: var(--theme-primary); }
+.board-pg-nav:hover { background: var(--theme-hover); color: var(--fs-primary-text, var(--theme-primary)); }
 .board-pg-disabled { color: var(--theme-border) !important; }
+
+
+/* ===== ★ (2026-10-23) 버튼·강조색 대비 =====
+   흰 글자 대비 3:1 미만인 연한 강조색 위에는 같은 계열의 짙은 글자(--fs-on-primary), 강조색을 글자로 쓰는 곳은
+   흰 바탕 대비 4.5:1 이 되도록 짙게(--fs-primary-text). style.css·app.js·이 파일의 해당 곳이 var(--fs-…, 원래값) 으로 바뀌어 있음. */
+:root {
+    --fs-primary-text: #0a766d;
+}
+
+/* 아래쪽 '취소' 버튼(class="btn modal-close")까지 머리줄 × 의 흰 글자를 받아 흰 바탕에 안 보이던 것 — 버튼 기본 글자색으로 */
+.btn.modal-close { color: var(--dark); }
+
+/* ===== ★ (2026-10-23) 강조색 머리줄 안 보조 글자 =====
+   모달 머리줄이 강조색(그라디언트) 바탕이라 그 안의 회색 보조 글자(미리보기 '1 / 6' 등, var(--fs-text-3))가 1.2:1 로 흐렸다 →
+   머리줄 안에서만 역할 변수를 흰 글자 계열로 (CSS 변수는 상속되므로 이 범위에만 적용) */
+.modal-header {
+    --fs-text-2: rgba(255, 255, 255, 0.92);
+    --fs-text-3: rgba(255, 255, 255, 0.85);
+}
+
+/* ===== ★ (2026-10-23) 툴바 버튼 테마 연동 =====
+   ①'작업'·'새 폴더'·'동기화' 같은 일반 툴바 버튼이 흰 바탕과 같은 색이라 버튼 경계가 안 보였다 → 테마의 옅은 색 바탕(--theme-bg),
+   (full 테마들과 같은 방식). 강조(업로드)·위험(삭제) 버튼은 그대로.
+   ②선택된 보기 버튼(그리드/목록)이 회색(검정 10%)이었다 → 테마 선택색(--theme-selected)·테마 글자색 */
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)) {
+    background: var(--theme-bg);
+    color: var(--theme-text);
+}
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover {
+    background: var(--theme-hover);
+}
+.toolbar-right .btn-icon.active {
+    background: var(--theme-selected);
+    border-color: var(--theme-selected);
+    color: var(--theme-text);
+}
+
+/* ===== ★ (2026-10-23) 머리줄·선택 표시 테마 연동 =====
+   ①머리줄이 흰색(--theme-header #ffffff)이라 사이드바만 테마색이었다 → 머리줄도 사이드바와 같은 색(#ccfbf1).
+     모바일 머리줄은 style.css 'body.is-mobile .header'(바탕 --bg)가 이겨서 같은 강도로 함께 지정.
+   ②그리드 선택 바탕이 style.css 의 기본 연파랑(#bbdefb)으로 덮여 테마 선택색이 안 나왔다 → 테마 선택색. 둘레 테두리(강조색 2px)는 style.css 그대로 */
+.header,
+body.is-mobile .header {
+    background: #ccfbf1;
+}
+.file-list.grid-view .file-item.selected {
+    background: var(--theme-selected);
+}
+
+/* ===== ★ (2026-10-24) 탐색기 바탕 흰색 =====
+   파일 목록 바탕이 style.css '.file-list { background: var(--bg) }' — 이 테마의 --bg 는 옅은 테마색이라 파일 칸(흰색) 둘레만 테마색이 들어가
+   어색했다(기본 테마는 테마 파일에서 흰색으로 덮음). 일반 테마는 머리줄·사이드만 테마색인 설계라 탐색기는 기본 테마처럼 흰색 */
+.file-list {
+    background: #ffffff;
+}
+
+/* ===== ★ (2026-10-24) 선택·올림 색을 다른 일반 테마와 같은 옅은 단계로, 툴바 버튼 경계 =====
+   ①이 테마만 선택색·올림색이 진했다(선택 #5eead4·올림 #a7f3d0) — 다른 일반 테마는 사이드바와 같은 옅은 단계.
+     → 선택 = 한 단계 진한 옅은 색(#99f6e4), 올림 = 바탕과 사이드바 사이(#defcf6)
+   ②'작업'·'새 폴더'·'동기화' 버튼 바탕(--theme-bg #f0fdfa)이 모바일 툴바 바탕과 같은 색이라 버튼 모양이 안 보였다(대비 1.00, PC 흰 바탕 위 1.04) →
+     사이드바 색(#ccfbf1) 바탕, 올리면 선택색 */
+:root {
+    --theme-hover: #defcf6;
+    --theme-selected: #99f6e4;
+}
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)) {
+    background: #ccfbf1;
+}
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover {
+    background: var(--theme-selected);
+}
+
+/* ===== ★ (2026-10-24) 사이드바 안내 글자 대비 =====
+   '개인·공용·외부' 구분 글자와 '내 공유 링크 (28)' 개수가 파랑(--fs-fg-info 기본값 #3498db·#3b82f6)이라 이 테마 사이드바 위 2.2~2.8:1 로 흐렸다 →
+   사이드바 안에서만 안내 글자 변수를 이 테마 계열의 짙은 색(#0f766e, 사이드바 위 4.5:1 이상) */
+.sidebar {
+    --fs-fg-info: #0f766e;
+}
+
+/* ===== ★ (2026-10-24) 게시판 색은 예전 진한 색 그대로 =====
+   위 블록에서 선택·올림 변수(--theme-hover·--theme-selected)를 옅게 바꾸자 같은 변수를 쓰던 게시판 표 머리줄·마우스 올림·고정 글 줄·지금 보는 글 줄,
+   페이지 번호·댓글 버튼 올림까지 함께 옅어져 고정 글이 덜 튀었다(요청 범위 밖으로 번진 변화) → 게시판만 바꾸기 전 색(#a7f3d0 / #5eead4)으로 고정 */
+.board-table thead tr,
+.board-table tbody tr:hover,
+.board-table tbody tr.board-row-pinned,
+.board-pg-num:hover,
+.board-pg-nav:hover,
+.cmt-actions button:hover {
+    background: #a7f3d0;
+}
+.board-table tbody tr.board-row-current {
+    background: #5eead4;
+}
+

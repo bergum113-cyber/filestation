@@ -43,7 +43,7 @@
 }
 
 .logo {
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
     font-weight: 600;
 }
 
@@ -113,7 +113,8 @@
     background: rgba(249, 115, 22, 0.15) !important;
 }
 
-.storage-item.active, .menu-list li.active > a {
+/* ★ (2026-10-23) 게시판 메뉴 선택(a.board-sidebar-item.active)도 같은 선택 표시 — 공통 규칙의 연파랑 바탕에 테마의 흰 메뉴 글자가 겹쳐 안 보이던 것 */
+.storage-item.active, .menu-list li.active > a, .menu-list li > a.board-sidebar-item.active {
     background: rgba(249, 115, 22, 0.25) !important;
     color: #9a3412 !important;
     font-weight: 500;
@@ -142,7 +143,7 @@
 
 .file-item.selected {
     background: var(--theme-selected);
-    border-left: 3px solid var(--theme-primary);
+    /* ★ (2026-10-23) 왼쪽 3px 막대(border-left) 제거 — full 테마들처럼 선택 표시를 바탕색 + 둘레 테두리로 통일 (펜닐 요청) */
 }
 
 .file-size,
@@ -167,7 +168,7 @@
 }
 
 .breadcrumb a {
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
 /* 모달 */
@@ -178,16 +179,16 @@
 
 .modal-header {
     background: var(--theme-primary);
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
     border-bottom: none;
 }
 
 .modal-header h2 {
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
 }
 
 .modal-header .modal-close {
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
 }
 
 .modal-header .modal-close:hover {
@@ -207,7 +208,7 @@
 .modal-body table th,
 .info-table th {
     background: var(--theme-hover);
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
 .modal-body table tr:hover {
@@ -215,23 +216,25 @@
 }
 
 /* 입력 필드 */
-input:focus,
-select:focus,
-textarea:focus {
+/* ★ (2026-10-24) 동영상·음악 플레이어 안쪽(.fsvs-root·.fap)은 빼고(:where — 선택자 우선순위는 종전과 같게) — 볼륨 막대·재생목록 검색칸을 누르면 테마 색 테두리 빛이 생겨
+   기본 테마와 달랐음(펜닐 제보: 플레이어 안쪽은 테마 영향 없이 기본 테마와 같게) */
+input:not(:where(.fsvs-root *, .fap *)):focus,
+select:not(:where(.fsvs-root *, .fap *)):focus,
+textarea:not(:where(.fsvs-root *, .fap *)):focus {
     border-color: var(--theme-primary);
     box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.1);
 }
 
 /* 설정 탭 */
 .settings-tab.active {
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
     border-bottom-color: var(--theme-primary);
 }
 
 /* 배지/태그 */
 .search-storage {
     background: var(--theme-hover);
-    color: var(--theme-primary);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
 /* 승인 알림 */
@@ -398,7 +401,7 @@ textarea:focus {
 
 .security-info-bar code {
     background: var(--theme-primary);
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
 }
 
 /* 보안 모달 헤더 */
@@ -423,7 +426,7 @@ textarea:focus {
 }
 
 .settings-status-bar .settings-link {
-    color: var(--theme-primary-hover);
+    color: var(--fs-primary-text, var(--theme-primary-hover));
 }
 
 /* 검색 인덱스 요구사항 박스 */
@@ -452,7 +455,7 @@ textarea:focus {
 }
 
 .index-auto-status a {
-    color: var(--theme-primary-hover);
+    color: var(--fs-primary-text, var(--theme-primary-hover));
 }
 
 /* ========== 게시판 테마 적용 ========== */
@@ -463,7 +466,7 @@ textarea:focus {
 .board-table tbody tr:hover { background: var(--theme-hover); }
 .board-table tbody tr.board-row-current { background: var(--theme-selected); }
 .board-col-num, .board-col-author, .board-col-date, .board-col-views { color: var(--theme-text-muted); }
-.board-comment-badge { color: var(--theme-primary); }
+.board-comment-badge { color: var(--fs-primary-text, var(--theme-primary)); }
 .board-detail-header { border-color: var(--theme-border); }
 .board-detail-header h2 { color: var(--theme-text); }
 .board-detail-meta { color: var(--theme-text-muted); }
@@ -476,8 +479,241 @@ textarea:focus {
 .cmt-header { color: var(--theme-text); }
 .cmt-item { border-color: var(--theme-border); }
 .board-pg-num { color: var(--theme-text); }
-.board-pg-num:hover { background: var(--theme-hover); color: var(--theme-primary); }
-.board-pg-current { background: var(--theme-primary); color: #fff !important; }
+.board-pg-num:hover { background: var(--theme-hover); color: var(--fs-primary-text, var(--theme-primary)); }
+.board-pg-current { background: var(--theme-primary); color: var(--fs-on-primary, #fff) !important; }
 .board-pg-nav { color: var(--theme-text-muted); }
-.board-pg-nav:hover { background: var(--theme-hover); color: var(--theme-primary); }
+.board-pg-nav:hover { background: var(--theme-hover); color: var(--fs-primary-text, var(--theme-primary)); }
 .board-pg-disabled { color: var(--theme-border) !important; }
+
+
+/* ===== ★ (2026-10-23) 버튼·강조색 대비 =====
+   흰 글자 대비 3:1 미만인 연한 강조색 위에는 같은 계열의 짙은 글자(--fs-on-primary), 강조색을 글자로 쓰는 곳은
+   흰 바탕 대비 4.5:1 이 되도록 짙게(--fs-primary-text). style.css·app.js·이 파일의 해당 곳이 var(--fs-…, 원래값) 으로 바뀌어 있음. */
+:root {
+    --fs-on-primary: #4c3823;
+    --fs-primary-text: #8b6640;
+}
+
+/* 아래쪽 '취소' 버튼(class="btn modal-close")까지 머리줄 × 의 흰 글자를 받아 흰 바탕에 안 보이던 것 — 버튼 기본 글자색으로 */
+.btn.modal-close { color: var(--dark); }
+
+/* ===== ★ (2026-10-23) 강조색 머리줄 안 보조 글자 =====
+   모달 머리줄이 강조색 바탕이라 그 안의 회색 보조 글자(미리보기 '1 / 6' 등, var(--fs-text-3))가 1.4:1 로 흐렸다 →
+   머리줄 안에서만 역할 변수를 머리줄 글자색 계열로 (CSS 변수는 상속되므로 이 범위에만 적용) */
+.modal-header {
+    --fs-text-2: var(--fs-on-primary, rgba(255, 255, 255, 0.92));
+    --fs-text-3: var(--fs-on-primary, rgba(255, 255, 255, 0.85));
+}
+
+/* ===== ★ (2026-10-23) 툴바 버튼 테마 연동 =====
+   ①'작업'·'새 폴더'·'동기화' 같은 일반 툴바 버튼이 흰 바탕과 같은 색이라 버튼 경계가 안 보였다 → 테마의 옅은 색 바탕(--theme-hover),
+   (full 테마들과 같은 방식). 강조(업로드)·위험(삭제) 버튼은 그대로.
+   ②선택된 보기 버튼(그리드/목록)이 회색(검정 10%)이었다 → 테마 선택색(--theme-selected)·테마 글자색 */
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)) {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover {
+    background: var(--theme-selected);
+}
+.toolbar-right .btn-icon.active {
+    background: var(--theme-selected);
+    border-color: var(--theme-selected);
+    color: var(--theme-text);
+}
+
+/* ③ 모바일에서 파일 영역 둘레 여백 10px 때문에 툴바가 10~16px 넘쳐 맨 오른쪽 '목록 보기' 버튼이 잘렸다(오늘 이전부터) →
+   모바일만 기본·mint·rose 테마처럼 여백·둥근 모서리·그림자 없이 화면 폭 가득 (PC 는 그대로) */
+@media (max-width: 1024px) {
+    body.is-mobile .file-area {
+        margin: 0;
+        border-radius: 0;
+        box-shadow: none;
+    }
+}
+
+/* ===== ★ (2026-10-23) 머리줄·선택 표시 테마 연동 =====
+   ①머리줄이 흰색(--theme-header #ffffff)이라 사이드바만 테마색이었다 → 머리줄도 사이드바와 같은 색(#fed7aa).
+     모바일 머리줄은 style.css 'body.is-mobile .header'(바탕 --bg)가 이겨서 같은 강도로 함께 지정.
+   ②그리드 선택 바탕이 style.css 의 기본 연파랑(#bbdefb)으로 덮여 테마 선택색이 안 나왔다 → 테마 선택색. 둘레 테두리(강조색 2px)는 style.css 그대로 */
+.header,
+body.is-mobile .header {
+    background: #fed7aa;
+}
+.file-list.grid-view .file-item.selected {
+    background: var(--theme-selected);
+}
+
+/* ===== ★ (2026-10-24) 탐색기 둘레 여백 PC 도 없앰 =====
+   일반 테마 6종(blue·lavender·pastel-blue·peach·pink·sky)만 맨 위 .file-area 규칙의 여백 10px·둥근 모서리·그림자로 탐색기가 떠 있는 카드처럼
+   사이드바·머리줄에서 10px 떨어져(틈으로 뒤 바탕색이 보임) 기본·다크·민트·로즈·full 테마 12종(붙어 있음)과 모양이 달랐다 → 다른 테마처럼 붙게.
+   모바일은 위 ③ 블록에서 이미 같은 값. 원래 규칙은 그대로 두고 여기서 덮음 */
+.file-area {
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+/* ===== ★ (2026-10-24) 탐색기 바탕 흰색 =====
+   파일 목록 바탕이 style.css '.file-list { background: var(--bg) }' — 이 테마의 --bg 는 옅은 테마색이라 파일 칸(흰색) 둘레만 테마색이 들어가
+   어색했다(기본 테마는 테마 파일에서 흰색으로 덮음). 일반 테마는 머리줄·사이드만 테마색인 설계라 탐색기는 기본 테마처럼 흰색 */
+.file-list {
+    background: #ffffff;
+}
+
+/* ===== ★ (2026-10-24) 사이드바 안내 글자 대비 =====
+   '개인·공용·외부' 구분 글자와 '내 공유 링크 (28)' 개수가 파랑(--fs-fg-info 기본값 #3498db·#3b82f6)이라 이 테마 사이드바 위 2.2~2.8:1 로 흐렸다 →
+   사이드바 안에서만 안내 글자 변수를 이 테마 계열의 짙은 색(#9a3412, 사이드바 위 4.5:1 이상) */
+.sidebar {
+    --fs-fg-info: #9a3412;
+}
+
+/* ===== ★ (2026-10-24) 검색 결과 줄 테마 색 =====
+   기본 연파랑 그라디언트 그대로였다 → 이 테마의 옅은 색(#fff7ed)에서 #fed7aa, 선 #fdba74, 검색어 이 테마의 짙은 색(#9a3412), 결과 수 글자 #525252 — 모두 4.5:1 이상 */
+:root {
+    --fs-search-from: #fff7ed;
+    --fs-search-to: #fed7aa;
+    --fs-search-line: #fdba74;
+    --fs-search-query: #9a3412;
+    --fs-search-count: #525252;
+}
+
+/* ===== ★ (2026-10-24) 안내·선택 표시 색을 테마 계열로 =====
+   '1개 선택' 표시, 설정 창 선택 탭, 세션 관리 현재 기기, 안내 상자(검색 인덱스·일괄 삭제·스토리지 권한·Docker 안내), 보안 GeoIP 항목,
+   파일 마우스 올림, 아이콘 관리 라벨 위치 버튼, 시스템 정보 버전 배지, SSO 설정 탭 등이 공통 안내 변수(--fs-tint-info 등)를 쓰는데
+   이 테마는 값을 정의하지 않아 기본 테마의 파랑(#e3f2fd·#1976d2·#90caf9·#2196f3)이 그대로였다 → 테마 계열 색
+   (연한 바탕 #ffedd5, 테두리 #fdba74, 안내 글자 #9a3412 — 연한 바탕·흰 바탕 위 4.5:1 이상) */
+:root {
+    --fs-tint-info: #ffedd5;
+    --fs-tint-info-border: #fdba74;
+    --fs-fg-info: #9a3412;
+    --fs-badge-info-bg: var(--theme-primary);
+    --fs-badge-info-fg: var(--fs-on-primary, #ffffff);
+    --fs-tab-on-bg: var(--theme-primary);
+    --fs-tab-on-fg: var(--fs-on-primary, #ffffff);
+}
+
+/* ===== ★ (2026-10-24) 포인트 색(강조색) 통일 =====
+   그누보드·라이믹스 스킨들처럼 포인트 색 하나로 — 체크박스·라디오, 파일을 폴더 위로 끌 때 점선, 목록 창 현재 페이지, 불러오는 중 표시,
+   입력칸 누름 테두리(공유 주소·보안 설정·사용자 공유 권한), 보안 안내 코드 배지가 기본 파랑이었고, 공지 팝업 머리줄·대기 알림·리소스 모니터는
+   고정 보라 그라디언트(#667eea→#764ba2)였다 → 강조색(--fs-accent),
+   그라디언트는 이 테마 계열 짙은 두 색(#c2410c→#9a3412, 흰 글자 4.5:1 이상) */
+:root {
+    --fs-accent: var(--theme-primary);
+    --fs-grad-a: #c2410c;
+    --fs-grad-b: #9a3412;
+}
+
+/* ===== ★ (2026-10-24) 일반 버튼 테마색 =====
+   모달·게시판 등 툴바 밖의 일반 버튼('취소'·'← 목록으로'·'첨부' 등)이 기본 테마와 같은 연회색(#f8f9fa — 흰 바탕과 대비 1.05, 경계가 거의 안 보임)이었다 →
+   테마 연한 색 바탕 + 테마 테두리, 올리면 테두리 색 바탕(강조·위험·경고 버튼과 툴바 버튼은 각자 규칙 그대로 — :where 로 강도를 낮춰 그 규칙들이 이김) */
+.btn:where(:not(.btn-primary, .btn-danger, .btn-warning)) {
+    background: var(--fs-tint-info);
+    border-color: var(--fs-tint-info-border);
+    color: var(--theme-text);
+}
+.btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover {
+    background: var(--fs-tint-info-border);
+}
+/* 피치는 테두리 색(#fdba74) 바탕 위 테마 글자가 4.3:1 — 올림은 한 단계 옅은 사이드바 색(5.4:1) */
+.btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover {
+    background: #fed7aa;
+}
+/* 승인 대기 알림(오른쪽 아래)도 같은 그라디언트 — 이 파일 앞쪽 규칙이 연한 강조색 단색(흰 글자 1.5~2.5:1)이거나 다른 테마에서 옮겨 온 파랑 그라디언트였다 */
+.pending-notification {
+    background: linear-gradient(135deg, var(--fs-grad-a) 0%, var(--fs-grad-b) 100%);
+}
+/* SSO 설정의 선택 안 된 탭(반투명 60%)이 이 테마 글자색(#9a3412)이면 회색 바탕 위 2.9:1 — 한 단계 짙은 갈색(약 4:1, 종전 회색 글자 때와 비슷) */
+.sso-tab:not(.active) {
+    color: #431407;
+}
+
+/* ★ (2026-10-24) 게시판 글보기 아래 목록의 지금 보는 글 줄 글자 — 이 줄은 배경(--theme-selected)이 진해서
+   번호·작성자·날짜·조회 글자(--theme-text-muted)와 '공지' 표시가 4.5:1 미만이었음(원래부터) →
+   이 줄에서만 테마 글자색(--theme-text). 로즈 테마에 먼저 넣었던 것과 같은 방식 */
+.board-table tbody tr.board-row-current .board-col-num,
+.board-table tbody tr.board-row-current .board-col-author,
+.board-table tbody tr.board-row-current .board-col-date,
+.board-table tbody tr.board-row-current .board-col-views,
+.board-table tbody tr.board-row-current .board-pin-label,
+.board-table tbody tr.board-row-current .board-comment-badge {   /* 댓글 개수 [N] 도 이 줄 위 4.5:1 미만이었음 */
+    color: var(--theme-text);
+}
+
+/* ★ (2026-10-24) 글자를 끌어 선택했을 때 색을 테마 강조색 계열로(32% — 글자색은 그대로라 읽힘). 색 섞기를 모르는 옛 브라우저는 기본 선택색 */
+::selection { background: color-mix(in srgb, var(--fs-accent) 32%, transparent); }
+
+
+/* ===== ★ (2026-10-25) 테마 구조 정리 — 피치 (일반 테마) (펜닐 요청: 전체 테마 시안 '균형안' 대로) =====
+   방향: 머리줄 = 기준색 #fb923c 그대로(테마 정체성), 사이드 = 기준색 16%(색 느낌은 남기고 넓은 면은 가볍게), 사이드 선택 = 36% + 진한 글자,
+   주 버튼·창 머리줄·파일 선택 테두리·현재 페이지 = 기준색, 탐색기 = 흰색.
+   글자: 머리줄·버튼 = 같은 계열 가장 진한 색(7.0:1), 사이드 글자 #502f13(10.5:1), 안내·제목 글자 #8d5222(선택 칸 위 4.7:1).
+   이 파일 앞쪽 규칙은 지우지 않고 여기서 덮음(우선순위 확보용 !important) */
+:root { --theme-sidebar:#feeee0; --sidebar-bg:#feeee0; --sidebar-text:#502f13; --theme-header:#fb923c; --theme-text:#502f13; --theme-text-muted:#8d5222;
+  --theme-hover:#feebdc; --theme-selected:#fed8b9; --theme-border:#fdcea7; --theme-primary:#fb923c; --theme-primary-hover:#dd8035; --primary:#fb923c; --primary-dark:#dd8035;
+  --fs-accent:#fb923c; --fs-primary-text:#8d5222; --fs-tint-info:#fff4ec; --fs-tint-info-border:#fdcea7; --fs-fg-info:#8d5222; --fs-on-primary:#321d0c; --fs-board-search-bg:#fff4ec;
+  --fs-tab-on-bg:#fb923c; --fs-tab-on-fg:#321d0c; --fs-badge-info-bg:#fb923c; --fs-badge-info-fg:#321d0c; --fs-grad-a:#a66028; --fs-grad-b:#8d5222; }
+.header, body.is-mobile .header { background:#fb923c !important; color:#321d0c; border-bottom:1px solid #dd8035 !important;
+    --fs-text:#321d0c; --fs-text-2:#321d0c; --fs-text-3:#321d0c; --fs-text-4:#321d0c; --fs-surface:rgba(255,255,255,0.3); --fs-surface-2:rgba(255,255,255,0.3); --fs-surface-3:rgba(255,255,255,0.3);
+    --fs-border:#dd8035; --fs-border-2:#dd8035; --fs-primary-text:#321d0c; --secondary:#321d0c; }
+.header .logo, .header .logo-text, .header .header-version, .header .search-hint, .header .search-hint *,
+.header .btn-icon, .header-right .btn-icon, .mobile-menu-btn, .mobile-search-btn, .header .digital-clock { color:#321d0c !important; }
+.header .btn-icon:hover, .header-right .btn-icon:hover, .mobile-menu-btn:hover, .mobile-search-btn:hover { background:rgba(255,255,255,0.3) !important; }
+#user-name, .header .user-welcome { background:rgba(255,255,255,0.3) !important; border-color:#dd8035 !important; color:#321d0c !important; }
+.header .user-welcome * { color:#321d0c !important; }
+.search-box, .header .search-box { background:#ffffff !important; border-color:#e28336 !important; }
+.header .search-box input { color:#502f13 !important; }
+.header .search-box input::placeholder, .header .search-box button { color:#8d5222 !important; }
+.sidebar { background:#feeee0 !important; color:#502f13; border-right:1px solid #fdcea7 !important; --fs-fg-info:#8d5222; --fs-text-2:#502f13; --fs-text-3:#8d5222; --fs-text-4:#8d5222; }
+.sidebar h3, .sidebar-section h3.section-toggle { color:#8d5222 !important; }
+.sidebar-section h3.section-toggle:hover { background:#fee3cc !important; color:#502f13 !important; }
+.sidebar-section h3.section-toggle .toggle-icon { background:#fed8b9 !important; color:#502f13 !important; }
+.sidebar-divider { background:#fdcea7 !important; }
+.sidebar-quota { border-top-color:#fdcea7 !important; }
+.quota-text { color:#8d5222 !important; }
+.storage-item, .menu-list li a { color:#502f13 !important; }
+.storage-item .storage-icon { color:#8d5222 !important; }
+.storage-item:hover, .menu-list li:hover, #storage-list a:hover { background:#fee3cc !important; }
+.storage-item.active, .menu-list li.active > a, .menu-list li > a.board-sidebar-item.active, #storage-list a.active { background:#fed8b9 !important; color:#502f13 !important; font-weight:600; }
+.quota-bar { background:#fee3cc !important; }
+.quota-fill { background:#fb923c !important; }
+.modal-header { background:#fb923c !important; color:#321d0c !important; --fs-text-2:#321d0c; --fs-text-3:#321d0c; }
+.modal-header h2, .modal-header .modal-close { color:#321d0c !important; }
+.btn.btn-primary, .btn-primary { background:#fb923c !important; border-color:#fb923c !important; color:#321d0c !important; }
+.btn.btn-primary:hover, .btn-primary:hover { background:#dd8035 !important; border-color:#dd8035 !important; }
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)) { background:#fff4ec !important; color:#502f13 !important; }
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover { background:#feebdc !important; }
+.toolbar-right .btn-icon.active { background:#fed8b9 !important; border-color:#fdcea7 !important; color:#502f13 !important; }
+.file-item:hover { background:#fff4ec !important; }
+.file-item.selected, .file-list.list-view .file-item.selected, .file-list.grid-view .file-item.selected { background:#feebdc !important; border-color:#fb923c !important; }
+.file-list, .file-area, .toolbar, .breadcrumb { background:#ffffff !important; }
+/* 목록 보기 크기·날짜·종류 글자 — style.css 공통 회색(--secondary #6c757d)이라 마우스 올린 줄(올림색) 위 3.9~4.3:1 → 이 테마 안내 글자색(#8d5222, 선택 칸 위에서도 4.6:1 이상) (2026-10-25 저녁) */
+.file-list.list-view .file-size, .file-list.list-view .file-date, .file-list.list-view .file-type, .file-list.list-view .file-item > .file-type { color:#8d5222 !important; }
+.board-table thead tr, .board-table tbody tr.board-row-pinned { background:#fff4ec !important; }
+.board-table thead th, .board-table thead th[class] { color:#8d5222 !important; }
+.board-table tbody tr.board-row-current { background:#feebdc !important; }
+.board-pg-current { background:#fb923c !important; color:#321d0c !important; }
+.settings-tab.active { color:#8d5222 !important; border-bottom-color:#fb923c !important; }
+.login-page { background: linear-gradient(135deg, #fb923c 0%, #feeee0 100%); }
+/* 흰 글자를 올리는 그라디언트(리소스 모니터·공지 팝업 머리줄·대기 알림)는 기준색이 밝아 2:1 안팎이라 같은 계열 짙은 두 색(#a66028→#8d5222, 흰 글자 4.8:1 이상), 성공 배지는 초록(공통 규칙과 같은 #2e7d32) */
+.badge-success { background:#2e7d32 !important; color:#ffffff !important; }
+/* 머리줄 시계(설정 > 시계 스타일) — 투명형(1·2)은 머리줄 글자색, 밝은 카드형(3·8·9)은 흰 카드 + 진한 글자, 검은 상자형(4·5·6·7·10)은 상자 안을 밝은 글자로 */
+.header .digital-clock.style-1 .clock-time, .header .digital-clock.style-1 .clock-date,
+.header .digital-clock.style-2 .clock-time, .header .digital-clock.style-2 .clock-date, .header .digital-clock.style-2 .clock-sep { color:#321d0c !important; }
+.header .digital-clock.style-2 { background:rgba(255,255,255,0.3) !important; border-color:#dd8035 !important; }
+.header .digital-clock.style-3, .header .digital-clock.style-8, .header .digital-clock.style-9 { color:#502f13 !important;
+  --fs-surface:#ffffff; --fs-surface-2:#f5f5f5; --fs-surface-3:#e8e8e8; --fs-border:#d4d4d4; --fs-border-2:#cccccc; --fs-tint-info-border:#fdcea7;
+  --fs-text:#502f13; --fs-text-2:#502f13; --fs-text-3:#502f13; --fs-text-4:#502f13; --fs-fg-info:#502f13; }
+.header .digital-clock.style-3 { background:#ffffff !important; border-color:#fdcea7 !important; }
+.header .digital-clock.style-3 .seg-digit { background:#feeee0 !important; border-color:#fdcea7 !important; color:#502f13 !important; }
+.header .digital-clock.style-3 .seg-colon, .header .digital-clock.style-3 .clock-date,
+.header .digital-clock.style-9 .clock-time, .header .digital-clock.style-9 .clock-date { color:#502f13 !important; }
+.header .digital-clock.style-8 { background:#e8e8e8 !important; border-color:#cccccc !important; }
+.header .digital-clock.style-8 .flip-half.upper, .header .digital-clock.style-8 .flip-flap.front { background:linear-gradient(180deg, #ffffff, #f5f5f5) !important; }
+.header .digital-clock.style-8 .flip-half.lower, .header .digital-clock.style-8 .flip-flap.back { background:linear-gradient(180deg, #f0f0f0, #e8e8e8) !important; }
+.header .digital-clock.style-8 .flip-num { color:#222222 !important; }
+.header .digital-clock.style-8 .clock-date { color:#4a4a4a !important; }
+.header .digital-clock.style-9 { background:rgba(255,255,255,0.78) !important; border-color:rgba(255,255,255,0.9) !important; }
+.header .digital-clock.style-4, .header .digital-clock.style-5, .header .digital-clock.style-6, .header .digital-clock.style-7, .header .digital-clock.style-10 { color:#e6e8eb !important; --fs-text-2:#c9cdd3; --fs-text-3:#b4bac2; }
+.header .digital-clock.style-5 .clock-date, .header .digital-clock.style-6 .clock-date { color:#b4bac2 !important; }
+.header .digital-clock.style-7 .clock-date { color:#c9cdd3 !important; }

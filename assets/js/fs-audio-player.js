@@ -584,6 +584,25 @@ class FSAudioPlayer {
             lyricsModalTrack: this.container.querySelector('.fap-lyrics-modal-track'),
             lyricsModalText: this.container.querySelector('.fap-lyrics-modal-text'),
         };
+        // ★ (2026-10-25) Tab 키로 플레이어 안 버튼이 하나씩 선택되지 않게(펜닐 요청 — Tab 을 누르면 버튼에 흰 테두리가 생김).
+        //   플레이어(.fap) 안 버튼·막대·입력칸을 tabindex=-1 — 마우스·터치·단축키(스페이스·방향키 등, 문서 전체에서 받음)와
+        //   코드가 직접 옮기는 포커스는 그대로. 나중에 생기는 버튼(설정 메뉴·이퀄라이저 팝업·재생목록 줄 등)도 같은 처리(destroy 때 감시 해제)
+        try {
+            const _ntRoot = this.$.root;
+            if (_ntRoot && typeof MutationObserver === 'function') {
+                const _ntSel = 'button, input, select, textarea, a[href], [tabindex]';
+                const _ntFix = (e) => { if (e.getAttribute('tabindex') !== '-1') e.setAttribute('tabindex', '-1'); };
+                const _ntScan = (n) => { if (!n || n.nodeType !== 1) return; if (n.matches(_ntSel)) _ntFix(n); n.querySelectorAll(_ntSel).forEach(_ntFix); };
+                _ntScan(_ntRoot);
+                this._noTabMo = new MutationObserver((ms) => {
+                    for (const m of ms) {
+                        if (m.type === 'attributes') { if (m.target.nodeType === 1 && m.target.matches(_ntSel)) _ntFix(m.target); }
+                        else m.addedNodes.forEach(_ntScan);
+                    }
+                });
+                this._noTabMo.observe(_ntRoot, { childList: true, subtree: true, attributes: true, attributeFilter: ['tabindex'] });
+            }
+        } catch (e) {}
         // ★ iOS: 시스템 정책상 audio.volume 변경 불가 (Apple 공식 정책)
         //   YouTube iOS 웹 등과 동일하게 볼륨 영역 전체 숨김
         //   사용자는 기기 물리 볼륨 버튼으로 조절
@@ -725,13 +744,20 @@ class FSAudioPlayer {
         selector.className = 'fap-skin-selector';
         const isKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');
         selector.innerHTML = `
-            <button class="fap-skin-btn" title="${isKo ? '스킨 선택' : 'Choose Skin'}">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                </svg>
+            <!-- ★ (2026-10-24) 별+스킨 이름 → 톱니바퀴 아이콘만(펜닐 요청 — 메뉴가 스킨·이퀄라이저·비주얼라이저 설정이라 '설정', 동영상 플레이어 ⚙ 와 같은 모양).
+                 스킨 이름 글자(.fap-skin-label)는 그대로 두고 CSS 로 숨김 — 스킨을 바꿀 때 글자를 고치는 기존 코드가 그대로 동작 -->
+            <button class="fap-skin-btn" title="${isKo ? '설정 (스킨·이퀄라이저·비주얼라이저)' : 'Settings (skin, equalizer, visualizer)'}" aria-label="${isKo ? '설정' : 'Settings'}">
+                <svg viewBox="-2 -2 28 28" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 <span class="fap-skin-label">${this._skins.find(s => s.id === this._currentSkin)?.name || 'Default'}</span>
             </button>
             <div class="fap-skin-menu" style="display:none;">
+                <!-- ★ (2026-10-24) 구간 반복(A-B)을 재생 줄에서 이 메뉴로 옮김(펜닐 승인) — 재생 줄을 '가사·셔플·이전·▶·다음·반복·볼륨'으로 해
+                     ▶ 를 정확히 가운데(실측 0px, 종전 16~24px 왼쪽)에. 누를 때마다 종전 버튼과 같은 순서(A 지정 → B 지정 → 해제, _cycleAb 그대로) -->
+                <div class="fap-skin-section-title">${isKo ? '재생' : 'Playback'}</div>
+                <div class="fap-vis-toggle-item fap-ab-item">
+                    <span class="fap-vis-toggle-label">${isKo ? '구간 반복' : 'A-B Repeat'}</span>
+                    <span class="fap-vis-toggle-state fap-ab-state"></span>
+                </div>
                 <div class="fap-skin-section-title">${isKo ? '스킨' : 'Skin'}</div>
                 ${this._skins.map(s => `
                     <div class="fap-skin-item${s.id === this._currentSkin ? ' active' : ''}" data-skin="${s.id}">
@@ -770,6 +796,7 @@ class FSAudioPlayer {
         const menu = selector.querySelector('.fap-skin-menu');
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (this._refreshAbMenu) this._refreshAbMenu();   // ★ (2026-10-24) 구간 반복 상태 글자 갱신
             menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
         });
         // 외부 클릭 시 메뉴 닫기 (destroy 시 해제를 위해 참조 저장)
@@ -778,7 +805,28 @@ class FSAudioPlayer {
         };
         document.addEventListener('click', this._skinMenuCloseHandler);
         // 메뉴 내부 클릭 (스킨 + 비주얼라이저 색상)
+        // ★ (2026-10-24) 구간 반복 메뉴 항목 상태 — OFF / A 0:12(A만 지정, 다음은 B) / 0:12~0:30(반복 중). 숨긴 A-B 버튼과 같은 _abA·_abB 를 읽음
+        this._refreshAbMenu = () => {
+            const st = selector.querySelector('.fap-ab-state');
+            if (!st) return;
+            const hasA = this._abA !== null && this._abA !== undefined, hasB = this._abB !== null && this._abB !== undefined;
+            st.textContent = hasB ? `${this._fmt(this._abA)}~${this._fmt(this._abB)}` : hasA ? `A ${this._fmt(this._abA)}` : 'OFF';   // 좁은 메뉴(픽셀 스킨 등)에서 줄바꿈 안 되게 짧게 — 다음 동작은 항목 툴팁
+            const it = selector.querySelector('.fap-ab-item');
+            if (it) {
+                it.classList.toggle('active', hasA);
+                it.title = hasB ? (isKo ? '눌러서 구간 반복 해제' : 'Click to clear') : hasA ? (isKo ? '지금 위치를 B 로 지정' : 'Set B at current position') : (isKo ? '지금 위치를 A 로 지정' : 'Set A at current position');
+            }
+        };
+        this._refreshAbMenu();
         menu.addEventListener('click', (e) => {
+            // ★ (2026-10-24) 구간 반복(A-B) — 종전 재생 줄 버튼과 같은 동작(_cycleAb), 누르면 메뉴 닫힘
+            const abItem = e.target.closest('.fap-ab-item');
+            if (abItem) {
+                e.stopPropagation();
+                this._cycleAb();
+                menu.style.display = 'none';
+                return;
+            }
             // 스킨 아이템
             const skinItem = e.target.closest('.fap-skin-item');
             if (skinItem) {
@@ -1098,6 +1146,22 @@ class FSAudioPlayer {
             this._showVolumeToast();
             this._saveVolumePref();
         });
+        // ★ (2026-10-24) PC 마우스로 볼륨 막대를 끌거나 음소거 버튼을 누른 뒤, 마우스를 치워도 볼륨 창이 안 닫히던 것(펜닐 제보) —
+        //   누른 요소(막대 tabindex=-1·음소거 버튼)에 포커스가 남아 CSS :focus-within 이 창을 계속 열어 두었다(다른 곳을 눌러야 닫힘).
+        //   마우스(pointerType 'mouse')로 누른 경우에만, 손을 뗀 뒤(막대 밖에서 떼도) 그 포커스를 풀어 :hover 기준(떠나면 잠시 뒤 닫힘)으로 되돌린다.
+        //   끄는 동안은 포커스가 그대로라 창이 열려 있고, 터치(안드로이드 — 누르면 열린 채 유지)·키보드(Tab)는 종전 그대로. ↑↓ 볼륨은 포커스와 무관.
+        const _volWrapEl = this.$.volBar && this.$.volBar.closest('.fap-volume');
+        if (_volWrapEl && window.PointerEvent) {
+            _volWrapEl.addEventListener('pointerdown', (e) => {
+                if (e.pointerType !== 'mouse') return;
+                document.addEventListener('pointerup', () => {
+                    setTimeout(() => {   // click(음소거) 처리 뒤에 풀기
+                        const ae = document.activeElement;
+                        if (ae && ae !== document.body && _volWrapEl.contains(ae) && typeof ae.blur === 'function') ae.blur();
+                    }, 0);
+                }, { once: true, capture: true });
+            });
+        }
         // Seek bar drag
         this._bindDrag(this.$.seekBar, '_draggingSeek', (ratio) => {
             if (!a.duration) return;
@@ -2456,6 +2520,7 @@ class FSAudioPlayer {
                 range.style.display = 'none';
             }
         }
+        if (this._refreshAbMenu) this._refreshAbMenu();   // ★ (2026-10-24) ⚙ 메뉴의 구간 반복 상태도 같이(곡을 넘겨 풀릴 때 등)
     }
 
     // ── Shuffle ──
@@ -4590,6 +4655,7 @@ class FSAudioPlayer {
         try { if (this._fapRO) { this._fapRO.disconnect(); this._fapRO = null; } if (this._fapRaf) { cancelAnimationFrame(this._fapRaf); this._fapRaf = 0; } } catch (e) {}   // ★ (2026-09-26) 재생 줄 폭 관찰 해제
         if (this._destroyed) return;
         this._destroyed = true;
+        try { if (this._noTabMo) { this._noTabMo.disconnect(); this._noTabMo = null; } } catch (e) {}   // ★ (2026-10-25) Tab 막기 감시 해제
         // ★ (2026-09-23) 재생목록 썸네일 대기열 정리(이벤트 해제·타이머 중지·떨어진 요소 참조 해제)
         clearTimeout(this._plCoverWait);
         if (this._plCoverVis) { document.removeEventListener('visibilitychange', this._plCoverVis); this._plCoverVis = null; }

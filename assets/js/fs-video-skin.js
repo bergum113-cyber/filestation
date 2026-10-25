@@ -180,6 +180,26 @@
         //   겹침이 생겼다(펜닐 확인). 재생/일시정지는 조작 줄의 버튼과 기존 가운데 버튼으로 한다.
         root.append(menu, bar);
         wrap.appendChild(root);
+        // ★ (2026-10-25) Tab 키로 플레이어 안 버튼이 하나씩 선택되지 않게(펜닐 요청 — Tab 을 누르면 버튼에 흰 테두리가 생김).
+        //   플레이어(wrap) 안 버튼·재생 막대·음량 막대·입력칸을 tabindex=-1 — 마우스·터치·단축키(스페이스·방향키 등, 문서 전체에서 받음)와
+        //   코드가 직접 옮기는 포커스는 그대로. 나중에 생기는 버튼(설정 창 목록·이퀄라이저 등)도 같은 처리, detach 하면 원래 값으로 되돌림
+        try {
+            if (typeof MutationObserver === 'function') {
+                const ntSel = 'button, input, select, textarea, a[href], [tabindex]';
+                const ntOrig = new Map();
+                const ntFix = (e) => { if (e.getAttribute('tabindex') === '-1') return; if (!ntOrig.has(e)) ntOrig.set(e, e.getAttribute('tabindex')); e.setAttribute('tabindex', '-1'); };
+                const ntScan = (n) => { if (!n || n.nodeType !== 1) return; if (n.matches(ntSel)) ntFix(n); n.querySelectorAll(ntSel).forEach(ntFix); };
+                ntScan(wrap);
+                const ntMo = new MutationObserver((ms) => {
+                    for (const m of ms) {
+                        if (m.type === 'attributes') { if (m.target.nodeType === 1 && m.target.matches(ntSel)) ntFix(m.target); }
+                        else m.addedNodes.forEach(ntScan);
+                    }
+                });
+                ntMo.observe(wrap, { childList: true, subtree: true, attributes: true, attributeFilter: ['tabindex'] });
+                cleanups.push(() => { ntMo.disconnect(); ntOrig.forEach((v, e) => { try { if (v === null) e.removeAttribute('tabindex'); else e.setAttribute('tabindex', v); } catch (x) {} }); ntOrig.clear(); });
+            }
+        } catch (e) {}
         // ★ (2026-10-05) 음량 표시(유튜브처럼, 펜닐 요청) — 키보드로 음량을 바꾸면 위쪽 가운데에 아이콘 + 퍼센트를 1초.
         //   음량 막대(입력칸)를 키보드로 움직이면 스킨이 직접, ↑↓ 키 처리(탐색기·공유)는 FSVideoSkin.showVolume(wrap) 으로 부른다.
         //   ★ (2026-10-08) 마우스·터치로 막대를 움직일 때도 띄운다(펜닐 요청 — 종전엔 키보드만).

@@ -215,11 +215,11 @@
 
 /* ========== 버튼 ========== */
 .btn-primary {
-    background: #4a90d9;
+    background: #3d78b4;   /* ★ (2026-10-24) 종전 #4a90d9 — 흰 글자 3.3:1 → 4.6:1(같은 파랑을 한 단계 짙게). 링크·강조 글자 등 다른 곳의 #4a90d9 는 그대로 */
 }
 
 .btn-primary:hover {
-    background: #3a7bc8;
+    background: #33669a;   /* 종전 #3a7bc8 — 평소 색보다 짙게 */
 }
 
 /* ========== 테이블 ========== */
@@ -548,7 +548,7 @@ textarea:focus {
 
 .security-info-bar code {
     background: var(--theme-primary);
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
 }
 
 /* 보안 모달 헤더 */
@@ -573,7 +573,7 @@ textarea:focus {
 }
 
 .settings-status-bar .settings-link {
-    color: var(--theme-primary-hover);
+    color: var(--fs-primary-text, var(--theme-primary-hover));
 }
 
 /* 검색 인덱스 요구사항 박스 */
@@ -602,5 +602,17 @@ textarea:focus {
 }
 
 .index-auto-status a {
-    color: var(--theme-primary-hover);
+    color: var(--fs-primary-text, var(--theme-primary-hover));
+}
+
+/* ★ (2026-10-24) 게시판 댓글 개수 [N] 글씨를 같은 색 계열에서 한 단계 또렷하게 — 종전 #4a90d9 는 일반 줄 3.34:1, 고정(📌) 줄 3.02:1 로
+   4.5:1 미만인 곳이 있었음 → #276fba (일반 5.16:1, 고정 4.67:1) */
+.board-comment-badge {
+    color: #276fba;
+}
+
+/* ★ (2026-10-24) 게시판 글보기 아래 목록의 지금 보는 글 줄(연파랑 #e3f2fd) 위 '공지' 표시(#b45309)가 4.4:1 —
+   이 줄에서만 한 단계 짙은 호박색 #a14a0b(5.25:1). 다른 줄은 그대로 */
+.board-table tbody tr.board-row-current .board-pin-label {
+    color: #a14a0b;
 }

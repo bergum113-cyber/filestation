@@ -1,199 +1,143 @@
 /* ========================================
-   Blue Full 테마 - 전체 블루 배경
+   Blue Full (블루 전체) — 기준색 #2563EB
+   ★ (2026-10-25) 펜닐 요청: 어두운 테마였던 것을 다른 전체 테마처럼 밝은 전체 방식으로 다시 만듦 —
+   일반 블루 테마 파일을 바탕으로(그동안 맞춘 대비 규칙 그대로) 파일 끝에 전체 테마 블록(사이드 22%·탐색기 4%)
+   ======================================== */
+/* ========================================
+   Blue 테마 - 전문적인 파란색
    성능: ⭐⭐⭐⭐⭐
    ======================================== */
 
 :root {
     /* 테마 변수 */
-    --theme-primary: #60a5fa;
-    --theme-primary-hover: #3b82f6;
-    --theme-bg: #1e3a5f;
+    --theme-primary: #2563eb;
+    --theme-primary-hover: #1d4ed8;
+    --theme-bg: #eff6ff;
     --theme-sidebar: #1e40af;
-    --theme-header: #1e40af;
-    --theme-content: #1e3a8a;
-    --theme-border: #3b82f6;
-    --theme-text: #e0f2fe;
-    --theme-text-muted: #93c5fd;
-    --theme-hover: #2563eb;
-    --theme-selected: #3b82f6;
+    --theme-header: #ffffff;
+    --theme-content: #ffffff;
+    --theme-border: #bfdbfe;
+    --theme-text: #1e3a5f;
+    --theme-text-muted: #64748b;
+    --theme-hover: #dbeafe;
+    --theme-selected: #bfdbfe;
     
     /* style.css 변수 재정의 */
     --sidebar-bg: #1e40af;
-    --sidebar-text: #e0f2fe;
-    --bg: #1e3a5f;
-    --border: #3b82f6;
-    --primary: #60a5fa;
-    --primary-dark: #3b82f6;
-    --dark: #e0f2fe;
-    --secondary: #93c5fd;
-    --light: #2563eb;
+    --sidebar-text: #ffffff;
+    --bg: #eff6ff;
+    --border: #bfdbfe;
+    --primary: #2563eb;
+    --primary-dark: #1d4ed8;
 }
 
-/* ========== 전역 텍스트 ========== */
-body {
-    color: var(--theme-text);
-}
-
-/* ========== 로그인 페이지 ========== */
+/* 로그인 페이지 */
 .login-page {
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
 }
 
 .login-box {
-    background: var(--theme-content);
-    box-shadow: 0 10px 40px rgba(0,0,0,0.5);
-    color: var(--theme-text);
+    background: #ffffff;
+    box-shadow: 0 10px 40px rgba(30, 64, 175, 0.3);
 }
 
-.login-box h1 {
-    color: var(--theme-text);
-}
-
-.login-box input {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.login-box input::placeholder {
-    color: var(--theme-text-muted);
-}
-
-.login-box label {
-    color: var(--theme-text);
-}
-
-/* ========== 헤더 ========== */
+/* 헤더 */
 .header {
     background: var(--theme-header);
-    border-bottom: 1px solid var(--theme-border);
-    color: var(--theme-text);
+    border-bottom: 2px solid var(--theme-primary);
 }
 
 .logo {
-    color: var(--theme-text);
+    color: var(--fs-primary-text, var(--theme-primary));
+    font-weight: 600;
 }
 
-#user-name {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 검색창 ========== */
+/* 검색창 */
 .search-box {
-    background: var(--theme-bg) !important;
-    border: 1px solid var(--theme-border) !important;
+    background: #eff6ff !important;
+    border: 1px solid var(--theme-border);
 }
 
 .search-box input {
-    background: transparent !important;
     color: var(--theme-text) !important;
+    background: transparent !important;
 }
 
 .search-box input::placeholder {
-    color: var(--theme-text-muted);
+    color: var(--theme-text-muted) !important;
 }
 
 .search-box button {
-    color: var(--theme-text-muted);
+    color: var(--theme-text-muted) !important;
 }
 
-/* ========== 사이드바 ========== */
+/* 사이드바 - 진한 파란색 배경 */
 .sidebar {
-    background: var(--theme-sidebar);
-    border-right: 1px solid var(--theme-border);
-    color: var(--theme-text);
+    background: #1e40af !important;
+    border-right: none;
+    color: #ffffff;
 }
 
 .sidebar h3 {
-    color: var(--theme-text-muted);
+    color: rgba(255,255,255,0.7) !important;
 }
 
 .sidebar-section h3.section-toggle {
-    color: var(--theme-text-muted);
+    color: rgba(255,255,255,0.7) !important;
 }
 
 .sidebar-section h3.section-toggle:hover {
-    color: #ffffff;
-    background: var(--theme-hover);
+    color: #ffffff !important;
+    background: rgba(255,255,255,0.1) !important;
 }
 
 .sidebar-section h3.section-toggle .toggle-icon {
-    background: var(--theme-border);
-    color: var(--theme-text-muted);
+    background: rgba(255,255,255,0.2) !important;
+    color: rgba(255,255,255,0.9) !important;
+}
+
+.sidebar-divider {
+    background: rgba(255,255,255,0.2) !important;
+}
+
+.sidebar-quota {
+    border-top-color: rgba(255,255,255,0.2) !important;
+}
+
+.quota-text {
+    color: rgba(255,255,255,0.8) !important;
 }
 
 .storage-item,
 .menu-list li a {
-    color: var(--theme-text);
+    color: rgba(255,255,255,0.9) !important;
 }
 
 .storage-item:hover,
 .menu-list li:hover {
-    background: var(--theme-hover);
+    background: rgba(255,255,255,0.1) !important;
 }
 
-.storage-item.active, .menu-list li.active > a {
-    background: var(--theme-selected);
-    color: #ffffff;
+/* ★ (2026-10-23) 게시판 메뉴 선택(a.board-sidebar-item.active)도 같은 선택 표시 — 공통 규칙의 연파랑 바탕에 테마의 흰 메뉴 글자가 겹쳐 안 보이던 것 */
+.storage-item.active, .menu-list li.active > a, .menu-list li > a.board-sidebar-item.active {
+    background: rgba(255,255,255,0.2) !important;
+    color: #ffffff !important;
+    font-weight: 500;
 }
 
-.sidebar-divider {
-    background: var(--theme-border);
-}
-
-.sidebar-quota {
-    border-top-color: var(--theme-border);
-}
-
-.quota-text {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 콘텐츠 영역 ========== */
+/* 콘텐츠 영역 */
 .content-area {
     background: var(--theme-bg);
 }
 
 .file-area {
     background: var(--theme-content);
+    border-radius: 8px;
+    margin: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
 }
 
-/* ========== 툴바 ========== */
-.toolbar {
-    background: var(--theme-content);
-    border-bottom: 1px solid var(--theme-border);
-}
-
-.toolbar .btn {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-.toolbar .btn:hover {
-    background: var(--theme-border);
-}
-
-/* ========== 브레드크럼 ========== */
-.breadcrumb {
-    background: var(--theme-content);
-    border-bottom: 1px solid var(--theme-border);
-    color: var(--theme-text);
-}
-
-.breadcrumb a {
-    color: var(--theme-primary);
-}
-
-.breadcrumb span {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 파일 목록 ========== */
-.file-list {
-    background: var(--theme-content);
-}
-
+/* 파일 아이템 */
 .file-item {
     color: var(--theme-text);
 }
@@ -204,10 +148,7 @@ body {
 
 .file-item.selected {
     background: var(--theme-selected);
-}
-
-.file-name {
-    color: var(--theme-text);
+    /* ★ (2026-10-23) 왼쪽 3px 막대(border-left) 제거 — full 테마들처럼 선택 표시를 바탕색 + 둘레 테두리로 통일 (펜닐 요청) */
 }
 
 .file-size,
@@ -215,202 +156,115 @@ body {
     color: var(--theme-text-muted);
 }
 
-/* 리스트 뷰 */
-.file-list.list-view .file-item {
-    background: transparent;
+/* 툴바 */
+.toolbar {
+    background: var(--theme-content);
     border-bottom: 1px solid var(--theme-border);
 }
 
-.file-list.list-view .file-item:hover {
-    background: var(--theme-hover);
-}
-
-.file-list.list-view .file-item.selected {
-    background: var(--theme-selected);
-}
-
-/* 그리드 뷰 */
-.file-list.grid-view .file-item {
-    background: var(--theme-hover);
+.toolbar .btn {
     border-color: var(--theme-border);
 }
 
-.file-list.grid-view .file-item:hover {
-    background: var(--theme-border);
-}
-
-.file-list.grid-view .file-item.selected {
-    background: var(--theme-selected);
-    border-color: var(--theme-primary);
-}
-
-/* ========== 모달 ========== */
-#modal-overlay {
-    background: rgba(0, 0, 0, 0.7);
-}
-
-.modal {
+/* 브레드크럼 */
+.breadcrumb {
     background: var(--theme-content);
-    box-shadow: 0 10px 50px rgba(0,0,0,0.5);
-    color: var(--theme-text);
+    border-bottom: 1px solid var(--theme-border);
+}
+
+.breadcrumb a {
+    color: var(--fs-primary-text, var(--theme-primary));
+}
+
+/* 모달 */
+.modal {
+    background: #ffffff;
+    box-shadow: 0 10px 50px rgba(30, 64, 175, 0.2);
 }
 
 .modal-header {
-    background: var(--theme-sidebar);
-    border-bottom: 1px solid var(--theme-border);
-    color: var(--theme-text);
+    background: var(--theme-primary);
+    color: var(--fs-on-primary, #ffffff);
+    border-bottom: none;
 }
 
 .modal-header h2 {
-    color: var(--theme-text);
+    color: var(--fs-on-primary, #ffffff);
 }
 
-.modal-close {
-    color: var(--theme-text-muted);
+.modal-header .modal-close {
+    color: var(--fs-on-primary, #ffffff);
 }
 
-.modal-close:hover {
-    color: var(--theme-text);
+.modal-header .modal-close:hover {
+    background: rgba(255,255,255,0.2);
 }
 
-.modal-body {
-    color: var(--theme-text);
-}
-
-.modal-footer {
-    background: var(--theme-sidebar);
-    border-top: 1px solid var(--theme-border);
-}
-
-/* ========== 폼 요소 ========== */
-.modal-body input,
-.modal-body select,
-.modal-body textarea {
-    background: var(--theme-bg) !important;
-    border-color: var(--theme-border) !important;
-    color: var(--theme-text) !important;
-}
-
-/* select 요소 강화 */
-select,
-.modal select,
-.modal-body select,
-#storage-type,
-#bulk-quota-target,
-#bulk-quota-unit,
-#bulk-delete-scope,
-#bulk-delete-type {
-    background: var(--theme-bg) !important;
-    border-color: var(--theme-border) !important;
-    color: var(--theme-text) !important;
-}
-
-.modal-body input::placeholder,
-.modal-body textarea::placeholder {
-    color: var(--theme-text-muted);
-}
-
-.modal-body label {
-    color: var(--theme-text);
-}
-
-.form-group label {
-    color: var(--theme-text);
-}
-
-.form-group input,
-.form-group select,
-.form-group textarea {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-/* ========== 테이블 ========== */
-.modal-body table {
-    color: var(--theme-text);
-}
-
-.modal-body table th {
-    background: var(--theme-sidebar);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.modal-body table td {
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.modal-body table tr:hover {
-    background: var(--theme-hover);
-}
-
-.data-table {
-    background: var(--theme-content);
-}
-
-.data-table th {
-    background: var(--theme-sidebar);
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-.data-table td {
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-.data-table tr:hover {
-    background: var(--theme-hover);
-}
-
-.info-table th {
-    background: var(--theme-sidebar);
-    color: var(--theme-text-muted);
-}
-
-.info-table td {
-    color: var(--theme-text);
-}
-
-/* ========== 버튼 ========== */
-.btn {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-.btn:hover {
-    background: var(--theme-border);
-}
-
+/* 버튼 */
 .btn-primary {
     background: var(--theme-primary);
-    color: #ffffff;
-    border-color: var(--theme-primary);
 }
 
 .btn-primary:hover {
     background: var(--theme-primary-hover);
 }
 
-.btn-secondary {
+/* 테이블 헤더 */
+.modal-body table th,
+.info-table th {
     background: var(--theme-hover);
-    color: var(--theme-text);
-    border-color: var(--theme-border);
+    color: var(--fs-primary-text, var(--theme-primary));
 }
 
-.btn-danger {
-    background: #dc3545;
-    color: #ffffff;
+.modal-body table tr:hover {
+    background: var(--theme-hover);
 }
 
-/* ========== 컨텍스트 메뉴 ========== */
+/* 입력 필드 */
+/* ★ (2026-10-24) 동영상·음악 플레이어 안쪽(.fsvs-root·.fap)은 빼고(:where — 선택자 우선순위는 종전과 같게) — 볼륨 막대·재생목록 검색칸을 누르면 테마 색 테두리 빛이 생겨
+   기본 테마와 달랐음(펜닐 제보: 플레이어 안쪽은 테마 영향 없이 기본 테마와 같게) */
+input:not(:where(.fsvs-root *, .fap *)):focus,
+select:not(:where(.fsvs-root *, .fap *)):focus,
+textarea:not(:where(.fsvs-root *, .fap *)):focus {
+    border-color: var(--theme-primary);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* 설정 탭 */
+.settings-tab.active {
+    color: var(--fs-primary-text, var(--theme-primary));
+    border-bottom-color: var(--theme-primary);
+}
+
+/* 배지/태그 */
+.search-storage {
+    background: var(--theme-hover);
+    color: var(--fs-primary-text, var(--theme-primary));
+}
+
+/* 승인 알림 */
+.pending-notification {
+    background: var(--theme-primary);
+}
+
+/* 진행 바 */
+.progress-fill {
+    background: linear-gradient(90deg, #1e40af, #3b82f6);
+}
+
+/* 용량 바 */
+.quota-bar {
+    background: rgba(255,255,255,0.3);
+}
+
+.quota-fill {
+    background: #60a5fa;
+}
+
+/* 컨텍스트 메뉴 */
 .context-menu {
-    background: var(--theme-content);
-    border-color: var(--theme-border);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    background: #ffffff;
+    border: 1px solid var(--theme-border);
 }
 
 .context-menu li {
@@ -421,823 +275,27 @@ select,
     background: var(--theme-hover);
 }
 
-/* ========== 토스트 ========== */
-.toast {
-    background: var(--theme-sidebar);
-    color: var(--theme-text);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-}
-
-/* ========== 설정 탭 ========== */
-.settings-tabs {
-    background: var(--theme-sidebar);
-    border-bottom-color: var(--theme-border);
-}
-
-.settings-tab {
-    color: var(--theme-text-muted);
-}
-
-.settings-tab:hover {
-    color: var(--theme-text);
-    background: var(--theme-hover);
-}
-
-.settings-tab.active {
-    color: var(--theme-primary);
-    border-bottom-color: var(--theme-primary);
-}
-
-/* ========== 설정 상태 바 ========== */
-.settings-status-bar {
-    background: var(--theme-sidebar);
-    border-color: var(--theme-border);
-}
-
-.settings-status-bar .status-on {
-    background: rgba(46, 125, 50, 0.3);
-    color: #81c784;
-}
-
-.settings-status-bar .status-off {
-    background: rgba(198, 40, 40, 0.3);
-    color: #ef9a9a;
-}
-
-/* ========== 공유 카드 ========== */
-.share-card {
-    background: var(--theme-content);
-    border-color: var(--theme-border);
-}
-
-.share-card-header {
-    background: var(--theme-sidebar);
-    border-bottom-color: var(--theme-border);
-}
-
-.share-file-name {
-    color: var(--theme-text);
-}
-
-.share-file-path {
-    color: var(--theme-text-muted);
-}
-
-.share-card-body {
-    background: var(--theme-content);
-}
-
-.share-url-input {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.share-meta {
-    color: var(--theme-text-muted);
-}
-
-.share-meta span {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 활동 로그 필터 ========== */
-.activity-filters {
-    background: var(--theme-sidebar);
-    border-color: var(--theme-border);
-}
-
-.activity-filters .filter-group label {
-    color: var(--theme-text);
-}
-
-.activity-filters .filter-group input,
-.activity-filters .filter-group select {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.activity-filters .filter-search input {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.activity-filters .filter-search input::placeholder {
-    color: var(--theme-text-muted);
-}
-
-.activity-stats {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-}
-
-.activity-pagination .page-info {
-    color: var(--theme-text-muted);
-}
-
-/* 활동 로그 테이블 */
-#activity-table {
-    background: var(--theme-content);
-}
-
-#activity-table th {
-    background: var(--theme-sidebar);
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-#activity-table td {
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-#activity-table tr:hover {
-    background: var(--theme-hover);
-}
-
-/* ========== 로그인 기록 테이블 ========== */
-#login-logs-table {
-    background: var(--theme-content);
-}
-
-#login-logs-table th {
-    background: var(--theme-sidebar);
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-#login-logs-table td {
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-#login-logs-table tr:hover {
-    background: var(--theme-hover);
-}
-
-/* ========== 사용자 테이블 ========== */
-#users-table {
-    background: var(--theme-content);
-}
-
-#users-table th {
-    background: var(--theme-sidebar);
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-#users-table td {
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-#users-table tr:hover {
-    background: var(--theme-hover);
-}
-
-/* ========== 스크롤바 ========== */
-::-webkit-scrollbar-track {
-    background: var(--theme-bg);
-}
-
+/* 스크롤바 */
 ::-webkit-scrollbar-thumb {
-    background: var(--theme-border);
+    background: #60a5fa;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #4a4a6a;
+    background: #3b82f6;
 }
 
-/* ========== 빈 폴더 메시지 ========== */
-.empty-folder,
-.empty-msg {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 체크박스 ========== */
+/* 체크박스 */
 .item-checkbox {
     accent-color: var(--theme-primary);
 }
 
-/* ========== 알림 박스 ========== */
-.info-box {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-/* ========== 용량 바 ========== */
-.quota-bar {
-    background: var(--theme-border);
-}
-
-/* ========== 상태 배지 ========== */
-.status-badge {
-    color: #ffffff;
-}
-
-.badge-success {
-    background: #2e7d32;
-}
-
-.badge-danger {
-    background: #c62828;
-}
-
-.badge-warning {
-    background: #f57c00;
-    color: #ffffff;
-}
-
-/* ========== 폴더 트리 ========== */
-.folder-tree-item {
-    color: var(--theme-text);
-}
-
-.folder-tree-item:hover {
-    background: var(--theme-hover);
-}
-
-.folder-tree-item.selected {
-    background: var(--theme-selected);
-}
-
-/* ========== 인덱스 상태 ========== */
-.index-auto-status #index-auto-on {
-    background: rgba(46, 125, 50, 0.3);
-    color: #81c784;
-    border-color: rgba(46, 125, 50, 0.5);
-}
-
-.index-auto-status #index-auto-off {
-    background: rgba(245, 124, 0, 0.3);
-    color: #ffb74d;
-    border-color: rgba(245, 124, 0, 0.5);
-}
-
-/* ========== SQLite 경고 ========== */
-.sqlite-warning {
-    background: rgba(255, 193, 7, 0.2);
-    border-color: rgba(255, 193, 7, 0.5);
-    color: #ffcc80;
-}
-
-/* ========== 설정 설명 ========== */
-.setting-desc {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 현재 경로 표시 ========== */
-.current-path {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 설정 항목 ========== */
-.setting-item {
-    background: var(--theme-hover);
+/* 설정 상태 바 */
+.settings-status-bar {
+    background: #eff6ff;
     border-color: var(--theme-border);
 }
 
-.setting-item label {
-    color: var(--theme-text);
-}
-
-.setting-label {
-    color: var(--theme-text);
-}
-
-/* ========== 보안 설정 섹션 ========== */
-.security-section {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-}
-
-.security-section h4 {
-    color: var(--theme-text);
-}
-
-.security-section textarea,
-.security-section input {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-/* ========== 역할 관리 ========== */
-.role-item {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.role-item.role-default {
-    background: var(--theme-selected);
-}
-
-/* ========== QoS ========== */
-.qos-item {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.qos-tabs {
-    border-bottom-color: var(--theme-border);
-}
-
-.qos-tab-btn {
-    color: var(--theme-text-muted);
-}
-
-.qos-tab-btn:hover {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-}
-
-.qos-tab-btn.active {
-    color: var(--theme-primary);
-    border-bottom-color: var(--theme-primary);
-}
-
-.qos-user-search input {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-/* ========== 부관리자 권한 섹션 ========== */
-.sub-admin-section {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-}
-
-.sub-admin-section h4 {
-    color: var(--theme-text);
-}
-
-.admin-menu-checks label {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.admin-menu-checks label:hover {
-    background: var(--theme-border);
-}
-
-/* ========== 탭 버튼 ========== */
-.tab-btn {
-    color: var(--theme-text-muted);
-    background: transparent;
-}
-
-.tab-btn:hover {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-}
-
-.tab-btn.active {
-    background: var(--theme-selected);
-    color: #ffffff;
-}
-
-/* ========== 스토리지 카드 ========== */
-.storage-card {
-    background: var(--theme-content);
-    border-color: var(--theme-border);
-}
-
-.storage-card-header {
-    background: var(--theme-sidebar);
-    border-bottom-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.storage-info {
-    color: var(--theme-text);
-}
-
-.storage-meta {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 정보 카드 ========== */
-.info-card {
-    background: var(--theme-content);
-    border-color: var(--theme-border);
-}
-
-.info-card h4 {
-    color: var(--theme-text);
-    border-bottom-color: var(--theme-border);
-}
-
-.info-row {
-    color: var(--theme-text);
-    border-bottom-color: var(--theme-border);
-}
-
-.info-row .label {
-    color: var(--theme-text-muted);
-}
-
-.info-row .value {
-    color: var(--theme-text);
-}
-
-/* ========== 권한 설정 ========== */
-.perm-section {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-}
-
-.perm-user-item {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.perm-storage-name {
-    background: var(--theme-sidebar);
-    color: var(--theme-text);
-}
-
-/* ========== 드롭다운 ========== */
-.dropdown-menu {
-    background: var(--theme-content);
-    border-color: var(--theme-border);
-    box-shadow: 0 10px 40px rgba(0,0,0,0.4);
-}
-
-.dropdown-item {
-    color: var(--theme-text);
-}
-
-.dropdown-item:hover {
-    background: var(--theme-hover);
-}
-
-/* ========== 알림 ========== */
-.alert {
-    border-color: var(--theme-border);
-}
-
-.alert-info {
-    background: rgba(108, 158, 255, 0.2);
-    border-color: rgba(108, 158, 255, 0.5);
-    color: #90caf9;
-}
-
-.alert-warning {
-    background: rgba(255, 193, 7, 0.2);
-    border-color: rgba(255, 193, 7, 0.5);
-    color: #ffcc80;
-}
-
-.alert-danger {
-    background: rgba(220, 53, 69, 0.2);
-    border-color: rgba(220, 53, 69, 0.5);
-    color: #ef9a9a;
-}
-
-/* ========== 검색 결과 ========== */
-.search-results {
-    background: var(--theme-content);
-    border-color: var(--theme-border);
-}
-
-.search-result-item {
-    border-bottom-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.search-result-item:hover {
-    background: var(--theme-hover);
-}
-
-.search-storage {
-    background: var(--theme-selected);
-    color: #ffffff;
-}
-
-.search-path {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 조건부 삭제 ========== */
-.condition-item {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-}
-
-.condition-item label {
-    color: var(--theme-text);
-}
-
-/* ========== 미리보기 모달 ========== */
-.preview-info {
-    background: var(--theme-sidebar);
-    border-top-color: var(--theme-border);
-    color: var(--theme-text-muted);
-}
-
-/* ========== 빈 상태 ========== */
-.empty-state,
-.no-data {
-    color: var(--theme-text-muted);
-}
-
-/* ========== select 옵션 ========== */
-.modal-body select option,
-select option {
-    background: var(--theme-bg) !important;
-    color: var(--theme-text) !important;
-}
-
-/* ========== 테마 선택 UI ========== */
-.theme-item {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-}
-
-.theme-item:hover {
-    border-color: var(--theme-primary);
-}
-
-.theme-item.active {
-    border-color: var(--theme-primary);
-    background: var(--theme-selected);
-}
-
-.theme-item span {
-    color: var(--theme-text);
-}
-
-/* ========== 휴지통 ========== */
-.trash-toolbar {
-    background: var(--theme-sidebar);
-    border-color: var(--theme-border);
-}
-
-.trash-info {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 공유 URL 박스 ========== */
-.share-url-box {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-}
-
-.share-url-box input {
-    background: transparent;
-    color: var(--theme-text);
-}
-
-/* ========== 국가 코드 목록 ========== */
-#country-codes-list {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-}
-
-.country-group strong {
-    color: var(--theme-primary);
-}
-
-.country-group span {
-    color: var(--theme-text);
-}
-
-/* ========== 이미지 업로드 ========== */
-.image-preview {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-}
-
-.image-preview .no-image {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 진행 바 ========== */
-.progress-fill {
-    background: linear-gradient(90deg, var(--theme-primary), var(--theme-primary-hover));
-}
-
-/* ========== 승인 알림 ========== */
-.pending-notification {
-    background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
-}
-
-/* ========== 드래그 앤 드롭 ========== */
-.file-area.dragover {
-    background: rgba(108, 158, 255, 0.1);
-    border: 2px dashed var(--theme-primary);
-}
-
-/* ========== 모달 내부 h3 ========== */
-.modal-body h3 {
-    color: var(--theme-primary);
-    border-bottom-color: var(--theme-border);
-}
-
-/* ========== 링크 ========== */
-a {
-    color: var(--theme-primary);
-}
-
-a:hover {
-    color: var(--theme-primary-hover);
-}
-
-/* ========== 기타 텍스트 요소 ========== */
-.copyright-login {
-    color: var(--theme-text-muted);
-}
-
-.error-msg {
-    color: #ef5350;
-}
-
-/* ========== 파일 뷰어 버튼 ========== */
-.btn-icon {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-    border-color: var(--theme-border);
-}
-
-.btn-icon:hover {
-    background: var(--theme-border);
-}
-
-.btn-icon.active {
-    background: var(--theme-selected);
-    color: #ffffff;
-}
-
-/* ========== 스토리지 권한 설정 ========== */
-.permission-section {
-    border-top-color: var(--theme-border);
-}
-
-.permission-section h4 {
-    color: var(--theme-text);
-}
-
-.permission-bulk {
-    background: var(--theme-hover);
-    border: 1px solid var(--theme-border);
-}
-
-.permission-bulk span {
-    color: var(--theme-text);
-}
-
-.permission-bulk label {
-    color: var(--theme-text);
-}
-
-.permission-list {
-    background: var(--theme-content);
-    border-color: var(--theme-border);
-}
-
-.permission-row {
-    background: var(--theme-content);
-    border-bottom-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.permission-row:hover {
-    background: var(--theme-hover);
-}
-
-.perm-user {
-    color: var(--theme-text);
-}
-
-.perm-checks label {
-    color: var(--theme-text);
-}
-
-/* ========== 권한 아이템 ========== */
-.perm-item {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-}
-
-/* ========== WebDAV 연결 ========== */
-.webdav-url {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-}
-
-.webdav-help {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-}
-
-.webdav-help p,
-.webdav-help ol,
-.webdav-help li {
-    color: var(--theme-text-muted);
-}
-
-/* ========== 페이지네이션 ========== */
-.pagination .page-info {
-    color: var(--theme-text-muted);
-}
-
-.pagination .page-link {
-    background: var(--theme-content);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.pagination .page-link:hover {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-}
-
-.pagination .page-current {
-    background: var(--theme-primary);
-    border-color: var(--theme-primary);
-}
-
-/* ========== QoS 속도 제한 ========== */
-.qos-item {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-}
-
-.qos-item-name {
-    color: var(--theme-text);
-}
-
-.qos-username {
-    color: var(--theme-text-muted);
-}
-
-.qos-item-settings label {
-    color: var(--theme-text);
-}
-
-.qos-item-settings input {
-    background: var(--theme-bg);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.qos-unit {
-    color: var(--theme-text-muted);
-}
-
-.qos-empty {
-    color: var(--theme-text-muted);
-}
-
-.qos-tabs {
-    border-bottom-color: var(--theme-border);
-}
-
-.qos-tab-btn {
-    color: var(--theme-text-muted);
-    background: transparent;
-}
-
-.qos-tab-btn:hover {
-    background: var(--theme-hover);
-    color: var(--theme-text);
-}
-
-.qos-tab-btn.active {
-    color: var(--theme-primary);
-    border-bottom-color: var(--theme-primary);
-    background: transparent;
-}
-
-/* ========== 세션 관리 ========== */
-.session-item {
-    background: var(--theme-hover);
-    border-color: var(--theme-border);
-    color: var(--theme-text);
-}
-
-.session-item.current {
-    background: var(--theme-selected);
-    border-color: var(--theme-primary);
-}
-
-.session-device {
-    color: var(--theme-text);
-}
-
-.session-details {
-    color: var(--theme-text-muted);
-}
-
-/* ========== IP/국가 차단 설정 ========== */
+/* ========== 보안 설정 스타일 ========== */
 .security-mode-section {
     background: var(--theme-content);
     border-color: var(--theme-border);
@@ -1278,7 +336,6 @@ a:hover {
     color: var(--theme-text) !important;
 }
 
-/* IP 차단 설정 textarea (disabled 포함) */
 #security-blocked-ips,
 #security-allowed-ips,
 #security-blocked-countries,
@@ -1307,31 +364,10 @@ a:hover {
 
 .security-admin-section textarea {
     background: var(--theme-bg);
-    border-color: #ef9a9a;
+    border-color: #3b82f6;
     color: var(--theme-text);
 }
 
-/* ========== 데이터 테이블 (일반) ========== */
-.data-table {
-    background: var(--theme-content);
-}
-
-.data-table th {
-    background: var(--theme-sidebar);
-    color: var(--theme-text);
-    border-bottom-color: var(--theme-border);
-}
-
-.data-table td {
-    color: var(--theme-text);
-    border-bottom-color: var(--theme-border);
-}
-
-.data-table tr:hover {
-    background: var(--theme-hover);
-}
-
-/* ========== 보안 섹션 (일반) ========== */
 .security-section {
     border-bottom-color: var(--theme-border);
 }
@@ -1347,54 +383,6 @@ a:hover {
     color: var(--theme-text);
 }
 
-/* ========== 상태 배지 ========== */
-.badge-success,
-.badge-active {
-    background: #2e7d32;
-    color: #ffffff;
-}
-
-.status-badge.active {
-    background: #2e7d32;
-    color: #ffffff;
-}
-
-/* 사용자 관리 상태 배지 */
-.status-active {
-    background: #2e7d32;
-    color: #ffffff;
-}
-
-.status-inactive {
-    background: #455a64;
-    color: #b0bec5;
-}
-
-.status-suspended {
-    background: #c62828;
-    color: #ffffff;
-}
-
-.status-pending {
-    background: #f57c00;
-    color: #ffffff;
-}
-
-/* ========== 로그인 실패 행 ========== */
-.login-logs-table tr.fail {
-    background: rgba(198, 40, 40, 0.3);
-    color: #ef9a9a;
-}
-
-.login-logs-table tr.fail td {
-    color: #ef9a9a;
-}
-
-.login-logs-table tr.fail:hover {
-    background: rgba(198, 40, 40, 0.4);
-}
-
-/* ========== 차단 기능 활성화 섹션 ========== */
 .security-toggle-section {
     background: var(--theme-hover);
     border: 1px solid var(--theme-border);
@@ -1410,7 +398,6 @@ a:hover {
 }
 
 
-/* ========== 현재 접속 정보 바 ========== */
 .security-info-bar {
     background: var(--theme-hover);
     border-color: var(--theme-border);
@@ -1419,7 +406,7 @@ a:hover {
 
 .security-info-bar code {
     background: var(--theme-primary);
-    color: #ffffff;
+    color: var(--fs-on-primary, #ffffff);
 }
 
 /* 보안 모달 헤더 */
@@ -1444,7 +431,7 @@ a:hover {
 }
 
 .settings-status-bar .settings-link {
-    color: var(--theme-primary-hover);
+    color: var(--fs-primary-text, var(--theme-primary-hover));
 }
 
 /* 검색 인덱스 요구사항 박스 */
@@ -1473,23 +460,7 @@ a:hover {
 }
 
 .index-auto-status a {
-    color: var(--theme-primary-hover);
-}
-
-.setting-notice {
-    background: rgba(255, 193, 7, 0.1);
-    border-color: rgba(255, 193, 7, 0.3);
-}
-
-.setting-notice p,
-.setting-notice ul,
-.setting-notice ol,
-.setting-notice li {
-    color: var(--theme-text);
-}
-
-.setting-notice a {
-    color: #60a5fa;
+    color: var(--fs-primary-text, var(--theme-primary-hover));
 }
 
 /* ========== 게시판 테마 적용 ========== */
@@ -1500,7 +471,7 @@ a:hover {
 .board-table tbody tr:hover { background: var(--theme-hover); }
 .board-table tbody tr.board-row-current { background: var(--theme-selected); }
 .board-col-num, .board-col-author, .board-col-date, .board-col-views { color: var(--theme-text-muted); }
-.board-comment-badge { color: var(--theme-primary); }
+.board-comment-badge { color: var(--fs-primary-text, var(--theme-primary)); }
 .board-detail-header { border-color: var(--theme-border); }
 .board-detail-header h2 { color: var(--theme-text); }
 .board-detail-meta { color: var(--theme-text-muted); }
@@ -1513,8 +484,286 @@ a:hover {
 .cmt-header { color: var(--theme-text); }
 .cmt-item { border-color: var(--theme-border); }
 .board-pg-num { color: var(--theme-text); }
-.board-pg-num:hover { background: var(--theme-hover); color: var(--theme-primary); }
-.board-pg-current { background: var(--theme-primary); color: #fff !important; }
+.board-pg-num:hover { background: var(--theme-hover); color: var(--fs-primary-text, var(--theme-primary)); }
+.board-pg-current { background: var(--theme-primary); color: var(--fs-on-primary, #fff) !important; }
 .board-pg-nav { color: var(--theme-text-muted); }
-.board-pg-nav:hover { background: var(--theme-hover); color: var(--theme-primary); }
+.board-pg-nav:hover { background: var(--theme-hover); color: var(--fs-primary-text, var(--theme-primary)); }
 .board-pg-disabled { color: var(--theme-border) !important; }
+
+
+/* ===== ★ (2026-10-23) 버튼·강조색 대비 =====
+   흰 글자 대비 3:1 미만인 연한 강조색 위에는 같은 계열의 짙은 글자(--fs-on-primary), 강조색을 글자로 쓰는 곳은
+   흰 바탕 대비 4.5:1 이 되도록 짙게(--fs-primary-text). style.css·app.js·이 파일의 해당 곳이 var(--fs-…, 원래값) 으로 바뀌어 있음. */
+
+/* 아래쪽 '취소' 버튼(class="btn modal-close")까지 머리줄 × 의 흰 글자를 받아 흰 바탕에 안 보이던 것 — 버튼 기본 글자색으로 */
+.btn.modal-close { color: var(--dark); }
+
+/* ===== ★ (2026-10-23) 강조색 머리줄 안 보조 글자 =====
+   모달 머리줄이 강조색 바탕이라 그 안의 회색 보조 글자(미리보기 '1 / 6' 등, var(--fs-text-3))가 1.4:1 로 흐렸다 →
+   머리줄 안에서만 역할 변수를 머리줄 글자색 계열로 (CSS 변수는 상속되므로 이 범위에만 적용) */
+.modal-header {
+    --fs-text-2: var(--fs-on-primary, rgba(255, 255, 255, 0.92));
+    --fs-text-3: var(--fs-on-primary, rgba(255, 255, 255, 0.85));
+}
+
+/* ===== ★ (2026-10-23) 툴바 버튼 테마 연동 =====
+   ①'작업'·'새 폴더'·'동기화' 같은 일반 툴바 버튼이 흰 바탕과 같은 색이라 버튼 경계가 안 보였다 → 테마의 옅은 색 바탕(--theme-hover),
+   (full 테마들과 같은 방식). 강조(업로드)·위험(삭제) 버튼은 그대로.
+   ②선택된 보기 버튼(그리드/목록)이 회색(검정 10%)이었다 → 테마 선택색(--theme-selected)·테마 글자색 */
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)) {
+    background: var(--theme-hover);
+    color: var(--theme-text);
+}
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover {
+    background: var(--theme-selected);
+}
+.toolbar-right .btn-icon.active {
+    background: var(--theme-selected);
+    border-color: var(--theme-selected);
+    color: var(--theme-text);
+}
+
+/* ③ 모바일에서 파일 영역 둘레 여백 10px 때문에 툴바가 10~16px 넘쳐 맨 오른쪽 '목록 보기' 버튼이 잘렸다(오늘 이전부터) →
+   모바일만 기본·mint·rose 테마처럼 여백·둥근 모서리·그림자 없이 화면 폭 가득 (PC 는 그대로) */
+@media (max-width: 1024px) {
+    body.is-mobile .file-area {
+        margin: 0;
+        border-radius: 0;
+        box-shadow: none;
+    }
+}
+
+/* ===== ★ (2026-10-23) 머리줄·선택 표시 테마 연동 =====
+   ①머리줄이 흰색(--theme-header #ffffff)이라 사이드바만 테마색이었다 → 머리줄도 사이드바와 같은 색(#1e40af).
+     모바일 머리줄은 style.css 'body.is-mobile .header'(바탕 --bg)가 이겨서 같은 강도로 함께 지정.
+   ②그리드 선택 바탕이 style.css 의 기본 연파랑(#bbdefb)으로 덮여 테마 선택색이 안 나왔다 → 테마 선택색. 둘레 테두리(강조색 2px)는 style.css 그대로 */
+.header,
+body.is-mobile .header {
+    background: #1e40af;
+}
+.file-list.grid-view .file-item.selected {
+    background: var(--theme-selected);
+}
+/* blue 는 사이드바가 짙은 파랑이라 머리줄 안 글자·아이콘·검색칸을 흰 계열로 — 머리줄 범위에서만 역할 변수를 어두운 바탕용으로
+   (로고·사용자 이름은 --fs-primary-text, 시계·버전·안내 글자는 --fs-text*, 시계 카드 모양은 --fs-surface* 를 씀) */
+.header {
+    color: #ffffff;
+    --fs-text: #ffffff;
+    --fs-text-2: rgba(255, 255, 255, 0.92);
+    --fs-text-3: rgba(255, 255, 255, 0.78);
+    --fs-text-4: rgba(255, 255, 255, 0.6);
+    --fs-surface: rgba(255, 255, 255, 0.12);
+    --fs-surface-2: rgba(255, 255, 255, 0.16);
+    --fs-surface-3: rgba(255, 255, 255, 0.24);
+    --fs-border: rgba(255, 255, 255, 0.25);
+    --fs-border-2: rgba(255, 255, 255, 0.35);
+    --fs-primary-text: #ffffff;
+    --secondary: rgba(255, 255, 255, 0.78);
+}
+.header-right .btn-icon,
+.mobile-menu-btn,
+.mobile-search-btn { color: rgba(255, 255, 255, 0.88); }
+.header-right .btn-icon:hover { color: #ffffff; background: rgba(255, 255, 255, 0.14); }
+.header .search-box {
+    background: rgba(255, 255, 255, 0.14) !important;
+    border-color: rgba(255, 255, 255, 0.3) !important;
+}
+.header .search-box input { color: #ffffff !important; }
+.header .search-box input::placeholder { color: rgba(255, 255, 255, 0.7) !important; }
+.header .search-box button { color: rgba(255, 255, 255, 0.8) !important; }
+#user-name {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.25);
+}
+
+/* ===== ★ (2026-10-24) 탐색기 둘레 여백 PC 도 없앰 =====
+   일반 테마 6종(blue·lavender·pastel-blue·peach·pink·sky)만 맨 위 .file-area 규칙의 여백 10px·둥근 모서리·그림자로 탐색기가 떠 있는 카드처럼
+   사이드바·머리줄에서 10px 떨어져(틈으로 뒤 바탕색이 보임) 기본·다크·민트·로즈·full 테마 12종(붙어 있음)과 모양이 달랐다 → 다른 테마처럼 붙게.
+   모바일은 위 ③ 블록에서 이미 같은 값. 원래 규칙은 그대로 두고 여기서 덮음 */
+.file-area {
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+/* ===== ★ (2026-10-24) 탐색기 바탕 흰색 =====
+   파일 목록 바탕이 style.css '.file-list { background: var(--bg) }' — 이 테마의 --bg 는 옅은 테마색이라 파일 칸(흰색) 둘레만 테마색이 들어가
+   어색했다(기본 테마는 테마 파일에서 흰색으로 덮음). 일반 테마는 머리줄·사이드만 테마색인 설계라 탐색기는 기본 테마처럼 흰색 */
+.file-list {
+    background: #ffffff;
+}
+
+/* ===== ★ (2026-10-24) 사이드바 안내 글자 대비 =====
+   '개인·공용·외부' 구분 글자와 '내 공유 링크 (28)' 개수가 파랑(--fs-fg-info 기본값 #3498db·#3b82f6)이라 이 테마 사이드바 위 2.2~2.8:1 로 흐렸다 →
+   사이드바 안에서만 안내 글자 변수를 이 테마 계열의 밝은 색(#bfdbfe, 사이드바 위 4.5:1 이상) */
+.sidebar {
+    --fs-fg-info: #bfdbfe;
+}
+
+/* ===== ★ (2026-10-24) 검색 결과 줄 테마 색 =====
+   기본 연파랑 그라디언트 그대로였다 → 이 테마의 옅은 색(#eff6ff)에서 #dbeafe, 선 #93c5fd, 검색어 이 테마의 짙은 색(#1d4ed8), 결과 수 글자 #525252 — 모두 4.5:1 이상 */
+:root {
+    --fs-search-from: #eff6ff;
+    --fs-search-to: #dbeafe;
+    --fs-search-line: #93c5fd;
+    --fs-search-query: #1d4ed8;
+    --fs-search-count: #525252;
+}
+
+/* ===== ★ (2026-10-24) 안내·선택 표시 색을 테마 계열로 =====
+   '1개 선택' 표시, 설정 창 선택 탭, 세션 관리 현재 기기, 안내 상자(검색 인덱스·일괄 삭제·스토리지 권한·Docker 안내), 보안 GeoIP 항목,
+   파일 마우스 올림, 아이콘 관리 라벨 위치 버튼, 시스템 정보 버전 배지, SSO 설정 탭 등이 공통 안내 변수(--fs-tint-info 등)를 쓰는데
+   이 테마는 값을 정의하지 않아 기본 테마의 파랑(#e3f2fd·#1976d2·#90caf9·#2196f3)이 그대로였다 → 테마 계열 색
+   (연한 바탕 #e5effe, 테두리 #93c5fd, 안내 글자 #1d4ed8 — 연한 바탕·흰 바탕 위 4.5:1 이상) */
+:root {
+    --fs-tint-info: #e5effe;   /* 회색 보조 글자(#888)가 이 바탕 위 3:1 이상 되게 한 단계 옅게 */
+    --fs-tint-info-border: #93c5fd;
+    --fs-fg-info: #1d4ed8;
+    --fs-badge-info-bg: var(--theme-primary);
+    --fs-badge-info-fg: var(--fs-on-primary, #ffffff);
+    --fs-tab-on-bg: var(--theme-primary);
+    --fs-tab-on-fg: var(--fs-on-primary, #ffffff);
+}
+
+/* ===== ★ (2026-10-24) 포인트 색(강조색) 통일 =====
+   그누보드·라이믹스 스킨들처럼 포인트 색 하나로 — 체크박스·라디오, 파일을 폴더 위로 끌 때 점선, 목록 창 현재 페이지, 불러오는 중 표시,
+   입력칸 누름 테두리(공유 주소·보안 설정·사용자 공유 권한), 보안 안내 코드 배지가 기본 파랑이었고, 공지 팝업 머리줄·대기 알림·리소스 모니터는
+   고정 보라 그라디언트(#667eea→#764ba2)였다 → 강조색(--fs-accent),
+   그라디언트는 이 테마 계열 짙은 두 색(#2563eb→#1d4ed8, 흰 글자 4.5:1 이상) */
+:root {
+    --fs-accent: var(--theme-primary);
+    --fs-grad-a: #2563eb;
+    --fs-grad-b: #1d4ed8;
+}
+
+/* ===== ★ (2026-10-24) 일반 버튼 테마색 =====
+   모달·게시판 등 툴바 밖의 일반 버튼('취소'·'← 목록으로'·'첨부' 등)이 기본 테마와 같은 연회색(#f8f9fa — 흰 바탕과 대비 1.05, 경계가 거의 안 보임)이었다 →
+   테마 연한 색 바탕 + 테마 테두리, 올리면 테두리 색 바탕(강조·위험·경고 버튼과 툴바 버튼은 각자 규칙 그대로 — :where 로 강도를 낮춰 그 규칙들이 이김) */
+.btn:where(:not(.btn-primary, .btn-danger, .btn-warning)) {
+    background: var(--fs-tint-info);
+    border-color: var(--fs-tint-info-border);
+    color: var(--theme-text);
+}
+.btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover {
+    background: var(--fs-tint-info-border);
+}
+/* 승인 대기 알림(오른쪽 아래)도 같은 그라디언트 — 이 파일 앞쪽 규칙이 연한 강조색 단색(흰 글자 1.5~2.5:1)이거나 다른 테마에서 옮겨 온 파랑 그라디언트였다 */
+.pending-notification {
+    background: linear-gradient(135deg, var(--fs-grad-a) 0%, var(--fs-grad-b) 100%);
+}
+
+/* ★ (2026-10-24) 게시판 표 머리줄 글씨(번호/제목/작성자…)를 한 단계 또렷하게 — 종전 --theme-text-muted(#64748b)는
+   머리줄 배경 위 대비 3.9:1(4.5:1 미만)라 흐렸음 → 6.21:1. 이 글씨만 바꾸고 --theme-text-muted 변수는 그대로(다른 곳 영향 없음) */
+/*   ↳ th[class] — 번호·작성자·날짜·조회 머리칸은 th 에 .board-col-* 클래스가 있어 style.css '.board-table .board-col-num' 등(0,2,0)이
+       '.board-table thead th'(0,1,2)를 이겨 종전엔 제목 칸만 바뀌었음(2026-10-24 실측으로 확인) → 속성 선택자로 (0,2,2) */
+.board-table thead th,
+.board-table thead th[class] {
+    color: #475569;
+}
+
+/* ★ (2026-10-24) 고정(📌) 글 줄의 번호·작성자·날짜·조회 글씨도 머리줄 글씨와 같은 색으로 — 고정 줄 배경이 머리줄과 같은데
+   글씨는 --theme-text-muted 라 대비 3.9:1(4.5:1 미만)였음. 일반 줄은 그대로 */
+.board-table tbody tr.board-row-pinned .board-col-num,
+.board-table tbody tr.board-row-pinned .board-col-author,
+.board-table tbody tr.board-row-pinned .board-col-date,
+.board-table tbody tr.board-row-pinned .board-col-views {
+    color: #475569;
+}
+
+/* ★ (2026-10-24) 게시판 댓글 개수 [N] 글씨를 같은 색 계열에서 한 단계 또렷하게 — 종전 #2563eb 는 일반 줄 5.17:1, 고정(📌) 줄 4.24:1 로
+   4.5:1 미만인 곳이 있었음 → #1759ea (일반 5.75:1, 고정 4.71:1) */
+.board-comment-badge {
+    color: #1759ea;
+}
+
+/* ★ (2026-10-24) 게시판 글보기 아래 목록의 지금 보는 글 줄 글자 — 이 줄은 배경(--theme-selected)이 진해서
+   번호·작성자·날짜·조회 글자(--theme-text-muted)와 '공지' 표시가 4.5:1 미만이었음(원래부터) →
+   이 줄에서만 테마 글자색(--theme-text). 로즈 테마에 먼저 넣었던 것과 같은 방식 */
+.board-table tbody tr.board-row-current .board-col-num,
+.board-table tbody tr.board-row-current .board-col-author,
+.board-table tbody tr.board-row-current .board-col-date,
+.board-table tbody tr.board-row-current .board-col-views,
+.board-table tbody tr.board-row-current .board-pin-label,
+.board-table tbody tr.board-row-current .board-comment-badge {   /* 댓글 개수 [N] 도 이 줄 위 4.5:1 미만이었음 */
+    color: var(--theme-text);
+}
+
+/* ★ (2026-10-24) 글자를 끌어 선택했을 때 색을 테마 강조색 계열로(32% — 글자색은 그대로라 읽힘). 색 섞기를 모르는 옛 브라우저는 기본 선택색 */
+::selection { background: color-mix(in srgb, var(--fs-accent) 32%, transparent); }
+
+
+/* ===== ★ (2026-10-25) 테마 구조 정리 — 블루 전체 (전체 테마) (펜닐 요청: 전체 테마 시안 '균형안' 대로) =====
+   방향: 머리줄 = 기준색 #2563eb 그대로(테마 정체성), 사이드 = 기준색 22%(색 느낌은 남기고 넓은 면은 가볍게), 사이드 선택 = 42% + 진한 글자,
+   주 버튼·창 머리줄·파일 선택 테두리·현재 페이지 = 기준색, 탐색기·본문도 기준색 8% + 그리드 파일 칸은 흰색(바탕보다 밝게 — 펜닐 승인, 처음 4%는 흰색과 거의 구별 안 되고 옛 전체 5종은 칸이 바탕보다 진해지는 역전이 생겨 저녁에 조정).
+   글자: 머리줄·버튼 = 흰색(5.2:1), 사이드 글자 #0e275c(10.5:1), 안내·제목 글자 #1a44a2(선택 칸 위 4.7:1).
+   이 파일 앞쪽 규칙은 지우지 않고 여기서 덮음(우선순위 확보용 !important) */
+:root { --theme-sidebar:#cfddfb; --sidebar-bg:#cfddfb; --sidebar-text:#0e275c; --theme-header:#2563eb; --theme-text:#0e275c; --theme-text-muted:#1a44a2;
+  --theme-hover:#d8e3fb; --theme-selected:#a3bdf7; --theme-border:#9db9f6; --theme-primary:#2563eb; --theme-primary-hover:#2157cf; --primary:#2563eb; --primary-dark:#2157cf;
+  --fs-accent:#2563eb; --fs-primary-text:#1a44a2; --fs-tint-info:#e9effd; --fs-tint-info-border:#9db9f6; --fs-fg-info:#1a44a2; --fs-on-primary:#ffffff; --fs-board-search-bg:#e9effd;
+  --fs-tab-on-bg:#2563eb; --fs-tab-on-fg:#ffffff; --fs-badge-info-bg:#2563eb; --fs-badge-info-fg:#ffffff; --fs-grad-a:#2563eb; --fs-grad-b:#1f54c8; }
+.header, body.is-mobile .header { background:#2563eb !important; color:#ffffff; border-bottom:1px solid #2157cf !important;
+    --fs-text:#ffffff; --fs-text-2:#ffffff; --fs-text-3:#ffffff; --fs-text-4:#ffffff; --fs-surface:rgba(255,255,255,0.18); --fs-surface-2:rgba(255,255,255,0.18); --fs-surface-3:rgba(255,255,255,0.18);
+    --fs-border:#2157cf; --fs-border-2:#2157cf; --fs-primary-text:#ffffff; --secondary:#ffffff; }
+.header .logo, .header .logo-text, .header .header-version, .header .search-hint, .header .search-hint *,
+.header .btn-icon, .header-right .btn-icon, .mobile-menu-btn, .mobile-search-btn, .header .digital-clock { color:#ffffff !important; }
+.header .btn-icon:hover, .header-right .btn-icon:hover, .mobile-menu-btn:hover, .mobile-search-btn:hover { background:rgba(255,255,255,0.18) !important; }
+#user-name, .header .user-welcome { background:rgba(255,255,255,0.18) !important; border-color:#2157cf !important; color:#ffffff !important; }
+.header .user-welcome * { color:#ffffff !important; }
+.search-box, .header .search-box { background:#ffffff !important; border-color:#2159d4 !important; }
+.header .search-box input { color:#0e275c !important; }
+.header .search-box input::placeholder, .header .search-box button { color:#1a44a2 !important; }
+.sidebar { background:#cfddfb !important; color:#0e275c; border-right:1px solid #9db9f6 !important; --fs-fg-info:#1a44a2; --fs-text-2:#0e275c; --fs-text-3:#1a44a2; --fs-text-4:#1a44a2; }
+.sidebar h3, .sidebar-section h3.section-toggle { color:#1a44a2 !important; }
+.sidebar-section h3.section-toggle:hover { background:#b9cdf9 !important; color:#0e275c !important; }
+.sidebar-section h3.section-toggle .toggle-icon { background:#a3bdf7 !important; color:#0e275c !important; }
+.sidebar-divider { background:#9db9f6 !important; }
+.sidebar-quota { border-top-color:#9db9f6 !important; }
+.quota-text { color:#1a44a2 !important; }
+.storage-item, .menu-list li a { color:#0e275c !important; }
+.storage-item .storage-icon { color:#1a44a2 !important; }
+.storage-item:hover, .menu-list li:hover, #storage-list a:hover { background:#b9cdf9 !important; }
+.storage-item.active, .menu-list li.active > a, .menu-list li > a.board-sidebar-item.active, #storage-list a.active { background:#a3bdf7 !important; color:#0e275c !important; font-weight:600; }
+.quota-bar { background:#b9cdf9 !important; }
+.quota-fill { background:#2563eb !important; }
+.modal-header { background:#2563eb !important; color:#ffffff !important; --fs-text-2:#ffffff; --fs-text-3:#ffffff; }
+.modal-header h2, .modal-header .modal-close { color:#ffffff !important; }
+.btn.btn-primary, .btn-primary { background:#2563eb !important; border-color:#2563eb !important; color:#ffffff !important; }
+.btn.btn-primary:hover, .btn-primary:hover { background:#2157cf !important; border-color:#2157cf !important; }
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)) { background:#e9effd !important; color:#0e275c !important; }
+.toolbar .btn:where(:not(.btn-primary, .btn-danger, .btn-warning)):hover { background:#d8e3fb !important; }
+.toolbar-right .btn-icon.active { background:#a3bdf7 !important; border-color:#9db9f6 !important; color:#0e275c !important; }
+.file-item:hover { background:#e0e9fc !important; }
+.file-item.selected, .file-list.list-view .file-item.selected, .file-list.grid-view .file-item.selected { background:#d8e3fb !important; border-color:#2563eb !important; }
+.file-list, .file-area, .toolbar, .breadcrumb { background:#eef3fd !important; }
+.file-list.grid-view .file-item:not(.selected) { background:#ffffff !important; box-shadow: inset 0 0 0 1px #bed0f9 !important; }
+.file-list.grid-view .file-item:not(.selected):hover { background:#e0e9fc !important; }
+/* 목록 보기 크기·날짜·종류 글자 — style.css 공통 회색(--secondary #6c757d)이라 마우스 올린 줄(올림색) 위 3.9~4.3:1 → 이 테마 안내 글자색(#1a44a2, 선택 칸 위에서도 4.6:1 이상) (2026-10-25 저녁) */
+.file-list.list-view .file-size, .file-list.list-view .file-date, .file-list.list-view .file-type, .file-list.list-view .file-item > .file-type { color:#1a44a2 !important; }
+.board-table thead tr, .board-table tbody tr.board-row-pinned { background:#e9effd !important; }
+.board-table thead th, .board-table thead th[class] { color:#1a44a2 !important; }
+.board-table tbody tr.board-row-current { background:#d8e3fb !important; }
+.board-pg-current { background:#2563eb !important; color:#ffffff !important; }
+.settings-tab.active { color:#1a44a2 !important; border-bottom-color:#2563eb !important; }
+.login-page { background: linear-gradient(135deg, #2563eb 0%, #cfddfb 100%); }
+/* 흰 글자를 올리는 그라디언트(리소스 모니터·공지 팝업 머리줄·대기 알림)는 기준색이 밝아 2:1 안팎이라 같은 계열 짙은 두 색(#2563eb→#1f54c8, 흰 글자 4.8:1 이상), 성공 배지는 초록(공통 규칙과 같은 #2e7d32) */
+.badge-success { background:#2e7d32 !important; color:#ffffff !important; }
+/* 머리줄 시계(설정 > 시계 스타일) — 투명형(1·2)은 머리줄 글자색, 밝은 카드형(3·8·9)은 흰 카드 + 진한 글자, 검은 상자형(4·5·6·7·10)은 상자 안을 밝은 글자로 */
+.header .digital-clock.style-1 .clock-time, .header .digital-clock.style-1 .clock-date,
+.header .digital-clock.style-2 .clock-time, .header .digital-clock.style-2 .clock-date, .header .digital-clock.style-2 .clock-sep { color:#ffffff !important; }
+.header .digital-clock.style-2 { background:#1d4db7 !important; border-color:#2157cf !important; }
+.header .digital-clock.style-3, .header .digital-clock.style-8, .header .digital-clock.style-9 { color:#0e275c !important;
+  --fs-surface:#ffffff; --fs-surface-2:#f5f5f5; --fs-surface-3:#e8e8e8; --fs-border:#d4d4d4; --fs-border-2:#cccccc; --fs-tint-info-border:#9db9f6;
+  --fs-text:#0e275c; --fs-text-2:#0e275c; --fs-text-3:#0e275c; --fs-text-4:#0e275c; --fs-fg-info:#0e275c; }
+.header .digital-clock.style-3 { background:#ffffff !important; border-color:#9db9f6 !important; }
+.header .digital-clock.style-3 .seg-digit { background:#cfddfb !important; border-color:#9db9f6 !important; color:#0e275c !important; }
+.header .digital-clock.style-3 .seg-colon, .header .digital-clock.style-3 .clock-date,
+.header .digital-clock.style-9 .clock-time, .header .digital-clock.style-9 .clock-date { color:#0e275c !important; }
+.header .digital-clock.style-8 { background:#e8e8e8 !important; border-color:#cccccc !important; }
+.header .digital-clock.style-8 .flip-half.upper, .header .digital-clock.style-8 .flip-flap.front { background:linear-gradient(180deg, #ffffff, #f5f5f5) !important; }
+.header .digital-clock.style-8 .flip-half.lower, .header .digital-clock.style-8 .flip-flap.back { background:linear-gradient(180deg, #f0f0f0, #e8e8e8) !important; }
+.header .digital-clock.style-8 .flip-num { color:#222222 !important; }
+.header .digital-clock.style-8 .clock-date { color:#4a4a4a !important; }
+.header .digital-clock.style-9 { background:rgba(255,255,255,0.78) !important; border-color:rgba(255,255,255,0.9) !important; }
+.header .digital-clock.style-4, .header .digital-clock.style-5, .header .digital-clock.style-6, .header .digital-clock.style-7, .header .digital-clock.style-10 { color:#e6e8eb !important; --fs-text-2:#c9cdd3; --fs-text-3:#b4bac2; }
+.header .digital-clock.style-5 .clock-date, .header .digital-clock.style-6 .clock-date { color:#b4bac2 !important; }
+.header .digital-clock.style-7 .clock-date { color:#c9cdd3 !important; }

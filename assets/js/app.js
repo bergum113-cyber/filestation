@@ -523,7 +523,7 @@
         if (_screenConsole || !window._coverDiagEnabled) return _screenConsole;
         _screenConsole = document.createElement('div');
         _screenConsole.id = 'cover-diag-console';
-        _screenConsole.style.cssText = 'position:fixed;left:5px;right:5px;bottom:5px;max-height:35vh;background:rgba(0,0,0,0.92);color:#0f0;font:11px/1.3 Menlo,monospace;padding:8px;border-radius:6px;overflow-y:auto;z-index:999999;border:1px solid #0f0;box-sizing:border-box;';
+        _screenConsole.style.cssText = 'position:fixed;left:5px;right:5px;bottom:5px;max-height:35vh;background:rgba(0,0,0,0.92);color:#0f0;font:11px/1.3 Menlo,monospace;padding:8px;border-radius:6px;overflow-y:auto;z-index:999999;border:1px solid var(--fs-tint-ok-border, #0f0);box-sizing:border-box;';
         const _hdr = document.createElement('div');
         _hdr.style.cssText = 'display:flex;gap:6px;margin-bottom:5px;border-bottom:1px solid #0a0;padding-bottom:4px;';
         _hdr.innerHTML = '<span style="color:#ff0;flex:1;">📋 COVER DIAG</span>'
@@ -1194,6 +1194,25 @@ class FSAudioPlayer {
             lyricsModalTrack: this.container.querySelector('.fap-lyrics-modal-track'),
             lyricsModalText: this.container.querySelector('.fap-lyrics-modal-text'),
         };
+        // ★ (2026-10-25) Tab 키로 플레이어 안 버튼이 하나씩 선택되지 않게(펜닐 요청 — Tab 을 누르면 버튼에 흰 테두리가 생김).
+        //   플레이어(.fap) 안 버튼·막대·입력칸을 tabindex=-1 — 마우스·터치·단축키(스페이스·방향키 등, 문서 전체에서 받음)와
+        //   코드가 직접 옮기는 포커스는 그대로. 나중에 생기는 버튼(설정 메뉴·이퀄라이저 팝업·재생목록 줄 등)도 같은 처리(destroy 때 감시 해제)
+        try {
+            const _ntRoot = this.$.root;
+            if (_ntRoot && typeof MutationObserver === 'function') {
+                const _ntSel = 'button, input, select, textarea, a[href], [tabindex]';
+                const _ntFix = (e) => { if (e.getAttribute('tabindex') !== '-1') e.setAttribute('tabindex', '-1'); };
+                const _ntScan = (n) => { if (!n || n.nodeType !== 1) return; if (n.matches(_ntSel)) _ntFix(n); n.querySelectorAll(_ntSel).forEach(_ntFix); };
+                _ntScan(_ntRoot);
+                this._noTabMo = new MutationObserver((ms) => {
+                    for (const m of ms) {
+                        if (m.type === 'attributes') { if (m.target.nodeType === 1 && m.target.matches(_ntSel)) _ntFix(m.target); }
+                        else m.addedNodes.forEach(_ntScan);
+                    }
+                });
+                this._noTabMo.observe(_ntRoot, { childList: true, subtree: true, attributes: true, attributeFilter: ['tabindex'] });
+            }
+        } catch (e) {}
         // ★ iOS: 시스템 정책상 audio.volume 변경 불가 (Apple 공식 정책)
         //   YouTube iOS 웹 등과 동일하게 볼륨 영역 전체 숨김
         //   사용자는 기기 물리 볼륨 버튼으로 조절
@@ -1335,13 +1354,20 @@ class FSAudioPlayer {
         selector.className = 'fap-skin-selector';
         const isKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');
         selector.innerHTML = `
-            <button class="fap-skin-btn" title="${isKo ? '스킨 선택' : 'Choose Skin'}">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                    <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-                </svg>
+            <!-- ★ (2026-10-24) 별+스킨 이름 → 톱니바퀴 아이콘만(펜닐 요청 — 메뉴가 스킨·이퀄라이저·비주얼라이저 설정이라 '설정', 동영상 플레이어 ⚙ 와 같은 모양).
+                 스킨 이름 글자(.fap-skin-label)는 그대로 두고 CSS 로 숨김 — 스킨을 바꿀 때 글자를 고치는 기존 코드가 그대로 동작 -->
+            <button class="fap-skin-btn" title="${isKo ? '설정 (스킨·이퀄라이저·비주얼라이저)' : 'Settings (skin, equalizer, visualizer)'}" aria-label="${isKo ? '설정' : 'Settings'}">
+                <svg viewBox="-2 -2 28 28" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 <span class="fap-skin-label">${this._skins.find(s => s.id === this._currentSkin)?.name || 'Default'}</span>
             </button>
             <div class="fap-skin-menu" style="display:none;">
+                <!-- ★ (2026-10-24) 구간 반복(A-B)을 재생 줄에서 이 메뉴로 옮김(펜닐 승인) — 재생 줄을 '가사·셔플·이전·▶·다음·반복·볼륨'으로 해
+                     ▶ 를 정확히 가운데(실측 0px, 종전 16~24px 왼쪽)에. 누를 때마다 종전 버튼과 같은 순서(A 지정 → B 지정 → 해제, _cycleAb 그대로) -->
+                <div class="fap-skin-section-title">${isKo ? '재생' : 'Playback'}</div>
+                <div class="fap-vis-toggle-item fap-ab-item">
+                    <span class="fap-vis-toggle-label">${isKo ? '구간 반복' : 'A-B Repeat'}</span>
+                    <span class="fap-vis-toggle-state fap-ab-state"></span>
+                </div>
                 <div class="fap-skin-section-title">${isKo ? '스킨' : 'Skin'}</div>
                 ${this._skins.map(s => `
                     <div class="fap-skin-item${s.id === this._currentSkin ? ' active' : ''}" data-skin="${s.id}">
@@ -1380,6 +1406,7 @@ class FSAudioPlayer {
         const menu = selector.querySelector('.fap-skin-menu');
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (this._refreshAbMenu) this._refreshAbMenu();   // ★ (2026-10-24) 구간 반복 상태 글자 갱신
             menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
         });
         // 외부 클릭 시 메뉴 닫기 (destroy 시 해제를 위해 참조 저장)
@@ -1388,7 +1415,28 @@ class FSAudioPlayer {
         };
         document.addEventListener('click', this._skinMenuCloseHandler);
         // 메뉴 내부 클릭 (스킨 + 비주얼라이저 색상)
+        // ★ (2026-10-24) 구간 반복 메뉴 항목 상태 — OFF / A 0:12(A만 지정, 다음은 B) / 0:12~0:30(반복 중). 숨긴 A-B 버튼과 같은 _abA·_abB 를 읽음
+        this._refreshAbMenu = () => {
+            const st = selector.querySelector('.fap-ab-state');
+            if (!st) return;
+            const hasA = this._abA !== null && this._abA !== undefined, hasB = this._abB !== null && this._abB !== undefined;
+            st.textContent = hasB ? `${this._fmt(this._abA)}~${this._fmt(this._abB)}` : hasA ? `A ${this._fmt(this._abA)}` : 'OFF';   // 좁은 메뉴(픽셀 스킨 등)에서 줄바꿈 안 되게 짧게 — 다음 동작은 항목 툴팁
+            const it = selector.querySelector('.fap-ab-item');
+            if (it) {
+                it.classList.toggle('active', hasA);
+                it.title = hasB ? (isKo ? '눌러서 구간 반복 해제' : 'Click to clear') : hasA ? (isKo ? '지금 위치를 B 로 지정' : 'Set B at current position') : (isKo ? '지금 위치를 A 로 지정' : 'Set A at current position');
+            }
+        };
+        this._refreshAbMenu();
         menu.addEventListener('click', (e) => {
+            // ★ (2026-10-24) 구간 반복(A-B) — 종전 재생 줄 버튼과 같은 동작(_cycleAb), 누르면 메뉴 닫힘
+            const abItem = e.target.closest('.fap-ab-item');
+            if (abItem) {
+                e.stopPropagation();
+                this._cycleAb();
+                menu.style.display = 'none';
+                return;
+            }
             // 스킨 아이템
             const skinItem = e.target.closest('.fap-skin-item');
             if (skinItem) {
@@ -1733,6 +1781,22 @@ class FSAudioPlayer {
             this._showVolumeToast();
             this._saveVolumePref();
         });
+        // ★ (2026-10-24) PC 마우스로 볼륨 막대를 끌거나 음소거 버튼을 누른 뒤, 마우스를 치워도 볼륨 창이 안 닫히던 것(펜닐 제보) —
+        //   누른 요소(막대 tabindex=-1·음소거 버튼)에 포커스가 남아 CSS :focus-within 이 창을 계속 열어 두었다(다른 곳을 눌러야 닫힘).
+        //   마우스(pointerType 'mouse')로 누른 경우에만, 손을 뗀 뒤(막대 밖에서 떼도) 그 포커스를 풀어 :hover 기준(떠나면 잠시 뒤 닫힘)으로 되돌린다.
+        //   끄는 동안은 포커스가 그대로라 창이 열려 있고, 터치(안드로이드 — 누르면 열린 채 유지)·키보드(Tab)는 종전 그대로. ↑↓ 볼륨은 포커스와 무관.
+        const _volWrapEl = this.$.volBar && this.$.volBar.closest('.fap-volume');
+        if (_volWrapEl && window.PointerEvent) {
+            _volWrapEl.addEventListener('pointerdown', (e) => {
+                if (e.pointerType !== 'mouse') return;
+                document.addEventListener('pointerup', () => {
+                    setTimeout(() => {   // click(음소거) 처리 뒤에 풀기
+                        const ae = document.activeElement;
+                        if (ae && ae !== document.body && _volWrapEl.contains(ae) && typeof ae.blur === 'function') ae.blur();
+                    }, 0);
+                }, { once: true, capture: true });
+            });
+        }
         // Seek bar drag
         this._bindDrag(this.$.seekBar, '_draggingSeek', (ratio) => {
             if (!a.duration) return;
@@ -2654,6 +2718,7 @@ class FSAudioPlayer {
         // ★ display = '' 먼저 (v5.8.1c) — _renderLyricsModalContent에서 scrollTop/clientHeight 계산하려면
         //    모달이 보여야 정확한 값이 나옴. display: none 상태에선 clientHeight=0, scrollTop도 동작 불안정
         this.$.lyricsModal.style.display = '';
+        this._syncLyricsModalTheme();   // ★ (2026-10-24) 정보 창(동영상 정보 등)과 같은 테마 색
         // ★ 헤더 드래그 위치 초기화 (PC만, 매번 열 때 가운데로 복귀)
         //    이전 드래그 시 position:fixed/margin:0 등이 남아있을 수 있어 모두 리셋
         //    렌더 전에 위치 리셋해야 활성라인 scrollTop 계산 시 정확한 위치
@@ -2675,6 +2740,44 @@ class FSAudioPlayer {
         this._bindLyricsModalDrag();
     }
     
+    /**
+     * ★ (2026-10-24) 가사 창을 정보 창(동영상 정보·확인 창 — 앱 공용 모달 #modal-confirm)과 같은 테마 색으로 (펜닐 제보)
+     *   가사 창은 플레이어 전용 창이라 머리줄 = 기본 강조색, 본문 = 흰색 고정이어서 다크·전체 테마에서도 밝게 떴다.
+     *   열 때마다 숨어 있는 공용 모달의 계산된 색(바탕·머리줄·제목·닫기·본문 글자)을 읽어 CSS 변수로 넘김 —
+     *   테마 파일의 모달 규칙이 바뀌어도 그대로 따라가고, 공용 모달 클래스를 붙이지 않아 앱의 모달 처리 코드(닫기·끌기 등)와 섞이지 않음.
+     *   공용 모달이 없는 공유 페이지(이 파일은 탐색기 전용이지만 방어)는 아무것도 안 해 종전 모양. 휴대폰(768px 이하)은 CSS 에서
+     *   종전 전체 화면 어두운 모양(v5.8.1c 요청) 그대로.
+     */
+    _syncLyricsModalTheme() {
+        try {
+            const c = this.$.lyricsModal && this.$.lyricsModal.querySelector('.fap-lyrics-modal-content');
+            const ref = document.getElementById('modal-confirm');
+            if (!c || !ref) return;
+            const hd = ref.querySelector('.modal-header'), bd = ref.querySelector('.modal-body');
+            if (!hd || !bd) return;
+            const h2 = hd.querySelector('h2'), cl = hd.querySelector('.modal-close');
+            const ms = getComputedStyle(ref), hs = getComputedStyle(hd), bs = getComputedStyle(bd);
+            const opaque = (v) => v && v !== 'transparent' && !/rgba\([^)]*,\s*0\)$/.test(v);
+            const bg = opaque(bs.backgroundColor) ? bs.backgroundColor : (opaque(ms.backgroundColor) ? ms.backgroundColor : '#ffffff');
+            const text = bs.color || ms.color;
+            const hdBg = (hs.backgroundImage && hs.backgroundImage !== 'none') ? hs.backgroundImage : (opaque(hs.backgroundColor) ? hs.backgroundColor : bg);
+            const hdText = h2 ? getComputedStyle(h2).color : hs.color;
+            const hdLine = (parseFloat(hs.borderBottomWidth) > 0 && hs.borderBottomStyle !== 'none') ? hs.borderBottomColor : 'transparent';
+            const closeC = cl ? getComputedStyle(cl).color : hdText;
+            // 동기화 가사의 현재 줄 강조색 — 테마 강조 글자색이 본문 바탕 위 4.5:1 이상일 때만, 아니면 본문 글자색(굵게·크게는 CSS 그대로)
+            const rootCs = getComputedStyle(document.documentElement);
+            const cand = (rootCs.getPropertyValue('--fs-primary-text') || rootCs.getPropertyValue('--theme-primary') || rootCs.getPropertyValue('--primary') || '').trim();
+            const lum = (col) => { const t = document.createElement('span'); t.style.color = col; t.style.display = 'none'; document.body.appendChild(t); const m = (getComputedStyle(t).color.match(/[\d.]+/g) || []).map(Number); t.remove();
+                if (m.length < 3) return null; const f = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(m[0]) + 0.7152 * f(m[1]) + 0.0722 * f(m[2]); };
+            let accent = text;
+            if (cand) { const a = lum(cand), b2 = lum(bg); if (a !== null && b2 !== null && (Math.max(a, b2) + 0.05) / (Math.min(a, b2) + 0.05) >= 4.5) accent = cand; }
+            const set = (k, v) => c.style.setProperty(k, v);
+            set('--fap-ly-bg', bg); set('--fap-ly-text', text); set('--fap-ly-hd-bg', hdBg); set('--fap-ly-hd-text', hdText);
+            set('--fap-ly-hd-line', hdLine); set('--fap-ly-close', closeC); set('--fap-ly-accent', accent);
+            c.classList.add('fap-ly-themed');
+        } catch (e) { /* 실패해도 종전 모양 그대로 */ }
+    }
+
     /**
      * 가사 모달 헤더 드래그 (PC만, 모바일은 풀스크린이라 불필요)
      */
@@ -3387,6 +3490,7 @@ class FSAudioPlayer {
                 range.style.display = 'none';
             }
         }
+        if (this._refreshAbMenu) this._refreshAbMenu();   // ★ (2026-10-24) ⚙ 메뉴의 구간 반복 상태도 같이(곡을 넘겨 풀릴 때 등)
     }
 
     // ── Shuffle ──
@@ -5826,6 +5930,7 @@ class FSAudioPlayer {
         try { if (this._fapRO) { this._fapRO.disconnect(); this._fapRO = null; } if (this._fapRaf) { cancelAnimationFrame(this._fapRaf); this._fapRaf = 0; } } catch (e) {}   // ★ (2026-09-26) 재생 줄 폭 관찰 해제
         if (this._destroyed) return;
         this._destroyed = true;
+        try { if (this._noTabMo) { this._noTabMo.disconnect(); this._noTabMo = null; } } catch (e) {}   // ★ (2026-10-25) Tab 막기 감시 해제
         // ★ (2026-09-23) 재생목록 썸네일 대기열 정리(이벤트 해제·타이머 중지·떨어진 요소 참조 해제)
         clearTimeout(this._plCoverWait);
         if (this._plCoverVis) { document.removeEventListener('visibilitychange', this._plCoverVis); this._plCoverVis = null; }
@@ -7164,7 +7269,7 @@ const App = {
             navigator.clipboard.writeText(val).then(() => {
                 this._appPwCopied = true;
                 this.toast(t('copied', '복사되었습니다.'), 'success');
-                $('#btn-copy-app-password').html('✅ ' + t('copied', '복사됨')).css('background', '#d4edda');
+                $('#btn-copy-app-password').html('✅ ' + t('copied', '복사됨')).css('background', 'var(--fs-tint-ok, #d4edda)');
             });
         });
         
@@ -7949,7 +8054,7 @@ const App = {
                     const rect = actionBtn.getBoundingClientRect();
                     const menu = document.createElement('div');
                     menu.className = 'vault-action-menu';
-                    menu.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.bottom + 4}px;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:10001;min-width:180px;padding:4px 0;`;
+                    menu.style.cssText = `position:fixed;left:${rect.left}px;top:${rect.bottom + 4}px;background:var(--fs-surface, #fff);border:1px solid var(--fs-border-2, #ddd);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:10001;min-width:180px;padding:4px 0;`;
                     
                     const hasClipboardItems = App.clipboard.items.length > 0;
                     const isSingle = vaultSelected.length === 1;
@@ -7975,16 +8080,16 @@ const App = {
                         if (a.action === '_divider') {
                             if (a.visible === false) return;
                             const hr = document.createElement('hr');
-                            hr.style.cssText = 'margin:4px 0;border:0;border-top:1px solid #eee;';
+                            hr.style.cssText = 'margin:4px 0;border:0;border-top:1px solid var(--fs-border, #eee);';
                             menu.appendChild(hr);
                             return;
                         }
                         // visible 조건 체크
                         if (a.visible === false) return;
                         const div = document.createElement('div');
-                        div.style.cssText = `padding:8px 16px;cursor:pointer;font-size:0.9em;${a.danger ? 'color:#dc3545;' : ''}`;
+                        div.style.cssText = `padding:8px 16px;cursor:pointer;font-size:0.9em;${a.danger ? 'color:var(--fs-fg-err, #dc3545);' : ''}`;
                         div.textContent = a.icon + ' ' + a.label;
-                        div.addEventListener('mouseenter', () => div.style.background = '#f0f0f0');
+                        div.addEventListener('mouseenter', () => div.style.background = 'var(--fs-surface-2, #f0f0f0)');
                         div.addEventListener('mouseleave', () => div.style.background = '');
                         div.addEventListener('click', () => {
                             menu.remove();
@@ -8141,7 +8246,9 @@ const App = {
             if (!this.currentStorage) return;
             const btn = $('#btn-index-sync');
             const origText = btn.html();
-            btn.prop('disabled', true).html('🔄 ' + t('syncing', '동기화 중...'));
+            // ★ (2026-10-23) 진행 중 글자에도 버튼의 선 그림 아이콘(index.php .fs-ico) 사용 — 없으면 종전처럼 🔄
+            const _syncIco = btn.find('svg.fs-ico').prop('outerHTML') || '🔄';
+            btn.prop('disabled', true).html(_syncIco + ' ' + t('syncing', '동기화 중...'));
             try {
                 const res = await new Promise((resolve, reject) => {
                     const evtUrl = `api.php?action=index_rebuild_stream&storage_id=${this.currentStorage}`;
@@ -8152,7 +8259,7 @@ const App = {
                             const data = JSON.parse(e.data);
                             if (data.type === 'progress') {
                                 lastCount = data.count || 0;
-                                btn.html(`🔄 ${lastCount.toLocaleString()}${t('count_items','개')}`);
+                                btn.html(`${_syncIco} ${lastCount.toLocaleString()}${t('count_items','개')}`);
                             } else if (data.type === 'complete') {
                                 evtSource.close();
                                 resolve({ success: true, count: data.count || lastCount });
@@ -8530,7 +8637,7 @@ const App = {
                 return;
             }
             
-            resultSpan.text(t('saving_settings', '설정 저장 중...')).css('color', '#666');
+            resultSpan.text(t('saving_settings', '설정 저장 중...')).css('color', 'var(--fs-text-2, #666)');
             
             // 먼저 현재 설정 저장
             const settings = {
@@ -8548,7 +8655,7 @@ const App = {
                     return;
                 }
                 
-                resultSpan.text(t('testing', '테스트 중...')).css('color', '#666');
+                resultSpan.text(t('testing', '테스트 중...')).css('color', 'var(--fs-text-2, #666)');
                 
                 const res = await this.api('antivirus_test', {}, 'GET');
                 if (res.success) {
@@ -9526,7 +9633,7 @@ const App = {
             if (tabId !== 'tab-app-passwords' && $('#app-password-created').is(':visible') && !App._appPwCopied) {
                 const confirmed = await App.showConfirmModal({
                     title: t('warning', '⚠️ 주의'),
-                    content: `<p style="margin:0 0 8px;">${t('app_pw_not_copied_title', '앱 비밀번호를 아직 복사하지 않았습니다.')}</p><p style="margin:0;color:#888;font-size:13px;">${t('app_pw_not_copied_desc', '이 화면을 벗어나면 다시 확인할 수 없습니다.')}</p>`,
+                    content: `<p style="margin:0 0 8px;">${t('app_pw_not_copied_title', '앱 비밀번호를 아직 복사하지 않았습니다.')}</p><p style="margin:0;color:var(--fs-text-3, #888);font-size:13px;">${t('app_pw_not_copied_desc', '이 화면을 벗어나면 다시 확인할 수 없습니다.')}</p>`,
                     buttons: [
                         { text: t('go_back_copy', '돌아가서 복사'), value: false, class: 'btn-primary' },
                         { text: t('continue_anyway', '계속 진행'), value: true, class: 'btn-secondary' }
@@ -9760,10 +9867,10 @@ const App = {
                 const m = env.methods || {};
                 const isKo = window.LANG !== 'en';
                 
-                let envHtml = `<div style="margin-bottom:10px;padding:10px;background:#f8f9fa;border:1px solid #e0e0e0;border-radius:6px;font-size:11px;">`;
+                let envHtml = `<div style="margin-bottom:10px;padding:10px;background:var(--fs-surface-2, #f8f9fa);border:1px solid var(--fs-border, #e0e0e0);border-radius:6px;font-size:11px;">`;
                 envHtml += `<div style="font-weight:700;margin-bottom:6px;">📋 ${isKo ? '서버 환경' : 'Server Environment'}: ${env.platform} / ${env.web_server} / PHP ${env.php_version || ''} / ${env.php_ldap ? '✅' : '❌'} LDAP / ${env.php_curl ? '✅' : '❌'} cURL / ${env.php_openssl ? '✅' : '❌'} OpenSSL</div>`;
                 envHtml += `<table style="width:100%;border-collapse:collapse;font-size:11px;">`;
-                envHtml += `<tr style="background:#eee;"><th style="text-align:left;padding:4px 8px;">${isKo ? '방식' : 'Method'}</th><th style="text-align:center;padding:4px 8px;">${isKo ? '사용 가능' : 'Available'}</th><th style="text-align:left;padding:4px 8px;">${isKo ? '상태' : 'Status'}</th></tr>`;
+                envHtml += `<tr style="background:var(--fs-surface-3, #eee);"><th style="text-align:left;padding:4px 8px;">${isKo ? '방식' : 'Method'}</th><th style="text-align:center;padding:4px 8px;">${isKo ? '사용 가능' : 'Available'}</th><th style="text-align:left;padding:4px 8px;">${isKo ? '상태' : 'Status'}</th></tr>`;
                 
                 const methods = [
                     ['Kerberos/SPNEGO', m.kerberos],
@@ -9775,7 +9882,7 @@ const App = {
                     const icon = info?.available ? '✅' : '❌';
                     const color = info?.available ? '#27ae60' : '#e74c3c';
                     const reason = info?.reason || '';
-                    envHtml += `<tr style="border-bottom:1px solid #eee;"><td style="padding:3px 8px;font-weight:600;">${name}</td><td style="text-align:center;padding:3px 8px;"><span style="color:${color}">${icon}</span></td><td style="padding:3px 8px;color:#666;">${reason}</td></tr>`;
+                    envHtml += `<tr style="border-bottom:1px solid var(--fs-border, #eee);"><td style="padding:3px 8px;font-weight:600;">${name}</td><td style="text-align:center;padding:3px 8px;"><span style="color:${color}">${icon}</span></td><td style="padding:3px 8px;color:var(--fs-text-2, #666);">${reason}</td></tr>`;
                 });
                 
                 envHtml += `</table></div>`;
@@ -9914,7 +10021,7 @@ const App = {
     async testLDAPConnection() {
         const resultEl = document.getElementById('sso-ldap-test-result');
         resultEl.textContent = '테스트 중...';
-        resultEl.style.color = '#666';
+        resultEl.style.color = 'var(--fs-text-2, #666)';
         try {
             const res = await this.api('sso_ldap_test', {
                 host: $('#sso-ldap-host').val(),
@@ -10496,7 +10603,7 @@ const App = {
                     <span class="notify-item-text" title="${this.escapeHtml((n.text || '').replace(/<[^>]*>/g, ''))}">${n.text}</span>
                 </span>
                 ${n.action ? `<button class="notify-item-action">${n.action}</button>` : ''}
-                <button class="notify-item-dismiss" title="${t('dismiss','닫기')}" style="background:none;border:none;cursor:pointer;font-size:14px;color:#999;padding:2px 4px;margin-left:4px;line-height:1;">✕</button>
+                <button class="notify-item-dismiss" title="${t('dismiss','닫기')}" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--fs-text-3, #999);padding:2px 4px;margin-left:4px;line-height:1;">✕</button>
             `;
             // 닫기 버튼
             item.querySelector('.notify-item-dismiss').addEventListener('click', (e) => {
@@ -10800,7 +10907,7 @@ const App = {
         // 알림 목록 모달 표시
         const html = `
             <div style="max-height:400px;overflow-y:auto;">
-                ${notifs.length === 0 ? `<p style="text-align:center;color:#888;padding:20px;">${t('no_notifications', '알림이 없습니다.')}</p>` : ''}
+                ${notifs.length === 0 ? `<p style="text-align:center;color:var(--fs-text-3, #888);padding:20px;">${t('no_notifications', '알림이 없습니다.')}</p>` : ''}
                 ${notifs.map(n => {
                     const isUnread = !n.is_read;
                     const time = n.created_at ? new Date(n.created_at).toLocaleString() : '';
@@ -10812,13 +10919,13 @@ const App = {
                     // 알림 내용 구성
                     let displayText = '';
                     if (n.reason === 'reply') {
-                        displayText = `<b>${fromName}</b>${t('notif_replied_to','님이 "')}<span style="color:var(--text-muted,#666);">${parentPreview}</span>${t('notif_reply_comment','" 댓글에 "')}<span style="color:var(--primary-color,#2196F3);">${contentPreview}</span>${t('notif_reply_left','" 답글을 남겼습니다.')}`;
+                        displayText = `<b>${fromName}</b>${t('notif_replied_to','님이 "')}<span style="color:var(--text-muted,var(--fs-text-2, #666));">${parentPreview}</span>${t('notif_reply_comment','" 댓글에 "')}<span style="color:var(--primary-color,var(--fs-fg-info, #2196F3));">${contentPreview}</span>${t('notif_reply_left','" 답글을 남겼습니다.')}`;
                     } else {
-                        displayText = `<b>${fromName}</b>${t('notif_commented_on','님이 "')}<span style="color:var(--text-muted,#666);">${postTitle}</span>${t('notif_comment_on_post','" 글에 "')}<span style="color:var(--primary-color,#2196F3);">${contentPreview}</span>${t('notif_comment_left','" 댓글을 남겼습니다.')}`;
+                        displayText = `<b>${fromName}</b>${t('notif_commented_on','님이 "')}<span style="color:var(--text-muted,var(--fs-text-2, #666));">${postTitle}</span>${t('notif_comment_on_post','" 글에 "')}<span style="color:var(--primary-color,var(--fs-fg-info, #2196F3));">${contentPreview}</span>${t('notif_comment_left','" 댓글을 남겼습니다.')}`;
                     }
-                    return `<div class="board-notif-item ${isUnread ? 'unread' : ''}" data-notif-id="${n.id}" data-board-id="${n.board_id}" data-post-id="${n.post_id}" data-comment-id="${n.comment_id || ''}" style="padding:10px 14px;border-bottom:1px solid var(--border-color, #eee);cursor:pointer;transition:background .15s;${isUnread ? 'background:var(--notif-unread-bg, #f0f7ff);' : ''}">
-                        <div style="font-size:13px;color:var(--text-color, #333);line-height:1.5;">${displayText}</div>
-                        <div style="font-size:11px;color:var(--text-muted, #888);margin-top:4px;">${boardName} · ${time}</div>
+                    return `<div class="board-notif-item ${isUnread ? 'unread' : ''}" data-notif-id="${n.id}" data-board-id="${n.board_id}" data-post-id="${n.post_id}" data-comment-id="${n.comment_id || ''}" style="padding:10px 14px;border-bottom:1px solid var(--border-color, var(--fs-border, #eee));cursor:pointer;transition:background .15s;${isUnread ? 'background:var(--notif-unread-bg, var(--fs-tint-info, #f0f7ff));' : ''}">
+                        <div style="font-size:13px;color:var(--text-color, var(--fs-text, #333));line-height:1.5;">${displayText}</div>
+                        <div style="font-size:11px;color:var(--text-muted, var(--fs-text-3, #888));margin-top:4px;">${boardName} · ${time}</div>
                     </div>`;
                 }).join('')}
             </div>
@@ -10832,13 +10939,13 @@ const App = {
             modal.className = 'modal-overlay';
             modal.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:10100;justify-content:center;align-items:center;';
             modal.innerHTML = `
-                <div style="background:var(--modal-bg, #fff);border-radius:12px;max-width:440px;width:90%;max-height:80vh;box-shadow:0 8px 32px rgba(0,0,0,0.2);overflow:hidden;">
-                    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border-color, #eee);">
-                        <h3 style="margin:0;font-size:16px;color:var(--text-color, #333);">💬 ${t('comment_notifications', '댓글 알림')}</h3>
+                <div style="background:var(--modal-bg, var(--fs-surface, #fff));border-radius:12px;max-width:440px;width:90%;max-height:80vh;box-shadow:0 8px 32px rgba(0,0,0,0.2);overflow:hidden;">
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border-color, var(--fs-border, #eee));">
+                        <h3 style="margin:0;font-size:16px;color:var(--text-color, var(--fs-text, #333));">💬 ${t('comment_notifications', '댓글 알림')}</h3>
                         <div style="display:flex;gap:8px;align-items:center;">
-                            <button id="board-notif-read-all" style="font-size:12px;padding:4px 10px;border:1px solid var(--border-color, #ddd);border-radius:6px;background:var(--bg-color, #f5f5f5);color:var(--text-color, #333);cursor:pointer;">${t('read_all', '모두 읽음')}</button>
-                            <button id="board-notif-delete-all" style="font-size:12px;padding:4px 10px;border:1px solid #e74c3c;border-radius:6px;background:transparent;color:#e74c3c;cursor:pointer;">${t('delete_all', '전체 삭제')}</button>
-                            <button id="board-notif-close" style="font-size:18px;background:none;border:none;color:var(--text-muted, #888);cursor:pointer;padding:0 4px;">✕</button>
+                            <button id="board-notif-read-all" style="font-size:12px;padding:4px 10px;border:1px solid var(--border-color, var(--fs-border-2, #ddd));border-radius:6px;background:var(--bg-color, var(--fs-surface-2, #f5f5f5));color:var(--text-color, var(--fs-text, #333));cursor:pointer;">${t('read_all', '모두 읽음')}</button>
+                            <button id="board-notif-delete-all" style="font-size:12px;padding:4px 10px;border:1px solid #e74c3c;border-radius:6px;background:transparent;color:var(--fs-fg-err, #e74c3c);cursor:pointer;">${t('delete_all', '전체 삭제')}</button>
+                            <button id="board-notif-close" style="font-size:18px;background:none;border:none;color:var(--text-muted, var(--fs-text-3, #888));cursor:pointer;padding:0 4px;">✕</button>
                         </div>
                     </div>
                     <div id="board-notif-body" style="padding:0;overflow-y:auto;max-height:calc(80vh - 60px);"></div>
@@ -11259,7 +11366,7 @@ const App = {
                     if (_isRemoteStorage) {
                         const _sType = (exists.storage_type || '').toUpperCase();
                         const _noticeMsg = t('remote_notice', '외부 스토리지 안내({type}): 목록, 업/다운로드, 미리보기 지원 / 동영상은 MP4·WebM 등만 미리보기 가능 / MKV·AVI 등은 다운로드만 가능 / 썸네일·압축·트랜스코딩·공유 링크 미지원').replace('{type}', _sType);
-                        $('#file-list').before(`<div id="remote-storage-notice" style="padding:6px 12px;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;font-size:11px;color:#795548;margin:0 0 6px;">⚠️ ${_noticeMsg}</div>`);
+                        $('#file-list').before(`<div id="remote-storage-notice" style="padding:6px 12px;background:var(--fs-tint-warn, #fff8e1);border:1px solid var(--fs-tint-warn-border, #ffe082);border-radius:6px;font-size:11px;color:var(--fs-fg-err, #795548);margin:0 0 6px;">⚠️ ${_noticeMsg}</div>`);
                     }
                     
                     // 모바일 위치 바 업데이트
@@ -11498,7 +11605,7 @@ const App = {
         if (_isRemoteStorage2) {
             const _sType2 = (storage.storage_type || '').toUpperCase();
             const _noticeMsg2 = t('remote_notice', '외부 스토리지 안내({type}): 목록, 업/다운로드, 미리보기 지원 / 동영상은 MP4·WebM 등만 미리보기 가능 / MKV·AVI 등은 다운로드만 가능 / 썸네일·압축·트랜스코딩·공유 링크 미지원').replace('{type}', _sType2);
-            $('#file-list').before(`<div id="remote-storage-notice" style="padding:6px 12px;background:#fff8e1;border:1px solid #ffe082;border-radius:6px;font-size:11px;color:#795548;margin:0 0 6px;">⚠️ ${_noticeMsg2}</div>`);
+            $('#file-list').before(`<div id="remote-storage-notice" style="padding:6px 12px;background:var(--fs-tint-warn, #fff8e1);border:1px solid var(--fs-tint-warn-border, #ffe082);border-radius:6px;font-size:11px;color:var(--fs-fg-err, #795548);margin:0 0 6px;">⚠️ ${_noticeMsg2}</div>`);
         }
         
         $('#storage-list a').removeClass('active');
@@ -12714,16 +12821,16 @@ const App = {
     async testFfmpeg() {
         const path = $('#setting-ffmpeg-path').val().trim();
         if (!path) {
-            $('#ffmpeg-test-result').html('<span style="color:#f44336;">' + t('enter_path_please', '경로를 입력해주세요.') + '</span>');
+            $('#ffmpeg-test-result').html('<span style="color:var(--fs-fg-err, #f44336);">' + t('enter_path_please', '경로를 입력해주세요.') + '</span>');
             return;
         }
-        $('#ffmpeg-test-result').html('<span style="color:#888;">' + t('testing', '테스트 중...') + '</span>');
+        $('#ffmpeg-test-result').html('<span style="color:var(--fs-text-3, #888);">' + t('testing', '테스트 중...') + '</span>');
         const res = await this.api('test_ffmpeg', { path });
         if (res.success) {
             const ver = res.version ? ` (v${this.escapeHtml(res.version)})` : '';
-            $('#ffmpeg-test-result').html(`<span style="color:#4CAF50;">✅ ${t("working_ok","정상 작동")}${ver}</span>`);
+            $('#ffmpeg-test-result').html(`<span style="color:var(--fs-fg-ok, #4CAF50);">✅ ${t("working_ok","정상 작동")}${ver}</span>`);
         } else {
-            $('#ffmpeg-test-result').html(`<span style="color:#f44336;">❌ ${this.escapeHtml(res.error)}</span>`);
+            $('#ffmpeg-test-result').html(`<span style="color:var(--fs-fg-err, #f44336);">❌ ${this.escapeHtml(res.error)}</span>`);
         }
     },
     
@@ -12731,16 +12838,16 @@ const App = {
     async testFfprobe() {
         const path = $('#setting-ffprobe-path').val().trim();
         if (!path) {
-            $('#ffprobe-test-result').html('<span style="color:#f44336;">' + t('enter_path_please', '경로를 입력해주세요.') + '</span>');
+            $('#ffprobe-test-result').html('<span style="color:var(--fs-fg-err, #f44336);">' + t('enter_path_please', '경로를 입력해주세요.') + '</span>');
             return;
         }
-        $('#ffprobe-test-result').html('<span style="color:#888;">' + t('testing', '테스트 중...') + '</span>');
+        $('#ffprobe-test-result').html('<span style="color:var(--fs-text-3, #888);">' + t('testing', '테스트 중...') + '</span>');
         const res = await this.api('test_ffprobe', { path });
         if (res.success) {
             const ver = res.version ? ` (v${this.escapeHtml(res.version)})` : '';
-            $('#ffprobe-test-result').html(`<span style="color:#4CAF50;">✅ ${t("working_ok","정상 작동")}${ver}</span>`);
+            $('#ffprobe-test-result').html(`<span style="color:var(--fs-fg-ok, #4CAF50);">✅ ${t("working_ok","정상 작동")}${ver}</span>`);
         } else {
-            $('#ffprobe-test-result').html(`<span style="color:#f44336;">❌ ${this.escapeHtml(res.error)}</span>`);
+            $('#ffprobe-test-result').html(`<span style="color:var(--fs-fg-err, #f44336);">❌ ${this.escapeHtml(res.error)}</span>`);
         }
     },
     
@@ -12749,31 +12856,31 @@ const App = {
     //   어느 단계에서 막혔는지와 조치 방법까지 보여준다.
     async testHwAccel() {
         const $box = $('#hwaccel-test-result');
-        $box.html('<span style="color:#888;">' + t('testing', '테스트 중...') + '</span>');
+        $box.html('<span style="color:var(--fs-text-3, #888);">' + t('testing', '테스트 중...') + '</span>');
         const res = await this.api('test_hwaccel', {}, 'POST');
         if (!res.success) {
-            $box.html('<span style="color:#f44336;">✖ ' + this.escapeHtml(res.error || t('test_failed', '테스트 실패')) + '</span>');
+            $box.html('<span style="color:var(--fs-fg-err, #f44336);">✖ ' + this.escapeHtml(res.error || t('test_failed', '테스트 실패')) + '</span>');
             return;
         }
-        let html = '<div style="color:#666; margin-bottom:4px;">'
+        let html = '<div style="color:var(--fs-text-2, #666); margin-bottom:4px;">'
             + this.escapeHtml(res.os) + ' · ffmpeg: <code>' + this.escapeHtml(res.ffmpeg) + '</code></div>';
         // ★ (2026-08-25) CPU·GPU 모델명 — 세대 판별은 하지 않고 모델명만 보여준다(판단은 사용자 몫).
         if (res.cpu) {
-            html += '<div style="color:#666; margin-bottom:2px;">CPU: ' + this.escapeHtml(res.cpu) + '</div>';
+            html += '<div style="color:var(--fs-text-2, #666); margin-bottom:2px;">CPU: ' + this.escapeHtml(res.cpu) + '</div>';
         }
         if (Array.isArray(res.gpus) && res.gpus.length) {
-            html += '<div style="color:#666; margin-bottom:4px;">GPU: '
+            html += '<div style="color:var(--fs-text-2, #666); margin-bottom:4px;">GPU: '
                  + res.gpus.map(g => this.escapeHtml(g)).join(', ') + '</div>';
         }
 
         // 렌더 노드 상태 (리눅스에서만 의미 있음)
         if (Array.isArray(res.render_nodes) && res.render_nodes.length) {
-            html += '<div style="color:#666; margin-bottom:4px;">/dev/dri: ';
+            html += '<div style="color:var(--fs-text-2, #666); margin-bottom:4px;">/dev/dri: ';
             html += res.render_nodes.map(n =>
                 '<code>' + this.escapeHtml(n.path) + '</code> '
                 + (n.usable
-                    ? '<span style="color:#4CAF50;">' + t('hw_accessible', '접근 가능') + '</span>'
-                    : '<span style="color:#f44336;">' + t('hw_no_permission', '권한 없음') + '</span>')
+                    ? '<span style="color:var(--fs-fg-ok, #4CAF50);">' + t('hw_accessible', '접근 가능') + '</span>'
+                    : '<span style="color:var(--fs-fg-err, #f44336);">' + t('hw_no_permission', '권한 없음') + '</span>')
             ).join(', ');
             html += '</div>';
         }
@@ -12782,7 +12889,7 @@ const App = {
         (res.items || []).forEach(it => {
             if (it.ok) anyOk = true;
             const mark = it.ok ? '✅' : '❌';
-            const color = it.ok ? '#4CAF50' : '#999';
+            const color = it.ok ? '#4CAF50' : 'var(--fs-text-3, #999)';
             html += '<div style="margin:2px 0; color:' + color + ';">' + mark + ' <b>' + this.escapeHtml(it.encoder) + '</b>';
             if (!it.ok && it.reason) html += ' — ' + this.escapeHtml(it.reason);
             html += '</div>';
@@ -12804,11 +12911,11 @@ const App = {
                 };
                 const msg = hints[it.pkg_hint];
                 if (msg) {
-                    html += '<div style="color:#2196F3; font-size:11px; margin:0 0 2px 18px;">↳ ' + msg + '</div>';
+                    html += '<div style="color:var(--fs-fg-info, #2196F3); font-size:11px; margin:0 0 2px 18px;">↳ ' + msg + '</div>';
                 }
             }
             if (!it.ok && it.detail) {
-                html += '<div style="color:#aaa; font-size:11px; margin:0 0 4px 18px; word-break:break-all;">'
+                html += '<div style="color:var(--fs-text-3, #aaa); font-size:11px; margin:0 0 4px 18px; word-break:break-all;">'
                      + this.escapeHtml(it.detail) + '</div>';
             }
         });
@@ -12823,7 +12930,7 @@ const App = {
             html += '<div style="color:#ff9800; margin-top:6px;">'
                  + t('hw_perm_fix_title', '조치 방법 — 웹서버 계정에 렌더 노드 접근 권한 주기') + '</div>';
             if (res.web_user || res.node_group) {
-                html += '<div style="color:#888; font-size:11px; margin-top:2px;">'
+                html += '<div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:2px;">'
                      + t('hw_web_user', '웹서버 계정') + ': <code>' + this.escapeHtml(res.web_user || '?') + '</code> · '
                      + t('hw_node_group', '렌더 노드 그룹') + ': <code>' + this.escapeHtml(res.node_group || '?') + '</code></div>';
             }
@@ -12839,21 +12946,21 @@ const App = {
                 //   구버전 DSM 에 --memberadd 가 없을 수 있어, 기존 멤버를 읽었으면
                 //   --member 완성 명령을 **대안**으로 함께 보여준다.
                 if (res.is_synology) {
-                    html += '<div style="color:#888; font-size:11px; margin-top:2px;">'
+                    html += '<div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:2px;">'
                          + t('hw_syno_memberadd', '아래 명령은 기존 멤버를 유지한 채 계정만 추가합니다.') + '</div>';
                 }
                 // 실제 계정·그룹으로 채운 명령 — 그대로 복사해 쓸 수 있다.
                 html += '<div style="margin-top:4px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
-                     + '<code id="hw-fix-cmd" style="background:#f5f5f5; padding:4px 8px; border-radius:4px; user-select:all; word-break:break-all;">'
+                     + '<code id="hw-fix-cmd" style="background:var(--fs-surface-2, #f5f5f5); padding:4px 8px; border-radius:4px; user-select:all; word-break:break-all;">'
                      + this.escapeHtml(res.fix_cmd) + '</code>'
                      + '<button type="button" class="btn btn-sm" onclick="App.copyHwFixCmd()">'
                      + t('copy', '복사') + '</button></div>';
                 if (res.alt_cmd) {
-                    html += '<div style="color:#888; font-size:11px; margin-top:6px;">'
+                    html += '<div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:6px;">'
                          + t('hw_syno_alt', '위 명령이 "unknown option" 등으로 실패하면(구버전 DSM) 아래를 사용하세요. 기존 멤버가 모두 포함되어 있으니 그대로 실행해야 합니다 — 일부를 빼면 그 계정이 그룹에서 제거됩니다.')
                          + '</div>';
                     html += '<div style="margin-top:2px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
-                         + '<code id="hw-alt-cmd" style="background:#f5f5f5; padding:4px 8px; border-radius:4px; user-select:all; word-break:break-all;">'
+                         + '<code id="hw-alt-cmd" style="background:var(--fs-surface-2, #f5f5f5); padding:4px 8px; border-radius:4px; user-select:all; word-break:break-all;">'
                          + this.escapeHtml(res.alt_cmd) + '</code>'
                          + '<button type="button" class="btn btn-sm" onclick="App.copyHwFixCmd(\'hw-alt-cmd\')">'
                          + t('copy', '복사') + '</button></div>';
@@ -12862,25 +12969,25 @@ const App = {
                     //   대안(--member)을 만들 수 없으므로, **조회 명령**을 안내한다.
                     //   (fix_cmd 가 항상 채워지도록 바뀌면서 아래 조회 분기가 도달 불가가 됐던 것을
                     //    감사에서 발견해 여기로 옮김.)
-                    html += '<div style="color:#888; font-size:11px; margin-top:6px;">'
+                    html += '<div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:6px;">'
                          + t('hw_syno_alt_unknown', '위 명령이 실패하면(구버전 DSM) 먼저 기존 멤버를 확인한 뒤, synogroup --member 로 그 목록 뒤에 계정을 덧붙여 실행하세요.')
                          + '</div>';
                     html += '<div style="margin-top:2px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">'
-                         + '<code id="hw-alt-cmd" style="background:#f5f5f5; padding:4px 8px; border-radius:4px; user-select:all;">'
+                         + '<code id="hw-alt-cmd" style="background:var(--fs-surface-2, #f5f5f5); padding:4px 8px; border-radius:4px; user-select:all;">'
                          + this.escapeHtml(res.get_cmd) + '</code>'
                          + '<button type="button" class="btn btn-sm" onclick="App.copyHwFixCmd(\'hw-alt-cmd\')">'
                          + t('copy', '복사') + '</button></div>';
                 }
             } else {
                 // 계정·그룹을 알아내지 못한 경우 일반 안내로 대체
-                html += '<div style="color:#888; font-size:11px; margin-top:2px;">'
+                html += '<div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:2px;">'
                      + t('hw_perm_generic', '웹서버 계정을 렌더 노드 그룹에 추가하세요 (예: usermod -aG video www-data).') + '</div>';
             }
             // ★ (2026-08-24) 환경별 실행 절차 — 서버가 판정한 is_synology 로 안내를 나눈다.
             //   [왜] 종전에는 "SSH 에서 실행 후 웹서버 재시작" 이라고만 적어, **SSH 를 켜는 법**과
             //   **웹서버를 재시작하는 법**이 빠져 있었다. 시놀로지는 SSH 가 기본 꺼짐이고
             //   재시작 위치도 일반 리눅스와 달라, 사용자가 여기서 막힌다.
-            html += '<ol style="color:#888; font-size:11px; margin:6px 0 0 18px; padding:0; line-height:1.7;">';
+            html += '<ol style="color:var(--fs-text-3, #888); font-size:11px; margin:6px 0 0 18px; padding:0; line-height:1.7;">';
             if (res.is_synology) {
                 html += '<li>' + t('hw_step_ssh_syno', 'SSH가 꺼져 있으면: 제어판 → 터미널 및 SNMP → SSH 서비스 활성화') + '</li>';
                 html += '<li>' + t('hw_step_run', 'SSH로 접속해 위 명령을 실행 (sudo 권한이 있는 계정)') + '</li>';
@@ -12896,7 +13003,7 @@ const App = {
         // ★ 권한 안내 절차 안에 이미 캐시 삭제 단계가 있으므로 그때는 생략(중복 방지).
         const hasPermSteps = (res.render_nodes || []).some(n => !n.usable);
         if (!hasPermSteps) {
-            html += '<div style="color:#888; margin-top:6px;">'
+            html += '<div style="color:var(--fs-text-3, #888); margin-top:6px;">'
                  + t('hw_apply_hint', '설정을 바꾼 뒤에는 data/hw_encoder_cache.json 을 삭제해야 다시 감지합니다.')
                  + '</div>';
         }
@@ -12932,16 +13039,16 @@ const App = {
         const tool = $('#setting-pdf-tool').val();
         const path = $('#setting-pdf-tool-path').val().trim();
         if (!tool && !path) {
-            $('#pdftool-test-result').html('<span style="color:#f44336;">' + t('select_tool_or_path', '도구를 선택하거나 경로를 입력해주세요.') + '</span>');
+            $('#pdftool-test-result').html('<span style="color:var(--fs-fg-err, #f44336);">' + t('select_tool_or_path', '도구를 선택하거나 경로를 입력해주세요.') + '</span>');
             return;
         }
-        $('#pdftool-test-result').html('<span style="color:#888;">' + t('testing', '테스트 중...') + '</span>');
+        $('#pdftool-test-result').html('<span style="color:var(--fs-text-3, #888);">' + t('testing', '테스트 중...') + '</span>');
         const res = await this.api('test_pdftool', { tool, path });
         if (res.success) {
             const ver = res.version ? ` (${this.escapeHtml(res.version)})` : '';
-            $('#pdftool-test-result').html(`<span style="color:#4CAF50;">✅ ${t("working_ok","정상 작동")}${ver}</span>`);
+            $('#pdftool-test-result').html(`<span style="color:var(--fs-fg-ok, #4CAF50);">✅ ${t("working_ok","정상 작동")}${ver}</span>`);
         } else {
-            $('#pdftool-test-result').html(`<span style="color:#f44336;">❌ ${this.escapeHtml(res.error)}</span>`);
+            $('#pdftool-test-result').html(`<span style="color:var(--fs-fg-err, #f44336);">❌ ${this.escapeHtml(res.error)}</span>`);
         }
     },
     
@@ -12968,15 +13075,15 @@ const App = {
         if (!el) return;
         
         const row = (icon, label, status, desc) => {
-            const color = status ? '#4CAF50' : '#999';
-            const bg = status ? '#E8F5E9' : '#f5f5f5';
-            const border = status ? '#C8E6C9' : '#eee';
+            const color = status ? 'var(--fs-fg-ok, #157347)' : 'var(--fs-text-3, #999)';   // ★ (2026-10-24) 초록 글자 #4CAF50 → 옅은 초록 바탕 위 2.5:1 이라 짙게(5.2:1), 어두운 테마는 테마의 성공 글자색
+            const bg = status ? 'var(--fs-tint-ok, #E8F5E9)' : 'var(--fs-surface-2, #f5f5f5)';
+            const border = status ? 'var(--fs-tint-ok-border, #C8E6C9)' : 'var(--fs-border, #eee)';
             const statusIcon = status ? '✅' : '❌';
             return `<div style="display:flex; align-items:center; gap:10px; padding:8px 12px; margin:4px 0; border-radius:8px; background:${bg}; border:1px solid ${border}; font-size:13px;">
                 <span style="font-size:16px;">${icon}</span>
                 <div style="flex:1;">
                     <div style="font-weight:600; color:${color};">${statusIcon} ${label}</div>
-                    <div style="font-size:11px; color:#888; margin-top:2px;">${desc}</div>
+                    <div style="font-size:11px; color:var(--fs-text-3, #888); margin-top:2px;">${desc}</div>
                 </div>
             </div>`;
         };
@@ -13028,7 +13135,7 @@ const App = {
         // 캐시 상태
         if (res.cache.count > 0) {
             const sizeMB = (res.cache.size / 1024 / 1024).toFixed(1);
-            html += `<div style="margin-top:8px; padding:6px 12px; font-size:12px; color:#666; background:#fafafa; border-radius:6px;">📦 ${t('cache','캐시')}: ${res.cache.count} ${t('files','파일')} (${sizeMB} MB)</div>`;
+            html += `<div style="margin-top:8px; padding:6px 12px; font-size:12px; color:var(--fs-text-2, #666); background:var(--fs-surface-2, #fafafa); border-radius:6px;">📦 ${t('cache','캐시')}: ${res.cache.count} ${t('files','파일')} (${sizeMB} MB)</div>`;
         }
         
         el.innerHTML = html;
@@ -13041,7 +13148,7 @@ const App = {
         
         // iframe fallback 함수
         const showIframe = () => {
-            { const _iframe = document.createElement('iframe'); _iframe.src = pdfUrl; _iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;'; container.innerHTML = ''; container.appendChild(_iframe); }
+            { const _iframe = document.createElement('iframe'); _iframe.src = pdfUrl; _iframe.style.cssText = 'width:100%;height:100%;border:none;background:var(--fs-surface, #fff);'; container.innerHTML = ''; container.appendChild(_iframe); }
         };
         
         try {
@@ -13086,13 +13193,13 @@ const App = {
                     <div style="display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:nowrap;">
                         <button onclick="App._pdfPrevPage()" style="background:#555;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:12px;">◀</button>
                         <input id="pdf-page-input" type="tel" inputmode="numeric" pattern="[0-9]*" value="1" style="width:36px;max-width:36px;text-align:center;background:#444;color:#fff;border:1px solid #666;border-radius:3px;padding:2px 4px;font-size:11px;margin:0;box-sizing:border-box;" onchange="App._pdfGoToPage(this.value)">
-                        <span style="color:#aaa;font-size:11px;white-space:nowrap;">/ ${totalPages}</span>
+                        <span style="color:var(--fs-text-3, #aaa);font-size:11px;white-space:nowrap;">/ ${totalPages}</span>
                         <button onclick="App._pdfNextPage()" style="background:#555;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:12px;">▶</button>
-                        <span style="color:#555;">|</span>
+                        <span style="color:var(--fs-text-2, #555);">|</span>
                         <button onclick="App._pdfZoom(-0.25)" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">➖</button>
                         <span id="pdf-zoom-level" style="color:#fff;font-size:11px;min-width:35px;text-align:center;">100%</span>
                         <button onclick="App._pdfZoom(0.25)" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">➕</button>
-                        <span style="color:#555;">|</span>
+                        <span style="color:var(--fs-text-2, #555);">|</span>
                         <button onclick="App._pdfFitWidth()" title="${t('fit_width','너비 맞춤')}" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">↔️</button>
                         <button onclick="App._pdfFitPage()" title="${t('fit_page','페이지 맞춤')}" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">📐</button>
                         <button onclick="App._pdfRotate()" title="${t('rotate','회전')}" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">🔄</button>
@@ -13153,7 +13260,7 @@ const App = {
             pageDiv.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
             pageDiv.style.position = 'relative';
             // 페이지 번호 표시
-            pageDiv.innerHTML = `<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#ccc;font-size:14px;">${i}</div>`;
+            pageDiv.innerHTML = `<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--fs-text-4, #ccc);font-size:14px;">${i}</div>`;
             pagesDiv.appendChild(pageDiv);
         }
         
@@ -13561,7 +13668,7 @@ const App = {
         const summary = res.summary || {};
         const sKeys = Object.keys(summary);
         let html = '<div style="max-height:60vh;overflow:auto;font-size:12px;">';
-        if (noExif) html += '<div style="margin-bottom:8px;color:#888;">' + this.escapeHtml(t('exif_none_basic', '이 이미지에는 EXIF 정보가 없습니다. 파일 자체의 기본 정보만 표시합니다.')) + '</div>';
+        if (noExif) html += '<div style="margin-bottom:8px;color:var(--fs-text-3, #888);">' + this.escapeHtml(t('exif_none_basic', '이 이미지에는 EXIF 정보가 없습니다. 파일 자체의 기본 정보만 표시합니다.')) + '</div>';
 
         if (sKeys.length) {
             html += '<table style="width:100%;border-collapse:collapse;margin-bottom:10px;">';
@@ -13574,7 +13681,7 @@ const App = {
                       + t('exif_map', '지도') + ' ↗</a>';
                 }
                 html += '<tr>'
-                     + '<td style="padding:3px 10px 3px 0;color:#666;white-space:nowrap;vertical-align:top;">'
+                     + '<td style="padding:3px 10px 3px 0;color:var(--fs-text-2, #666);white-space:nowrap;vertical-align:top;">'
                      + this.escapeHtml(k) + '</td>'
                      + '<td style="padding:3px 0;word-break:break-all;">' + v + '</td></tr>';
             });
@@ -13587,19 +13694,19 @@ const App = {
         if (!det || det.length) {
             // EXIF 가 없으면 접지 않고 '이미지' 묶음을 바로 보여 준다
             html += noExif ? '<div>' : ('<details style="margin-top:4px;">'
-                 + '<summary style="cursor:pointer;color:#2196F3;">' + t('exif_all', '전체 태그 보기') + '</summary>'
+                 + '<summary style="cursor:pointer;color:var(--fs-fg-info, #2196F3);">' + t('exif_all', '전체 태그 보기') + '</summary>'
                  + '<div style="margin-top:6px;">');
             if (det) {
                 det.forEach(g => {
                     if (!g || !Array.isArray(g.rows)) return;
                     html += '<div style="margin-bottom:10px;">'
-                         + '<div style="font-weight:600;margin-bottom:4px;color:#888;border-bottom:1px solid rgba(128,128,128,0.25);padding-bottom:2px;">' + this.escapeHtml(g.title) + '</div>'
+                         + '<div style="font-weight:600;margin-bottom:4px;color:var(--fs-text-3, #888);border-bottom:1px solid rgba(128,128,128,0.25);padding-bottom:2px;">' + this.escapeHtml(g.title) + '</div>'
                          + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;">';   // 묶음마다 항목 칸 너비를 같게
                     g.rows.forEach(r => {
                         let v = this.escapeHtml(r.v);
                         if (r.map) v += ' <a href="https://www.google.com/maps?q=' + encodeURIComponent(r.map) + '" target="_blank" rel="noopener">' + t('exif_map', '지도') + ' ↗</a>';
                         html += '<tr>'
-                             + '<td style="padding:2px 8px 2px 0;color:#666;vertical-align:top;width:9em;">' + this.escapeHtml(r.k) + '</td>'
+                             + '<td style="padding:2px 8px 2px 0;color:var(--fs-text-2, #666);vertical-align:top;width:9em;">' + this.escapeHtml(r.k) + '</td>'
                              + '<td style="padding:2px 0;word-break:break-all;">' + v + '</td></tr>';
                     });
                     html += '</table></div>';
@@ -13607,11 +13714,11 @@ const App = {
             } else {
             keys.forEach(sec => {
                 html += '<div style="margin-bottom:10px;">'
-                     + '<div style="font-weight:600;margin-bottom:4px;color:#888;">' + this.escapeHtml(sec) + '</div>'
+                     + '<div style="font-weight:600;margin-bottom:4px;color:var(--fs-text-3, #888);">' + this.escapeHtml(sec) + '</div>'
                      + '<table style="width:100%;border-collapse:collapse;">';
                 Object.keys(sections[sec]).forEach(k => {
                     html += '<tr>'
-                         + '<td style="padding:2px 8px 2px 0;color:#666;white-space:nowrap;vertical-align:top;">'
+                         + '<td style="padding:2px 8px 2px 0;color:var(--fs-text-2, #666);white-space:nowrap;vertical-align:top;">'
                          + this.escapeHtml(k) + '</td>'
                          + '<td style="padding:2px 0;word-break:break-all;">'
                          + this.escapeHtml(sections[sec][k]) + '</td></tr>';
@@ -13653,8 +13760,8 @@ const App = {
         const li = 'margin:2px 0;';
         const content = '<div style="font-size:14px;line-height:1.55;">'
             + '<p style="margin:0 0 10px;font-weight:500;">' + this.escapeHtml(head) + '</p>'
-            + (skipped > 0 ? '<p style="margin:0 0 10px;color:#888;font-size:13px;">' + this.escapeHtml(tf('exif_strip_skip_n', { count: skipped }, `폴더·다른 형식 ${skipped}개는 건너뜁니다.`)) + '</p>' : '')
-            + '<div style="font-size:13px;margin-bottom:8px;"><b style="color:#d9534f;">' + this.escapeHtml(t('exif_strip_rm_h', '지우는 것')) + '</b>'
+            + (skipped > 0 ? '<p style="margin:0 0 10px;color:var(--fs-text-3, #888);font-size:13px;">' + this.escapeHtml(tf('exif_strip_skip_n', { count: skipped }, `폴더·다른 형식 ${skipped}개는 건너뜁니다.`)) + '</p>' : '')
+            + '<div style="font-size:13px;margin-bottom:8px;"><b style="color:var(--fs-fg-err, #d9534f);">' + this.escapeHtml(t('exif_strip_rm_h', '지우는 것')) + '</b>'
             + '<ul style="margin:4px 0 0 18px;padding:0;">'
             + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm1', '위치(GPS 좌표·고도·방향)')) + '</li>'
             + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm2', '찍은·수정한 날짜와 시간, 시간대')) + '</li>'
@@ -13663,10 +13770,10 @@ const App = {
             + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm5', '편집 프로그램·컴퓨터 이름, 제조사 전용 정보(MakerNote)')) + '</li>'
             + '<li style="' + li + '">' + this.escapeHtml(t('exif_strip_rm6', '내장 썸네일(원본 사진이 남아 있을 수 있음), IPTC·주석, XMP 안의 위치·작성자·날짜 등')) + '</li>'
             + '</ul></div>'
-            + '<div style="font-size:13px;margin-bottom:8px;"><b style="color:#5cb85c;">' + this.escapeHtml(t('exif_strip_keep_h', '남기는 것')) + '</b>'
-            + '<div style="margin:4px 0 0 4px;color:#666;">' + this.escapeHtml(t('exif_strip_keep', '카메라 제조사·모델, 렌즈 모델, 촬영 설정(조리개·셔터·ISO·초점 거리·플래시 등), 방향, 해상도, 색 프로필, 별점, HDR 표시 정보')) + '</div>'
-            + '<div style="margin:4px 0 0 4px;color:#888;font-size:12px;">' + this.escapeHtml(t('exif_strip_keep2', '사진 뒤에 붙은 동영상(모션 포토)·제조사 추가 데이터는 지우지 않습니다(지우면 동영상이 사라짐).')) + '</div></div>'
-            + '<p style="margin:8px 0 0;color:#888;font-size:12px;">' + this.escapeHtml(t('exif_strip_note', '그림(화질)은 바뀌지 않습니다. 원본 파일이 바뀌고 수정한 날짜가 지금으로 바뀝니다. 버전 관리가 켜져 있으면 이전 버전에서 되돌릴 수 있습니다.')) + '</p>'
+            + '<div style="font-size:13px;margin-bottom:8px;"><b style="color:var(--fs-fg-ok, #5cb85c);">' + this.escapeHtml(t('exif_strip_keep_h', '남기는 것')) + '</b>'
+            + '<div style="margin:4px 0 0 4px;color:var(--fs-text-2, #666);">' + this.escapeHtml(t('exif_strip_keep', '카메라 제조사·모델, 렌즈 모델, 촬영 설정(조리개·셔터·ISO·초점 거리·플래시 등), 방향, 해상도, 색 프로필, 별점, HDR 표시 정보')) + '</div>'
+            + '<div style="margin:4px 0 0 4px;color:var(--fs-text-3, #888);font-size:12px;">' + this.escapeHtml(t('exif_strip_keep2', '사진 뒤에 붙은 동영상(모션 포토)·제조사 추가 데이터는 지우지 않습니다(지우면 동영상이 사라짐).')) + '</div></div>'
+            + '<p style="margin:8px 0 0;color:var(--fs-text-3, #888);font-size:12px;">' + this.escapeHtml(t('exif_strip_note', '그림(화질)은 바뀌지 않습니다. 원본 파일이 바뀌고 수정한 날짜가 지금으로 바뀝니다. 버전 관리가 켜져 있으면 이전 버전에서 되돌릴 수 있습니다.')) + '</p>'
             + '</div>';
         return this.showConfirmModal({
             title: t('exif_strip_title', '🧹 EXIF 개인정보 삭제'),
@@ -13781,8 +13888,8 @@ const App = {
         if (cnt.stripped && !this.isSearchMode && !(this.vault && this.vault.isVaultView)) this.loadFiles();
         if (bad.length) {
             const list = bad.slice(0, 50).map(b => '<div style="padding:4px 8px;margin:3px 0;background:rgba(0,0,0,0.04);border-radius:4px;word-break:break-all;font-size:12px;">'
-                + this.escapeHtml(b.name) + (b.msg ? ' <span style="color:#d9534f;">— ' + this.escapeHtml(b.msg) + '</span>' : '') + '</div>').join('')
-                + (bad.length > 50 ? '<div style="color:#888;font-size:12px;">… +' + (bad.length - 50) + '</div>' : '');
+                + this.escapeHtml(b.name) + (b.msg ? ' <span style="color:var(--fs-fg-err, #d9534f);">— ' + this.escapeHtml(b.msg) + '</span>' : '') + '</div>').join('')
+                + (bad.length > 50 ? '<div style="color:var(--fs-text-3, #888);font-size:12px;">… +' + (bad.length - 50) + '</div>' : '');
             this.toast(summary, cnt.stripped ? 'success' : 'error', 4000);
             this.alert('<div style="margin-bottom:8px;">' + this.escapeHtml(summary) + '</div><div style="max-height:300px;overflow:auto;">' + list + '</div>', t('exif_strip_title', '🧹 EXIF 개인정보 삭제'));
         } else {
@@ -13799,12 +13906,12 @@ const App = {
         (Array.isArray(groups) ? groups : []).forEach(g => {
             if (!g || !Array.isArray(g.rows) || !g.rows.length) return;
             html += '<div style="margin-bottom:10px;">'
-                 + '<div style="font-weight:600;margin-bottom:4px;color:#888;border-bottom:1px solid rgba(128,128,128,0.25);padding-bottom:2px;">' + this.escapeHtml(g.title) + '</div>'
+                 + '<div style="font-weight:600;margin-bottom:4px;color:var(--fs-text-3, #888);border-bottom:1px solid rgba(128,128,128,0.25);padding-bottom:2px;">' + this.escapeHtml(g.title) + '</div>'
                  + '<table style="width:100%;border-collapse:collapse;table-layout:fixed;">';
             g.rows.forEach(r => {
                 let v = this.escapeHtml(r.v);
                 if (r.map) v += ' <a href="https://www.google.com/maps?q=' + encodeURIComponent(r.map) + '" target="_blank" rel="noopener">' + t('exif_map', '지도') + ' ↗</a>';
-                html += '<tr><td style="padding:2px 8px 2px 0;color:#666;vertical-align:top;width:9em;">' + this.escapeHtml(r.k) + '</td>'
+                html += '<tr><td style="padding:2px 8px 2px 0;color:var(--fs-text-2, #666);vertical-align:top;width:9em;">' + this.escapeHtml(r.k) + '</td>'
                      + '<td style="padding:2px 0;word-break:break-all;">' + v + '</td></tr>';
             });
             html += '</table></div>';
@@ -13902,7 +14009,7 @@ const App = {
         else { groups = res.groups || []; if (res.note) note = res.note; }
         const liveTitle = t('vi_live', '재생 상태');
         const html = '<div style="max-height:60vh;overflow:auto;font-size:12px;" id="vi-scroll">'
-            + (note ? '<div style="margin-bottom:8px;color:#888;">' + this.escapeHtml(note) + '</div>' : '')
+            + (note ? '<div style="margin-bottom:8px;color:var(--fs-text-3, #888);">' + this.escapeHtml(note) + '</div>' : '')
             + this._infoGroupsHtml(groups)
             + '<div id="vi-live">' + this._infoGroupsHtml([{ title: liveTitle, rows: this._videoLiveRows(v2) }]) + '</div>'
             + '</div>';
@@ -13912,7 +14019,7 @@ const App = {
             if (!box || !this._videoInfoShown()) { clearInterval(timer); return; }   // 닫혔거나 다른 창이 덮음
             // [검토 반영] 창이 열린 채 다음 영상으로 자동으로 넘어가면 위 정보(이전 영상)와 재생 상태(새 영상)가 섞이므로 멈추고 알린다.
             if (!vv || this._currentPreviewItem !== item) {
-                box.innerHTML = '<div style="color:#888;">' + this.escapeHtml(t('vi_moved', '다른 영상으로 넘어가 재생 상태 갱신을 멈췄습니다.')) + '</div>';
+                box.innerHTML = '<div style="color:var(--fs-text-3, #888);">' + this.escapeHtml(t('vi_moved', '다른 영상으로 넘어가 재생 상태 갱신을 멈췄습니다.')) + '</div>';
                 clearInterval(timer); return;
             }
             box.innerHTML = this._infoGroupsHtml([{ title: liveTitle, rows: this._videoLiveRows(vv) }]);
@@ -15042,10 +15149,10 @@ const App = {
             const escHandler = (e) => { if (e.key === 'Escape') close(null); };
             const html = `
                 <div id="download-choice-modal" class="modal-overlay" style="display:flex;align-items:center;justify-content:center;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;">
-                    <div style="background:white;border-radius:12px;min-width:340px;max-width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                    <div style="background:var(--fs-surface, white);border-radius:12px;min-width:340px;max-width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.3);">
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:18px 20px 12px;">
                             <h3 style="margin:0;font-size:16px;">📥 ${items.length}${t('count_files_download','개 파일 다운로드')}</h3>
-                            <button id="dl-choice-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999;padding:0 0 0 10px;line-height:1;">&times;</button>
+                            <button id="dl-choice-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--fs-text-3, #999);padding:0 0 0 10px;line-height:1;">&times;</button>
                         </div>
                         <div style="padding:0 20px 20px;display:flex;flex-direction:column;gap:10px;">
                             <button id="dl-choice-individual" class="btn btn-primary" style="padding:12px;font-size:14px;">
@@ -15285,7 +15392,7 @@ const App = {
             : `<p style="margin:0 0 8px;">${t('convert_h264_confirm', '이 동영상을 H264/MP4로 변환합니다.')}</p>`;
         const ok = await this.showConfirmModal({
             title: t('convert_h264_title', '🎬 H264/MP4로 변환'),
-            content: `${countMsg}<p style="margin:0 0 12px;color:#888;font-size:13px;">${t('convert_h264_desc', '원본이 이미 H264면 화질·용량 그대로 MP4로 재포장되고, 그 외(HEVC 등)는 화질을 최대한 보존하여 변환합니다. 변환된 파일은 같은 폴더에 생성됩니다.')}</p><label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;user-select:none;"><input type="checkbox" id="convert-delete-original" style="width:16px;height:16px;cursor:pointer;"><span>${t('convert_delete_original_label', '변환 후 원본을 휴지통으로 이동')}</span></label>`,
+            content: `${countMsg}<p style="margin:0 0 12px;color:var(--fs-text-3, #888);font-size:13px;">${t('convert_h264_desc', '원본이 이미 H264면 화질·용량 그대로 MP4로 재포장되고, 그 외(HEVC 등)는 화질을 최대한 보존하여 변환합니다. 변환된 파일은 같은 폴더에 생성됩니다.')}</p><label style="display:flex;align-items:center;gap:8px;font-size:14px;cursor:pointer;user-select:none;"><input type="checkbox" id="convert-delete-original" style="width:16px;height:16px;cursor:pointer;"><span>${t('convert_delete_original_label', '변환 후 원본을 휴지통으로 이동')}</span></label>`,
             buttons: [
                 { text: t('cancel', '취소'), value: false, class: 'btn-secondary' },
                 { text: t('convert_start', '변환 시작'), value: true, class: 'btn-primary' }
@@ -15444,23 +15551,23 @@ const App = {
         if (old) old.remove();
         const html = `
             <div id="conv-progress-modal" class="modal-overlay" style="display:flex; align-items:center; justify-content:center; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:10000;">
-                <div style="background:white; border-radius:12px; padding:30px; width:550px; max-width:90%; box-sizing:border-box; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                <div style="background:var(--fs-surface, white); border-radius:12px; padding:30px; width:550px; max-width:90%; box-sizing:border-box; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
                     <h3 style="margin:0 0 20px; font-size:18px;">🎬 ${t('converting','변환 중...')}</h3>
                     <div style="margin-bottom:15px;">
-                        <div style="font-size:14px; color:#666; margin-bottom:5px; word-break:break-all; overflow-wrap:anywhere;">
+                        <div style="font-size:14px; color:var(--fs-text-2, #666); margin-bottom:5px; word-break:break-all; overflow-wrap:anywhere;">
                             <span id="conv-progress-filename" style="font-weight:500;">${this.escapeHtml(filename)}</span>
                         </div>
-                        <div style="background:#e0e0e0; border-radius:10px; height:20px; overflow:hidden;">
+                        <div style="background:var(--fs-surface-3, #e0e0e0); border-radius:10px; height:20px; overflow:hidden;">
                             <div id="conv-progress-bar" style="background:linear-gradient(90deg, #2196F3, #03A9F4); height:100%; width:0%; transition:width 0.3s; border-radius:10px;"></div>
                         </div>
-                        <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:13px; color:#888;">
+                        <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:13px; color:var(--fs-text-3, #888);">
                             <span id="conv-progress-stage">${t('preparing','준비 중...')}</span>
                             <span id="conv-progress-percent">0%</span>
                         </div>
                     </div>
-                    <p style="text-align:center;margin:12px 0 0;font-size:12px;color:#aaa;">${t('convert_time_notice','영상 길이/화질에 따라 시간이 걸릴 수 있습니다.')}</p>
+                    <p style="text-align:center;margin:12px 0 0;font-size:12px;color:var(--fs-text-3, #aaa);">${t('convert_time_notice','영상 길이/화질에 따라 시간이 걸릴 수 있습니다.')}</p>
                     <div style="text-align:center;margin-top:16px;">
-                        <button type="button" id="conv-progress-cancel" style="padding:8px 24px;font-size:14px;border:1px solid #ccc;border-radius:6px;background:#f5f5f5;cursor:pointer;">${t('cancel','취소')}</button>
+                        <button type="button" id="conv-progress-cancel" style="padding:8px 24px;font-size:14px;border:1px solid var(--fs-border-2, #ccc);border-radius:6px;background:var(--fs-surface-2, #f5f5f5);cursor:pointer;">${t('cancel','취소')}</button>
                     </div>
                 </div>
             </div>
@@ -15497,14 +15604,14 @@ const App = {
                         <button class="modal-close" id="extract-mode-close">&times;</button>
                     </div>
                     <div class="modal-body">
-                        <p style="margin:0 0 14px;font-size:14px;color:var(--text-light,#666);">${this.escapeHtml(item.name)}</p>
-                        <button id="extract-mode-folder" class="btn" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border:1px solid var(--border,#ddd);border-radius:6px;cursor:pointer;background:var(--bg,#fff);">
+                        <p style="margin:0 0 14px;font-size:14px;color:var(--text-light,var(--fs-text-2, #666));">${this.escapeHtml(item.name)}</p>
+                        <button id="extract-mode-folder" class="btn" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border:1px solid var(--border,var(--fs-border-2, #ddd));border-radius:6px;cursor:pointer;background:var(--bg,var(--fs-surface, #fff));">
                             <div style="font-weight:600;font-size:14px;">📁 ${folderLabel}</div>
-                            <div style="font-size:12px;color:#888;margin-top:3px;">${this.escapeHtml(baseName)}/ ${t('extract_to_folder_desc', '폴더를 만들고 그 안에 풉니다')}</div>
+                            <div style="font-size:12px;color:var(--fs-text-3, #888);margin-top:3px;">${this.escapeHtml(baseName)}/ ${t('extract_to_folder_desc', '폴더를 만들고 그 안에 풉니다')}</div>
                         </button>
-                        <button id="extract-mode-here" class="btn" style="display:block;width:100%;text-align:left;padding:12px 14px;border:1px solid var(--border,#ddd);border-radius:6px;cursor:pointer;background:var(--bg,#fff);">
+                        <button id="extract-mode-here" class="btn" style="display:block;width:100%;text-align:left;padding:12px 14px;border:1px solid var(--border,var(--fs-border-2, #ddd));border-radius:6px;cursor:pointer;background:var(--bg,var(--fs-surface, #fff));">
                             <div style="font-weight:600;font-size:14px;">📂 ${hereLabel}</div>
-                            <div style="font-size:12px;color:#888;margin-top:3px;">${t('extract_here_desc', '현재 위치에 바로 풉니다')}</div>
+                            <div style="font-size:12px;color:var(--fs-text-3, #888);margin-top:3px;">${t('extract_here_desc', '현재 위치에 바로 풉니다')}</div>
                         </button>
                     </div>
                     <div class="modal-footer">
@@ -15778,21 +15885,21 @@ const App = {
         const title = type === 'extract' ? t('extracting','📦 압축 해제 중...') : t('compressing','🗜️ 압축 중...');
         const html = `
             <div id="zip-progress-modal" class="modal-overlay" style="display:flex; align-items:center; justify-content:center; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:10000;">
-                <div style="background:white; border-radius:12px; padding:30px; min-width:400px; max-width:90%; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                <div style="background:var(--fs-surface, white); border-radius:12px; padding:30px; min-width:400px; max-width:90%; box-shadow:0 10px 40px rgba(0,0,0,0.3);">
                     <h3 style="margin:0 0 20px; font-size:18px;">${title}</h3>
                     <div style="margin-bottom:15px;">
-                        <div style="font-size:14px; color:#666; margin-bottom:5px;">
+                        <div style="font-size:14px; color:var(--fs-text-2, #666); margin-bottom:5px;">
                             <span id="zip-progress-filename" style="font-weight:500;">${this.escapeHtml(filename)}</span>
                         </div>
-                        <div style="background:#e0e0e0; border-radius:10px; height:20px; overflow:hidden;">
+                        <div style="background:var(--fs-surface-3, #e0e0e0); border-radius:10px; height:20px; overflow:hidden;">
                             <div id="zip-progress-bar" style="background:linear-gradient(90deg, #4CAF50, #8BC34A); height:100%; width:0%; transition:width 0.2s; border-radius:10px;"></div>
                         </div>
-                        <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:13px; color:#888;">
+                        <div style="display:flex; justify-content:space-between; margin-top:8px; font-size:13px; color:var(--fs-text-3, #888);">
                             <span id="zip-progress-count">${t('preparing','준비 중...')}</span>
                             <span id="zip-progress-percent">0%</span>
                         </div>
                     </div>
-                    <p style="text-align:center;margin:12px 0 0;font-size:12px;color:#aaa;">⚠️ ${t('compress_no_cancel','진행 중에는 취소할 수 없습니다. 대용량 파일은 진행률이 실시간으로 반영되지 않을 수 있습니다.')}</p>
+                    <p style="text-align:center;margin:12px 0 0;font-size:12px;color:var(--fs-text-3, #aaa);">⚠️ ${t('compress_no_cancel','진행 중에는 취소할 수 없습니다. 대용량 파일은 진행률이 실시간으로 반영되지 않을 수 있습니다.')}</p>
                 </div>
             </div>
         `;
@@ -15837,12 +15944,12 @@ const App = {
                             <button class="modal-close" id="zip-password-close">&times;</button>
                         </div>
                         <div class="modal-body">
-                            ${message ? `<p style="margin:0 0 15px; font-size:14px; color:var(--text-light,#666);">${message}</p>` : ''}
+                            ${message ? `<p style="margin:0 0 15px; font-size:14px; color:var(--text-light,var(--fs-text-2, #666));">${message}</p>` : ''}
                             <input type="password" id="zip-password-input" placeholder="${t('zip_password_placeholder', '암호 입력')}" autocomplete="off" style="padding:8px 10px;font-size:13px;">
                             ${showConfirm ? `
                             <input type="password" id="zip-password-confirm" placeholder="${t('zip_password_confirm', '암호 확인')}" autocomplete="off" style="margin-top:10px;padding:8px 10px;font-size:13px;">
                             ` : ''}
-                            <div id="zip-password-error" style="display:none;color:#e74c3c;font-size:0.85em;margin-top:6px;"></div>
+                            <div id="zip-password-error" style="display:none;color:var(--fs-fg-err, #e74c3c);font-size:0.85em;margin-top:6px;"></div>
                         </div>
                         <div class="modal-footer">
                             <button id="zip-password-cancel" class="btn">${t('cancel', '취소')}</button>
@@ -15934,21 +16041,21 @@ const App = {
                                 <label>${t('compress_filename', '파일명')}</label>
                                 <input type="text" id="compress-zip-name" value="${this.escapeHtml(defaultZipName)}">
                             </div>
-                            <div style="margin-top:12px;padding:10px;background:var(--bg-light, #f8f9fa);border-radius:6px;">
+                            <div style="margin-top:12px;padding:10px;background:var(--bg-light, var(--fs-surface-2, #f8f9fa));border-radius:6px;">
                                 <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;margin:0;">
                                     <input type="checkbox" id="compress-use-password" style="width:15px;height:15px;">
-                                    <span style="font-size:0.85em;color:var(--text-light,#666);">🔐 ${t('compress_encrypt', '암호 설정 (AES-256)')}</span>
+                                    <span style="font-size:0.85em;color:var(--text-light,var(--fs-text-2, #666));">🔐 ${t('compress_encrypt', '암호 설정 (AES-256)')}</span>
                                 </label>
                             </div>
                             <div id="compress-password-fields" style="display:none;margin-top:12px;">
                                 <input type="password" id="compress-password" placeholder="${t('zip_password_placeholder', '암호 입력')}" autocomplete="off" style="padding:8px 10px;font-size:13px;">
                                 <input type="password" id="compress-password-confirm" placeholder="${t('zip_password_confirm', '암호 확인')}" autocomplete="off" style="margin-top:8px;padding:8px 10px;font-size:13px;">
-                                <div id="compress-password-error" style="display:none;color:#e74c3c;font-size:0.85em;margin-top:6px;"></div>
+                                <div id="compress-password-error" style="display:none;color:var(--fs-fg-err, #e74c3c);font-size:0.85em;margin-top:6px;"></div>
                             </div>
-                            <div style="margin-top:12px;padding:10px;background:var(--bg-light, #f8f9fa);border-radius:6px;">
+                            <div style="margin-top:12px;padding:10px;background:var(--bg-light, var(--fs-surface-2, #f8f9fa));border-radius:6px;">
                                 <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;margin:0;">
                                     <input type="checkbox" id="compress-use-split" style="width:15px;height:15px;">
-                                    <span style="font-size:0.85em;color:var(--text-light,#666);">📦 ${t('compress_split', '분할 압축')}</span>
+                                    <span style="font-size:0.85em;color:var(--text-light,var(--fs-text-2, #666));">📦 ${t('compress_split', '분할 압축')}</span>
                                 </label>
                             </div>
                             <div id="compress-split-fields" style="display:none;margin-top:12px;">
@@ -15967,9 +16074,9 @@ const App = {
                                         <option value="MB" selected>MB</option>
                                         <option value="GB">GB</option>
                                     </select>
-                                    <span style="font-size:12px;color:#999;">${t('compress_split_desc', '단위별 분할')}</span>
+                                    <span style="font-size:12px;color:var(--fs-text-3, #999);">${t('compress_split_desc', '단위별 분할')}</span>
                                 </div>
-                                <p style="margin:6px 0 0;font-size:11px;color:#999;">⚠️ ${t('compress_split_note', '분할 압축은 서버에 7-Zip이 설치되어야 합니다')}</p>
+                                <p style="margin:6px 0 0;font-size:11px;color:var(--fs-text-3, #999);">⚠️ ${t('compress_split_note', '분할 압축은 서버에 7-Zip이 설치되어야 합니다')}</p>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -16581,7 +16688,7 @@ const App = {
                 <span class="upload-session-name" title="${this.escapeHtml(displayName)}">${this.escapeHtml(displayName)}</span>
                 <button class="upload-session-cancel" title="${t('cancel','취소')}">✕</button>
             </div>
-            <div style="font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(storageName + destDisplay)}">${t('to_location','대상')}: ${this.escapeHtml(storageName)}${this.escapeHtml(destDisplay)}</div>
+            <div style="font-size:11px;color:var(--fs-text-3, #888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(storageName + destDisplay)}">${t('to_location','대상')}: ${this.escapeHtml(storageName)}${this.escapeHtml(destDisplay)}</div>
             ${totalCount > 1 ? `<div class="upload-session-count">1 / ${totalCount}${t('count_files', '개 파일')}</div>` : ''}
             <div class="upload-session-progress">
                 <div class="upload-session-fill" style="width: 0%"></div>
@@ -17972,7 +18079,7 @@ const App = {
                 <span class="upload-session-name" title="${this.escapeHtml(session.filename)}">📥 ${this.escapeHtml(session.filename)}</span>
                 <button class="upload-session-cancel" title="${t('cancel','취소')}">✕</button>
             </div>
-            <div style="font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t('from_location','출발')}: ${this.escapeHtml(storageName)}${this.escapeHtml(srcPath)}</div>
+            <div style="font-size:11px;color:var(--fs-text-3, #888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${t('from_location','출발')}: ${this.escapeHtml(storageName)}${this.escapeHtml(srcPath)}</div>
             <div class="upload-session-progress">
                 <div class="upload-session-fill" style="width: 0%"></div>
             </div>
@@ -18553,7 +18660,10 @@ const App = {
             } else if (this.clipboard.items.length > 0) {
                 btn.style.display = '';
                 const mode = this.clipboard.mode === 'cut' ? t('move') : t('copy');
-                btn.textContent = `📋 ${t('paste','붙여넣기')} (${this.clipboard.items.length} ${mode})`;
+                // ★ (2026-10-23) 글자만 바꾸고 앞의 선 그림 아이콘(index.php .fs-ico, 이모지 대신)은 유지 — textContent 는 아이콘까지 지우므로 떼어 뒀다 다시 붙임
+                const _ico = btn.querySelector('svg.fs-ico');
+                btn.textContent = `${_ico ? ' ' : '📋 '}${t('paste','붙여넣기')} (${this.clipboard.items.length} ${mode})`;
+                if (_ico) btn.prepend(_ico);
             } else {
                 btn.style.display = 'none';
             }
@@ -18918,7 +19028,7 @@ const App = {
             const srcName = this._getStorageName(session.sourceStorageId);
             const dstName = this._getStorageName(session.destStorageId);
             const dstPath = session.destPath ? `/${session.destPath}` : '/';
-            pathHtml = `<div style="font-size:11px;color:#888;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(srcName)} → ${this.escapeHtml(dstName + dstPath)}">${this.escapeHtml(srcName)} → ${this.escapeHtml(dstName)}${this.escapeHtml(dstPath)}</div>`;
+            pathHtml = `<div style="font-size:11px;color:var(--fs-text-3, #888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(srcName)} → ${this.escapeHtml(dstName + dstPath)}">${this.escapeHtml(srcName)} → ${this.escapeHtml(dstName)}${this.escapeHtml(dstPath)}</div>`;
         }
         
         item.innerHTML = `
@@ -18928,7 +19038,7 @@ const App = {
             </div>
             ${pathHtml}
             <div class="upload-session-count">1 / ${session.totalFiles} ${t('files','파일')}</div>
-            <div class="upload-session-filename" style="font-size:11px;color:#555;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(session.currentFileName)}</div>
+            <div class="upload-session-filename" style="font-size:11px;color:var(--fs-text-2, #555);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(session.currentFileName)}</div>
             <div class="upload-session-progress">
                 <div class="upload-session-fill" style="width: 0%"></div>
             </div>
@@ -19708,7 +19818,10 @@ const App = {
             btnDeleteSelected.style.display = '';
             const isVault = this.vault && this.vault.isVaultView;
             const delLabel = isVault ? t('permanent_delete','영구 삭제') : t('delete_selected','선택 삭제');
-            btnDeleteSelected.textContent = `🗑️ ${delLabel} (${checked.length})`;
+            // ★ (2026-10-23) 선 그림 아이콘 유지 (위 붙여넣기 버튼과 같은 처리)
+            const _icoDel = btnDeleteSelected.querySelector('svg.fs-ico');
+            btnDeleteSelected.textContent = `${_icoDel ? ' ' : '🗑️ '}${delLabel} (${checked.length})`;
+            if (_icoDel) btnDeleteSelected.prepend(_icoDel);
         } else {
             btnDeleteSelected.style.display = 'none';
         }
@@ -19718,7 +19831,10 @@ const App = {
             const canDownload = this.currentPermissions && this.currentPermissions.can_download;
             if (checked.length > 0 && canDownload) {
                 btnDownloadSelected.style.display = '';
-                btnDownloadSelected.textContent = `📥 ${t('download','다운로드')} (${checked.length})`;
+                // ★ (2026-10-23) 선 그림 아이콘 유지
+                const _icoDl = btnDownloadSelected.querySelector('svg.fs-ico');
+                btnDownloadSelected.textContent = `${_icoDl ? ' ' : '📥 '}${t('download','다운로드')} (${checked.length})`;
+                if (_icoDl) btnDownloadSelected.prepend(_icoDl);
             } else {
                 btnDownloadSelected.style.display = 'none';
             }
@@ -20141,7 +20257,7 @@ const App = {
                 tip = t('search_no_match', '검색어와 일치하는 파일이 없습니다.');
             }
             
-            list.innerHTML = `<div class="empty-folder">${t('no_search_results','검색 결과가 없습니다.')}<br><small style="color:#888;">${tip}</small></div>`;
+            list.innerHTML = `<div class="empty-folder">${t('no_search_results','검색 결과가 없습니다.')}<br><small style="color:var(--fs-text-3, #888);">${tip}</small></div>`;
             return;
         }
         
@@ -20153,7 +20269,7 @@ const App = {
             const names = unindexedStorages.map(s => s.name).join(', ');
             const notice = document.createElement('div');
             notice.className = 'search-unindexed-notice';
-            notice.style.cssText = 'padding:8px 12px;margin:0 0 8px;background:#fff3cd;border:1px solid #ffc107;border-radius:6px;font-size:12px;color:#856404;';
+            notice.style.cssText = 'padding:8px 12px;margin:0 0 8px;background:var(--fs-tint-warn, #fff3cd);border:1px solid #ffc107;border-radius:6px;font-size:12px;color:var(--fs-fg-warn, #856404);';
             notice.innerHTML = `⚠️ ${t('search_unindexed_notice', '다음 스토리지는 인덱스가 없어 통합 검색에 포함되지 않습니다.')}<br><strong>${this.escapeHtml(names)}</strong><br><small>${t('search_unindexed_tip', '필터에서 해당 스토리지를 선택하면 실시간으로 검색할 수 있습니다 (느릴 수 있음).')}</small>`;
             list.appendChild(notice);
         }
@@ -20282,7 +20398,7 @@ const App = {
         
         if (startPage > 1) {
             html += `<button class="page-btn" data-page="1">1</button>`;
-            if (startPage > 2) html += '<span style="color:#999;padding:0 5px;">...</span>';
+            if (startPage > 2) html += '<span style="color:var(--fs-text-3, #999);padding:0 5px;">...</span>';
         }
         
         for (let i = startPage; i <= endPage; i++) {
@@ -20291,7 +20407,7 @@ const App = {
         }
         
         if (endPage < totalPages) {
-            if (endPage < totalPages - 1) html += '<span style="color:#999;padding:0 5px;">...</span>';
+            if (endPage < totalPages - 1) html += '<span style="color:var(--fs-text-3, #999);padding:0 5px;">...</span>';
             html += `<button class="page-btn" data-page="${totalPages}">${totalPages}</button>`;
         }
         
@@ -20734,8 +20850,8 @@ const App = {
             box.innerHTML =
                 `<label>${t('share_link', '공유 링크')} — ` +
                 `${t('share_bulk_new', '신규')} ${made} · ${t('share_bulk_exist', '기존')} ${kept}` +
-                (bad ? ` · <span style="color:#d33;">${t('share_bulk_fail', '실패')} ${bad}</span>` : '') + `</label>` +
-                `<div style="max-height:240px;overflow-y:auto;border:1px solid #ddd;border-radius:6px;padding:6px;">` +
+                (bad ? ` · <span style="color:var(--fs-fg-err, #d33);">${t('share_bulk_fail', '실패')} ${bad}</span>` : '') + `</label>` +
+                `<div style="max-height:240px;overflow-y:auto;border:1px solid var(--fs-border-2, #ddd);border-radius:6px;padding:6px;">` +
                 results.map(r => r.url
                     ? `<div style="display:flex;gap:6px;align-items:center;padding:4px 2px;">
                            <span style="flex:0 0 auto;font-size:12px;opacity:.7;">${r.state === 'exist' ? '♻️' : '🔗'}</span>
@@ -20743,7 +20859,7 @@ const App = {
                            <input type="text" readonly value="${esc(r.url)}" style="flex:1;min-width:0;font-size:12px;">
                            <button type="button" class="btn btn-sm" onclick="App.copyToClipboard(this.previousElementSibling.value)">📋</button>
                        </div>`
-                    : `<div style="padding:4px 2px;font-size:12px;color:#d33;">⚠️ ${esc(r.name)} — ${esc(r.error || '')}</div>`
+                    : `<div style="padding:4px 2px;font-size:12px;color:var(--fs-fg-err, #d33);">⚠️ ${esc(r.name)} — ${esc(r.error || '')}</div>`
                 ).join('') +
                 `</div>` +
                 (results.some(r => r.url)
@@ -20866,18 +20982,18 @@ const App = {
             // 용량 표시 (간결하게)
             const quota = parseInt(s.quota);
             const usedSize = parseInt(s.used_size) || 0;
-            let quotaHtml = `<span style="color:#888;">${t('unlimited','무제한')}</span>`;
+            let quotaHtml = `<span style="color:var(--fs-text-3, #888);">${t('unlimited','무제한')}</span>`;
             if (quota > 0) {
                 const percent = Math.round((usedSize / quota) * 100);
                 const barColor = percent > 90 ? '#e74c3c' : percent > 70 ? '#f39c12' : '#3498db';
                 quotaHtml = `
                     <div style="white-space:nowrap;">${this.formatSize(usedSize)} / ${this.formatSize(quota)}</div>
-                    <div style="background:#eee;height:4px;border-radius:2px;margin-top:3px;width:100px;">
+                    <div style="background:var(--fs-surface-3, #eee);height:4px;border-radius:2px;margin-top:3px;width:100px;">
                         <div style="background:${barColor};height:100%;width:${percent}%;border-radius:2px;"></div>
                     </div>
                 `;
             } else if (quota === -1) {
-                quotaHtml = `<span>${usedSize > 0 ? this.formatSize(usedSize) + ' ' + t('il_used_lower','사용') : ''} <small style="color:#888;">(${t('disk_mode','디스크')})</small></span>`;
+                quotaHtml = `<span>${usedSize > 0 ? this.formatSize(usedSize) + ' ' + t('il_used_lower','사용') : ''} <small style="color:var(--fs-text-3, #888);">(${t('disk_mode','디스크')})</small></span>`;
             } else if (usedSize > 0) {
                 quotaHtml = `<span>${this.formatSize(usedSize)} ${t('il_used_lower','사용')}</span>`;
             }
@@ -20888,12 +21004,12 @@ const App = {
             
             tbody.append(`
                 <tr>
-                    <td style="text-align:center;color:#888;font-size:0.85em;">${s.id}</td>
+                    <td style="text-align:center;color:var(--fs-text-3, #888);font-size:0.85em;">${s.id}</td>
                     <td title="${this.escapeHtml(name)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default;"><strong>${this.escapeHtml(name)}</strong></td>
-                    <td title="${this.escapeHtml(path)}" style="font-size:0.9em;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default;">${this.escapeHtml(path)}</td>
+                    <td title="${this.escapeHtml(path)}" style="font-size:0.9em;color:var(--fs-text-2, #666);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default;">${this.escapeHtml(path)}</td>
                     <td style="text-align:center;">${typeName}</td>
                     <td>${quotaHtml}</td>
-                    <td title="${this.escapeHtml(desc)}" style="font-size:0.9em;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default;">${this.escapeHtml(desc)}</td>
+                    <td title="${this.escapeHtml(desc)}" style="font-size:0.9em;color:var(--fs-text-2, #666);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:default;">${this.escapeHtml(desc)}</td>
                     <td style="white-space:nowrap;">
                         <button class="btn btn-sm" onclick="App.editStorage(${s.id})">${t('edit','수정')}</button>
                         <button class="btn btn-sm btn-danger" onclick="App.deleteStorage(${s.id})">${t('delete','삭제')}</button>
@@ -21154,7 +21270,7 @@ const App = {
         if (storageId) {
             this.loadFolderPermissions(storageId);
         } else {
-            $('#folder-perm-list').html(`<div style="color:#999;font-size:12px;">${t('fperm_save_first', '스토리지 저장 후 폴더 권한을 설정할 수 있습니다.')}</div>`);
+            $('#folder-perm-list').html(`<div style="color:var(--fs-text-3, #5f6368);font-size:12px;">${t('fperm_save_first', '스토리지 저장 후 폴더 권한을 설정할 수 있습니다.')}</div>`);
         }
         
         // 폴더 권한 추가 버튼
@@ -21194,7 +21310,7 @@ const App = {
         this._folderPermStorageId = storageId;
         
         if (this._folderPerms.length === 0) {
-            list.innerHTML = `<div style="color:#999;font-size:11px;padding:2px 0;">${t('fperm_none', '미설정 (모든 폴더에 스토리지 권한 적용)')}</div>`;
+            list.innerHTML = `<div style="color:var(--fs-text-3, #5f6368);font-size:11px;padding:2px 0;">${t('fperm_none', '미설정 (모든 폴더에 스토리지 권한 적용)')}</div>`;
             return;
         }
         
@@ -21218,16 +21334,16 @@ const App = {
         folderPaths.forEach(folderPath => {
             const users = grouped[folderPath];
             const userCount = users.length;
-            html += `<div class="fperm-folder-group" style="border:1px solid #e0e0e0;border-radius:4px;margin-bottom:4px;">`;
-            html += `<div class="fperm-folder-header" data-folder="${this.escapeHtml(folderPath)}" style="display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;background:#f8f9fa;border-radius:4px;font-size:12px;" onmouseenter="this.style.background='#eef'" onmouseleave="this.style.background='#f8f9fa'">
+            html += `<div class="fperm-folder-group" style="border:1px solid var(--fs-border, #e0e0e0);border-radius:4px;margin-bottom:4px;">`;
+            html += `<div class="fperm-folder-header" data-folder="${this.escapeHtml(folderPath)}" style="display:flex;align-items:center;gap:6px;padding:6px 8px;cursor:pointer;background:var(--fs-surface-2, #f8f9fa);border-radius:4px;font-size:12px;" onmouseenter="this.style.background='var(--fs-tint-info, #eef)'" onmouseleave="this.style.background='var(--fs-surface-2, #f8f9fa)'">
                 <input type="checkbox" class="fperm-folder-cb" data-folder="${this.escapeHtml(folderPath)}" onclick="event.stopPropagation()">
                 <span class="fperm-expand-icon" style="font-size:10px;width:14px;">▶</span>
                 <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(folderPath)}">📁 ${this.escapeHtml(folderPath)}</span>
-                <span style="font-size:11px;color:#888;">(${userCount}${t('fperm_users','명')})</span>
+                <span style="font-size:11px;color:var(--fs-text-3, #888);">(${userCount}${t('fperm_users','명')})</span>
             </div>`;
             html += `<div class="fperm-folder-body" style="display:none;padding:2px 8px 6px 30px;">`;
             users.forEach(p => {
-                html += `<div class="fperm-user-row" data-idx="${p._idx}" style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid #f0f0f0;font-size:12px;">
+                html += `<div class="fperm-user-row" data-idx="${p._idx}" style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--fs-border, #f0f0f0);font-size:12px;">
                     <span style="width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(p.username)}</span>
                     <span class="fperm-toggle" data-idx="${p._idx}" data-field="can_visible" style="cursor:pointer;" title="${t('visible','표시')}">${p.can_visible ? '✅' : '❌'}</span>
                     <span class="fperm-toggle" data-idx="${p._idx}" data-field="can_read" style="cursor:pointer;" title="${t('read','읽기')}">${p.can_read ? '✅' : '❌'}</span>
@@ -21480,11 +21596,11 @@ const App = {
         let html = '';
         if (currentPath) {
             const parent = currentPath.split('/').slice(0, -1).join('/');
-            html += `<div class="fperm-browse-item" data-path="${this.escapeHtml(parent)}" data-action="browse" style="padding:6px 8px;cursor:pointer;border-radius:4px;" onmouseenter="this.style.background='#f0f0f0'" onmouseleave="this.style.background=''">⬆️ ..</div>`;
+            html += `<div class="fperm-browse-item" data-path="${this.escapeHtml(parent)}" data-action="browse" style="padding:6px 8px;cursor:pointer;border-radius:4px;" onmouseenter="this.style.background='var(--fs-surface-2, #f0f0f0)'" onmouseleave="this.style.background=''">⬆️ ..</div>`;
         }
         res.folders.forEach(f => {
             const safePath = this.escapeHtml(f.path);
-            html += `<div style="padding:6px 8px;border-radius:4px;display:flex;align-items:center;gap:8px;" onmouseenter="this.style.background='#f0f0f0'" onmouseleave="this.style.background=''">
+            html += `<div style="padding:6px 8px;border-radius:4px;display:flex;align-items:center;gap:8px;" onmouseenter="this.style.background='var(--fs-surface-2, #f0f0f0)'" onmouseleave="this.style.background=''">
                 <input type="checkbox" class="fperm-folder-cb" value="${safePath}">
                 <span class="fperm-browse-item" data-path="${safePath}" data-action="browse" style="flex:1;cursor:pointer;">📁 ${this.escapeHtml(f.name)}</span>
             </div>`;
@@ -21579,7 +21695,7 @@ const App = {
             
             $container.append(`
                 <div class="permission-row" data-user-id="${user.id}">
-                    <span class="perm-user">${this.escapeHtml(user.display_name || user.username)}${user.display_name && user.display_name !== user.username ? ' <span style="color:#999;font-size:0.9em;">(' + this.escapeHtml(user.username) + ')</span>' : ''}</span>
+                    <span class="perm-user">${this.escapeHtml(user.display_name || user.username)}${user.display_name && user.display_name !== user.username ? ' <span style="color:var(--fs-text-3, #5f6368);font-size:0.9em;">(' + this.escapeHtml(user.username) + ')</span>' : ''}</span>
                     <div class="perm-checks">
                         <label title="${t('perm_show_web_tooltip','웹사이트에 표시')}"><input type="checkbox" class="perm-visible" ${isVisible ? 'checked' : ''}> ${t('perm_show_web','웹')}</label>
                         <label title="${t('perm_show_webdav_tooltip','WebDAV에 표시')}"><input type="checkbox" class="perm-visible-webdav" ${isVisibleWebdav ? 'checked' : ''}> ${t('perm_show_webdav','DAV')}</label>
@@ -22010,7 +22126,7 @@ const App = {
         
         if (statusEl) {
             setTimeout(() => {
-                statusEl.innerHTML = `<span style="color:#43a047;">✅ ${t('config_backup_done', '백업 완료')}</span>`;
+                statusEl.innerHTML = `<span style="color:var(--fs-fg-ok, #43a047);">✅ ${t('config_backup_done', '백업 완료')}</span>`;
             }, 1000);
         }
     },
@@ -22043,17 +22159,17 @@ const App = {
             const res = await response.json();
             
             if (res.success) {
-                if (statusEl) statusEl.innerHTML = `<span style="color:#43a047;">✅ ${this.escapeHtml(res.message)}</span>`;
+                if (statusEl) statusEl.innerHTML = `<span style="color:var(--fs-fg-ok, #43a047);">✅ ${this.escapeHtml(res.message)}</span>`;
                 this.toast(res.message, 'success');
                 
                 // 3초 후 새로고침
                 setTimeout(() => location.reload(), 3000);
             } else {
-                if (statusEl) statusEl.innerHTML = `<span style="color:#e53935;">❌ ${this.escapeHtml(res.error)}</span>`;
+                if (statusEl) statusEl.innerHTML = `<span style="color:var(--fs-fg-err, #e53935);">❌ ${this.escapeHtml(res.error)}</span>`;
                 this.toast(res.error, 'error');
             }
         } catch (e) {
-            if (statusEl) statusEl.innerHTML = `<span style="color:#e53935;">❌ ${t('config_restore_failed', '복원 실패')}</span>`;
+            if (statusEl) statusEl.innerHTML = `<span style="color:var(--fs-fg-err, #e53935);">❌ ${t('config_restore_failed', '복원 실패')}</span>`;
             this.toast(t('config_restore_failed', '복원 실패'), 'error');
         }
     },
@@ -22081,7 +22197,7 @@ const App = {
         
         const container = document.getElementById('sync-task-list');
         if (!tasks.length) {
-            container.innerHTML = `<div style="text-align:center;padding:30px;color:#999;font-size:13px;">${t('no_sync_tasks', '동기화 작업이 없습니다.')}</div>`;
+            container.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-text-3, #5f6368);font-size:13px;">${t('no_sync_tasks', '동기화 작업이 없습니다.')}</div>`;
             return;
         }
         
@@ -22092,10 +22208,10 @@ const App = {
         };
         
         const statusLabels = {
-            'success': `<span style="color:#27ae60;">✅ ${t('sync_success','성공')}</span>`,
+            'success': `<span style="color:var(--fs-fg-ok, #27ae60);">✅ ${t('sync_success','성공')}</span>`,
             'partial': `<span style="color:#f39c12;">⚠️ ${t('sync_partial','부분 성공')}</span>`,
-            'error': `<span style="color:#e74c3c;">❌ ${t('sync_error','실패')}</span>`,
-            'running': `<span style="color:#3498db;">🔄 ${t('sync_running','실행 중')}</span>`
+            'error': `<span style="color:var(--fs-fg-err, #e74c3c);">❌ ${t('sync_error','실패')}</span>`,
+            'running': `<span style="color:var(--fs-fg-info, #3498db);">🔄 ${t('sync_running','실행 중')}</span>`
         };
         
         let html = '<div style="display:flex;flex-direction:column;gap:8px;">';
@@ -22104,18 +22220,18 @@ const App = {
             const tgtName = storageMap[task.target_storage_id] || `#${task.target_storage_id}`;
             const srcPath = task.source_path ? `/${task.source_path}` : '/';
             const tgtPath = task.target_path ? `/${task.target_path}` : '/';
-            const status = task.last_status ? (statusLabels[task.last_status] || this.escapeHtml(task.last_status)) : `<span style="color:#999;">${t('never_run','미실행')}</span>`;
+            const status = task.last_status ? (statusLabels[task.last_status] || this.escapeHtml(task.last_status)) : `<span style="color:var(--fs-text-3, #999);">${t('never_run','미실행')}</span>`;
             const lastRun = this.escapeHtml(task.last_run || '-');
             
-            html += `<div style="border:1px solid #e0e0e0;border-radius:8px;padding:10px 14px;background:#fff;">
+            html += `<div style="border:1px solid var(--fs-border, #e0e0e0);border-radius:8px;padding:10px 14px;background:var(--fs-surface, #fff);">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                     <strong style="font-size:14px;">${this.escapeHtml(task.name || 'Untitled')}</strong>
-                    <span style="font-size:11px;color:#888;">${modeLabels[task.mode] || task.mode}</span>
+                    <span style="font-size:11px;color:var(--fs-text-3, #888);">${modeLabels[task.mode] || task.mode}</span>
                 </div>
-                <div style="font-size:12px;color:#555;margin-bottom:6px;">
+                <div style="font-size:12px;color:var(--fs-text-2, #555);margin-bottom:6px;">
                     📂 ${this.escapeHtml(srcName)}${this.escapeHtml(srcPath)} → 📂 ${this.escapeHtml(tgtName)}${this.escapeHtml(tgtPath)}
                 </div>
-                <div style="font-size:11px;color:#888;margin-bottom:8px;">
+                <div style="font-size:11px;color:var(--fs-text-3, #888);margin-bottom:8px;">
                     ${t('last_run','마지막 실행')}: ${lastRun} | ${t('status','상태')}: ${status}
                     ${task.delete_orphan ? ' | 🗑️ ' + t('delete_orphan_short','고아삭제') : ''}
                     ${task.schedule && task.schedule.enabled ? ' | ⏰ <code style="font-size:10px;">' + this.escapeHtml(task.schedule.cron || '') + '</code>' : ''}
@@ -22942,24 +23058,24 @@ const App = {
                         if (res.success && res.users && res.users.length > 0) {
                             App._ishareSearchResults = res.users;
                             const html = res.users.map((u, idx) => `
-                                <div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid #eee;" 
-                                     onmouseover="this.style.background='#f0f2ff'" onmouseout="this.style.background=''"
+                                <div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--fs-border, #eee);" 
+                                     onmouseover="this.style.background='var(--fs-tint-info, #f0f2ff)'" onmouseout="this.style.background=''"
                                      onclick="App.selectInternalShareUserByIndex(${idx})">
-                                    👤 <strong>${App.escapeHtml(u.display_name)}</strong> <span style="color:#888;">@${App.escapeHtml(u.username)}</span>
+                                    👤 <strong>${App.escapeHtml(u.display_name)}</strong> <span style="color:var(--fs-text-3, #888);">@${App.escapeHtml(u.username)}</span>
                                 </div>
                             `).join('');
                             resultsDiv.innerHTML = html;
                             resultsDiv.style.display = '';
                         } else if (res.success) {
-                            resultsDiv.innerHTML = `<div style="padding:8px 12px;color:#999;">${t('ishare_no_users_found', '검색 결과가 없습니다 (자기 자신 제외)')}</div>`;
+                            resultsDiv.innerHTML = `<div style="padding:8px 12px;color:var(--fs-text-3, #999);">${t('ishare_no_users_found', '검색 결과가 없습니다 (자기 자신 제외)')}</div>`;
                             resultsDiv.style.display = '';
                         } else {
-                            resultsDiv.innerHTML = `<div style="padding:8px 12px;color:#e74c3c;">⚠️ ${this.escapeHtml(res.error || 'API Error')}</div>`;
+                            resultsDiv.innerHTML = `<div style="padding:8px 12px;color:var(--fs-fg-err, #e74c3c);">⚠️ ${this.escapeHtml(res.error || 'API Error')}</div>`;
                             resultsDiv.style.display = '';
                         }
                     } catch (err) {
                         const resultsDiv = document.getElementById('ishare-user-results');
-                        resultsDiv.innerHTML = `<div style="padding:8px 12px;color:#e74c3c;">⚠️ ${this.escapeHtml(err.message)}</div>`;
+                        resultsDiv.innerHTML = `<div style="padding:8px 12px;color:var(--fs-fg-err, #e74c3c);">⚠️ ${this.escapeHtml(err.message)}</div>`;
                         resultsDiv.style.display = '';
                     }
                 }, 300);
@@ -22986,7 +23102,7 @@ const App = {
                 if (existing.length > 0) {
                     const permLabels = { read: '👁️ ' + t('perm_read', '읽기'), write: '✏️ ' + t('perm_write_label', '쓰기'), full: '🔓 ' + t('perm_full', '전체') };
                     let html = existing.map(s => `
-                        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#f5f5f5;border-radius:6px;margin-bottom:4px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--fs-surface-2, #f5f5f5);border-radius:6px;margin-bottom:4px;">
                             <span>👤 ${this.escapeHtml(s.shared_with_display || s.shared_with_name)} — ${permLabels[s.permission] || s.permission}</span>
                             <button class="btn btn-sm btn-danger" onclick="App.deleteInternalShare(${s.id})" style="font-size:11px;padding:2px 8px;">✕</button>
                         </div>
@@ -23009,7 +23125,7 @@ const App = {
         this._ishareTargetUser = { id, displayName, username };
         $('#ishare-user-results').hide();
         $('#ishare-user-search').val('');
-        $('#ishare-selected-user').html(`👤 <strong>${this.escapeHtml(displayName)}</strong> @${this.escapeHtml(username)} <span style="cursor:pointer;color:#e74c3c;margin-left:10px;" onclick="App.clearInternalShareUser()">✕</span>`).show();
+        $('#ishare-selected-user').html(`👤 <strong>${this.escapeHtml(displayName)}</strong> @${this.escapeHtml(username)} <span style="cursor:pointer;color:var(--fs-fg-err, #e74c3c);margin-left:10px;" onclick="App.clearInternalShareUser()">✕</span>`).show();
     },
     
     clearInternalShareUser() {
@@ -23076,7 +23192,7 @@ const App = {
         const container = $(`#${containerId}`);
         
         if (!res.success || !res.shares || res.shares.length === 0) {
-            container.html(`<div style="text-align:center;padding:30px;color:#999;">📭 ${t('ishare_no_shares', '공유 항목이 없습니다')}</div>`);
+            container.html(`<div style="text-align:center;padding:30px;color:var(--fs-text-3, #999);">📭 ${t('ishare_no_shares', '공유 항목이 없습니다')}</div>`);
             this.showModal(modalId);
             return;
         }
@@ -23150,7 +23266,7 @@ const App = {
         const container = $('#shared-with-me-list');
         
         if (!res.success || !res.shares || res.shares.length === 0) {
-            container.html(`<div style="text-align:center;padding:30px;color:#999;">📭 ${t('ishare_no_shared', '공유받은 항목이 없습니다')}</div>`);
+            container.html(`<div style="text-align:center;padding:30px;color:var(--fs-text-3, #5f6368);">📭 ${t('ishare_no_shared', '공유받은 항목이 없습니다')}</div>`);
             this.showModal('modal-shared-with-me');
             return;
         }
@@ -23220,7 +23336,7 @@ const App = {
         let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
             <div>
                 <strong>📁 ${this.escapeHtml(share.filename)}${subPath ? '/' + this.escapeHtml(subPath) : ''}</strong>
-                <span style="font-size:12px;color:#888;margin-left:8px;">${permLabel}</span>
+                <span style="font-size:12px;color:var(--fs-text-3, #888);margin-left:8px;">${permLabel}</span>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap;">
                 ${subPath 
@@ -23233,23 +23349,23 @@ const App = {
         
         // 드래그 드롭존 + 진행률 UI (쓰기 권한 있을 때만)
         if (canWrite) {
-            html += `<div id="ishare-dropzone" style="border:2px dashed #c5c9d6;border-radius:8px;padding:16px;text-align:center;color:#888;margin-bottom:12px;cursor:pointer;transition:all 0.2s;font-size:13px;">
+            html += `<div id="ishare-dropzone" style="border:2px dashed var(--fs-border-2, #c5c9d6);border-radius:8px;padding:16px;text-align:center;color:var(--fs-text-3, #888);margin-bottom:12px;cursor:pointer;transition:all 0.2s;font-size:13px;">
                     📥 ${t('ishare_drop_hint', '여기에 파일을 끌어놓거나 위의 업로드 버튼을 누르세요')}
                 </div>
                 <div id="ishare-progress" style="display:none;margin-bottom:12px;">
-                    <div style="height:8px;background:#eee;border-radius:4px;overflow:hidden;width:100%;"><div id="ishare-bar" style="height:100%;background:#667eea;border-radius:4px;transition:width 0.3s;width:0%;"></div></div>
-                    <p id="ishare-status" style="font-size:13px;color:#666;margin-top:5px;white-space:pre-line;"></p>
+                    <div style="height:8px;background:var(--fs-surface-3, #eee);border-radius:4px;overflow:hidden;width:100%;"><div id="ishare-bar" style="height:100%;background:var(--fs-accent, #667eea);border-radius:4px;transition:width 0.3s;width:0%;"></div></div>
+                    <p id="ishare-status" style="font-size:13px;color:var(--fs-text-2, #666);margin-top:5px;white-space:pre-line;"></p>
                 </div>`;
         }
         
         if (items.length === 0) {
-            html += `<div style="text-align:center;padding:20px;color:#999;">${t('empty_folder', '빈 폴더입니다.')}</div>`;
+            html += `<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">${t('empty_folder', '빈 폴더입니다.')}</div>`;
         } else {
             items.forEach((item, idx) => {
                 // 메인 파일 리스트와 동일한 getFileIcon() 사용 — 사용자 정의 아이콘 반영
                 let icon = item.is_dir ? '📁' : this.getFileIcon(item.name || item.ext || '');
                 
-                const size = item.is_dir ? '' : `<span style="color:#999;font-size:12px;">(${this.formatSize(item.size)})</span>`;
+                const size = item.is_dir ? '' : `<span style="color:var(--fs-text-3, #5f6368);font-size:12px;">(${this.formatSize(item.size)})</span>`;
                 
                 html += `<div class="ishare-browse-item">
                     <div class="ishare-browse-name">
@@ -23274,17 +23390,17 @@ const App = {
                 dz.addEventListener('click', () => this.uploadToInternalShare(id, this._ishBrowseSubPath));
                 dz.addEventListener('dragover', e => {
                     e.preventDefault();
-                    dz.style.borderColor = '#667eea';
-                    dz.style.background = '#f0f2ff';
+                    dz.style.borderColor = 'var(--fs-accent, #667eea)'; // ★ (2026-10-24) 테마 색 — 변수 없으면 종전 색(기본 테마 그대로)
+                    dz.style.background = 'var(--fs-tint-info, #f0f2ff)';
                 });
                 dz.addEventListener('dragleave', e => {
                     e.preventDefault();
-                    dz.style.borderColor = '#c5c9d6';
+                    dz.style.borderColor = 'var(--fs-border-2, #c5c9d6)';
                     dz.style.background = '';
                 });
                 dz.addEventListener('drop', async e => {
                     e.preventDefault();
-                    dz.style.borderColor = '#c5c9d6';
+                    dz.style.borderColor = 'var(--fs-border-2, #c5c9d6)';
                     dz.style.background = '';
                     const files = Array.from(e.dataTransfer.files || []);
                     if (files.length === 0) return;
@@ -23530,9 +23646,9 @@ const App = {
         const existingInput = container.find('.ishare-mkdir-inline');
         if (existingInput.length) { existingInput.find('input').focus(); return; }
         
-        const html = `<div class="ishare-mkdir-inline" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;padding:10px;background:#f0f7ff;border-radius:8px;border:1px solid #d0e3ff;">
+        const html = `<div class="ishare-mkdir-inline" style="display:flex;gap:8px;align-items:center;margin-bottom:12px;padding:10px;background:var(--fs-tint-info, #f0f7ff);border-radius:8px;border:1px solid var(--fs-tint-info-border, #d0e3ff);">
             <span style="font-size:18px;">📁+</span>
-            <input type="text" id="ishare-mkdir-input" placeholder="${t('new_folder_name', '폴더 이름')}" style="flex:1;padding:6px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px;">
+            <input type="text" id="ishare-mkdir-input" placeholder="${t('new_folder_name', '폴더 이름')}" style="flex:1;padding:6px 10px;border:1px solid var(--fs-border-2, #ccc);border-radius:6px;font-size:14px;">
             <button class="btn btn-sm btn-primary" id="btn-ishare-mkdir-confirm">${t('create', '생성')}</button>
             <button class="btn btn-sm" id="btn-ishare-mkdir-cancel">${t('cancel', '취소')}</button>
         </div>`;
@@ -23583,9 +23699,9 @@ const App = {
         // 기존 인라인 편집 제거
         container.find('.ishare-rename-inline').remove();
         
-        const html = `<div class="ishare-rename-inline" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;padding:8px 10px;background:#fff8e6;border-radius:8px;border:1px solid #ffe0a0;">
+        const html = `<div class="ishare-rename-inline" style="display:flex;gap:8px;align-items:center;margin-bottom:8px;padding:8px 10px;background:var(--fs-tint-warn, #fff8e6);border-radius:8px;border:1px solid var(--fs-tint-warn-border, #ffe0a0);">
             <span>✏️</span>
-            <input type="text" id="ishare-rename-input" value="${this.escapeHtml(currentName)}" style="flex:1;padding:5px 8px;border:1px solid #ccc;border-radius:6px;font-size:13px;">
+            <input type="text" id="ishare-rename-input" value="${this.escapeHtml(currentName)}" style="flex:1;padding:5px 8px;border:1px solid var(--fs-border-2, #ccc);border-radius:6px;font-size:13px;">
             <button class="btn btn-sm btn-primary" id="btn-ishare-rename-ok">${t('confirm', '확인')}</button>
             <button class="btn btn-sm" id="btn-ishare-rename-cancel">${t('cancel', '취소')}</button>
         </div>`;
@@ -24010,7 +24126,7 @@ const App = {
                 const displayName = log.display_name || log.username || '-';
                 const username = log.username || '';
                 const userHtml = displayName !== username && username
-                    ? `${this.escapeHtml(displayName)} <span style="color:#999;font-size:0.85em;">(${this.escapeHtml(username)})</span>`
+                    ? `${this.escapeHtml(displayName)} <span style="color:var(--fs-text-3, #5f6368);font-size:0.85em;">(${this.escapeHtml(username)})</span>`
                     : this.escapeHtml(displayName);
                 
                 // 시간 줄임
@@ -24243,7 +24359,7 @@ const App = {
                 <p><strong>🖥️ ${t('os','운영체제')}:</strong> ${details.os}</p>
                 <p><strong>🌐 ${t('browser','브라우저')}:</strong> ${details.browser}</p>
                 <hr style="margin:10px 0;">
-                <p style="font-size:11px;color:#888;word-break:break-all;"><strong>User-Agent:</strong><br>${ua}</p>
+                <p style="font-size:11px;color:var(--fs-text-3, #888);word-break:break-all;"><strong>User-Agent:</strong><br>${ua}</p>
             </div>
         `;
         this.showAlert((t('access_info', '접속 정보')), content);
@@ -24265,7 +24381,7 @@ const App = {
         // 모달 (화면 중앙) — .modal 클래스 제거하여 closeModal 간섭 방지
         const modal = document.createElement('div');
         modal.id = 'modal-alert-popup';
-        modal.style.cssText = 'display:flex;flex-direction:column;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10001;max-width:700px;width:95%;max-height:90vh;background:white;border-radius:var(--radius,12px);box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;';
+        modal.style.cssText = 'display:flex;flex-direction:column;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:10001;max-width:700px;width:95%;max-height:90vh;background:var(--fs-surface, white);border-radius:var(--radius,12px);box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;';
         modal.innerHTML = `
             <div class="modal-header">
                 <h2>${title}</h2>
@@ -24306,7 +24422,7 @@ const App = {
                 }
                 return `<li><a href="#" class="board-sidebar-item" data-board-id="${b.id}">
                     ${this.escapeHtml(b.icon || '📋')} ${this.escapeHtml(b.name)}${badge}
-                    <span style="float:right;color:#999;font-size:11px;"></span>
+                    <span style="float:right;color:var(--fs-text-3, #999);font-size:11px;"></span>
                 </a></li>`;
             }).join('');
             
@@ -24441,7 +24557,7 @@ const App = {
         const toolbarCenter = toolbar.querySelector('.toolbar-center');
         if (toolbarCenter) toolbarCenter.style.display = '';
         
-        listEl.innerHTML = `<div style="text-align:center;padding:30px;color:#999;">${t('loading','로딩 중...')}</div>`;
+        listEl.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-text-3, #999);">${t('loading','로딩 중...')}</div>`;
         
         const search = this._boardSearchQuery ?? '';
         // 상단 검색창 동기화
@@ -24454,7 +24570,7 @@ const App = {
         const res = await this.api('board_posts', { board_id: this.currentBoardId, page: this.currentBoardPage, search, search_type: searchType }, 'GET');
         
         if (!res.success) {
-            listEl.innerHTML = `<div style="text-align:center;padding:30px;color:#e74c3c;">${this.escapeHtml(res.error || 'Error')}</div>`;
+            listEl.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-fg-err, #e74c3c);">${this.escapeHtml(res.error || 'Error')}</div>`;
             this._boardRenderAdminBar(false);
             return;
         }
@@ -24606,7 +24722,7 @@ const App = {
         const toolbarCenter = toolbar.querySelector('.toolbar-center');
         if (toolbarCenter) toolbarCenter.style.display = 'none';
         
-        detailEl.innerHTML = `<div style="text-align:center;padding:30px;color:#999;">${t('loading','로딩 중...')}</div>`;
+        detailEl.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-text-3, #999);">${t('loading','로딩 중...')}</div>`;
         
         // 기존 댓글 CKEditor 인스턴스 모두 정리
         if (this._cmtEditors) {
@@ -24619,7 +24735,7 @@ const App = {
         
         const res = await this.api('board_post_view', { post_id: postId }, 'GET');
         if (!res.success || !res.post) {
-            detailEl.innerHTML = `<div style="text-align:center;padding:30px;color:#e74c3c;">${t('board_post_not_found', '게시글을 찾을 수 없습니다.')}</div>`;
+            detailEl.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-fg-err, #e74c3c);">${t('board_post_not_found', '게시글을 찾을 수 없습니다.')}</div>`;
             return;
         }
         
@@ -24682,12 +24798,12 @@ const App = {
         let attachHtml = '';
         if (p.attachments?.length) {
             attachHtml = `
-                <div style="margin:16px 20px;padding:12px 14px;background:var(--bg-tertiary,#f8f9fa);border-radius:8px;border:1px solid var(--border-color,#e9ecef);">
-                    <h4 style="font-size:12px;font-weight:600;color:#999;margin-bottom:8px;">📎 ${t('attachments','첨부파일')} (${p.attachments.length})</h4>
+                <div style="margin:16px 20px;padding:12px 14px;background:var(--bg-tertiary,var(--fs-surface-2, #f8f9fa));border-radius:8px;border:1px solid var(--border-color,var(--fs-border, #e9ecef));">
+                    <h4 style="font-size:12px;font-weight:600;color:var(--fs-text-3, #999);margin-bottom:8px;">📎 ${t('attachments','첨부파일')} (${p.attachments.length})</h4>
                     ${p.attachments.map(a => `
                         <div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:13px;">
-                            <a href="api.php?action=board_post_download&board_id=${p.board_id}&post_id=${p.id}&file=${encodeURIComponent(a.file)}" style="color:var(--primary,#667eea);">📄 ${this.escapeHtml(a.name)}</a>
-                            <span style="color:#999;font-size:11px;">(${this.formatSize(a.size)})</span>
+                            <a href="api.php?action=board_post_download&board_id=${p.board_id}&post_id=${p.id}&file=${encodeURIComponent(a.file)}" style="color:var(--fs-primary-text, var(--primary,var(--fs-fg-info, #667eea)));">📄 ${this.escapeHtml(a.name)}</a>
+                            <span style="color:var(--fs-text-3, #5f6368);font-size:11px;">(${this.formatSize(a.size)})</span>
                         </div>
                     `).join('')}
                 </div>
@@ -24696,7 +24812,7 @@ const App = {
         
         // 공지 뱃지
         const detailNoticeColor = p.notice_color || '';
-        const noticeBadge = p.is_notice ? `<span style="background:#f59f00;color:#fff;font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:6px;">🔔 공지</span>` : '';
+        const noticeBadge = p.is_notice ? `<span style="background:#f59f00;color:#212529;font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:6px;">🔔 공지</span>` : '';
         
         let actionsHtml = '';
         if (canEdit) {
@@ -24786,7 +24902,7 @@ const App = {
                             }
                         } else {
                             const sizeStr = att.size > 1048576 ? (att.size/1048576).toFixed(1)+'MB' : (att.size/1024).toFixed(0)+'KB';
-                            attachFileHtml += `<span style="position:relative;display:inline-flex;align-items:center;margin:4px 4px 4px 0;"><a href="${dlUrl}" style="display:inline-flex;align-items:center;gap:4px;padding:4px ${canDelete ? '28px' : '10px'} 4px 10px;background:var(--theme-hover,#f0f0f0);border-radius:4px;font-size:12px;color:var(--theme-text,#333);text-decoration:none;">📦 ${this.escapeHtml(att.name)} <span style="color:#999;">(${sizeStr})</span></a>${canDelete ? `<button onclick="event.preventDefault();event.stopPropagation();App.deleteCommentAttachment(${c.id},${p.id},'${this.escapeHtml(att.file).replace(/'/g, "\\'")}')" style="position:absolute;top:50%;right:4px;transform:translateY(-50%);background:none;border:none;color:#999;font-size:14px;cursor:pointer;padding:0 2px;" title="${t('delete','삭제')}">×</button>` : ''}</span>`;
+                            attachFileHtml += `<span style="position:relative;display:inline-flex;align-items:center;margin:4px 4px 4px 0;"><a href="${dlUrl}" style="display:inline-flex;align-items:center;gap:4px;padding:4px ${canDelete ? '28px' : '10px'} 4px 10px;background:var(--theme-hover,var(--fs-surface-2, #f0f0f0));border-radius:4px;font-size:12px;color:var(--theme-text,var(--fs-text, #333));text-decoration:none;">📦 ${this.escapeHtml(att.name)} <span style="color:var(--fs-text-3, #999);">(${sizeStr})</span></a>${canDelete ? `<button onclick="event.preventDefault();event.stopPropagation();App.deleteCommentAttachment(${c.id},${p.id},'${this.escapeHtml(att.file).replace(/'/g, "\\'")}')" style="position:absolute;top:50%;right:4px;transform:translateY(-50%);background:none;border:none;color:var(--fs-text-3, #999);font-size:14px;cursor:pointer;padding:0 2px;" title="${t('delete','삭제')}">×</button>` : ''}</span>`;
                         }
                     });
                 }
@@ -24920,7 +25036,7 @@ const App = {
         const board = this.currentBoardData || {};
         const boardTitle = this.escapeHtml(board.icon || '📋') + ' ' + this.escapeHtml(board.name || '');
         
-        let html = `<div style="padding:10px 14px 6px;font-weight:600;font-size:14px;color:var(--theme-text,#333);cursor:pointer;" onclick="App._boardSearchQuery='';App.currentBoardPage=1;App.boardShowList();">${boardTitle}</div>`;
+        let html = `<div style="padding:10px 14px 6px;font-weight:600;font-size:14px;color:var(--theme-text,var(--fs-text, #333));cursor:pointer;" onclick="App._boardSearchQuery='';App.currentBoardPage=1;App.boardShowList();">${boardTitle}</div>`;
         html += `<table class="board-table">
             <thead>
                 <tr>
@@ -24955,10 +25071,10 @@ const App = {
         // 검색 + 글쓰기 버튼 (페이지네이션 위)
         const isAdmin = (this.user?.role === 'admin' || this.user?.role === 'sub_admin');
         const canWrite = board.perm_write === 'all' || isAdmin;
-        html += `<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:6px 14px 0;border-top:1px solid var(--theme-border,var(--border,#eee));margin-top:4px;">`;
+        html += `<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:6px 14px 0;border-top:1px solid var(--theme-border,var(--border,var(--fs-border, #eee)));margin-top:4px;">`;
         html += `<div style="position:relative;display:inline-flex;align-items:center;">
-            <span style="position:absolute;left:8px;color:#aaa;font-size:13px;pointer-events:none;">🔍</span>
-            <input type="text" id="board-detail-search" placeholder="${t('search','검색...')}" value="${this.escapeHtml(this._boardSearchQuery || '')}" style="width:160px;height:30px;font-size:12px;padding:5px 10px 5px 26px;border:1px solid var(--theme-border,var(--border,#ddd));border-radius:14px;outline:none;background:var(--theme-hover,var(--bg-secondary,#f8f9fa));color:var(--theme-text,#333);" onkeyup="if(event.key==='Enter'){App._boardSearchQuery=this.value;App.currentBoardPage=1;App.boardShowList();}">
+            <span style="position:absolute;left:8px;color:var(--fs-text-3, #aaa);font-size:13px;pointer-events:none;">🔍</span>
+            <input type="text" id="board-detail-search" placeholder="${t('search','검색...')}" value="${this.escapeHtml(this._boardSearchQuery || '')}" style="width:160px;height:30px;font-size:12px;padding:5px 10px 5px 26px;border:1px solid var(--theme-border,var(--border,var(--fs-border-2, #ddd)));border-radius:14px;outline:none;background:var(--theme-hover,var(--bg-secondary,var(--fs-surface-2, #f8f9fa)));color:var(--theme-text,var(--fs-text, #333));" onkeyup="if(event.key==='Enter'){App._boardSearchQuery=this.value;App.currentBoardPage=1;App.boardShowList();}">
         </div>`;
         if (canWrite) {
             html += `<button id="btn-board-detail-write" class="btn btn-primary btn-board-write" onclick="App.showBoardWriteForm()">✏️ ${t('write','글쓰기')}</button>`;
@@ -25169,14 +25285,18 @@ const App = {
             image_previewText: ' ',
             // 콘텐츠 스타일
             contentsCss: [
-                'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; line-height: 1.8; color: #333; padding: 10px; }',
+                'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; line-height: 1.8; color: var(--fs-text, #333); padding: 10px; }',
                 'img { max-width: 100%; height: auto; border-radius: 4px; }',
                 'video { max-width: 100%; height: auto; border-radius: 4px; display: block; }',
                 'table { border-collapse: collapse; width: 100%; }',
-                'td, th { border: 1px solid #ddd; padding: 6px 8px; }',
+                'td, th { border: 1px solid var(--fs-border-2, #ddd); padding: 6px 8px; }',
                 '.cke_widget_wrapper:hover { outline: 2px solid #4a90d9; }',
-                '.cke_widget_selected { outline: 2px solid #4a90d9; }'
+                '.cke_widget_selected { outline: 2px solid #4a90d9; }',
+                // ★ (2026-10-24) 테마 색을 처음부터 — 글 쓰는 칸 문서가 흰 바탕으로 열렸다가 테마 색으로 바뀌며 번쩍이던 것(_applyCkeTheme 설명)
+                ...this._ckeThemeCssList()
             ],
+            // ★ (2026-10-24) 편집기 틀이 만들어지는 즉시(화면에 그려지기 전) 테마 클래스 — 종전엔 글 쓰는 칸 준비 뒤(contentDom)라 흰 틀이 한 번 보였다
+            on: { uiReady: (evt) => this._applyCkeTheme(evt.editor) },
             // 허용 콘텐츠 (XSS 방지는 서버에서 처리)
             allowedContent: true,
             extraAllowedContent: 'video[*]{*}(*);source[*]{*}(*);audio[*]{*}(*)',
@@ -25190,6 +25310,9 @@ const App = {
             // 자동 단락 감지
             autoParagraph: true
         });
+        
+        // ★ (2026-10-24) 편집기 테마 연동 — 편집 영역(별도 문서 iframe)은 테마 CSS 가 닿지 않아 어느 테마에서나 흰 바탕이었다(_applyCkeTheme 설명)
+        this._boardEditor.on('contentDom', () => this._applyCkeTheme(this._boardEditor));
         
         // 이미지/동영상 프리셋 리사이즈 바 + 드래그앤드롭/붙여넣기
         this._boardEditor.on('instanceReady', () => {
@@ -25622,11 +25745,15 @@ const App = {
                 { name: 'insert', items: ['HorizontalRule', 'SpecialChar'] },
             ],
             contentsCss: [
-                'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: #333; padding: 8px; margin: 0; }',
+                'body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: var(--fs-text, #333); padding: 8px; margin: 0; }',
                 'p { margin: 0; min-height: 1.6em; }',
                 'img { max-width: 100%; height: auto; }',
                 'video { max-width: 100%; height: auto; }',
+                // ★ (2026-10-24) 테마 색을 처음부터(글쓰기 편집기와 같은 이유)
+                ...this._ckeThemeCssList(),
             ],
+            // ★ (2026-10-24) 편집기 틀이 만들어지는 즉시 테마 클래스(글쓰기 편집기와 같은 이유)
+            on: { uiReady: (evt) => this._applyCkeTheme(evt.editor) },
             allowedContent: true,
             extraAllowedContent: 'video[*]{*}(*);source[*]{*}(*);audio[*]{*}(*)',
             fillEmptyBlocks: false,
@@ -25638,6 +25765,9 @@ const App = {
             autoGrow_maxHeight: 300,
         });
         
+        // ★ (2026-10-24) 편집기 테마 연동(댓글 입력·수정) — _applyCkeTheme 설명
+        editor.on('contentDom', () => this._applyCkeTheme(editor));
+        
         // 초기 content + 프리셋 바 설정
         editor.on('instanceReady', () => {
             if (initialContent) {
@@ -25648,6 +25778,104 @@ const App = {
         });
         
         this._cmtEditors[textareaId] = editor;
+    },
+    
+    // ★ (2026-10-24) 게시판 편집기(CKEditor 4 — 글쓰기·댓글 입력·댓글 수정) 테마 연동
+    //   편집기 틀(도구막대·아래 띠)은 편집기 자체 스킨 색이고, 글 쓰는 칸은 별도 문서(iframe)라 테마 CSS·변수가 닿지 않아
+    //   어두운 테마·전체 테마에서도 흰 종이 + 회색 도구막대 그대로였다.
+    //   → 테마가 공통 배경 변수(--fs-surface)를 정의한 테마(다크·전체 테마 9종)에서만: 틀에 fs-cke-themed 클래스(style.css 가 테마 변수로 칠함),
+    //     어두운 테마(color-scheme: dark)는 fs-cke-dark(도구 아이콘 반전 — 아이콘이 어두운 그림이라), 글 쓰는 칸 문서엔 테마 바탕·글자색 style 을 넣는다.
+    //     변수가 없는 테마(기본·일반 8종)는 아무것도 하지 않아 종전과 같다. 편집 영역은 원본 보기 전환 등으로 다시 만들어지므로 contentDom 마다,
+    //     테마를 바꾸면 setTheme 에서 열린 편집기 모두 다시 적용(_refreshCkeThemes).
+    _ckeThemeInfo() {
+        const cs = getComputedStyle(document.documentElement);
+        const v = (n) => cs.getPropertyValue(n).trim();
+        const surface = v('--fs-surface');
+        if (!surface) return null;
+        return {
+            surface,
+            text: v('--fs-text') || v('--theme-text') || '#333',
+            link: v('--fs-primary-text') || v('--theme-primary') || '',
+            line: v('--fs-border-2') || v('--theme-border') || '#ddd',
+            dark: /dark/.test(cs.colorScheme || '')
+        };
+    },
+    
+    _applyCkeTheme(editor) {
+        try {
+            if (!editor) return;
+            const info = this._ckeThemeInfo();
+            if (info) editor._fsCkeThemed = true;   // 한 번이라도 테마 색을 입힌 편집기(만들 때 contentsCss 포함) — 기본 테마로 바꿀 때 되돌릴 대상
+            const box = editor.container && editor.container.$;
+            if (box) {
+                box.classList.toggle('fs-cke-themed', !!info);
+                box.classList.toggle('fs-cke-dark', !!(info && info.dark));
+            }
+            // ★ (2026-10-24) 링크·이미지·표 넣기 등 대화상자도 테마 색 — 대화상자는 편집기 밖(body)에 따로 그려져 위 클래스가 안 닿았다(흰 창 안에
+            //   테마의 어두운 선택칸만 섞여 보임). 편집기마다 한 번만 '대화상자 열림' 처리를 걸고, 열릴 때마다 지금 테마로 색을 다시 정함
+            if (!editor._fsDlgHook && typeof editor.on === 'function') {
+                editor._fsDlgHook = true;
+                editor.on('dialogShow', (ev) => this._themeCkeDialog(ev && ev.data));
+            }
+            const doc = editor.document && editor.document.$;
+            if (!doc || !doc.head) return;
+            let st = doc.getElementById('fs-cke-theme');
+            if (!info) {
+                // 테마 색이 없는 테마(기본·일반)로 바꾼 경우 — 만들 때 넣은 테마 스타일(contentsCss)이 문서에 남아 있으므로 원래 모양(흰 바탕·#333 글자)으로 덮는다.
+                //   처음부터 기본·일반 테마에서 만든 편집기는 아무것도 넣지 않는다(종전과 같음)
+                if (editor._fsCkeThemed) {
+                    if (!st) { st = doc.createElement('style'); st.id = 'fs-cke-theme'; doc.head.appendChild(st); }
+                    st.textContent = ':root { color-scheme: light; } html, body { background: #fff; } body { color: #333; } a { color: revert; } td, th { border-color: #ddd; }';
+                } else if (st) { st.remove(); }
+                doc.documentElement.style.colorScheme = '';
+                return;
+            }
+            if (!st) { st = doc.createElement('style'); st.id = 'fs-cke-theme'; doc.head.appendChild(st); }
+            st.textContent = this._ckeThemeCssText(info);
+            doc.documentElement.style.colorScheme = info.dark ? 'dark' : 'light';
+        } catch (e) {}
+    },
+    
+    // ★ (2026-10-24) CKEditor 대화상자 테마 색 — 테마 색이 있는 테마(다크·전체)만 .fs-cke-dlg + 색 변수, 기본·일반 테마는 클래스를 떼어 종전(흰 창) 그대로.
+    //   같은 대화상자 요소를 다음에 다시 쓰므로 열릴 때마다 지금 테마로 다시 정한다(테마를 바꾼 뒤에도 맞음). 값은 테마 CSS 변수(사용자 입력 아님)
+    _themeCkeDialog(dialog) {
+        try {
+            const el = dialog && dialog.getElement && dialog.getElement() && dialog.getElement().$;
+            if (!el) return;
+            const info = this._ckeThemeInfo();
+            el.classList.toggle('fs-cke-dlg', !!info);
+            el.classList.toggle('fs-cke-dlg-dark', !!(info && info.dark));
+            if (!info) return;
+            const cs = getComputedStyle(document.documentElement);
+            const v = (n) => cs.getPropertyValue(n).trim();
+            const set = (k, val) => el.style.setProperty(k, val);
+            set('--fsd-bg', info.surface);
+            set('--fsd-bg2', v('--fs-surface-2') || info.surface);
+            set('--fsd-text', info.text);
+            set('--fsd-text2', v('--fs-text-2') || info.text);
+            set('--fsd-line', info.line);
+            set('--fsd-input', v('--theme-bg') || info.surface);
+            set('--fsd-accent', v('--fs-accent') || v('--theme-primary') || '#139ff7');
+        } catch (e) { /* 실패해도 종전 모양 */ }
+    },
+    
+    // 글 쓰는 칸 문서에 넣을 테마 스타일 — 값은 테마 CSS 변수에서 읽은 색(사용자 입력 아님).
+    //   color-scheme 도 함께: 어두운 테마에서 바깥은 다크인데 칸 문서만 밝은 모드면 브라우저가 칸 뒤를 흰색으로 먼저 칠한다
+    _ckeThemeCssText(info) {
+        return `:root { color-scheme: ${info.dark ? 'dark' : 'light'}; } html, body { background: ${info.surface}; } body { color: ${info.text}; }`
+            + (info.link ? ` a { color: ${info.link}; }` : '')
+            + ` td, th { border-color: ${info.line}; }`;
+    },
+    
+    // ★ (2026-10-24) 편집기를 만들 때 contentsCss 에 덧붙일 목록 — 글 쓰는 칸 문서가 처음 열릴 때부터 테마 색(흰 번쩍임 방지).
+    //   변수가 없는 테마(기본·일반)는 빈 목록이라 종전과 같다. 테마를 나중에 바꾸면 _applyCkeTheme 의 style 이 뒤에 있어 그 값이 이김
+    _ckeThemeCssList() {
+        try { const info = this._ckeThemeInfo(); return info ? [this._ckeThemeCssText(info)] : []; } catch (e) { return []; }
+    },
+    
+    _refreshCkeThemes() {
+        if (this._boardEditor) this._applyCkeTheme(this._boardEditor);
+        Object.values(this._cmtEditors || {}).forEach(ed => this._applyCkeTheme(ed));
     },
     
     _destroyCmtEditor(textareaId) {
@@ -25963,7 +26191,7 @@ const App = {
         if (res.success) {
             await this.showConfirmModal({
                 title: t('board_delete_done','삭제 완료'),
-                content: `<div style="text-align:center;padding:12px 0;font-size:14px;color:var(--theme-text,#333);">${t('post_delete_done','게시글이 삭제되었습니다.')}</div>`,
+                content: `<div style="text-align:center;padding:12px 0;font-size:14px;color:var(--theme-text,var(--fs-text, #333));">${t('post_delete_done','게시글이 삭제되었습니다.')}</div>`,
                 buttons: [{ text: t('ok','확인'), value: true, class: 'btn-primary' }]
             });
             this.loadBoardPosts();
@@ -25976,6 +26204,9 @@ const App = {
     showEditCommentForm(commentId, postId) {
         // 기존 열린 폼들 닫기
         document.querySelectorAll('[id^="reply-form-"],[id^="edit-form-"]').forEach(el => {
+            // ★ (2026-10-24) 지우기 전에 그 안의 댓글 편집기를 먼저 정리 — 종전엔 화면(innerHTML)만 지워 보이지 않는 편집기가 메모리·CKEDITOR.instances 에 남았다
+            //   (같은 창을 다시 열 때에야 정리됨). 열린 적 없는 창은 _destroyCmtEditor 가 아무것도 안 함
+            el.querySelectorAll('textarea[id]').forEach(ta => this._destroyCmtEditor(ta.id));
             el.style.display = 'none';
             el.innerHTML = '';
         });
@@ -26069,6 +26300,9 @@ const App = {
 
     showReplyForm(commentId, postId) {
         document.querySelectorAll('[id^="reply-form-"],[id^="edit-form-"]').forEach(el => {
+            // ★ (2026-10-24) 지우기 전에 그 안의 댓글 편집기를 먼저 정리 — 종전엔 화면(innerHTML)만 지워 보이지 않는 편집기가 메모리·CKEDITOR.instances 에 남았다
+            //   (같은 창을 다시 열 때에야 정리됨). 열린 적 없는 창은 _destroyCmtEditor 가 아무것도 안 함
+            el.querySelectorAll('textarea[id]').forEach(ta => this._destroyCmtEditor(ta.id));
             el.style.display = 'none';
             el.innerHTML = '';
         });
@@ -26125,7 +26359,7 @@ const App = {
         if (nonMedia.length === 0) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
         preview.style.display = 'flex';
         preview.innerHTML = nonMedia.map(f => {
-            return `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--theme-hover,#f0f0f0);border-radius:4px;font-size:12px;">
+            return `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--theme-hover,var(--fs-surface-2, #f0f0f0));border-radius:4px;font-size:12px;">
                 📦 ${this.escapeHtml(f.name)}
             </span>`;
         }).join('');
@@ -26239,9 +26473,9 @@ const App = {
         }
         preview.style.display = 'flex';
         preview.innerHTML = nonMediaFiles.map((f) => {
-            return `<span class="cmt-attach-item" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--theme-hover,#f0f0f0);border-radius:4px;font-size:12px;">
+            return `<span class="cmt-attach-item" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--theme-hover,var(--fs-surface-2, #f0f0f0));border-radius:4px;font-size:12px;">
                 📦 ${this.escapeHtml(f.name)}
-                <button type="button" onclick="App._removeCommentFileByName('${this.escapeHtml(f.name).replace(/'/g,"\\'")}')" style="border:none;background:none;cursor:pointer;color:#999;font-size:14px;padding:0 2px;">×</button>
+                <button type="button" onclick="App._removeCommentFileByName('${this.escapeHtml(f.name).replace(/'/g,"\\'")}')" style="border:none;background:none;cursor:pointer;color:var(--fs-text-3, #999);font-size:14px;padding:0 2px;">×</button>
             </span>`;
         }).join('');
     },
@@ -26306,7 +26540,7 @@ const App = {
         if (nonMedia.length === 0) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
         preview.style.display = 'flex';
         preview.innerHTML = nonMedia.map(f => {
-            return `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--theme-hover,#f0f0f0);border-radius:4px;font-size:12px;">
+            return `<span style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:var(--theme-hover,var(--fs-surface-2, #f0f0f0));border-radius:4px;font-size:12px;">
                 📦 ${this.escapeHtml(f.name)}
             </span>`;
         }).join('');
@@ -26367,8 +26601,8 @@ const App = {
             if (!container) return;
             bar = document.createElement('div');
             bar.id = containerId + '-progress';
-            bar.style.cssText = 'margin:6px 0;font-size:12px;color:#666;';
-            bar.innerHTML = `<div style="display:flex;align-items:center;gap:6px;"><div class="spinner-small"></div><span class="cmt-progress-text">업로드 중...</span></div><div style="margin-top:3px;height:3px;background:#e0e0e0;border-radius:2px;overflow:hidden;"><div class="cmt-progress-bar" style="width:0%;height:100%;background:var(--primary,#667eea);border-radius:2px;transition:width 0.3s;"></div></div>`;
+            bar.style.cssText = 'margin:6px 0;font-size:12px;color:var(--fs-text-2, #666);';
+            bar.innerHTML = `<div style="display:flex;align-items:center;gap:6px;"><div class="spinner-small"></div><span class="cmt-progress-text">업로드 중...</span></div><div style="margin-top:3px;height:3px;background:var(--fs-surface-3, #e0e0e0);border-radius:2px;overflow:hidden;"><div class="cmt-progress-bar" style="width:0%;height:100%;background:var(--primary,#667eea);border-radius:2px;transition:width 0.3s;"></div></div>`;
             container.parentElement.insertBefore(bar, container.nextSibling);
         }
         bar.style.display = 'block';
@@ -26518,7 +26752,7 @@ const App = {
         if (res.success) {
             await this.showConfirmModal({
                 title: t('board_delete_done','삭제 완료'),
-                content: `<div style="text-align:center;padding:12px 0;font-size:14px;color:var(--theme-text,#333);">${t('comment_delete_done','댓글이 삭제되었습니다.')}</div>`,
+                content: `<div style="text-align:center;padding:12px 0;font-size:14px;color:var(--theme-text,var(--fs-text, #333));">${t('comment_delete_done','댓글이 삭제되었습니다.')}</div>`,
                 buttons: [{ text: t('ok','확인'), value: true, class: 'btn-primary' }]
             });
             this.viewBoardPost(postId);
@@ -26550,7 +26784,7 @@ const App = {
         const emptyEl = document.getElementById('board-manage-empty');
         const countEl = document.getElementById('board-manage-count');
         
-        listEl.innerHTML = `<div style="text-align:center;padding:20px;color:#999;">${t('loading','로딩 중...')}</div>`;
+        listEl.innerHTML = `<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">${t('loading','로딩 중...')}</div>`;
         
         const res = await this.api('board_manage_list', {}, 'GET');
         const boards = res.success ? (res.boards || []) : [];
@@ -26869,15 +27103,15 @@ const App = {
             const ext = a.name.split('.').pop().toLowerCase();
             const isVideo = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp'].includes(ext);
             const escapedName = this.escapeHtml(a.name).replace(/'/g, "\\'");
-            const insertBtn = (isImg || isVideo) ? `<a href="#" onclick="App._insertMediaToContent('${escapedName}');return false;" style="color:var(--primary,#667eea);font-size:11px;white-space:nowrap;">삽입</a>` : '';
+            const insertBtn = (isImg || isVideo) ? `<a href="#" onclick="App._insertMediaToContent('${escapedName}');return false;" style="color:var(--fs-primary-text, var(--primary,#667eea));font-size:11px;white-space:nowrap;">삽입</a>` : '';
             
-            return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg-tertiary,#f8f9fa);border-radius:4px;margin-bottom:4px;font-size:13px;">
+            return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg-tertiary,var(--fs-surface-2, #f8f9fa));border-radius:4px;margin-bottom:4px;font-size:13px;">
                 <span>📎 ${this.escapeHtml(a.name)}</span>
-                <span style="color:#999;font-size:11px;">(${this.formatSize(a.size)})</span>
+                <span style="color:var(--fs-text-3, #5f6368);font-size:11px;">(${this.formatSize(a.size)})</span>
                 ${a.pending ? '<span style="color:#f59f00;font-size:11px;">⏳</span>' : ''}
                 <span style="margin-left:auto;display:flex;gap:6px;align-items:center;">
                     ${insertBtn}
-                    <a href="#" onclick="App.removeBoardAttachment(${i}, ${postId ? postId : 'null'});return false;" style="color:#e74c3c;font-size:11px;">✕</a>
+                    <a href="#" onclick="App.removeBoardAttachment(${i}, ${postId ? postId : 'null'});return false;" style="color:var(--fs-fg-err, #e74c3c);font-size:11px;">✕</a>
                 </span>
             </div>`;
         }).join('');
@@ -26960,26 +27194,26 @@ const App = {
         if (!storageId) return;
         
         const listEl = document.getElementById('storage-picker-list');
-        listEl.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">로딩 중...</div>';
+        listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">로딩 중...</div>';
         
         const res = await this.api('files', { storage_id: storageId, path: this._storagePickerPath }, 'GET');
-        if (!res.success) { listEl.innerHTML = '<div style="color:#e74c3c;">오류</div>'; return; }
+        if (!res.success) { listEl.innerHTML = '<div style="color:var(--fs-fg-err, #e74c3c);">오류</div>'; return; }
         
         // 브레드크럼
         const bcEl = document.getElementById('storage-picker-breadcrumb');
         const parts = this._storagePickerPath ? this._storagePickerPath.split('/').filter(Boolean) : [];
-        let bcHtml = `<a href="#" onclick="App._storagePickerPath='';App.loadStoragePickerFiles();return false;" style="color:var(--primary,#667eea);text-decoration:none;">🏠</a>`;
+        let bcHtml = `<a href="#" onclick="App._storagePickerPath='';App.loadStoragePickerFiles();return false;" style="color:var(--fs-primary-text, var(--primary,#667eea));text-decoration:none;">🏠</a>`;
         let buildPath = '';
         parts.forEach(p => {
             buildPath += (buildPath ? '/' : '') + p;
             const bp = buildPath;
-            bcHtml += ` / <a href="#" onclick="App._storagePickerPath='${this.escapeHtml(bp).replace(/'/g, "\\'")}';App.loadStoragePickerFiles();return false;" style="color:var(--primary,#667eea);text-decoration:none;">${this.escapeHtml(p)}</a>`;
+            bcHtml += ` / <a href="#" onclick="App._storagePickerPath='${this.escapeHtml(bp).replace(/'/g, "\\'")}';App.loadStoragePickerFiles();return false;" style="color:var(--fs-primary-text, var(--primary,#667eea));text-decoration:none;">${this.escapeHtml(p)}</a>`;
         });
         bcEl.innerHTML = bcHtml;
         
         const files = res.items || res.files || [];
         if (!files.length) {
-            listEl.innerHTML = '<div style="text-align:center;padding:20px;color:#999;">비어있음</div>';
+            listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">비어있음</div>';
             return;
         }
         
@@ -26987,18 +27221,18 @@ const App = {
             const isDir = f.is_dir || f.type === 'folder';
             const icon = isDir ? '📁' : this._getFileIcon(f.name);
             const checked = this._storagePickerSelected.has(f.path || f.name) ? 'checked' : '';
-            const size = isDir ? '' : `<span style="color:#999;font-size:11px;">(${this.formatSize(f.size)})</span>`;
+            const size = isDir ? '' : `<span style="color:var(--fs-text-3, #5f6368);font-size:11px;">(${this.formatSize(f.size)})</span>`;
             
             if (isDir) {
-                return `<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--border-color,#f0f0f0);cursor:pointer;" onclick="App._storagePickerPath='${this.escapeHtml(f.path || f.name).replace(/'/g, "\\'")}';App.loadStoragePickerFiles();">
+                return `<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--border-color,var(--fs-border, #f0f0f0));cursor:pointer;" onclick="App._storagePickerPath='${this.escapeHtml(f.path || f.name).replace(/'/g, "\\'")}';App.loadStoragePickerFiles();">
                     <span style="font-size:16px;">${icon}</span>
                     <span style="font-size:13px;flex:1;">${this.escapeHtml(f.name)}</span>
-                    <span style="color:#999;font-size:12px;">▶</span>
+                    <span style="color:var(--fs-text-3, #999);font-size:12px;">▶</span>
                 </div>`;
             }
             
             const filePath = f.path || f.name;
-            return `<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--border-color,#f0f0f0);">
+            return `<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--border-color,var(--fs-border, #f0f0f0));">
                 <input type="checkbox" ${checked} onchange="App._toggleStoragePickerFile('${this.escapeHtml(filePath).replace(/'/g, "\\'")}', '${this.escapeHtml(f.name).replace(/'/g, "\\'")}', ${f.size || 0}, this.checked)" style="width:auto !important;">
                 <span style="font-size:16px;">${icon}</span>
                 <span style="font-size:13px;flex:1;word-break:break-all;">${this.escapeHtml(f.name)}</span>
@@ -27322,11 +27556,11 @@ const App = {
                 <span style="font-size: 32px;">${icon}</span>
                 <div style="flex: 1; min-width: 0;">
                     <div style="font-weight: 600; word-break: break-all; font-size: 14px;">${this.escapeHtml(item.name)}</div>
-                    <div style="color: #888; font-size: 12px;">${typeText}${sizeText}</div>
+                    <div style="color: var(--fs-text-3, #888); font-size: 12px;">${typeText}${sizeText}</div>
                 </div>
             </div>
-            <div style="background: #ffebee; padding: 10px 12px; border-radius: 6px; border-left: 3px solid #f44336; font-size: 13px;">
-                <span style="color: #c62828;">${t('perm_delete_warn','⚠️ 영구 삭제되며 복구할 수 없습니다.')}</span>
+            <div style="background: var(--fs-tint-err, #ffebee); padding: 10px 12px; border-radius: 6px; border-left: 3px solid #f44336; font-size: 13px;">
+                <span style="color: var(--fs-fg-err, #c62828);">${t('perm_delete_warn','⚠️ 영구 삭제되며 복구할 수 없습니다.')}</span>
             </div>
         `;
         
@@ -27350,11 +27584,11 @@ const App = {
                 <div style="text-align: center; font-size: 15px; font-weight: 600; margin-bottom: 10px;">
                     ${t('confirm_perm_delete','정말로 영구 삭제하시겠습니까?')}
                 </div>
-                <div style="text-align: center; color: #666; font-size: 13px; margin-bottom: 15px;">
+                <div style="text-align: center; color: var(--fs-text-2, #666); font-size: 13px; margin-bottom: 15px;">
                     "${this.escapeHtml(item.name)}"
                 </div>
-                <div style="background: #ffebee; padding: 12px; border-radius: 6px; border: 1px solid #f44336; text-align: center;">
-                    <span style="color: #c62828; font-weight: 600;">${t('cannot_undo','이 작업은 되돌릴 수 없습니다!')}</span>
+                <div style="background: var(--fs-tint-err, #ffebee); padding: 12px; border-radius: 6px; border: 1px solid #f44336; text-align: center;">
+                    <span style="color: var(--fs-fg-err, #c62828); font-weight: 600;">${t('cannot_undo','이 작업은 되돌릴 수 없습니다!')}</span>
                 </div>
             `;
             
@@ -27406,14 +27640,14 @@ const App = {
             <div style="margin-bottom: 12px; font-size: 14px;">
                 <strong>${targetText}</strong>${t('confirm_empty','을(를) 비우시겠습니까?')}
             </div>
-            <div style="background: #f5f5f5; padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px;">
+            <div style="background: var(--fs-surface-2, #f5f5f5); padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px;">
                 <div style="display: flex; justify-content: space-between;">
                     <span>${itemCount} ${t('items_n_count', '항목')}</span>
-                    <span style="color: #666;">${this.formatSize(totalSize)}</span>
+                    <span style="color: var(--fs-text-2, #666);">${this.formatSize(totalSize)}</span>
                 </div>
             </div>
-            <div style="background: #ffebee; padding: 10px 12px; border-radius: 6px; border-left: 3px solid #f44336; font-size: 13px;">
-                <span style="color: #c62828;">${t('perm_delete_all_warn','⚠️ 모든 파일이 영구 삭제되며 복구할 수 없습니다.')}</span>
+            <div style="background: var(--fs-tint-err, #ffebee); padding: 10px 12px; border-radius: 6px; border-left: 3px solid #f44336; font-size: 13px;">
+                <span style="color: var(--fs-fg-err, #c62828);">${t('perm_delete_all_warn','⚠️ 모든 파일이 영구 삭제되며 복구할 수 없습니다.')}</span>
             </div>
         `;
         
@@ -27437,11 +27671,11 @@ const App = {
                 <div style="text-align: center; font-size: 15px; font-weight: 600; margin-bottom: 10px;">
                     ${t('final_confirm_really', '정말로')} ${targetText}${t('confirm_empty','을(를) 비우시겠습니까?')}
                 </div>
-                <div style="text-align: center; color: #666; font-size: 13px; margin-bottom: 15px;">
+                <div style="text-align: center; color: var(--fs-text-2, #666); font-size: 13px; margin-bottom: 15px;">
                     ${itemCount} ${t('items_n_count', '항목')} · ${this.formatSize(totalSize)}
                 </div>
-                <div style="background: #ffebee; padding: 12px; border-radius: 6px; border: 1px solid #f44336; text-align: center;">
-                    <span style="color: #c62828; font-weight: 600;">${t('cannot_undo','이 작업은 되돌릴 수 없습니다!')}</span>
+                <div style="background: var(--fs-tint-err, #ffebee); padding: 12px; border-radius: 6px; border: 1px solid #f44336; text-align: center;">
+                    <span style="color: var(--fs-fg-err, #c62828); font-weight: 600;">${t('cannot_undo','이 작업은 되돌릴 수 없습니다!')}</span>
                 </div>
             `;
             
@@ -27623,13 +27857,13 @@ const App = {
             <div style="margin-bottom: 12px; font-size: 14px;">
                 <strong>${targetText}</strong>${t('confirm_restore_all','의 모든 항목을 복구하시겠습니까?')}
             </div>
-            <div style="background: #e3f2fd; padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px;">
+            <div style="background: var(--fs-tint-info, #e3f2fd); padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px;">
                 <div style="display: flex; justify-content: space-between;">
                     <span>${t('restore_target', '복구 대상:')} ${itemCount} ${t('items_n_count', '항목')}</span>
                 </div>
             </div>
-            <div style="background: #fff3e0; padding: 10px 12px; border-radius: 6px; border-left: 3px solid #ff9800; font-size: 13px;">
-                <span style="color: #e65100;">📌 ${t('restore_notice','원래 위치로 복구됩니다. 같은 이름의 파일이 있으면 덮어쓰지 않고 건너뜁니다.')}</span>
+            <div style="background: var(--fs-tint-warn, #fff3e0); padding: 10px 12px; border-radius: 6px; border-left: 3px solid #ff9800; font-size: 13px;">
+                <span style="color: var(--fs-fg-warn, #e65100);">📌 ${t('restore_notice','원래 위치로 복구됩니다. 같은 이름의 파일이 있으면 덮어쓰지 않고 건너뜁니다.')}</span>
             </div>
         `;
         
@@ -27777,7 +28011,7 @@ const App = {
         
         // 검색 방식 표시
         const methodText = res.method === 'index' ? t('index_search', '⚡ 인덱스 검색') : t('file_scan', '📂 파일 스캔');
-        $('#bulk-delete-count').html(`(${res.items.length} ${t('found','발견')}) <small style="color:#888">${methodText}</small>`);
+        $('#bulk-delete-count').html(`(${res.items.length} ${t('found','발견')}) <small style="color:var(--fs-text-3, #888)">${methodText}</small>`);
         
         res.items.forEach((item, idx) => {
             const icon = item.is_dir ? '📁' : '📄';
@@ -27906,7 +28140,7 @@ const App = {
                 const dname = log.display_name || log.username || '-';
                 const uname = log.username || '';
                 const userHtml = dname !== uname && uname
-                    ? `${this.escapeHtml(dname)} <span style="color:#999;font-size:0.85em;">(${this.escapeHtml(uname)})</span>`
+                    ? `${this.escapeHtml(dname)} <span style="color:var(--fs-text-3, #5f6368);font-size:0.85em;">(${this.escapeHtml(uname)})</span>`
                     : this.escapeHtml(dname);
                 
                 // 파일/경로 — 로그인 관련은 표시 안 함
@@ -27934,7 +28168,7 @@ const App = {
                     const fullPath = (storageName ? '[' + storageName + '] ' : '') + (dirPath ? dirPath + '/' : '') + (filename || log.path || '');
                     fileHtml = `<strong>${this.escapeHtml(filename || log.path || '-')}</strong>`;
                     if (locationStr) {
-                        fileHtml += `<div style="font-size:0.8em;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(locationStr)}</div>`;
+                        fileHtml += `<div style="font-size:0.8em;color:var(--fs-text-3, #999);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(locationStr)}</div>`;
                     }
                     fileHtml = `<span title="${this.escapeHtml(fullPath)}" style="cursor:default;">${fileHtml}</span>`;
                 }
@@ -28122,7 +28356,7 @@ const App = {
         if (!tbody) return;
         
         if (!data || !data.length) {
-            tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:#888;padding:20px;">${t('no_data','데이터 없음')}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="3" style="text-align:center;color:var(--fs-text-3, #888);padding:20px;">${t('no_data','데이터 없음')}</td></tr>`;
             return;
         }
         
@@ -28189,7 +28423,7 @@ const App = {
         if (!tbody) return;
         
         if (!data || !data.length) {
-            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#888;padding:20px;">${t('no_data','데이터 없음')}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--fs-text-3, #888);padding:20px;">${t('no_data','데이터 없음')}</td></tr>`;
             return;
         }
         
@@ -28222,7 +28456,7 @@ const App = {
         if (!container) return;
         
         if (!data || !data.length) {
-            container.innerHTML = `<div style="text-align:center;color:#888;padding:20px;">${t('no_data','데이터 없음')}</div>`;
+            container.innerHTML = `<div style="text-align:center;color:var(--fs-text-3, #888);padding:20px;">${t('no_data','데이터 없음')}</div>`;
             return;
         }
         
@@ -28244,7 +28478,7 @@ const App = {
         if (!tbody) return;
         
         if (!data || !data.length) {
-            tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#888;padding:20px;">${t('no_data','데이터 없음')}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--fs-text-3, #888);padding:20px;">${t('no_data','데이터 없음')}</td></tr>`;
             return;
         }
         
@@ -28487,7 +28721,7 @@ const App = {
             $('#index-status').html(`
                 <div class="index-complete">
                     ✅ ${t('index_rebuild_complete','인덱스 재구축 완료!')} (${totalItems.toLocaleString()}${t('count_items','개 항목')})
-                    <div style="font-size:12px;color:#666;margin-top:8px;">${detailHtml}</div>
+                    <div style="font-size:12px;color:var(--fs-text-2, #666);margin-top:8px;">${detailHtml}</div>
                 </div>
             `).show();
             
@@ -28722,29 +28956,29 @@ const App = {
         let content = `<div>`;
         
         // 날짜 검색 폼
-        content += `<div style="background:#f8f9fa; padding:12px; border-radius:8px; margin-bottom:15px;">
+        content += `<div style="background:var(--fs-surface-2, #f8f9fa); padding:12px; border-radius:8px; margin-bottom:15px;">
             <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
                 <label style="font-weight:500;">📅 ${t('period','기간')}:</label>
                 <input type="date" id="log-start-date" lang="${window.LANG || 'ko'}" value="${startDate || ''}" 
                     ${minDate ? `min="${minDate}" max="${maxDate}"` : ''} 
-                    style="padding:5px 10px; border:1px solid #ddd; border-radius:4px;">
+                    style="padding:5px 10px; border:1px solid var(--fs-border-2, #ddd); border-radius:4px;">
                 <span>~</span>
                 <input type="date" id="log-end-date" lang="${window.LANG || 'ko'}" value="${endDate || ''}" 
                     ${minDate ? `min="${minDate}" max="${maxDate}"` : ''} 
-                    style="padding:5px 10px; border:1px solid #ddd; border-radius:4px;">
+                    style="padding:5px 10px; border:1px solid var(--fs-border-2, #ddd); border-radius:4px;">
                 <button class="btn btn-sm btn-primary" onclick="App.searchDeletedUserLogs()">${t('search','검색')}</button>
                 <button class="btn btn-sm" onclick="App.showDeletedUserLogs(${index}, '${type}', 1, '', '')">${t('reset','초기화')}</button>
             </div>
-            ${minDate ? `<p style="font-size:11px; color:#888; margin:8px 0 0 0;">${t('record_period','기록 기간:')} ${minDate} ~ ${maxDate}</p>` : ''}
+            ${minDate ? `<p style="font-size:11px; color:var(--fs-text-3, #888); margin:8px 0 0 0;">${t('record_period','기록 기간:')} ${minDate} ~ ${maxDate}</p>` : ''}
         </div>`;
         
-        content += `<p style="margin-bottom:10px; color:#666;">
+        content += `<p style="margin-bottom:10px; color:var(--fs-text-2, #666);">
             ${t('user','사용자')}: <strong>${this.escapeHtml(user.username)}</strong> | 
             ${startDate || endDate ? tf('search_results_count', '검색결과: {filtered}건 (전체: {total}건)', {filtered: totalCount, total: allLogs.length}) : tf('total_count', '총 {count}건', {count: totalCount})}
         </p>`;
         
         if (totalCount === 0) {
-            content += `<p style="text-align:center; padding:40px; color:#888;">
+            content += `<p style="text-align:center; padding:40px; color:var(--fs-text-3, #888);">
                 ${startDate || endDate ? t('no_logs_period', '해당 기간에 로그가 없습니다.') : t('no_logs', '보관된 로그가 없습니다.')}
             </p>`;
         } else {
@@ -28752,30 +28986,30 @@ const App = {
             content += `<table style="width:100%; border-collapse:collapse; font-size:12px;">`;
             
             if (type === 'login') {
-                content += `<thead><tr style="background:#f5f5f5; position:sticky; top:0;">
-                    <th style="padding:8px; border:1px solid #ddd;">${t('th_time','시간')}</th>
-                    <th style="padding:8px; border:1px solid #ddd;">IP</th>
-                    <th style="padding:8px; border:1px solid #ddd;">${t('th_country','국가')}</th>
-                    <th style="padding:8px; border:1px solid #ddd;">${t('th_result','결과')}</th>
-                    <th style="padding:8px; border:1px solid #ddd;">${t('th_message','메시지')}</th>
+                content += `<thead><tr style="background:var(--fs-surface-2, #f5f5f5); position:sticky; top:0;">
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">${t('th_time','시간')}</th>
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">IP</th>
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">${t('th_country','국가')}</th>
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">${t('th_result','결과')}</th>
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">${t('th_message','메시지')}</th>
                 </tr></thead><tbody>`;
                 
                 pageLogs.forEach(log => {
-                    const resultClass = log.success ? 'color:#4caf50' : 'color:#f44336';
+                    const resultClass = log.success ? 'color:var(--fs-fg-ok, #4caf50)' : 'color:var(--fs-fg-err, #f44336)';
                     content += `<tr>
-                        <td style="padding:6px; border:1px solid #eee; white-space:nowrap;">${log.created_at || '-'}</td>
-                        <td style="padding:6px; border:1px solid #eee;">${log.ip || '-'}</td>
-                        <td style="padding:6px; border:1px solid #eee;">${log.country || '-'}</td>
-                        <td style="padding:6px; border:1px solid #eee; ${resultClass}">${log.success ? t('success_icon', '✅ 성공') : t('failed_icon', '❌ 실패')}</td>
-                        <td style="padding:6px; border:1px solid #eee;">${this.escapeHtml(log.reason || '-')}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee); white-space:nowrap;">${log.created_at || '-'}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee);">${log.ip || '-'}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee);">${log.country || '-'}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee); ${resultClass}">${log.success ? t('success_icon', '✅ 성공') : t('failed_icon', '❌ 실패')}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee);">${this.escapeHtml(log.reason || '-')}</td>
                     </tr>`;
                 });
             } else {
-                content += `<thead><tr style="background:#f5f5f5; position:sticky; top:0;">
-                    <th style="padding:8px; border:1px solid #ddd;">${t('th_time','시간')}</th>
-                    <th style="padding:8px; border:1px solid #ddd;">${t('th_action','작업')}</th>
-                    <th style="padding:8px; border:1px solid #ddd;">${t('th_target','대상')}</th>
-                    <th style="padding:8px; border:1px solid #ddd;">${t('th_detail','상세')}</th>
+                content += `<thead><tr style="background:var(--fs-surface-2, #f5f5f5); position:sticky; top:0;">
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">${t('th_time','시간')}</th>
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">${t('th_action','작업')}</th>
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">${t('th_target','대상')}</th>
+                    <th style="padding:8px; border:1px solid var(--fs-border-2, #ddd);">${t('th_detail','상세')}</th>
                 </tr></thead><tbody>`;
                 
                 pageLogs.forEach(log => {
@@ -28786,10 +29020,10 @@ const App = {
                     }
                     
                     content += `<tr>
-                        <td style="padding:6px; border:1px solid #eee; white-space:nowrap;">${log.created_at || '-'}</td>
-                        <td style="padding:6px; border:1px solid #eee;">${log.type || '-'}</td>
-                        <td style="padding:6px; border:1px solid #eee; max-width:150px; overflow:hidden; text-overflow:ellipsis;" title="${this.escapeHtml(target || '')}">${this.escapeHtml(target || '-')}</td>
-                        <td style="padding:6px; border:1px solid #eee; max-width:150px; overflow:hidden; text-overflow:ellipsis;" title="${this.escapeHtml(log.details || '')}">${this.escapeHtml(log.details || '-')}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee); white-space:nowrap;">${log.created_at || '-'}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee);">${log.type || '-'}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee); max-width:150px; overflow:hidden; text-overflow:ellipsis;" title="${this.escapeHtml(target || '')}">${this.escapeHtml(target || '-')}</td>
+                        <td style="padding:6px; border:1px solid var(--fs-border, #eee); max-width:150px; overflow:hidden; text-overflow:ellipsis;" title="${this.escapeHtml(log.details || '')}">${this.escapeHtml(log.details || '-')}</td>
                     </tr>`;
                 });
             }
@@ -28818,7 +29052,7 @@ const App = {
                 }
                 
                 for (let i = startPage; i <= endPage; i++) {
-                    const activeStyle = i === currentPage ? 'background:#007bff; color:#fff;' : '';
+                    const activeStyle = i === currentPage ? 'background:var(--fs-accent, #007bff); color:var(--fs-on-primary, #fff);' : ''; // ★ (2026-10-24) 테마 색 — 변수 없으면 종전 색(기본 테마 그대로)
                     content += `<button class="btn btn-sm" onclick="App.showDeletedUserLogs(${index}, '${type}', ${i}, ${sd}, ${ed})" style="margin:0 2px; ${activeStyle}">${i}</button>`;
                 }
                 
@@ -28832,7 +29066,7 @@ const App = {
                     content += `<button class="btn btn-sm" onclick="App.showDeletedUserLogs(${index}, '${type}', ${currentPage + 1}, ${sd}, ${ed})" style="margin:0 2px;">${t('next','다음')} ▶</button>`;
                 }
                 
-                content += `<p style="margin-top:8px; font-size:11px; color:#888;">${tf('page_info', '{current}/{total} 페이지', {current: currentPage, total: totalPages})} (${perPage} ${t('per_page', '건씩')})</p>`;
+                content += `<p style="margin-top:8px; font-size:11px; color:var(--fs-text-3, #888);">${tf('page_info', '{current}/{total} 페이지', {current: currentPage, total: totalPages})} (${perPage} ${t('per_page', '건씩')})</p>`;
                 content += `</div>`;
             }
         }
@@ -28892,7 +29126,7 @@ const App = {
             <div style="margin-bottom: 12px;">
                 <strong>"${this.escapeHtml(user.username)}"</strong> ${t('confirm_perm_delete_record','기록을 영구 삭제하시겠습니까?')}
             </div>
-            <div style="background: #f5f5f5; padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px;">
+            <div style="background: var(--fs-surface-2, #f5f5f5); padding: 10px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px;">
                 <div>• ${t('user_info_login_logs','사용자 정보, 로그인 기록')} (${loginCount}${t('count_suffix','건')}), ${t('activity_log','활동 로그')} (${activityCount}${t('count_suffix','건')})</div>
             </div>
         `;
@@ -28900,8 +29134,8 @@ const App = {
         if (hasFolder) {
             // 폴더가 실제로 존재함
             content += `
-                <div style="background: #fff3e0; padding: 10px 12px; border-radius: 6px; border-left: 3px solid #ff9800; margin-bottom: 12px; font-size: 13px;">
-                    <span style="color: #e65100;">⚠️ ${t('folder_exists','파일 폴더 있음')}: ${this.escapeHtml(folderName)}</span>
+                <div style="background: var(--fs-tint-warn, #fff3e0); padding: 10px 12px; border-radius: 6px; border-left: 3px solid #ff9800; margin-bottom: 12px; font-size: 13px;">
+                    <span style="color: var(--fs-fg-warn, #e65100);">⚠️ ${t('folder_exists','파일 폴더 있음')}: ${this.escapeHtml(folderName)}</span>
                 </div>
             `;
             
@@ -28938,8 +29172,8 @@ const App = {
             // 폴더가 없음
             if (hadFolder) {
                 content += `
-                    <div style="background: #e3f2fd; padding: 10px 12px; border-radius: 6px; border-left: 3px solid #2196f3; margin-bottom: 12px; font-size: 13px;">
-                        <span style="color: #1565c0;">ℹ️ ${t('folder_already_deleted','파일 폴더는 이미 삭제됨')}</span>
+                    <div style="background: var(--fs-tint-info, #e3f2fd); padding: 10px 12px; border-radius: 6px; border-left: 3px solid #2196f3; margin-bottom: 12px; font-size: 13px;">
+                        <span style="color: var(--fs-fg-info, #1565c0);">ℹ️ ${t('folder_already_deleted','파일 폴더는 이미 삭제됨')}</span>
                     </div>
                 `;
             }
@@ -29135,12 +29369,12 @@ const App = {
                 '<td style="text-align:center;"><span class="popup-order-badge">' + (index + 1) + '</span></td>' +
                 '<td style="text-align:center;"><span class="popup-status ' + status + '">' + statusText + '</span></td>' +
                 '<td style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + this.escapeHtml(popup.title || t('no_title', '제목 없음')) + '">' + this.escapeHtml(popup.title || t('no_title', '제목 없음')) + '</td>' +
-                '<td style="color:#666; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + this.escapeHtml(contentDisplay || '-') + '">' + this.escapeHtml(contentDisplay || '-') + '</td>' +
-                '<td style="text-align:center; font-size:11px; color:#666;">' + displayModeText + '</td>' +
-                '<td style="text-align:center; color:#666; font-size:12px;">' + width + '×' + height + '</td>' +
-                '<td style="text-align:center; color:#666; font-size:12px;">' + periodText + '</td>' +
+                '<td style="color:var(--fs-text-2, #666); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="' + this.escapeHtml(contentDisplay || '-') + '">' + this.escapeHtml(contentDisplay || '-') + '</td>' +
+                '<td style="text-align:center; font-size:11px; color:var(--fs-text-2, #666);">' + displayModeText + '</td>' +
+                '<td style="text-align:center; color:var(--fs-text-2, #666); font-size:12px;">' + width + '×' + height + '</td>' +
+                '<td style="text-align:center; color:var(--fs-text-2, #666); font-size:12px;">' + periodText + '</td>' +
                 '<td style="text-align:center;">' + (hasImage ? '✅' : '❌') + '</td>' +
-                '<td style="text-align:center;"><span style="display:inline-block;width:18px;height:18px;border-radius:3px;background:' + bgColor + ';border:1px solid #ccc;"></span></td>' +
+                '<td style="text-align:center;"><span style="display:inline-block;width:18px;height:18px;border-radius:3px;background:' + bgColor + ';border:1px solid var(--fs-border-2, #ccc);"></span></td>' +
                 '<td style="text-align:center;">' +
                     '<button class="btn btn-sm btn-icon" onclick="App.openPopupEditModal(' + index + ')" title="' + (t('il_edit', '편집')) + '">✏️</button>' +
                     '<button class="btn btn-sm btn-icon btn-danger-icon" onclick="App.deletePopup(' + index + ')" title="' + (t('il_delete', '삭제')) + '">🗑️</button>' +
@@ -29820,11 +30054,11 @@ const App = {
                     res.logs.forEach(log => {
                         const icon = log.clean ? '✅' : '❌';
                         const color = log.clean ? '#4caf50' : '#f44336';
-                        logHtml += `<div style="color:${color}; margin-bottom:5px; padding: 3px 0; border-bottom: 1px solid #eee;">${icon} [${log.time}] ${this.escapeHtml(log.filename)} - ${this.escapeHtml(log.result)}</div>`;
+                        logHtml += `<div style="color:${color}; margin-bottom:5px; padding: 3px 0; border-bottom: 1px solid var(--fs-border, #eee);">${icon} [${log.time}] ${this.escapeHtml(log.filename)} - ${this.escapeHtml(log.result)}</div>`;
                     });
                     contentEl.innerHTML = logHtml;
                 } else {
-                    contentEl.innerHTML = '<div style="text-align: center; color: #999; padding: 20px;">' + t('no_logs', '로그가 없습니다') + '</div>';
+                    contentEl.innerHTML = '<div style="text-align: center; color: var(--fs-text-3, #5f6368); padding: 20px;">' + t('no_logs', '로그가 없습니다') + '</div>';
                 }
                 
                 // 페이지네이션
@@ -30103,14 +30337,14 @@ const App = {
                 res.logs.forEach(log => {
                     const icon = log.type === 'blocked' ? '🚫' : '⚠️';
                     const color = log.type === 'blocked' ? '#f44336' : '#ff9800';
-                    html += `<div style="color:${color}; margin-bottom:5px; padding: 3px 0; border-bottom: 1px solid #eee;">
+                    html += `<div style="color:${color}; margin-bottom:5px; padding: 3px 0; border-bottom: 1px solid var(--fs-border, #eee);">
                         ${icon} [${log.time}] ${this.escapeHtml(log.user || t('unknown_user', '알수없음'))} - ${this.escapeHtml(log.action)} - ${this.escapeHtml(log.detail)}
                     </div>`;
                 });
                 contentEl.innerHTML = html;
             } else {
                 if (statsEl) statsEl.innerHTML = t('no_logs_available', '로그가 없습니다');
-                contentEl.innerHTML = '' + '<div style="text-align: center; color: #999; padding: 20px;">' + t('il_no_logs', '로그가 없습니다') + '</div>' + '';
+                contentEl.innerHTML = '' + '<div style="text-align: center; color: var(--fs-text-3, #5f6368); padding: 20px;">' + t('il_no_logs', '로그가 없습니다') + '</div>' + '';
             }
         } catch (e) {
         }
@@ -30900,9 +31134,9 @@ const App = {
                     'color': '',
                     'font-weight': 'normal'
                 });
-                $(`.icon-change-tab[data-ctab="${tab}"]`).addClass('active').css({
-                    'border-bottom-color': '#4fc3f7',
-                    'color': '#1976d2',
+                $(`.icon-change-tab[data-ctab="${tab}"]`).addClass('active').css({   // ★ (2026-10-24) 테마 색 — 변수 없으면 종전 색(기본 테마 그대로)
+                    'border-bottom-color': 'var(--fs-accent, #4fc3f7)',
+                    'color': 'var(--fs-fg-info, #1976d2)',
                     'font-weight': 'bold'
                 });
                 $('.icon-change-panel').hide();
@@ -30922,7 +31156,7 @@ const App = {
                 // 최대 크기 체크
                 const maxSize = file.name.toLowerCase().endsWith('.svg') ? 102400 : 524288;
                 if (file.size > maxSize) {
-                    preview.html(`<span style="color:#d32f2f;">파일이 너무 큽니다<br>(최대 ${maxSize/1024}KB)</span>`);
+                    preview.html(`<span style="color:var(--fs-fg-err, #d32f2f);">파일이 너무 큽니다<br>(최대 ${maxSize/1024}KB)</span>`);
                     $('#btn-icon-change-apply').prop('disabled', true);
                     return;
                 }
@@ -30936,7 +31170,7 @@ const App = {
                     $('#btn-icon-change-apply').prop('disabled', false);
                 };
                 reader.onerror = () => {
-                    preview.html('<span style="color:#d32f2f;">파일 읽기 실패</span>');
+                    preview.html('<span style="color:var(--fs-fg-err, #d32f2f);">파일 읽기 실패</span>');
                     $('#btn-icon-change-apply').prop('disabled', true);
                 };
                 reader.readAsDataURL(file);
@@ -31257,20 +31491,20 @@ const App = {
         
         // 변경 버튼 + (커스텀 설정된 경우만) 초기화 버튼
         const resetBtn = hasCustom 
-            ? `<button type="button" class="btn btn-sm" data-reset-folder="1" style="color:#d32f2f;" title="기본 폴더 아이콘으로 복원">🔄 초기화</button>`
+            ? `<button type="button" class="btn btn-sm" data-reset-folder="1" style="color:var(--fs-fg-err, #d32f2f);" title="기본 폴더 아이콘으로 복원">🔄 초기화</button>`
             : '';
         const customBadge = hasCustom 
-            ? '<span style="color:#d32f2f; font-size:12px; margin-left:6px;" title="사용자 변경됨">🎨</span>'
+            ? '<span style="color:var(--fs-fg-err, #d32f2f); font-size:12px; margin-left:6px;" title="사용자 변경됨">🎨</span>'
             : '';
         
         return `
-            <div class="icon-ext-row" style="display:flex; align-items:center; padding:8px 15px; border-bottom:2px solid #1976d2; gap:12px; background:#f3f8ff;">
-                <div style="width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:#fafafa; border:1px solid #e0e0e0; border-radius:4px; flex-shrink:0;">
+            <div class="icon-ext-row" style="display:flex; align-items:center; padding:8px 15px; border-bottom:2px solid #1976d2; gap:12px; background:var(--fs-surface-2, #f3f8ff);">
+                <div style="width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:var(--fs-surface-2, #fafafa); border:1px solid var(--fs-border, #e0e0e0); border-radius:4px; flex-shrink:0;">
                     ${iconHtml}
                 </div>
                 <div style="flex:1; min-width:0;">
                     <div style="font-weight:bold; font-family:monospace; font-size:14px;">📁 폴더 ${customBadge}</div>
-                    <div style="color:#888; font-size:11px; margin-top:2px;">${this.escapeHtml(iconName)} <span style="color:#bbb;">(${this.escapeHtml(this._iconMgrSourceLabel(iconSource))})</span> · 모든 폴더에 적용</div>
+                    <div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:2px;">${this.escapeHtml(iconName)} <span style="color:var(--fs-text-4, #5f6368);">(${this.escapeHtml(this._iconMgrSourceLabel(iconSource))})</span> · 모든 폴더에 적용</div>
                 </div>
                 <div style="display:flex; gap:6px;">
                     ${resetBtn}
@@ -31398,13 +31632,13 @@ const App = {
                 const emojiChar = icon.emoji || '📄';
                 iconHtml = `<span style="font-size:24px;">${this.escapeHtml(emojiChar)}</span>`;
             } else {
-                iconHtml = '<span style="color:#aaa; font-size:20px;">?</span>';
+                iconHtml = '<span style="color:var(--fs-text-3, #aaa); font-size:20px;">?</span>';
             }
             
             const customBadge = isCustomized 
                 ? (isUserAdded 
-                    ? '<span style="color:#1976d2; font-size:12px; margin-left:6px;" title="사용자 추가 확장자">➕</span>' 
-                    : '<span style="color:#d32f2f; font-size:12px; margin-left:6px;" title="사용자 변경됨">🎨</span>')
+                    ? '<span style="color:var(--fs-fg-info, #1976d2); font-size:12px; margin-left:6px;" title="사용자 추가 확장자">➕</span>' 
+                    : '<span style="color:var(--fs-fg-err, #d32f2f); font-size:12px; margin-left:6px;" title="사용자 변경됨">🎨</span>')
                 : '';
             
             // 버튼:
@@ -31427,23 +31661,23 @@ const App = {
                 // 이미 default 매핑이면 아이콘 제거 버튼 숨김
                 const clearPart = isAlreadyDefault 
                     ? '' 
-                    : `<button type="button" class="btn btn-sm" data-clear-ext="${this.escapeHtml(ext)}" style="color:#888;" title="전용 아이콘 제거, 기본 아이콘(default)으로 표시">🚫 아이콘 제거</button>`;
-                actionBtn = clearPart + `<button type="button" class="btn btn-sm" data-remove-ext="${this.escapeHtml(ext)}" style="color:#d32f2f;" title="사용자 추가 확장자 완전 삭제">🗑️ 삭제</button>`;
+                    : `<button type="button" class="btn btn-sm" data-clear-ext="${this.escapeHtml(ext)}" style="color:var(--fs-text-3, #888);" title="전용 아이콘 제거, 기본 아이콘(default)으로 표시">🚫 아이콘 제거</button>`;
+                actionBtn = clearPart + `<button type="button" class="btn btn-sm" data-remove-ext="${this.escapeHtml(ext)}" style="color:var(--fs-fg-err, #d32f2f);" title="사용자 추가 확장자 완전 삭제">🗑️ 삭제</button>`;
             } else if (isCustomized) {
-                actionBtn = `<button type="button" class="btn btn-sm" data-reset-ext="${this.escapeHtml(ext)}" style="color:#d32f2f;" title="사용자 변경 취소, 기본 아이콘으로 되돌림">🔄 초기화</button>`;
+                actionBtn = `<button type="button" class="btn btn-sm" data-reset-ext="${this.escapeHtml(ext)}" style="color:var(--fs-fg-err, #d32f2f);" title="사용자 변경 취소, 기본 아이콘으로 되돌림">🔄 초기화</button>`;
             } else if (!isInline) {
                 // 기본 내장 확장자 → 아이콘 제거(기본 파일 아이콘으로 변경)
-                actionBtn = `<button type="button" class="btn btn-sm" data-clear-ext="${this.escapeHtml(ext)}" style="color:#888;" title="전용 아이콘 제거, 기본 아이콘(default)으로 표시">🚫 아이콘 제거</button>`;
+                actionBtn = `<button type="button" class="btn btn-sm" data-clear-ext="${this.escapeHtml(ext)}" style="color:var(--fs-text-3, #888);" title="전용 아이콘 제거, 기본 아이콘(default)으로 표시">🚫 아이콘 제거</button>`;
             }
             
             htmlParts.push(`
-                <div class="icon-ext-row" style="display:flex; align-items:center; padding:8px 15px; border-bottom:1px solid #f0f0f0; gap:12px;">
-                    <div style="width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:#fafafa; border:1px solid #e0e0e0; border-radius:4px; flex-shrink:0;">
+                <div class="icon-ext-row" style="display:flex; align-items:center; padding:8px 15px; border-bottom:1px solid var(--fs-border, #f0f0f0); gap:12px;">
+                    <div style="width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:var(--fs-surface-2, #fafafa); border:1px solid var(--fs-border, #e0e0e0); border-radius:4px; flex-shrink:0;">
                         ${iconHtml}
                     </div>
                     <div style="flex:1; min-width:0;">
                         <div style="font-weight:bold; font-family:monospace; font-size:14px;">.${this.escapeHtml(ext)} ${customBadge}</div>
-                        <div style="color:#888; font-size:11px; margin-top:2px;">${this.escapeHtml(icon.name || '-')} <span style="color:#bbb;">(${this.escapeHtml(this._iconMgrSourceLabel(icon.source))})</span></div>
+                        <div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:2px;">${this.escapeHtml(icon.name || '-')} <span style="color:var(--fs-text-4, #5f6368);">(${this.escapeHtml(this._iconMgrSourceLabel(icon.source))})</span></div>
                     </div>
                     <div style="display:flex; gap:6px;">
                         ${actionBtn}
@@ -31454,7 +31688,7 @@ const App = {
         });
         
         if (shown === 0) {
-            listEl.html('<div style="padding:40px; text-align:center; color:#aaa;">검색 결과가 없습니다.</div>');
+            listEl.html('<div style="padding:40px; text-align:center; color:var(--fs-text-3, #aaa);">검색 결과가 없습니다.</div>');
         } else {
             // 문자열로 한 번에 추가 (커스텀 $ 함수의 append는 문자열 전용)
             listEl.html(htmlParts.join(''));
@@ -31565,7 +31799,7 @@ const App = {
             // 이모지 아이콘 (음악 🎵, 실행 ⚙️ 등)
             curEl.html(`<span style="font-size:40px;">${this.escapeHtml(currentIcon.emoji)}</span>`);
         } else {
-            curEl.html('<span style="color:#aaa; font-size:24px;">?</span>');
+            curEl.html('<span style="color:var(--fs-text-3, #aaa); font-size:24px;">?</span>');
         }
         
         // 정보 (이모지면 출처를 'emoji'가 아닌 '이모지'로 한국어 표시)
@@ -31615,7 +31849,7 @@ const App = {
             'border-bottom-color': 'transparent', 'color': '', 'font-weight': 'normal'
         });
         $('.icon-change-tab[data-ctab="upload"]').addClass('active').css({
-            'border-bottom-color': '#4fc3f7', 'color': '#1976d2', 'font-weight': 'bold'
+            'border-bottom-color': 'var(--fs-accent, #4fc3f7)', 'color': 'var(--fs-fg-info, #1976d2)', 'font-weight': 'bold'   // ★ (2026-10-24) 테마 색 — 변수 없으면 종전 색(기본 테마 그대로)
         });
         $('.icon-change-panel').hide();
         $('#icon-change-panel-upload').show();
@@ -31643,7 +31877,7 @@ const App = {
         const renderCardHtml = (name, isCustom) => {
             const rawPath = isCustom ? `assets/file-icons/custom/${name}.svg` : `assets/file-icons/${name}.svg`;
             const path = this._iconUrlWithBuster(rawPath, name);
-            const borderColor = isCustom ? '#d32f2f' : '#e0e0e0';
+            const borderColor = isCustom ? '#d32f2f' : 'var(--fs-border-2, #e0e0e0)'; // ★ (2026-10-24) 테마 색 — 변수 없으면 종전 색(기본 테마 그대로) — 커스텀(빨강)은 구분용이라 유지
             const isLabel = name.indexOf('archive_') === 0;
             // 라벨형 아이콘 미리보기: 우측 상단에 "라벨" 표시
             const labelBadge = isLabel 
@@ -31656,17 +31890,17 @@ const App = {
                 : '';
             return `
                 <div class="icon-gallery-card" data-gallery-name="${this.escapeHtml(name)}" data-gallery-custom="${isCustom ? '1' : '0'}" 
-                     style="padding:6px; background:#fff; border:2px solid ${borderColor}; border-radius:6px; text-align:center; cursor:pointer; transition:all .15s; position:relative;">
+                     style="padding:6px; background:var(--fs-surface, #fff); border:2px solid ${borderColor}; border-radius:6px; text-align:center; cursor:pointer; transition:all .15s; position:relative;">
                     ${deleteBtn}
                     ${labelBadge}
                     <img src="${this.escapeHtml(path)}" style="width:40px; height:40px;">
-                    <div style="margin-top:4px; font-size:10px; word-break:break-all; color:#555;">${this.escapeHtml(name)}</div>
+                    <div style="margin-top:4px; font-size:10px; word-break:break-all; color:var(--fs-text-2, #555);">${this.escapeHtml(name)}</div>
                 </div>
             `;
         };
         
         if (custom.length + builtin.length === 0) {
-            galleryEl.html('<div style="grid-column:1/-1; padding:20px; text-align:center; color:#aaa;">아이콘이 없습니다.</div>');
+            galleryEl.html('<div style="grid-column:1/-1; padding:20px; text-align:center; color:var(--fs-text-3, #aaa);">아이콘이 없습니다.</div>');
             return;
         }
         
@@ -31705,10 +31939,15 @@ const App = {
         galleryEl.find('.icon-gallery-card').on('click', (e) => {
             const el = e.currentTarget;
             // 모든 카드 초기화
-            galleryEl.find('.icon-gallery-card').css({'background':'#fff', 'border-color':'#e0e0e0'});
-            // 선택된 카드 강조
-            el.style.background = '#e3f2fd';
-            el.style.borderColor = '#1976d2';
+            //   ★ (2026-10-24) 처음 그릴 때와 같은 값으로 되돌림 — 종전엔 #fff/#e0e0e0 고정이라
+            //     다크·전체 테마에서 클릭 후 카드가 하얘지고, 커스텀 아이콘의 빨간 테두리도 사라졌음
+            galleryEl.find('.icon-gallery-card').each((_, c) => {
+                c.style.background = 'var(--fs-surface, #fff)';
+                c.style.borderColor = c.dataset.galleryCustom === '1' ? '#d32f2f' : 'var(--fs-border-2, #e0e0e0)';
+            });
+            // 선택된 카드 강조 (테마 색, 변수 없으면 종전 색)
+            el.style.background = 'var(--fs-tint-info, #e3f2fd)';
+            el.style.borderColor = 'var(--fs-fg-info, #1976d2)';
             
             const name = el.dataset.galleryName;
             const isCustom = el.dataset.galleryCustom === '1';
@@ -31942,8 +32181,8 @@ const App = {
             // 7-Zip 상태
             const sz = res.seven_zip || {};
             const szStatus = sz.installed
-                ? `<span class="status-ok">✅ ${t('il_installed', '설치됨')}</span> <span style="color:#888;font-size:12px;">(v${this.escapeHtml(sz.version || '?')} — ${this.escapeHtml(sz.path || '')})</span>`
-                : `<span class="status-warn">⚠️ ${t('il_not_installed', '미설치')}</span> <span style="color:#888;font-size:12px;">— ${t('7zip_install_guide', 'zip/tar만 미리보기 가능. 7-Zip 설치 시 rar, 7z, iso 등 40개+ 형식 지원')}</span>`;
+                ? `<span class="status-ok">✅ ${t('il_installed', '설치됨')}</span> <span style="color:var(--fs-text-3, #888);font-size:12px;">(v${this.escapeHtml(sz.version || '?')} — ${this.escapeHtml(sz.path || '')})</span>`
+                : `<span class="status-warn">⚠️ ${t('il_not_installed', '미설치')}</span> <span style="color:var(--fs-text-3, #888);font-size:12px;">— ${t('7zip_install_guide', 'zip/tar만 미리보기 가능. 7-Zip 설치 시 rar, 7z, iso 등 40개+ 형식 지원')}</span>`;
             
             // 검색 인덱스 상태
             const indexStats = res.index_stats || {};
@@ -32172,9 +32411,9 @@ const App = {
                             <tr><th>7-Zip</th><td colspan="2">${szStatus}</td></tr>
                         </tbody>
                     </table>
-                    ${!sz.installed ? `<div style="margin-top:8px;padding:8px 12px;background:rgba(255,152,0,0.08);border:1px solid rgba(255,152,0,0.2);border-radius:6px;font-size:12px;color:#666;">
+                    ${!sz.installed ? `<div style="margin-top:8px;padding:8px 12px;background:rgba(255,152,0,0.08);border:1px solid rgba(255,152,0,0.2);border-radius:6px;font-size:12px;color:var(--fs-text-2, #666);">
                         <p style="margin:0 0 4px;font-weight:600;">📦 ${t('7zip_install_title', '7-Zip 설치 안내')}</p>
-                        <p style="margin:0;">Windows: <a href="https://www.7-zip.org/download.html" target="_blank" style="color:#1976d2;">7-zip.org</a> ${t('7zip_install_desc_win', '에서 다운로드 후 기본 경로에 설치')}<br>
+                        <p style="margin:0;">Windows: <a href="https://www.7-zip.org/download.html" target="_blank" style="color:var(--fs-fg-info, #1976d2);">7-zip.org</a> ${t('7zip_install_desc_win', '에서 다운로드 후 기본 경로에 설치')}<br>
                         Linux: <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">apt install 7zip</code> ${t('7zip_or', '또는')} <code style="background:rgba(128,128,128,0.12);padding:1px 5px;border-radius:3px;">yum install p7zip-full</code></p>
                     </div>` : ''}
                 </div>
@@ -32289,9 +32528,9 @@ const App = {
                         <tr>
                             <th>WebDAV</th>
                             <td><span class="status-ok">${t('il_status_active', '✅ 활성')}</span></td>
-                            <td style="font-size:12px;color:#888;">
+                            <td style="font-size:12px;color:var(--fs-text-3, #888);">
                                 <code style="user-select:all;cursor:pointer;" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavUrl)}');App.toast('${t('copied','복사됨')}','success')">${this.escapeHtml(webdavUrl)}</code>
-                                ${webdavExternal !== webdavUrl ? `<br><code style="user-select:all;cursor:pointer;color:#666;" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavExternal)}');App.toast('${t('copied','복사됨')}','success')">${this.escapeHtml(webdavExternal)}</code> <small>(${t('il_external','외부')})</small>` : ''}
+                                ${webdavExternal !== webdavUrl ? `<br><code style="user-select:all;cursor:pointer;color:var(--fs-text-2, #666);" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavExternal)}');App.toast('${t('copied','복사됨')}','success')">${this.escapeHtml(webdavExternal)}</code> <small>(${t('il_external','외부')})</small>` : ''}
                             </td>
                         </tr>
                     </table>
@@ -32612,7 +32851,7 @@ const App = {
                 });
             } else {
                 // QRCode 라이브러리 없으면 URI 직접 표시
-                qrContainer.innerHTML = '<p style="color:#c00;">' + t('qr_code_error', 'QR 코드를 생성할 수 없습니다.') + '<br>' + t('qr_code_manual', '아래 키를 직접 입력하세요.') + '</p>';
+                qrContainer.innerHTML = '<p style="color:var(--fs-fg-err, #c00);">' + t('qr_code_error', 'QR 코드를 생성할 수 없습니다.') + '<br>' + t('qr_code_manual', '아래 키를 직접 입력하세요.') + '</p>';
             }
             
             $('#twofa-secret-key').text(res.secret);
@@ -32656,7 +32895,7 @@ const App = {
     show2FABackupCodes(codes) {
         const list = $('#twofa-backup-codes-list');
         list.html(codes.map(code => 
-            `<code style="background:#f5f5f5; padding:8px; text-align:center; font-family:monospace; font-size:14px;">${code}</code>`
+            `<code style="background:var(--fs-surface-2, #f5f5f5); padding:8px; text-align:center; font-family:monospace; font-size:14px;">${code}</code>`
         ).join(''));
         $('#twofa-backup-codes-section').show();
     },
@@ -32778,11 +33017,11 @@ const App = {
                     if (sz.installed) {
                         szPanel.style.background = 'rgba(76,175,80,0.08)';
                         szPanel.style.border = '1px solid rgba(76,175,80,0.2)';
-                        szPanel.innerHTML = `✅ <b>7-Zip ${this.escapeHtml(sz.version || '')}</b> ${t('il_installed', '설치됨')} <span style="color:#888;font-size:12px;">(${this.escapeHtml(sz.path || '')})</span><br><span style="font-size:12px;color:#666;">${t('archive_all_supported', '모든 아카이브 형식 미리보기 가능')}</span>`;
+                        szPanel.innerHTML = `✅ <b>7-Zip ${this.escapeHtml(sz.version || '')}</b> ${t('il_installed', '설치됨')} <span style="color:var(--fs-text-3, #888);font-size:12px;">(${this.escapeHtml(sz.path || '')})</span><br><span style="font-size:12px;color:var(--fs-text-2, #666);">${t('archive_all_supported', '모든 아카이브 형식 미리보기 가능')}</span>`;
                     } else {
                         szPanel.style.background = 'rgba(255,152,0,0.08)';
                         szPanel.style.border = '1px solid rgba(255,152,0,0.2)';
-                        szPanel.innerHTML = `⚠️ <b>7-Zip</b> ${t('il_not_installed', '미설치')}<br><span style="font-size:12px;color:#666;">${t('archive_zip_only', 'ZIP, TAR 형식만 미리보기 가능합니다. 7-Zip을 설치하면 RAR, 7Z, ISO 등 40개+ 형식을 지원합니다.')}</span>`;
+                        szPanel.innerHTML = `⚠️ <b>7-Zip</b> ${t('il_not_installed', '미설치')}<br><span style="font-size:12px;color:var(--fs-text-2, #666);">${t('archive_zip_only', 'ZIP, TAR 형식만 미리보기 가능합니다. 7-Zip을 설치하면 RAR, 7Z, ISO 등 40개+ 형식을 지원합니다.')}</span>`;
                     }
                     // UnRAR 설치 상태 (rar 전용 — 7-Zip이 못 읽는 rar 보완)
                     const urPanel = document.getElementById('archive-unrar-status');
@@ -32791,11 +33030,11 @@ const App = {
                         if (ur.installed) {
                             urPanel.style.background = 'rgba(76,175,80,0.08)';
                             urPanel.style.border = '1px solid rgba(76,175,80,0.2)';
-                            urPanel.innerHTML = `✅ <b>UnRAR ${this.escapeHtml(ur.version || '')}</b> ${t('il_installed', '설치됨')} <span style="color:#888;font-size:12px;">(${this.escapeHtml(ur.path || '')})</span><br><span style="font-size:12px;color:#666;">${t('unrar_rar_supported', '7-Zip이 못 읽는 rar 파일도 미리보기 가능')}</span>`;
+                            urPanel.innerHTML = `✅ <b>UnRAR ${this.escapeHtml(ur.version || '')}</b> ${t('il_installed', '설치됨')} <span style="color:var(--fs-text-3, #888);font-size:12px;">(${this.escapeHtml(ur.path || '')})</span><br><span style="font-size:12px;color:var(--fs-text-2, #666);">${t('unrar_rar_supported', '7-Zip이 못 읽는 rar 파일도 미리보기 가능')}</span>`;
                         } else {
                             urPanel.style.background = 'rgba(158,158,158,0.08)';
                             urPanel.style.border = '1px solid rgba(158,158,158,0.2)';
-                            urPanel.innerHTML = `<b>UnRAR</b> ${t('il_not_installed', '미설치')} <span style="color:#888;font-size:12px;">(${t('optional', '선택')})</span><br><span style="font-size:12px;color:#666;">${t('unrar_optional_desc', '일부 rar는 7-Zip으로 목록이 안 보일 수 있습니다. WinRAR(UnRAR) 설치 시 그런 rar도 처리됩니다.')}</span>`;
+                            urPanel.innerHTML = `<b>UnRAR</b> ${t('il_not_installed', '미설치')} <span style="color:var(--fs-text-3, #888);font-size:12px;">(${t('optional', '선택')})</span><br><span style="font-size:12px;color:var(--fs-text-2, #666);">${t('unrar_optional_desc', '일부 rar는 7-Zip으로 목록이 안 보일 수 있습니다. WinRAR(UnRAR) 설치 시 그런 rar도 처리됩니다.')}</span>`;
                         }
                     }
                 }).catch(() => {});
@@ -33084,15 +33323,15 @@ const App = {
             ? (isKo
                 ? `<div style="padding:10px 12px;background:rgba(255,152,0,0.1);border:1px solid rgba(255,152,0,0.25);border-radius:6px;margin-bottom:6px;">
                     <p style="margin:0;font-size:13px;"><strong>🔑 2단계 인증 사용 중</strong> — WebDAV는 <strong>앱 비밀번호</strong>로만 접속 가능합니다.</p>
-                    <p style="margin:6px 0 0;font-size:12px;color:#666;">설정 → 🔑 앱 비밀번호 탭에서 생성하세요.</p>
+                    <p style="margin:6px 0 0;font-size:12px;color:var(--fs-text-2, #666);">설정 → 🔑 앱 비밀번호 탭에서 생성하세요.</p>
                    </div>`
                 : `<div style="padding:10px 12px;background:rgba(255,152,0,0.1);border:1px solid rgba(255,152,0,0.25);border-radius:6px;margin-bottom:6px;">
                     <p style="margin:0;font-size:13px;"><strong>🔑 2FA Enabled</strong> — WebDAV requires an <strong>app password</strong>.</p>
-                    <p style="margin:6px 0 0;font-size:12px;color:#666;">Generate one in Settings → 🔑 App Passwords tab.</p>
+                    <p style="margin:6px 0 0;font-size:12px;color:var(--fs-text-2, #666);">Generate one in Settings → 🔑 App Passwords tab.</p>
                    </div>`)
             : (isKo
-                ? `<p style="font-size:12px;color:#888;margin:0;">FileStation 로그인 비밀번호를 사용합니다.</p>`
-                : `<p style="font-size:12px;color:#888;margin:0;">Use your FileStation login password.</p>`);
+                ? `<p style="font-size:12px;color:var(--fs-text-3, #888);margin:0;">FileStation 로그인 비밀번호를 사용합니다.</p>`
+                : `<p style="font-size:12px;color:var(--fs-text-3, #888);margin:0;">Use your FileStation login password.</p>`);
         
         const html = `
         <div class="modal" id="modal-webdav-guide" style="display:none;max-width:580px;">
@@ -33106,13 +33345,13 @@ const App = {
                     <div style="margin-bottom:15px;padding:12px;background:rgba(33,150,243,0.08);border:1px solid rgba(33,150,243,0.2);border-radius:8px;">
                         <p style="margin:0 0 8px;font-weight:600;font-size:14px;">📡 ${isKo ? '접속 정보' : 'Connection Info'}</p>
                         <table style="font-size:13px;width:100%;border-collapse:collapse;">
-                            <tr><td style="padding:4px 8px 4px 0;color:#888;width:100px;">URL</td>
-                                <td style="padding:4px 0;"><code style="background:rgba(128,128,128,0.12);padding:3px 8px;border-radius:4px;font-size:12px;user-select:all;cursor:pointer;" onclick="navigator.clipboard.writeText('${this.escapeHtml(davUrl)}');App.toast('${isKo ? '복사됨' : 'Copied'}','success')">${this.escapeHtml(davUrl)}</code> <span style="font-size:11px;color:#888;">📋</span></td></tr>
-                            <tr><td style="padding:4px 8px 4px 0;color:#888;">Windows</td>
-                                <td style="padding:4px 0;"><code style="background:rgba(128,128,128,0.12);padding:3px 8px;border-radius:4px;font-size:12px;user-select:all;cursor:pointer;" data-cp="${this.escapeHtml(uncPath)}" onclick="${uncCopyJs}">${this.escapeHtml(uncPath)}</code> <span style="font-size:11px;color:#888;">📋</span></td></tr>
-                            <tr><td style="padding:4px 8px 4px 0;color:#888;">${isKo ? '계정' : 'Account'}</td>
+                            <tr><td style="padding:4px 8px 4px 0;color:var(--fs-text-3, #888);width:100px;">URL</td>
+                                <td style="padding:4px 0;"><code style="background:rgba(128,128,128,0.12);padding:3px 8px;border-radius:4px;font-size:12px;user-select:all;cursor:pointer;" onclick="navigator.clipboard.writeText('${this.escapeHtml(davUrl)}');App.toast('${isKo ? '복사됨' : 'Copied'}','success')">${this.escapeHtml(davUrl)}</code> <span style="font-size:11px;color:var(--fs-text-3, #888);">📋</span></td></tr>
+                            <tr><td style="padding:4px 8px 4px 0;color:var(--fs-text-3, #888);">Windows</td>
+                                <td style="padding:4px 0;"><code style="background:rgba(128,128,128,0.12);padding:3px 8px;border-radius:4px;font-size:12px;user-select:all;cursor:pointer;" data-cp="${this.escapeHtml(uncPath)}" onclick="${uncCopyJs}">${this.escapeHtml(uncPath)}</code> <span style="font-size:11px;color:var(--fs-text-3, #888);">📋</span></td></tr>
+                            <tr><td style="padding:4px 8px 4px 0;color:var(--fs-text-3, #888);">${isKo ? '계정' : 'Account'}</td>
                                 <td style="padding:4px 0;"><strong>${this.escapeHtml(username)}</strong></td></tr>
-                            <tr><td style="padding:4px 8px 4px 0;color:#888;vertical-align:top;">${isKo ? '비밀번호' : 'Password'}</td>
+                            <tr><td style="padding:4px 8px 4px 0;color:var(--fs-text-3, #888);vertical-align:top;">${isKo ? '비밀번호' : 'Password'}</td>
                                 <td style="padding:4px 0;">${pwSection}</td></tr>
                         </table>
                     </div>
@@ -33124,7 +33363,7 @@ const App = {
                         <p style="font-weight:600;margin:0 0 8px;">📂 Windows ${isKo ? '탐색기' : 'Explorer'}</p>
                         <ol style="font-size:13px;margin:0;padding-left:20px;line-height:1.8;">
                             <li>${isKo ? '파일 탐색기 → <b>내 PC</b> 우클릭 → <b>네트워크 드라이브 연결</b>' : 'File Explorer → Right-click <b>This PC</b> → <b>Map Network Drive</b>'}</li>
-                            <li>${isKo ? '폴더에 입력:' : 'Folder:'} <code style="background:rgba(128,128,128,0.12);padding:2px 6px;border-radius:3px;font-size:12px;user-select:all;cursor:pointer;" data-cp="${this.escapeHtml(uncPath)}" onclick="${uncCopyJs}">${this.escapeHtml(uncPath)}</code> <span style="font-size:11px;color:#888;">📋</span></li>
+                            <li>${isKo ? '폴더에 입력:' : 'Folder:'} <code style="background:rgba(128,128,128,0.12);padding:2px 6px;border-radius:3px;font-size:12px;user-select:all;cursor:pointer;" data-cp="${this.escapeHtml(uncPath)}" onclick="${uncCopyJs}">${this.escapeHtml(uncPath)}</code> <span style="font-size:11px;color:var(--fs-text-3, #888);">📋</span></li>
                             <li>${isKo ? '"다른 자격 증명으로 연결" 체크 → 사용자 이름과 비밀번호 입력' : 'Check "Connect using different credentials" → Enter username and password'}</li>
                         </ol>
                     </div>
@@ -33140,14 +33379,14 @@ const App = {
                     
                     <div style="margin-bottom:14px;">
                         <p style="font-weight:600;margin:0 0 8px;">💻 ${isKo ? '전용 클라이언트 (권장 — 대용량 / 안정적)' : 'Dedicated Clients (Recommended — Large Files / Stable)'}</p>
-                        <p style="font-size:12px;color:#888;margin:0 0 6px;">${isKo ? 'Windows 탐색기는 비밀번호 반복 요청 및 파일 크기 제한이 있어 전용 클라이언트가 더 편리합니다.' : 'Windows Explorer has password prompt and file size limits — dedicated clients are more reliable.'}</p>
+                        <p style="font-size:12px;color:var(--fs-text-3, #888);margin:0 0 6px;">${isKo ? 'Windows 탐색기는 비밀번호 반복 요청 및 파일 크기 제한이 있어 전용 클라이언트가 더 편리합니다.' : 'Windows Explorer has password prompt and file size limits — dedicated clients are more reliable.'}</p>
                         <ul style="font-size:13px;margin:0 0 8px;padding-left:20px;line-height:1.8;">
                             <li><a href="https://www.raidrive.com" target="_blank"><b>RaiDrive</b></a> — ${isKo ? '무료, Windows 네트워크 드라이브 마운트 (Z: 드라이브처럼 사용)' : 'Free, Windows network drive mount'}</li>
                             <li><a href="https://cyberduck.io" target="_blank"><b>Cyberduck</b></a> — ${isKo ? '무료, Windows/macOS, 파일 전송 (FTP 스타일)' : 'Free, Windows/macOS, file transfer'}</li>
                             <li><a href="https://winscp.net" target="_blank"><b>WinSCP</b></a> — ${isKo ? '무료, Windows, 파일 관리자 (듀얼 패널)' : 'Free, Windows, file manager'}</li>
                         </ul>
-                        <p style="font-size:12px;color:#888;margin:8px 0 4px;font-weight:600;">${isKo ? '▶ 앱별 연결 설정' : '▶ Connection Setup'}</p>
-                        <ul style="font-size:12px;margin:0;padding-left:20px;line-height:1.8;color:#666;">
+                        <p style="font-size:12px;color:var(--fs-text-3, #888);margin:8px 0 4px;font-weight:600;">${isKo ? '▶ 앱별 연결 설정' : '▶ Connection Setup'}</p>
+                        <ul style="font-size:12px;margin:0;padding-left:20px;line-height:1.8;color:var(--fs-text-2, #666);">
                             <li><b>RaiDrive</b>: ${isKo ? '<b>추가</b> → <b>개인용</b> → <b>NAS</b> → <b>WebDAV</b> 선택 → 주소 <code>' + host + '</code> 경로 <code>/mydav.php</code> → HTTPS 체크 → 계정/비밀번호 → <b>연결</b>' : 'Add → Personal → NAS → Select WebDAV → Address <code>' + host + '</code> Path <code>/mydav.php</code> → Check HTTPS → Enter credentials → Connect'}</li>
                             <li><b>Cyberduck</b>: ${isKo ? '<b>새 연결</b> → <b>WebDAV (HTTPS)</b> 선택 → 서버 <code>' + host + '</code> 포트 443 → 경로 <code>/mydav.php</code> → 계정/비밀번호' : 'New Connection → Select WebDAV (HTTPS) → Server <code>' + host + '</code> Port 443 → Path <code>/mydav.php</code> → Credentials'}</li>
                             <li><b>WinSCP</b>: ${isKo ? '<b>새 세션</b> → 프로토콜 <b>WebDAV</b> → 암호화 <b>TLS/SSL</b> → 호스트 <code>' + host + '</code> → 사용자/비밀번호 → 고급 → 환경 → 디렉토리 <code>/mydav.php</code>' : 'New Session → Protocol WebDAV → Encryption TLS/SSL → Host <code>' + host + '</code> → Credentials → Advanced → Environment → Directory <code>/mydav.php</code>'}</li>
@@ -33175,8 +33414,8 @@ const App = {
                             <li><b>Apple TV (tvOS)</b>: ${isKo ? 'App Store에서 Infuse 또는 VLC 설치 — WebDAV 완벽 지원' : 'Install Infuse or VLC from App Store — full WebDAV support'}</li>
                             <li><b>Nvidia Shield / Fire TV</b>: ${isKo ? 'Kodi, VLC 앱 설치' : 'Install Kodi, VLC apps'}</li>
                         </ul>
-                        <p style="font-size:12px;color:#888;margin:8px 0 4px;font-weight:600;">${isKo ? '▶ 앱별 설정 방법' : '▶ App Setup'}</p>
-                        <ul style="font-size:12px;margin:0;padding-left:20px;line-height:1.7;color:#666;">
+                        <p style="font-size:12px;color:var(--fs-text-3, #888);margin:8px 0 4px;font-weight:600;">${isKo ? '▶ 앱별 설정 방법' : '▶ App Setup'}</p>
+                        <ul style="font-size:12px;margin:0;padding-left:20px;line-height:1.7;color:var(--fs-text-2, #666);">
                             <li><b>Kodi</b>: ${isKo ? '설정 → 파일 관리자 → 소스 추가 → &lt;Add network location&gt; → WebDAV 선택 → 서버/경로/계정 입력' : 'Settings → File Manager → Add source → Add network location → WebDAV → Enter server/path/credentials'}</li>
                             <li><b>VLC</b>: ${isKo ? '미디어 → 네트워크 스트림 열기 → URL 입력' : 'Media → Open Network Stream → Enter URL'}</li>
                             <li><b>Infuse</b>: ${isKo ? '파일 → 즐겨찾기 → 파일 공유 추가 → WebDAV (HTTPS) 선택' : 'Files → Favorites → Add Files Share → WebDAV (HTTPS)'}</li>
@@ -33186,43 +33425,43 @@ const App = {
                     
                     <div style="margin-bottom:14px;">
                         <p style="font-weight:600;margin:0 0 8px;">🎞️ ${isKo ? '삼성 / LG 스마트 TV (DLNA 방식)' : 'Samsung / LG Smart TV (DLNA)'}</p>
-                        <p style="font-size:12px;color:#888;margin:0 0 8px;">${isKo ? 'WebDAV 미지원 TV는 DLNA(UPnP)로 연결. FileStation은 DLNA 서버를 내장하지 않으므로 별도 DLNA 서버를 설치하고 FileStation 스토리지 경로를 공유하세요.' : 'For TVs without WebDAV support, use DLNA (UPnP). FileStation does not bundle a DLNA server — install one separately and share the FileStation storage path.'}</p>
-                        <p style="font-size:12px;color:#666;margin:0 0 4px;font-weight:600;">${isKo ? '▶ DLNA 서버' : '▶ DLNA Servers'}</p>
-                        <ul style="font-size:12px;margin:0;padding-left:20px;line-height:1.8;color:#666;">
+                        <p style="font-size:12px;color:var(--fs-text-3, #888);margin:0 0 8px;">${isKo ? 'WebDAV 미지원 TV는 DLNA(UPnP)로 연결. FileStation은 DLNA 서버를 내장하지 않으므로 별도 DLNA 서버를 설치하고 FileStation 스토리지 경로를 공유하세요.' : 'For TVs without WebDAV support, use DLNA (UPnP). FileStation does not bundle a DLNA server — install one separately and share the FileStation storage path.'}</p>
+                        <p style="font-size:12px;color:var(--fs-text-2, #666);margin:0 0 4px;font-weight:600;">${isKo ? '▶ DLNA 서버' : '▶ DLNA Servers'}</p>
+                        <ul style="font-size:12px;margin:0;padding-left:20px;line-height:1.8;color:var(--fs-text-2, #666);">
                             <li><b>Windows</b>: ${isKo ? 'Windows Media Player(기본 내장) — 설정에서 "미디어 스트리밍" 활성화' : 'Windows Media Player (built-in) — Enable "Media Streaming" in settings'}</li>
                             <li><b>Windows</b>: ${isKo ? 'Serviio, Universal Media Server (무료, 자막/트랜스코딩 우수)' : 'Serviio, Universal Media Server (free, better subtitle/transcode)'}</li>
                             <li><b>Synology</b>: ${isKo ? '패키지 센터 → <b>Media Server</b> 설치 → 공유 폴더 지정' : 'Package Center → Install <b>Media Server</b> → Configure shared folder'}</li>
                             <li><b>Linux</b>: MiniDLNA / ReadyMedia, Jellyfin</li>
                         </ul>
-                        <p style="font-size:12px;color:#666;margin:8px 0 4px;font-weight:600;">${isKo ? '▶ 연동 방법' : '▶ How to Connect'}</p>
-                        <ol style="font-size:12px;margin:0;padding-left:20px;line-height:1.7;color:#666;">
+                        <p style="font-size:12px;color:var(--fs-text-2, #666);margin:8px 0 4px;font-weight:600;">${isKo ? '▶ 연동 방법' : '▶ How to Connect'}</p>
+                        <ol style="font-size:12px;margin:0;padding-left:20px;line-height:1.7;color:var(--fs-text-2, #666);">
                             <li>${isKo ? 'FileStation 스토리지 경로(예: <code>D:\\Files</code> 또는 <code>/volume1/filestation</code>)를 DLNA 서버 공유 폴더로 추가' : 'Add FileStation storage path as DLNA server shared folder'}</li>
                             <li>${isKo ? 'DLNA 서버가 미디어 라이브러리 스캔 완료될 때까지 대기' : 'Wait for DLNA server to scan media library'}</li>
                             <li>${isKo ? 'TV와 같은 네트워크(동일 서브넷) 접속 확인' : 'Ensure TV is on the same network (same subnet)'}</li>
                             <li>${isKo ? 'TV 앱: 삼성 "외부 소스/연결된 기기", LG "SmartShare" → DLNA 서버 자동 감지' : 'TV: Samsung "Sources/Connected Devices", LG "SmartShare" → DLNA auto-detected'}</li>
                         </ol>
-                        <p style="font-size:11px;color:#999;margin:8px 0 0;">${isKo ? '⚠️ DLNA는 같은 네트워크(LAN) 안에서만 동작. 외부 접속 시 WebDAV 사용.' : '⚠️ DLNA works only within the same network (LAN). For external access, use WebDAV.'}</p>
+                        <p style="font-size:11px;color:var(--fs-text-3, #999);margin:8px 0 0;">${isKo ? '⚠️ DLNA는 같은 네트워크(LAN) 안에서만 동작. 외부 접속 시 WebDAV 사용.' : '⚠️ DLNA works only within the same network (LAN). For external access, use WebDAV.'}</p>
                     </div>
                     
                     <!-- ═══ 섹션 4: 주의사항 ═══ -->
                     <h3 style="margin:20px 0 10px;font-size:15px;padding-bottom:6px;border-bottom:2px solid rgba(128,128,128,0.3);">⚠️ ${isKo ? '주의사항' : 'Notes'}</h3>
                     
                     <div style="padding:10px 12px;background:rgba(128,128,128,0.06);border:1px solid rgba(128,128,128,0.15);border-radius:6px;">
-                        <ul style="font-size:12px;margin:0;padding-left:16px;color:#666;line-height:1.7;">
+                        <ul style="font-size:12px;margin:0;padding-left:16px;color:var(--fs-text-2, #666);line-height:1.7;">
                             <li>${isKo ? 'Windows 탐색기는 HTTPS에서만 동작합니다 (HTTP 사용 시 레지스트리 수정 필요)' : 'Windows Explorer only works with HTTPS (registry change needed for HTTP)'}</li>
                             <li>${isKo ? 'Windows 탐색기 파일 크기 제한: 기본 50MB (레지스트리 수정 시 최대 4GB)' : 'Windows Explorer file size limit: 50MB default (up to 4GB with registry change)'}</li>
                             <li>${isKo ? '접속 오류 시: 비밀번호 5회 실패 → 15분 잠금 (관리자에게 문의)' : 'Connection errors: 5 failures → 15min lockout (contact admin)'}</li>
                         </ul>
                         
                         <div style="margin:10px 0;padding:8px 12px;background:rgba(255,82,82,0.08);border:1px solid rgba(255,82,82,0.25);border-radius:4px;">
-                            <p style="margin:0;font-size:12px;line-height:1.7;"><span style="color:#d32f2f;font-weight:600;">🔴 ${isKo ? 'Windows 탐색기 비밀번호 반복 요청' : 'Windows Explorer Repeated Password Prompts'}</span><br>
+                            <p style="margin:0;font-size:12px;line-height:1.7;"><span style="color:var(--fs-fg-err, #d32f2f);font-weight:600;">🔴 ${isKo ? 'Windows 탐색기 비밀번호 반복 요청' : 'Windows Explorer Repeated Password Prompts'}</span><br>
                             ${isKo 
                                 ? 'Windows 탐색기는 자격증명을 저장해도 <b>비밀번호를 반복 요청</b>하는 알려진 문제가 있습니다 (Basic Auth 제한).<br>해결할 수 없으므로, <b>RaiDrive, Cyberduck</b> 등 전용 클라이언트를 사용하면 안정적입니다.'
                                 : 'Windows Explorer has a known issue of <b>repeatedly asking for passwords</b> (Basic Auth limitation).<br>Cannot be fixed. Use <b>RaiDrive, Cyberduck</b> for reliable credential storage.'}</p>
                         </div>
                         
                         <p style="font-weight:600;margin:12px 0 6px;font-size:13px;">🔄 ${isKo ? '비밀번호 변경/접속 오류 시 자격 증명 초기화' : 'Reset Credentials After Password Change'}</p>
-                        <ol style="font-size:12px;margin:0;padding-left:16px;color:#666;line-height:1.8;">
+                        <ol style="font-size:12px;margin:0;padding-left:16px;color:var(--fs-text-2, #666);line-height:1.8;">
                             <li>${isKo ? '<b>제어판</b> → <b>자격 증명 관리자</b> → <b>Windows 자격 증명</b> 탭' : '<b>Control Panel</b> → <b>Credential Manager</b> → <b>Windows Credentials</b> tab'}</li>
                             <li>${isKo ? `<code>${host}</code> 관련 항목을 찾아 <b>제거</b>` : `Find <code>${host}</code> entry and <b>Remove</b>`}</li>
                             <li>${isKo ? '또는 CMD에서:' : 'Or run in CMD:'} <code style="background:rgba(128,128,128,0.12);padding:2px 6px;border-radius:3px;">cmdkey /delete:${host}</code></li>
@@ -33241,28 +33480,28 @@ const App = {
     async detectNetworkEnv() {
         const panel = document.getElementById('network-share-panel');
         const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
-        panel.innerHTML = `<div style="text-align:center;padding:20px;color:#999;">${t('loading','로딩 중...')}</div>`;
+        panel.innerHTML = `<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">${t('loading','로딩 중...')}</div>`;
         
         let res;
         try {
             const resp = await fetch('api.php?action=network_share_detect', { credentials: 'same-origin' });
             const text = await resp.text();
             if (!text) {
-                panel.innerHTML = `<div style="padding:15px;color:#c62828;background:#ffebee;border-radius:6px;">
+                panel.innerHTML = `<div style="padding:15px;color:var(--fs-fg-err, #c62828);background:var(--fs-tint-err, #ffebee);border-radius:6px;">
                     ${isKo ? '서버 응답이 비어있습니다 (HTTP ' + resp.status + ')' : 'Empty response (HTTP ' + resp.status + ')'}
                 </div>`;
                 return;
             }
             res = JSON.parse(text);
         } catch(e) {
-            panel.innerHTML = `<div style="padding:15px;color:#c62828;background:#ffebee;border-radius:6px;">
+            panel.innerHTML = `<div style="padding:15px;color:var(--fs-fg-err, #c62828);background:var(--fs-tint-err, #ffebee);border-radius:6px;">
                 ${isKo ? '서버 환경 감지 실패: ' : 'Failed: '}${e.message}
             </div>`;
             return;
         }
         
         if (!res || !res.success) {
-            panel.innerHTML = `<div style="padding:15px;color:#c62828;background:#ffebee;border-radius:6px;">
+            panel.innerHTML = `<div style="padding:15px;color:var(--fs-fg-err, #c62828);background:var(--fs-tint-err, #ffebee);border-radius:6px;">
                 ${this.escapeHtml(res?.error || (isKo ? '서버 환경 감지 실패' : 'Detection failed'))}
             </div>`;
             return;
@@ -33274,12 +33513,12 @@ const App = {
         let html = `<div class="setting-notice" style="margin-bottom:15px;">
             <p><strong>${isKo ? '서버 환경' : 'Server Environment'}</strong></p>
             <table style="font-size:13px;width:100%;border-collapse:collapse;">
-                <tr><td style="padding:3px 10px 3px 0;color:#888;width:120px;">OS</td><td>${this.escapeHtml(env.os)} ${env.is_docker ? '🐳 Docker' : ''}</td></tr>
-                <tr><td style="padding:3px 10px 3px 0;color:#888;">Hostname</td><td>${this.escapeHtml(env.hostname)}</td></tr>
-                <tr><td style="padding:3px 10px 3px 0;color:#888;">IP</td><td>${this.escapeHtml(env.ip)}</td></tr>
-                <tr><td style="padding:3px 10px 3px 0;color:#888;">SMB</td><td>${env.smb_available 
-                    ? `<span style="color:#4caf50;">✅ ${isKo ? '사용 가능' : 'Available'}</span>${env.smb_running === false ? ` <span style="color:#ff9800;">(${isKo ? '서비스 중지됨' : 'Service stopped'})</span>` : env.smb_running === true ? ` <span style="color:#4caf50;">(${isKo ? '실행 중' : 'Running'})</span>` : ''}`
-                    : `<span style="color:#f44336;">❌ ${isKo ? '미설치' : 'Not installed'}</span>`}</td></tr>
+                <tr><td style="padding:3px 10px 3px 0;color:var(--fs-text-3, #888);width:120px;">OS</td><td>${this.escapeHtml(env.os)} ${env.is_docker ? '🐳 Docker' : ''}</td></tr>
+                <tr><td style="padding:3px 10px 3px 0;color:var(--fs-text-3, #888);">Hostname</td><td>${this.escapeHtml(env.hostname)}</td></tr>
+                <tr><td style="padding:3px 10px 3px 0;color:var(--fs-text-3, #888);">IP</td><td>${this.escapeHtml(env.ip)}</td></tr>
+                <tr><td style="padding:3px 10px 3px 0;color:var(--fs-text-3, #888);">SMB</td><td>${env.smb_available 
+                    ? `<span style="color:var(--fs-fg-ok, #4caf50);">✅ ${isKo ? '사용 가능' : 'Available'}</span>${env.smb_running === false ? ` <span style="color:#ff9800;">(${isKo ? '서비스 중지됨' : 'Service stopped'})</span>` : env.smb_running === true ? ` <span style="color:var(--fs-fg-ok, #4caf50);">(${isKo ? '실행 중' : 'Running'})</span>` : ''}`
+                    : `<span style="color:var(--fs-fg-err, #f44336);">❌ ${isKo ? '미설치' : 'Not installed'}</span>`}</td></tr>
             </table>
         </div>`;
         
@@ -33290,7 +33529,7 @@ const App = {
                 <p style="font-size:13px;">${isKo 
                     ? 'PHP에서 exec() 함수가 비활성화되어 있어 자동 공유 생성/삭제가 불가합니다. 아래 수동 방법을 참고하세요.'
                     : 'exec() is disabled in PHP. Auto share creation is unavailable. Use manual method below.'}</p>
-                <p style="font-size:12px;color:#888;margin-top:5px;">${isKo ? 'php.ini에서 disable_functions 확인' : 'Check disable_functions in php.ini'}</p>
+                <p style="font-size:12px;color:var(--fs-text-3, #888);margin-top:5px;">${isKo ? 'php.ini에서 disable_functions 확인' : 'Check disable_functions in php.ini'}</p>
             </div>`;
         }
         
@@ -33316,7 +33555,7 @@ const App = {
                 <div style="background:rgba(128,128,128,0.15);border:1px solid rgba(128,128,128,0.3);border-radius:4px;padding:6px 10px;margin:6px 0;font-family:monospace;font-size:12px;">
                     sudo ${this.escapeHtml(installCmd)}
                 </div>
-                <p style="font-size:12px;color:#888;margin-top:5px;">${isKo ? '설치 후 다시 감지 버튼을 눌러주세요.' : 'After installation, click detect again.'}</p>
+                <p style="font-size:12px;color:var(--fs-text-3, #888);margin-top:5px;">${isKo ? '설치 후 다시 감지 버튼을 눌러주세요.' : 'After installation, click detect again.'}</p>
             </div>`;
         }
         
@@ -33346,7 +33585,7 @@ const App = {
                     </tr>
                     ${env.existing_shares.map(s => `<tr style="border-bottom:1px solid rgba(128,128,128,0.2);">
                         <td style="padding:6px 8px;font-weight:bold;">${this.escapeHtml(s.name)}</td>
-                        <td style="padding:6px 8px;font-size:12px;color:#888;">${this.escapeHtml(s.path)}</td>
+                        <td style="padding:6px 8px;font-size:12px;color:var(--fs-text-3, #888);">${this.escapeHtml(s.path)}</td>
                         <td style="padding:6px 8px;font-family:monospace;font-size:12px;">\\\\${this.escapeHtml(env.ip)}\\${this.escapeHtml(s.name)}</td>
                         <td style="padding:6px 8px;"><button class="btn btn-sm btn-danger" onclick="App.removeNetworkShare('${this.escapeHtml(s.name).replace(/'/g, "\\'")}')" style="font-size:11px;padding:2px 8px;">${isKo ? '삭제' : 'Del'}</button></td>
                     </tr>`).join('')}
@@ -33360,13 +33599,13 @@ const App = {
                 <p><strong>${isKo ? '새 공유 생성' : 'Create New Share'}</strong></p>
                 <div style="display:flex;gap:15px;flex-wrap:wrap;margin-top:10px;align-items:flex-end;">
                     <div style="flex:2;min-width:200px;">
-                        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">${isKo ? '스토리지' : 'Storage'}</label>
+                        <label style="font-size:12px;color:var(--fs-text-3, #888);display:block;margin-bottom:4px;">${isKo ? '스토리지' : 'Storage'}</label>
                         <select id="share-storage-id" class="form-control" style="font-size:14px;padding:8px 10px;height:40px;">
                             ${env.storages.filter(s => s.exists).map(s => `<option value="${s.id}">${this.escapeHtml(s.name)} (${this.escapeHtml(s.path)})</option>`).join('')}
                         </select>
                     </div>
                     <div style="flex:1;min-width:160px;">
-                        <label style="font-size:12px;color:#888;display:block;margin-bottom:4px;">${isKo ? '공유명' : 'Share Name'}</label>
+                        <label style="font-size:12px;color:var(--fs-text-3, #888);display:block;margin-bottom:4px;">${isKo ? '공유명' : 'Share Name'}</label>
                         <input type="text" id="share-name" class="form-control" placeholder="${isKo ? '영문/숫자/하이픈만' : 'alphanumeric only'}" style="font-size:14px;padding:8px 10px;height:40px;">
                     </div>
                 </div>
@@ -33391,7 +33630,7 @@ const App = {
                     <td style="padding:6px 8px;">📂 Windows</td>
                     <td style="padding:6px 8px;font-family:monospace;">
                         ${isKo ? '탐색기 주소창:' : 'Explorer:'} <strong>\\\\${this.escapeHtml(serverAddr)}\\${isKo ? '공유명' : 'sharename'}</strong><br>
-                        <span style="color:#888;">${isKo ? '또는 "네트워크 드라이브 연결"로 드라이브 문자 할당' : 'Or "Map network drive" for drive letter'}</span>
+                        <span style="color:var(--fs-text-3, #888);">${isKo ? '또는 "네트워크 드라이브 연결"로 드라이브 문자 할당' : 'Or "Map network drive" for drive letter'}</span>
                     </td>
                 </tr>
                 <tr style="border-bottom:1px solid rgba(128,128,128,0.15);">
@@ -33421,14 +33660,14 @@ const App = {
         if (env.smb_available && env.os !== 'Windows') {
             html += `<div style="margin-top:15px;padding:15px;background:rgba(128,128,128,0.05);border:1px solid rgba(128,128,128,0.2);border-radius:6px;">
                 <p><strong>👥 ${isKo ? 'Samba 사용자 동기화' : 'Samba User Sync'}</strong></p>
-                <p style="font-size:13px;color:#888;margin:5px 0 10px;">${isKo
+                <p style="font-size:13px;color:var(--fs-text-3, #888);margin:5px 0 10px;">${isKo
                     ? 'FileStation 사용자를 Samba 사용자로 등록합니다. 사용자별 SMB 접근이 가능해집니다.'
                     : 'Register FileStation users as Samba users. Enables per-user SMB access.'}</p>
                 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
                     <button class="btn btn-secondary" onclick="App.syncSambaUsers()" style="padding:8px 16px;">🔄 ${isKo ? '전체 동기화' : 'Sync All'}</button>
-                    <span id="smb-sync-status" style="font-size:12px;color:#888;"></span>
+                    <span id="smb-sync-status" style="font-size:12px;color:var(--fs-text-3, #888);"></span>
                 </div>
-                <p style="font-size:11px;color:#f57c00;margin-top:8px;">⚠️ ${isKo
+                <p style="font-size:11px;color:var(--fs-fg-warn, #f57c00);margin-top:8px;">⚠️ ${isKo
                     ? '초기 비밀번호는 "사용자명1234"로 설정됩니다. 사용자가 smbpasswd 명령으로 변경할 수 있습니다.'
                     : 'Default password is "username1234". Users can change via smbpasswd command.'}</p>
             </div>`;
@@ -33510,7 +33749,7 @@ const App = {
                 const msg = isKo 
                     ? `${res.synced?.length || 0}명 동기화 완료` + (res.errors?.length ? `, ${res.errors.length}건 오류` : '')
                     : res.message || 'Done';
-                if (statusEl) statusEl.innerHTML = `<span style="color:#4caf50;">✅ ${this.escapeHtml(msg)}</span>`;
+                if (statusEl) statusEl.innerHTML = `<span style="color:var(--fs-fg-ok, #4caf50);">✅ ${this.escapeHtml(msg)}</span>`;
                 this.toast(msg, 'success');
                 
                 if (res.errors?.length) {
@@ -33519,11 +33758,11 @@ const App = {
                 }
             } else {
                 const errMsg = res.error || (isKo ? '동기화 실패' : 'Sync failed');
-                if (statusEl) statusEl.innerHTML = `<span style="color:#f44336;">❌ ${this.escapeHtml(errMsg)}</span>`;
+                if (statusEl) statusEl.innerHTML = `<span style="color:var(--fs-fg-err, #f44336);">❌ ${this.escapeHtml(errMsg)}</span>`;
                 this.toast(errMsg, 'error');
             }
         } catch (e) {
-            if (statusEl) statusEl.innerHTML = `<span style="color:#f44336;">❌ ${this.escapeHtml(e.message)}</span>`;
+            if (statusEl) statusEl.innerHTML = `<span style="color:var(--fs-fg-err, #f44336);">❌ ${this.escapeHtml(e.message)}</span>`;
             this.toast(e.message, 'error');
         }
     },
@@ -34883,8 +35122,8 @@ const App = {
             
             // 전체 파일 목록 표시 (스크롤 가능)
             const listHtml = items.map((item, idx) => 
-                `<div style="padding:6px 10px;margin:4px 0;background:#f8f9fa;border-radius:4px;word-break:break-all;font-size:13px;">
-                    <span style="color:#888;margin-right:6px;">${idx + 1}.</span>📄 ${this.escapeHtml(item.name)}
+                `<div style="padding:6px 10px;margin:4px 0;background:var(--fs-surface-2, #f8f9fa);border-radius:4px;word-break:break-all;font-size:13px;">
+                    <span style="color:var(--fs-text-3, #888);margin-right:6px;">${idx + 1}.</span>📄 ${this.escapeHtml(item.name)}
                 </div>`
             ).join('');
             
@@ -34892,10 +35131,10 @@ const App = {
                 <div style="margin-bottom:12px;font-size:14px;">
                     ${tf('il_delete_n_items', {count: count}, `<strong>${count}개</strong> 항목을 삭제하시겠습니까?`)}
                 </div>
-                <div style="max-height:350px;overflow-y:auto;margin-bottom:12px;border:1px solid #e0e0e0;border-radius:6px;padding:8px;">
+                <div style="max-height:350px;overflow-y:auto;margin-bottom:12px;border:1px solid var(--fs-border, #e0e0e0);border-radius:6px;padding:8px;">
                     ${listHtml}
                 </div>
-                <div style="color:#dc3545;font-size:13px;">
+                <div style="color:var(--fs-fg-err, #dc3545);font-size:13px;">
                     ${t('deleted_to_trash','⚠️ 삭제된 항목은 휴지통으로 이동합니다.')}
                 </div>
             `;
@@ -35556,11 +35795,11 @@ const App = {
                 if (!box) return;
                 let body;
                 if (r && r.success && r.supported && Array.isArray(r.groups) && r.groups.length) {
-                    body = (r.note ? '<div style="margin-bottom:6px;color:#888;font-size:12px;">' + this.escapeHtml(r.note) + '</div>' : '') + '<div style="font-size:12px;">' + this._infoGroupsHtml(r.groups) + '</div>';
+                    body = (r.note ? '<div style="margin-bottom:6px;color:var(--fs-text-3, #888);font-size:12px;">' + this.escapeHtml(r.note) + '</div>' : '') + '<div style="font-size:12px;">' + this._infoGroupsHtml(r.groups) + '</div>';
                 } else {
                     const msg = (r && r.success && !r.supported && r.note === 'remote storage') ? t('vi_remote_short', '원격 저장소의 파일은 동영상 정보를 읽을 수 없습니다.')
                         : ((r && r.error) || t('vi_unreadable', '동영상 정보를 읽지 못했습니다(손상되었거나 지원하지 않는 형식).'));
-                    body = '<div style="font-size:12px;color:#888;">' + this.escapeHtml(msg) + '</div>';
+                    body = '<div style="font-size:12px;color:var(--fs-text-3, #888);">' + this.escapeHtml(msg) + '</div>';
                 }
                 box.innerHTML = '<h4>' + t('vi_section', '🎬 동영상 정보') + '</h4>' + body;
             });
@@ -35592,7 +35831,7 @@ const App = {
         ];
         
         const level = levels.find(l => score >= l.min && score <= l.max) || levels[0];
-        container.innerHTML = `<div style="background:#eee;border-radius:2px;height:4px;"><div class="strength-bar" style="width:${level.width};background:${level.color};"></div></div><div class="strength-text" style="color:${level.color};">${level.label}</div>`;
+        container.innerHTML = `<div style="background:var(--fs-surface-3, #eee);border-radius:2px;height:4px;"><div class="strength-bar" style="width:${level.width};background:${level.color};"></div></div><div class="strength-text" style="color:${level.color};">${level.label}</div>`;
     },
     
     // ★ 브라우저 탭 제목 (2026-08-15 펜닐님 요청)
@@ -35677,7 +35916,7 @@ const App = {
                 <div class="session-item ${session.is_current ? 'current' : ''}">
                     <div class="session-info">
                         <div class="session-device">
-                            ${uaDetails.icon} ${this.escapeHtml(deviceStr)} <span style="color:#999;font-size:0.85em;">[${this.escapeHtml(deviceTypeLabel)}]</span> ${currentBadge}
+                            ${uaDetails.icon} ${this.escapeHtml(deviceStr)} <span style="color:var(--fs-text-3, #5f6368);font-size:0.85em;">[${this.escapeHtml(deviceTypeLabel)}]</span> ${currentBadge}
                         </div>
                         <div class="session-details">
                             <span>IP: ${this.escapeHtml(session.ip)}</span>
@@ -35812,7 +36051,11 @@ const App = {
     currentTheme: 'default',
     
     initTheme() {
-        const saved = localStorage.getItem('theme') || 'default';
+        let saved = localStorage.getItem('theme') || 'default';
+        // ★ (2026-10-25) 민트 테마 제거 → 미쿠로 자동 전환(index.php 머리 스크립트와 같은 처리 — 그쪽이 먼저 바꿔 두지만 저장이 막힌 환경 대비)
+        // ★ (2026-10-25) 민트 전체도 제거 → 미쿠 전체로
+        const _themeMove = { 'mint': 'miku', 'mint-full': 'miku-full', 'dark-color': 'dark-side', 'dark-full': 'dark' };   // ★ (2026-10-25 저녁) 다크 컬러 → 다크 사이드, 다크 전체 → 다크
+        if (_themeMove[saved]) { saved = _themeMove[saved]; try { localStorage.setItem('theme', saved); } catch (e) {} }
         this.currentTheme = saved;
         
         // 이미 head에서 테마가 로드되어 있으면 선택 표시만 업데이트
@@ -35845,6 +36088,16 @@ const App = {
         // ★ (2026-10-23) 테마 파일 버전(index.php 가 넘긴 수정 시각) — 고쳐 올린 테마를 브라우저가 옛 파일로 쓰지 않게(index.php 설명)
         const _tv = (window.FS_THEME_VER && window.FS_THEME_VER[theme]) || '';
         $('head').append(`<link id="theme-css" rel="stylesheet" href="assets/themes/${theme}/theme.css${_tv ? '?v=' + encodeURIComponent(_tv) : ''}">`);
+        // ★ (2026-10-24) 새 테마 CSS 를 받은 뒤 열린 게시판 편집기에도 새 테마 색 적용(_applyCkeTheme)
+        const _tl = document.getElementById('theme-css');
+        if (_tl) _tl.addEventListener('load', () => {
+            this._refreshCkeThemes();
+            // ★ (2026-10-24) 열려 있는 음악 플레이어 가사 창도 새 테마 색으로(종전엔 다시 열 때까지 이전 테마 색) — 닫혀 있으면 열 때 맞추므로 건너뜀
+            try {
+                const _ap = this._fsAudioPlayer;
+                if (_ap && _ap.$ && _ap.$.lyricsModal && _ap.$.lyricsModal.style.display !== 'none' && typeof _ap._syncLyricsModalTheme === 'function') _ap._syncLyricsModalTheme();
+            } catch (e) {}
+        }, { once: true });
         
         // 선택 표시 업데이트
         $('.theme-item').removeClass('active');
@@ -35923,7 +36176,7 @@ const App = {
     async _loadVaultArchive(storageId, item) {
         const list = document.getElementById('archive-list');
         try {
-            if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:#999;">🔐 ${t('vault_decrypting', '암호화 해제 중...')}</div>`;
+            if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #999);">🔐 ${t('vault_decrypting', '암호화 해제 중...')}</div>`;
             
             const vaultPath = this.vault?.currentVaultPath;
             const key = this.getVaultKey(storageId, vaultPath);
@@ -35942,7 +36195,7 @@ const App = {
                 // 청크 다운로드 + 복호화 + 병합
                 const chunks = [];
                 for (let i = 0; i < totalChunks; i++) {
-                    if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:#999;">🔐 ${t('vault_decrypting', '암호화 해제 중...')} (${i+1}/${totalChunks})</div>`;
+                    if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #999);">🔐 ${t('vault_decrypting', '암호화 해제 중...')} (${i+1}/${totalChunks})</div>`;
                     const chunkUrl = `api.php?action=vault_download&storage_id=${storageId}&path=${encodeURIComponent(vaultPath)}&uuid=${uuid}&chunk_index=${i}`;
                     const chunkRes = await fetch(chunkUrl);
                     if (!chunkRes.ok) throw new Error(`Chunk ${i} download failed`);
@@ -35969,7 +36222,7 @@ const App = {
             }
             
             // 3. 임시 업로드 (청크 방식)
-            if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:#999;">📦 ${t('loading', '로딩 중...')}</div>`;
+            if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #999);">📦 ${t('loading', '로딩 중...')}</div>`;
             const tempId = E2ECrypto.generateUUID();
             const decryptedArr = new Uint8Array(decrypted);
             const UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024; // 4MB
@@ -35996,7 +36249,7 @@ const App = {
                 if (!upJson.success) throw new Error(upJson.error || 'Upload failed');
                 
                 if (list && totalUpChunks > 1) {
-                    list.innerHTML = `<div style="text-align:center;padding:40px;color:#999;">📦 ${t('uploading', '업로드 중...')} (${Math.round((i+1)/totalUpChunks*100)}%)</div>`;
+                    list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #999);">📦 ${t('uploading', '업로드 중...')} (${Math.round((i+1)/totalUpChunks*100)}%)</div>`;
                 }
             }
             
@@ -36008,7 +36261,7 @@ const App = {
             }, 'GET');
             
             if (!res.success) {
-                if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:#d32f2f;">❌ ${this.escapeHtml(res.error || 'Error')}</div>`;
+                if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-fg-err, #d32f2f);">❌ ${this.escapeHtml(res.error || 'Error')}</div>`;
                 return;
             }
             this._zipItems = res.items || [];
@@ -36039,7 +36292,7 @@ const App = {
             if (tempId) {
                 this.api('vault_preview_cleanup', { storage_id: storageId, path: vaultPath, temp_id: tempId }).catch(() => {});
             }
-            if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:#d32f2f;">❌ ${this.escapeHtml(e.message || 'Error')}</div>`;
+            if (list) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-fg-err, #d32f2f);">❌ ${this.escapeHtml(e.message || 'Error')}</div>`;
         }
     },
     
@@ -36066,7 +36319,7 @@ const App = {
                 // 취소 시 안내
                 const cancelList = document.getElementById('archive-list');
                 if (cancelList) {
-                    cancelList.innerHTML = `<div style="text-align:center;padding:40px;color:#888;">🔒 ${t('archive_password_cancelled', '암호 입력이 취소되었습니다.')}</div>`;
+                    cancelList.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #888);">🔒 ${t('archive_password_cancelled', '암호 입력이 취소되었습니다.')}</div>`;
                 }
                 return;
             }
@@ -36075,8 +36328,8 @@ const App = {
                 const errList = document.getElementById('archive-list');
                 if (errList) {
                     errList.innerHTML = `<div style="text-align:center;padding:40px;">
-                        <div style="color:#d32f2f;margin-bottom:10px;">❌ ${this.escapeHtml(res.error || 'Error')}</div>
-                        <button onclick="App._loadZipList(${storageId},'${this.escapeHtml(path).replace(/'/g, "\\'")}')" style="padding:6px 16px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;">🔄 ${t('retry', '다시 시도')}</button>
+                        <div style="color:var(--fs-fg-err, #d32f2f);margin-bottom:10px;">❌ ${this.escapeHtml(res.error || 'Error')}</div>
+                        <button onclick="App._loadZipList(${storageId},'${this.escapeHtml(path).replace(/'/g, "\\'")}')" style="padding:6px 16px;border:1px solid var(--fs-border-2, #ccc);border-radius:4px;background:var(--fs-surface-2, #f5f5f5);cursor:pointer;">🔄 ${t('retry', '다시 시도')}</button>
                     </div>`;
                 }
                 return;
@@ -36106,9 +36359,9 @@ const App = {
             const list = document.getElementById('archive-list');
             if (list) {
                 list.innerHTML = `<div style="text-align:center;padding:40px;">
-                    <div style="color:#d32f2f;margin-bottom:10px;">❌ ${t('server_error', '서버 연결 실패')}</div>
-                    <div style="color:#888;font-size:12px;margin-bottom:12px;">${this.escapeHtml(e.message || '')}</div>
-                    <button onclick="App._loadZipList(${storageId},'${this.escapeHtml(path).replace(/'/g, "\\'")}')" style="padding:6px 16px;border:1px solid #ccc;border-radius:4px;background:#f5f5f5;cursor:pointer;">🔄 ${t('retry', '다시 시도')}</button>
+                    <div style="color:var(--fs-fg-err, #d32f2f);margin-bottom:10px;">❌ ${t('server_error', '서버 연결 실패')}</div>
+                    <div style="color:var(--fs-text-3, #888);font-size:12px;margin-bottom:12px;">${this.escapeHtml(e.message || '')}</div>
+                    <button onclick="App._loadZipList(${storageId},'${this.escapeHtml(path).replace(/'/g, "\\'")}')" style="padding:6px 16px;border:1px solid var(--fs-border-2, #ccc);border-radius:4px;background:var(--fs-surface-2, #f5f5f5);cursor:pointer;">🔄 ${t('retry', '다시 시도')}</button>
                 </div>`;
             }
         }
@@ -36125,13 +36378,13 @@ const App = {
         if (folderPath) {
             pathBar.style.display = '';
             const parts = folderPath.split('/');
-            let bc = `<a href="#" onclick="App._renderZipFolder('');return false;" style="color:#1976d2;text-decoration:none;">📦 /</a>`;
+            let bc = `<a href="#" onclick="App._renderZipFolder('');return false;" style="color:var(--fs-fg-info, #1976d2);text-decoration:none;">📦 /</a>`;
             let accum = '';
             parts.forEach((p, i) => {
                 accum += (i > 0 ? '/' : '') + p;
                 const path = accum;
                 if (i < parts.length - 1) {
-                    bc += ` <a href="#" onclick="App._renderZipFolder('${this.escapeHtml(path).replace(/'/g, "\\'")}');return false;" style="color:#1976d2;text-decoration:none;">${this.escapeHtml(p)}</a> /`;
+                    bc += ` <a href="#" onclick="App._renderZipFolder('${this.escapeHtml(path).replace(/'/g, "\\'")}');return false;" style="color:var(--fs-fg-info, #1976d2);text-decoration:none;">${this.escapeHtml(p)}</a> /`;
                 } else {
                     bc += ` <strong>${this.escapeHtml(p)}</strong>`;
                 }
@@ -36179,12 +36432,12 @@ const App = {
         });
         
         if (folders.size === 0 && files.length === 0) {
-            list.innerHTML = `<div style="text-align:center;padding:40px;color:#999;">${t('empty_folder', '빈 폴더입니다')}</div>`;
+            list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #999);">${t('empty_folder', '빈 폴더입니다')}</div>`;
             return;
         }
         
         let html = `<table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed;">
-            <thead><tr style="background:#f5f5f5;border-bottom:2px solid #ddd;position:sticky;top:0;z-index:1;">
+            <thead><tr style="background:var(--fs-surface-2, #f5f5f5);border-bottom:2px solid var(--fs-border-2, #ddd);position:sticky;top:0;z-index:1;">
                 <th style="padding:8px 12px;text-align:left;">${t('name', '이름')}</th>
                 <th style="padding:8px 12px;text-align:right;width:90px;">${t('size', '크기')}</th>
                 <th style="padding:8px 12px;text-align:left;width:150px;">${t('modified', '수정일')}</th>
@@ -36193,7 +36446,7 @@ const App = {
         // 상위 폴더 이동
         if (folderPath) {
             const parent = folderPath.includes('/') ? folderPath.substring(0, folderPath.lastIndexOf('/')) : '';
-            html += `<tr style="cursor:pointer;border-bottom:1px solid #f0f0f0;" onmouseenter="this.style.background='#f0f8ff'" onmouseleave="this.style.background=''" onclick="App._renderZipFolder('${this.escapeHtml(parent).replace(/'/g, "\\'")}')">
+            html += `<tr style="cursor:pointer;border-bottom:1px solid var(--fs-border, #f0f0f0);" onmouseenter="this.style.background='var(--fs-tint-info, #f0f8ff)'" onmouseleave="this.style.background=''" onclick="App._renderZipFolder('${this.escapeHtml(parent).replace(/'/g, "\\'")}')">
                 <td style="padding:6px 12px;" colspan="3">📁 <strong>..</strong></td>
             </tr>`;
         }
@@ -36202,10 +36455,10 @@ const App = {
         const sortedFolders = [...folders.entries()].sort((a, b) => a[0].localeCompare(b[0]));
         sortedFolders.forEach(([name, info]) => {
             const fullPath = prefix + name;
-            html += `<tr style="cursor:pointer;border-bottom:1px solid #f0f0f0;" onmouseenter="this.style.background='#f0f8ff'" onmouseleave="this.style.background=''" onclick="App._renderZipFolder('${this.escapeHtml(fullPath).replace(/'/g, "\\'")}')">
-                <td style="padding:6px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(name)}">📁 <strong>${this.escapeHtml(name)}</strong> <span style="color:#999;font-size:11px;">(${info.count})</span></td>
-                <td style="padding:6px 12px;text-align:right;color:#888;white-space:nowrap;">${this._formatSize(info.size)}</td>
-                <td style="padding:6px 12px;color:#888;white-space:nowrap;">-</td>
+            html += `<tr style="cursor:pointer;border-bottom:1px solid var(--fs-border, #f0f0f0);" onmouseenter="this.style.background='var(--fs-tint-info, #f0f8ff)'" onmouseleave="this.style.background=''" onclick="App._renderZipFolder('${this.escapeHtml(fullPath).replace(/'/g, "\\'")}')">
+                <td style="padding:6px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(name)}">📁 <strong>${this.escapeHtml(name)}</strong> <span style="color:var(--fs-text-3, #999);font-size:11px;">(${info.count})</span></td>
+                <td style="padding:6px 12px;text-align:right;color:var(--fs-text-3, #888);white-space:nowrap;">${this._formatSize(info.size)}</td>
+                <td style="padding:6px 12px;color:var(--fs-text-3, #888);white-space:nowrap;">-</td>
             </tr>`;
         });
         
@@ -36219,16 +36472,16 @@ const App = {
             const fileName = item.name.split('/').pop();
             const ext = fileName.split('.').pop().toLowerCase();
             const icon = this._getArchiveFileIcon(ext);
-            const lockBadge = item.encrypted ? ' <span style="color:#e65100;font-size:11px;">🔒</span>' : '';
+            const lockBadge = item.encrypted ? ' <span style="color:var(--fs-fg-warn, #e65100);font-size:11px;">🔒</span>' : '';
             const isImage = ['jpg','jpeg','png','gif','webp','bmp','svg'].includes(ext);
             const canPreviewImg = isImage; // 암호화 항목은 클릭 시 _previewArchiveImage에서 비번을 요청
             const imgStyle = canPreviewImg ? 'cursor:pointer;' : '';
             const imgAttr = canPreviewImg ? ` data-archive-img="${this.escapeHtml(item.name)}" onclick="App._previewArchiveImage(this.dataset.archiveImg)"` : '';
             const imgHint = canPreviewImg ? ` title="${t('click_to_preview', '클릭하여 미리보기')}"` : '';
-            html += `<tr style="border-bottom:1px solid #f0f0f0;${imgStyle}" onmouseenter="this.style.background='#f8f8f8'" onmouseleave="this.style.background=''"${imgAttr}${imgHint}>
-                <td style="padding:6px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(fileName)}">${icon} ${canPreviewImg ? '<span style="color:#1976d2;text-decoration:underline;">' : ''}${this.escapeHtml(fileName)}${canPreviewImg ? '</span>' : ''}${lockBadge}</td>
-                <td style="padding:6px 12px;text-align:right;color:#888;white-space:nowrap;">${this._formatSize(item.size)}</td>
-                <td style="padding:6px 12px;color:#888;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.modified || '-'}</td>
+            html += `<tr style="border-bottom:1px solid var(--fs-border, #f0f0f0);${imgStyle}" onmouseenter="this.style.background='var(--fs-surface-2, #f8f8f8)'" onmouseleave="this.style.background=''"${imgAttr}${imgHint}>
+                <td style="padding:6px 12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${this.escapeHtml(fileName)}">${icon} ${canPreviewImg ? '<span style="color:var(--fs-fg-info, #1976d2);text-decoration:underline;">' : ''}${this.escapeHtml(fileName)}${canPreviewImg ? '</span>' : ''}${lockBadge}</td>
+                <td style="padding:6px 12px;text-align:right;color:var(--fs-text-3, #888);white-space:nowrap;">${this._formatSize(item.size)}</td>
+                <td style="padding:6px 12px;color:var(--fs-text-3, #888);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${item.modified || '-'}</td>
             </tr>`;
         });
         
@@ -36510,7 +36763,7 @@ const App = {
                 return;
             }
             
-            let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="border-bottom:2px solid #dee2e6;">';
+            let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;"><thead><tr style="border-bottom:2px solid var(--fs-border, #dee2e6);">';
             html += `<th style="padding:8px;text-align:left;">${t('label', '라벨')}</th>`;
             html += `<th style="padding:8px;text-align:left;">${t('prefix', '비밀번호')}</th>`;
             html += `<th style="padding:8px;text-align:left;">${t('created', '생성일')}</th>`;
@@ -36521,7 +36774,7 @@ const App = {
             for (const ap of list) {
                 const created = ap.created ? ap.created.substring(0, 10) : '-';
                 const lastUsed = ap.last_used ? ap.last_used.substring(0, 10) : t('never', '사용 안 함');
-                html += `<tr style="border-bottom:1px solid #eee;">`;
+                html += `<tr style="border-bottom:1px solid var(--fs-border, #eee);">`;
                 html += `<td style="padding:8px;">${this.escapeHtml(ap.label)}</td>`;
                 html += `<td style="padding:8px;"><code>${this.escapeHtml(ap.prefix)}</code></td>`;
                 html += `<td style="padding:8px;">${created}</td>`;
@@ -36561,7 +36814,7 @@ const App = {
         const confirmed = await this.showConfirmModal({
             title: t('delete_app_password', '🗑️ 앱 비밀번호 삭제'),
             content: `<p style="margin:0 0 10px;">${t('confirm_delete_app_pw', '이 앱 비밀번호를 삭제하시겠습니까?')}</p>
-                <ul style="margin:0;padding-left:18px;color:#666;font-size:13px;line-height:1.8;">
+                <ul style="margin:0;padding-left:18px;color:var(--fs-text-2, #666);font-size:13px;line-height:1.8;">
                     <li>${t('app_pw_del_warn1', '이 비밀번호를 사용하는 기기에서 접속이 끊어집니다.')}</li>
                     <li>${t('app_pw_del_warn2', 'Windows 탐색기: 자격 증명 관리자에서 해당 항목도 삭제해야 합니다.')}</li>
                 </ul>`,
@@ -37878,17 +38131,17 @@ const App = {
             
             case 'archive':
                 // ZIP 내부 파일 목록 보기
-                content = `<div class="archive-viewer" style="width:100%;height:100%;display:flex;flex-direction:column;background:#fff;color:#333;overflow:hidden;">
-                    <div style="padding:10px 15px;background:#f5f5f5;border-bottom:1px solid #ddd;display:flex;align-items:center;gap:8px;">
+                content = `<div class="archive-viewer" style="width:100%;height:100%;display:flex;flex-direction:column;background:var(--fs-surface, #fff);color:var(--fs-text, #333);overflow:hidden;">
+                    <div style="padding:10px 15px;background:var(--fs-surface-2, #f5f5f5);border-bottom:1px solid var(--fs-border-2, #ddd);display:flex;align-items:center;gap:8px;">
                         <span style="font-size:18px;">📦</span>
                         <span style="font-weight:600;font-size:14px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(item.name)}</span>
-                        <span id="archive-info" style="font-size:12px;color:#888;"></span>
+                        <span id="archive-info" style="font-size:12px;color:var(--fs-text-3, #888);"></span>
                     </div>
-                    <div id="archive-path-bar" style="padding:6px 15px;background:#fafafa;border-bottom:1px solid #eee;font-size:12px;display:none;">
+                    <div id="archive-path-bar" style="padding:6px 15px;background:var(--fs-surface-2, #fafafa);border-bottom:1px solid var(--fs-border, #eee);font-size:12px;display:none;">
                         <span id="archive-breadcrumb"></span>
                     </div>
                     <div id="archive-list" tabindex="0" style="flex:1;overflow-y:auto;overflow-x:hidden;padding:0;outline:none;">
-                        <div style="text-align:center;padding:40px;color:#999;">⏳ ${t('loading', '로딩 중...')}</div>
+                        <div style="text-align:center;padding:40px;color:var(--fs-text-3, #999);">⏳ ${t('loading', '로딩 중...')}</div>
                     </div>
                 </div>`;
                 if (item._vaultBlobUrl || item._vault) {
@@ -39104,7 +39357,7 @@ const App = {
                 el = document.createElement('div');
                 el.id = 'stream-debug';
                 el.style.cssText = 'position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow-y:auto;background:rgba(0,0,0,0.85);color:#0f0;font:11px/1.4 monospace;padding:8px;z-index:99999;pointer-events:auto;';
-                el.innerHTML = '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>🔧 Stream Debug</b><button onclick="this.parentElement.parentElement.remove()" style="color:#f00;background:none;border:none;font-size:16px;cursor:pointer">✕</button></div><div id="stream-debug-log"></div>';
+                el.innerHTML = '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><b>🔧 Stream Debug</b><button onclick="this.parentElement.parentElement.remove()" style="color:var(--fs-fg-err, #f00);background:none;border:none;font-size:16px;cursor:pointer">✕</button></div><div id="stream-debug-log"></div>';
                 document.body.appendChild(el);
             }
             const logEl = el.querySelector('#stream-debug-log');
@@ -44381,7 +44634,7 @@ const App = {
         
         // 로딩 표시
         $('#preview-title').text('🔐 ' + img.name).attr('title', img.name);
-        $('#preview-content').html('<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div style="text-align:center;"><div style="font-size:1.2em;">🔐</div><div style="margin-top:8px;color:var(--text-secondary,#666);">' + t('vault_decrypting', '암호화 해제 중...') + '</div></div></div>');
+        $('#preview-content').html('<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div style="text-align:center;"><div style="font-size:1.2em;">🔐</div><div style="margin-top:8px;color:var(--text-secondary,var(--fs-text-2, #666));">' + t('vault_decrypting', '암호화 해제 중...') + '</div></div></div>');
         
         try {
             const storageId = img.storageId;
@@ -44745,16 +44998,16 @@ const App = {
         const ext = info.filename.split('.').pop().toLowerCase();
         
         // 에디터 UI 구성 — 메모장 스타일
-        pc.innerHTML = `<div id="np-editor-root" style="display:flex;flex-direction:column;width:100%;height:100%;background:var(--theme-bg,#fff);font-family:'Consolas','Courier New','맑은 고딕',monospace;">
-            <div id="np-toolbar" style="display:flex;justify-content:space-between;align-items:center;padding:3px 8px;background:var(--theme-hover,#f0f0f0);border-bottom:1px solid var(--theme-border,#ddd);flex-shrink:0;gap:4px;min-height:30px;">
+        pc.innerHTML = `<div id="np-editor-root" style="display:flex;flex-direction:column;width:100%;height:100%;background:var(--theme-bg,var(--fs-surface, #fff));font-family:'Consolas','Courier New','맑은 고딕',monospace;">
+            <div id="np-toolbar" style="display:flex;justify-content:space-between;align-items:center;padding:3px 8px;background:var(--theme-hover,var(--fs-surface-2, #f0f0f0));border-bottom:1px solid var(--theme-border,var(--fs-border-2, #ddd));flex-shrink:0;gap:4px;min-height:30px;">
                 <div style="display:flex;align-items:center;gap:4px;overflow:hidden;min-width:0;flex:1;">
-                    <span style="font-size:12px;font-weight:500;color:var(--theme-text,#333);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">✏️ ${this.escapeHtml(info.filename)}</span>
-                    <span id="np-dirty" style="color:#e74c3c;font-weight:bold;display:none;font-size:13px;" title="${t('unsaved', '수정됨')}">●</span>
+                    <span style="font-size:12px;font-weight:500;color:var(--theme-text,var(--fs-text, #333));overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">✏️ ${this.escapeHtml(info.filename)}</span>
+                    <span id="np-dirty" style="color:var(--fs-fg-err, #e74c3c);font-weight:bold;display:none;font-size:13px;" title="${t('unsaved', '수정됨')}">●</span>
                 </div>
                 <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
                     <button id="np-btn-find" class="btn btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap;" title="Ctrl+F / Ctrl+H">🔍 ${t('find', '찾기')}</button>
                     <button id="np-btn-wrap" class="btn btn-sm" style="padding:2px 8px;font-size:11px;white-space:nowrap;" title="${t('word_wrap', '자동 줄 바꿈')}">↩ ${t('wrap', '줄바꿈')}</button>
-                    <select id="text-editor-encoding" style="font-size:11px;padding:2px 4px;border:1px solid var(--theme-border,#ccc);border-radius:3px;background:var(--theme-bg,#fff);color:var(--theme-text,#333);height:24px;">
+                    <select id="text-editor-encoding" style="font-size:11px;padding:2px 4px;border:1px solid var(--theme-border,var(--fs-border-2, #ccc));border-radius:3px;background:var(--theme-bg,var(--fs-surface, #fff));color:var(--theme-text,var(--fs-text, #333));height:24px;">
                         <option value="utf-8" ${info.encoding==='utf-8'?'selected':''}>UTF-8</option>
                         <option value="utf-8-bom" ${info.encoding==='utf-8-bom'?'selected':''}>UTF-8 BOM</option>
                         <option value="euc-kr" ${info.encoding==='euc-kr'?'selected':''}>EUC-KR</option>
@@ -44764,28 +45017,28 @@ const App = {
                     <button id="btn-text-save" class="btn btn-primary" style="padding:3px 14px;font-size:12px;white-space:nowrap;border-radius:4px;height:24px;">${t('save', '저장')}</button>
                 </div>
             </div>
-            <div id="np-find-bar" style="display:none;padding:4px 8px;background:var(--theme-hover,#f5f5f5);border-bottom:1px solid var(--theme-border,#ddd);flex-shrink:0;">
+            <div id="np-find-bar" style="display:none;padding:4px 8px;background:var(--theme-hover,var(--fs-surface-2, #f5f5f5));border-bottom:1px solid var(--theme-border,var(--fs-border-2, #ddd));flex-shrink:0;">
                 <div style="display:flex;align-items:center;gap:4px;margin-bottom:0;" id="np-find-row">
-                    <span style="font-size:11px;color:var(--theme-text-secondary,#666);width:40px;flex-shrink:0;">${t('find', '찾기')}</span>
-                    <input id="np-find-input" type="text" placeholder="${t('find_text', '찾을 내용')}" style="flex:1;min-width:100px;padding:3px 6px;font-size:12px;border:1px solid var(--theme-border,#ccc);border-radius:3px;background:var(--theme-bg,#fff);color:var(--theme-text,#333);">
+                    <span style="font-size:11px;color:var(--theme-text-secondary,var(--fs-text-2, #666));width:40px;flex-shrink:0;">${t('find', '찾기')}</span>
+                    <input id="np-find-input" type="text" placeholder="${t('find_text', '찾을 내용')}" style="flex:1;min-width:100px;padding:3px 6px;font-size:12px;border:1px solid var(--theme-border,var(--fs-border-2, #ccc));border-radius:3px;background:var(--theme-bg,var(--fs-surface, #fff));color:var(--theme-text,var(--fs-text, #333));">
                     <button id="np-find-prev" class="btn btn-sm" style="padding:2px 8px;font-size:11px;" title="${t('find_prev', '이전 찾기')} (Shift+Enter)">▲</button>
                     <button id="np-find-next" class="btn btn-sm" style="padding:2px 8px;font-size:11px;" title="${t('find_next', '다음 찾기')} (Enter)">▼</button>
-                    <label style="font-size:11px;display:flex;align-items:center;gap:2px;color:var(--theme-text-secondary,#666);white-space:nowrap;"><input id="np-find-case" type="checkbox" style="margin:0;"> ${t('match_case', '대/소문자')}</label>
-                    <span id="np-find-count" style="font-size:11px;color:var(--theme-text-secondary,#888);min-width:50px;"></span>
-                    <button id="np-find-close" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--theme-text-secondary,#888);padding:0 4px;line-height:1;">✕</button>
+                    <label style="font-size:11px;display:flex;align-items:center;gap:2px;color:var(--theme-text-secondary,var(--fs-text-2, #666));white-space:nowrap;"><input id="np-find-case" type="checkbox" style="margin:0;"> ${t('match_case', '대/소문자')}</label>
+                    <span id="np-find-count" style="font-size:11px;color:var(--theme-text-secondary,var(--fs-text-3, #888));min-width:50px;"></span>
+                    <button id="np-find-close" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--theme-text-secondary,var(--fs-text-3, #888));padding:0 4px;line-height:1;">✕</button>
                 </div>
                 <div style="display:none;align-items:center;gap:4px;margin-top:4px;" id="np-replace-row">
-                    <span style="font-size:11px;color:var(--theme-text-secondary,#666);width:40px;flex-shrink:0;">${t('replace_label', '바꾸기')}</span>
-                    <input id="np-replace-input" type="text" placeholder="${t('replace_text', '바꿀 내용')}" style="flex:1;min-width:100px;padding:3px 6px;font-size:12px;border:1px solid var(--theme-border,#ccc);border-radius:3px;background:var(--theme-bg,#fff);color:var(--theme-text,#333);">
+                    <span style="font-size:11px;color:var(--theme-text-secondary,var(--fs-text-2, #666));width:40px;flex-shrink:0;">${t('replace_label', '바꾸기')}</span>
+                    <input id="np-replace-input" type="text" placeholder="${t('replace_text', '바꿀 내용')}" style="flex:1;min-width:100px;padding:3px 6px;font-size:12px;border:1px solid var(--theme-border,var(--fs-border-2, #ccc));border-radius:3px;background:var(--theme-bg,var(--fs-surface, #fff));color:var(--theme-text,var(--fs-text, #333));">
                     <button id="np-replace-one" class="btn btn-sm" style="padding:2px 8px;font-size:11px;">${t('replace', '바꾸기')}</button>
                     <button id="np-replace-all" class="btn btn-sm" style="padding:2px 8px;font-size:11px;">${t('replace_all', '모두')}</button>
                 </div>
             </div>
             <div style="flex:1;display:flex;min-height:0;overflow:hidden;position:relative;">
-                <canvas id="np-gutter-canvas" style="flex-shrink:0;width:50px;background:var(--theme-hover,#f5f5f5);border-right:1px solid var(--theme-border,#e0e0e0);"></canvas>
-                <textarea id="text-editor-area" spellcheck="false" wrap="soft" style="flex:1;width:100%;height:100%;border:none;outline:none;resize:none;padding:8px 10px;font-family:'Consolas','Courier New','맑은 고딕',monospace;font-size:13px;line-height:1.5;tab-size:4;background:var(--theme-bg,#fff);color:var(--theme-text,#333);box-sizing:border-box;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;"></textarea>
+                <canvas id="np-gutter-canvas" style="flex-shrink:0;width:50px;background:var(--theme-hover,var(--fs-surface-2, #f5f5f5));border-right:1px solid var(--theme-border,var(--fs-border, #e0e0e0));"></canvas>
+                <textarea id="text-editor-area" spellcheck="false" wrap="soft" style="flex:1;width:100%;height:100%;border:none;outline:none;resize:none;padding:8px 10px;font-family:'Consolas','Courier New','맑은 고딕',monospace;font-size:13px;line-height:1.5;tab-size:4;background:var(--theme-bg,var(--fs-surface, #fff));color:var(--theme-text,var(--fs-text, #333));box-sizing:border-box;overflow-y:auto;white-space:pre-wrap;word-wrap:break-word;"></textarea>
             </div>
-            <div id="np-statusbar" style="display:flex;justify-content:space-between;align-items:center;padding:2px 10px;background:var(--theme-hover,#f0f0f0);border-top:1px solid var(--theme-border,#ddd);flex-shrink:0;font-size:11px;color:var(--theme-text-secondary,#888);min-height:20px;">
+            <div id="np-statusbar" style="display:flex;justify-content:space-between;align-items:center;padding:2px 10px;background:var(--theme-hover,var(--fs-surface-2, #f0f0f0));border-top:1px solid var(--theme-border,var(--fs-border-2, #ddd));flex-shrink:0;font-size:11px;color:var(--theme-text-secondary,var(--fs-text-3, #888));min-height:20px;">
                 <div style="display:flex;gap:16px;">
                     <span id="np-status-pos">Ln 1, Col 1</span>
                     <span id="np-status-sel"></span>
@@ -45967,10 +46220,10 @@ const App = {
         const folderName = path.split('/').pop();
         const toolbar = document.createElement('div');
         toolbar.id = 'vault-toolbar';
-        toolbar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-warning,#fff3cd);border-radius:8px;margin-bottom:8px;flex-wrap:wrap;';
+        toolbar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-warning,var(--fs-tint-warn, #fff3cd));border-radius:8px;margin-bottom:8px;flex-wrap:wrap;';
         toolbar.innerHTML = `
             <span style="font-weight:600;">🔐 ${this.escapeHtml(folderName)}</span>
-            <span style="font-size:0.85em;color:var(--text-secondary,#666);">${t('vault_unlocked_desc', 'E2E 암호화 폴더')}</span>
+            <span style="font-size:0.85em;color:var(--text-secondary,var(--fs-text-2, #666));">${t('vault_unlocked_desc', 'E2E 암호화 폴더')}</span>
             <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;">
                 <button class="btn btn-sm" id="btn-vault-upload-file" style="font-size:0.85em;">📤 ${t('vault_btn_upload', '암호화 업로드')}</button>
                 <button class="btn btn-sm" id="btn-vault-encrypt-selected" style="font-size:0.85em;display:none;">🔐 ${t('vault_encrypt_selected', '선택 암호화')}</button>
@@ -46025,7 +46278,7 @@ const App = {
             const badge = isSubVault
                 ? `<span class="vault-badge">🔐</span>`
                 : isPlain 
-                    ? `<span class="vault-badge" style="color:var(--text-warning,#e67e22);" title="${t('vault_not_encrypted','암호화되지 않음')}">⚠️</span>`
+                    ? `<span class="vault-badge" style="color:var(--text-warning,var(--fs-fg-warn, #e67e22));" title="${t('vault_not_encrypted','암호화되지 않음')}">⚠️</span>`
                     : `<span class="vault-badge">🔐</span>`;
             const plainClass = isPlain ? ' vault-plain' : '';
             const escapedPath = this.escapeHtml(item.path || '');
@@ -46406,10 +46659,10 @@ const App = {
             const escH = (e) => { if (e.key === 'Escape') close(null); };
             const html = `
                 <div id="download-choice-modal" class="modal-overlay" style="display:flex;align-items:center;justify-content:center;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;">
-                    <div style="background:white;border-radius:12px;min-width:340px;max-width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.3);">
+                    <div style="background:var(--fs-surface, white);border-radius:12px;min-width:340px;max-width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.3);">
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:18px 20px 12px;">
                             <h3 style="margin:0;font-size:16px;">🔐📥 ${selectedItems.length}${t('count_files_download','개 파일 다운로드')}</h3>
-                            <button id="dl-choice-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:#999;padding:0 0 0 10px;line-height:1;">&times;</button>
+                            <button id="dl-choice-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--fs-text-3, #999);padding:0 0 0 10px;line-height:1;">&times;</button>
                         </div>
                         <div style="padding:0 20px 20px;display:flex;flex-direction:column;gap:10px;">
                             <button id="dl-choice-individual" class="btn btn-primary" style="padding:12px;font-size:14px;">
@@ -47432,9 +47685,9 @@ const App = {
             const overlay = document.createElement('div');
             overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10002;display:flex;align-items:center;justify-content:center;';
             const box = document.createElement('div');
-            box.style.cssText = 'background:#fff;border-radius:12px;padding:20px 24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.3);';
+            box.style.cssText = 'background:var(--fs-surface, #fff);border-radius:12px;padding:20px 24px;max-width:400px;width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.3);';
             box.innerHTML = `<div style="font-weight:600;margin-bottom:12px;">⚠️ ${t('vault_duplicate_title', '동일한 파일명 존재')}</div>
-                <div style="font-size:0.9em;color:#666;margin-bottom:16px;word-break:break-all;">${this.escapeHtml(fileName)}</div>
+                <div style="font-size:0.9em;color:var(--fs-text-2, #666);margin-bottom:16px;word-break:break-all;">${this.escapeHtml(fileName)}</div>
                 <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;">
                     <button id="vault-dup-skip" class="btn btn-sm" style="font-size:0.85em;">${t('skip', '건너뛰기')}</button>
                     <button id="vault-dup-rename" class="btn btn-sm" style="font-size:0.85em;">${t('rename', '이름 변경')}</button>
@@ -47789,7 +48042,7 @@ const App = {
             preOpenTab = window.open('about:blank', '_blank');
             if (preOpenTab) {
                 preOpenTab.document.title = '🔐 ' + item.name + ' - Loading...';
-                preOpenTab.document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:#666;"><div style="text-align:center;"><div style="font-size:2em;margin-bottom:12px;">🔐</div><div>암호화 해제 중...</div></div></div>';
+                preOpenTab.document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:var(--fs-text-2, #666);"><div style="text-align:center;"><div style="font-size:2em;margin-bottom:12px;">🔐</div><div>암호화 해제 중...</div></div></div>';
             }
         }
         
@@ -47818,11 +48071,11 @@ const App = {
         $('#preview-content').html(`
             <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;gap:10px;">
                 <div style="font-size:1.3em;">🔐</div>
-                <div id="vault-decrypt-status" style="font-size:0.9em;color:var(--text-secondary,#666);">${t('vault_decrypting', '암호화 해제 중...')}</div>
-                <div style="width:100%;max-width:240px;height:5px;background:var(--border-color,#ddd);border-radius:3px;overflow:hidden;">
+                <div id="vault-decrypt-status" style="font-size:0.9em;color:var(--text-secondary,var(--fs-text-2, #666));">${t('vault_decrypting', '암호화 해제 중...')}</div>
+                <div style="width:100%;max-width:240px;height:5px;background:var(--border-color,var(--fs-surface-3, #ddd));border-radius:3px;overflow:hidden;">
                     <div id="vault-decrypt-progress" style="width:0%;height:100%;background:var(--primary-color,#4a90d9);border-radius:3px;transition:width 0.15s;"></div>
                 </div>
-                <div id="vault-decrypt-pct" style="font-size:0.8em;color:var(--text-tertiary,#999);">0%</div>
+                <div id="vault-decrypt-pct" style="font-size:0.8em;color:var(--text-tertiary,var(--fs-text-3, #999));">0%</div>
             </div>`);
         this.showModal('modal-preview');
         this.hideGalleryNav();
@@ -48197,7 +48450,7 @@ const App = {
         const overlay = document.createElement('div');
         overlay.className = 'vault-preview-overlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;flex-direction:column;cursor:pointer;';
-        overlay.innerHTML = `<div style="color:#fff;font-size:0.9em;padding:8px 16px;margin-bottom:8px;">🔐 ${this.escapeHtml(name)}</div><div style="color:#aaa;font-size:0.8em;margin-top:8px;">${t('click_to_close', '클릭하여 닫기')}</div>`;
+        overlay.innerHTML = `<div style="color:#fff;font-size:0.9em;padding:8px 16px;margin-bottom:8px;">🔐 ${this.escapeHtml(name)}</div><div style="color:var(--fs-text-3, #aaa);font-size:0.8em;margin-top:8px;">${t('click_to_close', '클릭하여 닫기')}</div>`;
         const img = document.createElement('img');
         img.src = blobUrl;
         img.style.cssText = 'max-width:90vw;max-height:85vh;object-fit:contain;border-radius:4px;';
@@ -48245,7 +48498,7 @@ const App = {
         header.appendChild(closeBtn);
         const iframe = document.createElement('iframe');
         iframe.src = blobUrl;
-        iframe.style.cssText = 'width:85vw;height:82vh;border:none;border-radius:8px;background:#fff;';
+        iframe.style.cssText = 'width:85vw;height:82vh;border:none;border-radius:8px;background:var(--fs-surface, #fff);';
         overlay.appendChild(header);
         overlay.appendChild(iframe);
         overlay.addEventListener('click', (e) => { if (e.target === overlay) { overlay.remove(); URL.revokeObjectURL(blobUrl); } });
@@ -48736,7 +48989,7 @@ const App = {
         // 항상 확인 모달 표시
         if (!await this.showConfirmModal({
             title: t('confirm', '확인'),
-            content: `<div style="font-size:14px;">${t('vault_decrypt_all_confirm2', '모든 암호화 파일을 해제하시겠습니까?')}</div><div style="font-size:12px;color:#666;margin-top:8px;">📁 ${t('vault_decrypt_all_folder_note', '모든 파일의 암호화가 해제된 후 이 폴더는 일반 폴더로 전환됩니다.')}</div>`,
+            content: `<div style="font-size:14px;">${t('vault_decrypt_all_confirm2', '모든 암호화 파일을 해제하시겠습니까?')}</div><div style="font-size:12px;color:var(--fs-text-2, #666);margin-top:8px;">📁 ${t('vault_decrypt_all_folder_note', '모든 파일의 암호화가 해제된 후 이 폴더는 일반 폴더로 전환됩니다.')}</div>`,
             buttons: [
                 { text: t('cancel', '취소'), value: false, class: 'btn-secondary' },
                 { text: t('vault_btn_decrypt_all', '전체 암호화 해제'), value: true, class: 'btn-primary' }
@@ -48990,16 +49243,16 @@ const App = {
         actions.forEach(a => {
             if (a.action === '_divider') {
                 const hr = document.createElement('hr');
-                hr.style.cssText = 'margin:4px 0;border:0;border-top:1px solid #eee;';
+                hr.style.cssText = 'margin:4px 0;border:0;border-top:1px solid var(--fs-border, #eee);';
                 menu.appendChild(hr);
                 return;
             }
             const div = document.createElement('div');
             div.className = 'vault-ctx-item';
             div.dataset.action = a.action;
-            div.style.cssText = `padding:8px 16px;cursor:pointer;font-size:0.9em;${a.danger ? 'color:#dc3545;' : ''}`;
+            div.style.cssText = `padding:8px 16px;cursor:pointer;font-size:0.9em;${a.danger ? 'color:var(--fs-fg-err, #dc3545);' : ''}`;
             div.textContent = a.icon + ' ' + a.label;
-            div.addEventListener('mouseenter', () => div.style.background = '#f0f0f0');
+            div.addEventListener('mouseenter', () => div.style.background = 'var(--fs-surface-2, #f0f0f0)');
             div.addEventListener('mouseleave', () => div.style.background = '');
             div.addEventListener('click', () => {
                 _closeVaultCtx();
@@ -49018,7 +49271,7 @@ const App = {
             overlay.addEventListener('touchmove', function(ev) { ev.preventDefault(); }, { passive: false });
             document.body.appendChild(overlay);
             
-            menu.style.cssText = 'position:fixed;left:0;right:0;background:#fff;border-top:1px solid #ddd;border-radius:12px 12px 0 0;box-shadow:0 -4px 16px rgba(0,0,0,0.15);z-index:10001;min-width:auto;padding:8px 0;';
+            menu.style.cssText = 'position:fixed;left:0;right:0;background:var(--fs-surface, #fff);border-top:1px solid var(--fs-border-2, #ddd);border-radius:12px 12px 0 0;box-shadow:0 -4px 16px rgba(0,0,0,0.15);z-index:10001;min-width:auto;padding:8px 0;';
             
             const viewH = window.innerHeight;
             const maxH = Math.floor(viewH * 0.35);
@@ -49037,7 +49290,7 @@ const App = {
             }, { passive: false });
         } else {
             // PC: 커서 위치
-            menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:10001;min-width:160px;padding:4px 0;`;
+            menu.style.cssText = `position:fixed;left:${e.clientX}px;top:${e.clientY}px;background:var(--fs-surface, #fff);border:1px solid var(--fs-border-2, #ddd);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,0.15);z-index:10001;min-width:160px;padding:4px 0;`;
             
             const rect = menu.getBoundingClientRect();
             if (rect.right > window.innerWidth - 10) menu.style.left = (window.innerWidth - rect.width - 10) + 'px';
@@ -49320,17 +49573,17 @@ const App = {
     _showConvertProgress(folderName, totalFiles, totalSize) {
         $('#vault-convert-overlay').remove();
         const overlay = $(`<div id="vault-convert-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;">
-            <div style="background:var(--bg-primary,#fff);border-radius:12px;padding:24px 32px;min-width:380px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+            <div style="background:var(--bg-primary,var(--fs-surface, #fff));border-radius:12px;padding:24px 32px;min-width:380px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
                 <h3 style="margin:0 0 16px 0;">🔐 ${t('vault_converting', '폴더 암호화 변환 중...')}</h3>
-                <div style="font-size:0.9em;color:var(--text-secondary,#666);margin-bottom:8px;">
+                <div style="font-size:0.9em;color:var(--text-secondary,var(--fs-text-2, #666));margin-bottom:8px;">
                     📁 ${this.escapeHtml(folderName.split('/').pop())} — ${totalFiles}${t('vault_convert_files_count', '개 파일')} (${this.formatSize(totalSize)})
                 </div>
                 <div id="vault-convert-file" style="font-size:0.85em;margin-bottom:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
-                <div style="background:var(--border-color,#e0e0e0);border-radius:8px;height:8px;overflow:hidden;">
+                <div style="background:var(--border-color,var(--fs-surface-3, #e0e0e0));border-radius:8px;height:8px;overflow:hidden;">
                     <div id="vault-convert-bar" style="height:100%;background:var(--color-primary,#4a90d9);border-radius:8px;transition:width 0.3s;width:0%;"></div>
                 </div>
-                <div id="vault-convert-status" style="font-size:0.8em;color:var(--text-secondary,#888);margin-top:8px;text-align:center;">0 / ${totalFiles}</div>
-                <div style="font-size:0.75em;color:var(--text-warning,#856404);margin-top:12px;padding:6px 10px;background:var(--bg-warning,#fff3cd);border-radius:6px;">
+                <div id="vault-convert-status" style="font-size:0.8em;color:var(--text-secondary,var(--fs-text-3, #888));margin-top:8px;text-align:center;">0 / ${totalFiles}</div>
+                <div style="font-size:0.75em;color:var(--text-warning,var(--fs-fg-warn, #856404));margin-top:12px;padding:6px 10px;background:var(--bg-warning,var(--fs-tint-warn, #fff3cd));border-radius:6px;">
                     ⚠️ ${t('vault_convert_warning', '변환 중 페이지를 닫지 마세요. 중단 시 일부 파일만 변환될 수 있습니다.')}
                 </div>
             </div>
@@ -49369,12 +49622,13 @@ const App = {
     _iconMgrHighlightLabelPosBtn(position) {
         document.querySelectorAll('.label-pos-btn').forEach(btn => {
             if (btn.dataset.position === position) {
-                btn.style.borderColor = '#1976d2';
-                btn.style.background = '#e3f2fd';
+                // ★ (2026-10-24) 테마 변수(없으면 종전 색) — 종전 고정 파랑·흰색이라 어느 테마에서나 기본 테마 색이었다(처음 그릴 때 index.php 의 버튼 바탕·테두리 변수와 같게)
+                btn.style.borderColor = 'var(--fs-fg-info, #1976d2)';
+                btn.style.background = 'var(--fs-tint-info, #e3f2fd)';
                 btn.style.fontWeight = 'bold';
             } else {
-                btn.style.borderColor = '#ddd';
-                btn.style.background = '#fff';
+                btn.style.borderColor = 'var(--fs-border-2, #ddd)';
+                btn.style.background = 'var(--fs-surface, #fff)';
                 btn.style.fontWeight = 'normal';
             }
         });
@@ -49633,7 +49887,7 @@ const App = {
         this._favShowCount = count;
         
         if (this.favorites.length === 0) {
-            list.innerHTML = `<li class="empty-message" style="color:#999;font-size:12px;padding:5px 10px;">${t('no_favorites','즐겨찾기가 없습니다')}</li>`;
+            list.innerHTML = `<li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;">${t('no_favorites','즐겨찾기가 없습니다')}</li>`;
             return;
         }
         
@@ -49654,13 +49908,13 @@ const App = {
         if (hasMore) {
             const remaining = this.favorites.length - count;
             list.innerHTML += `<li class="favorite-more" style="text-align:center;padding:4px;">
-                <a href="#" id="favorites-show-more" style="color:var(--primary);font-size:11px;">${t('show_more','더 보기')} (${remaining})</a>
+                <a href="#" id="favorites-show-more" style="color:var(--fs-primary-text, var(--primary));font-size:11px;">${t('show_more','더 보기')} (${remaining})</a>
             </li>`;
         }
         
         // 하단에 전체 삭제 버튼
         list.innerHTML += `<li class="favorite-clear" style="text-align:center;padding:5px;">
-            <a href="#" id="clear-favorites" style="color:#999;font-size:11px;">${t('delete_all', '전체 삭제')}</a>
+            <a href="#" id="clear-favorites" style="color:var(--fs-text-3, #999);font-size:11px;">${t('delete_all', '전체 삭제')}</a>
         </li>`;
         
         // 클릭: 선택 표시, 더블클릭/더블탭: 이동
@@ -49709,7 +49963,7 @@ const App = {
                     this.loadFavorites();
                     // 목록이 비어있으면 메시지 표시
                     if (list.querySelectorAll('.favorite-item').length === 0) {
-                        list.innerHTML = `<li class="empty-message" style="color:#999;font-size:12px;padding:5px 10px;">${t('no_favorites','즐겨찾기가 없습니다')}</li>`;
+                        list.innerHTML = `<li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;">${t('no_favorites','즐겨찾기가 없습니다')}</li>`;
                     }
                 }
             });
@@ -49799,7 +50053,7 @@ const App = {
         this._recentShowCount = count;
         
         if (this.recentFiles.length === 0) {
-            list.innerHTML = `<li class="empty-message" style="color:#999;font-size:12px;padding:5px 10px;">${t('no_recent_files','최근 파일이 없습니다')}</li>`;
+            list.innerHTML = `<li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;">${t('no_recent_files','최근 파일이 없습니다')}</li>`;
             return;
         }
         
@@ -49820,13 +50074,13 @@ const App = {
         if (hasMore) {
             const remaining = this.recentFiles.length - count;
             list.innerHTML += `<li class="recent-more" style="text-align:center;padding:4px;">
-                <a href="#" id="recent-show-more" style="color:var(--primary);font-size:11px;">${t('show_more','더 보기')} (${remaining})</a>
+                <a href="#" id="recent-show-more" style="color:var(--fs-primary-text, var(--primary));font-size:11px;">${t('show_more','더 보기')} (${remaining})</a>
             </li>`;
         }
         
         // 하단에 기록 삭제 버튼
         list.innerHTML += `<li class="recent-clear" style="text-align:center;padding:5px;">
-            <a href="#" id="clear-recent-files" style="color:#999;font-size:11px;">${t('delete_history', '기록 삭제')}</a>
+            <a href="#" id="clear-recent-files" style="color:var(--fs-text-3, #999);font-size:11px;">${t('delete_history', '기록 삭제')}</a>
         </li>`;
         
         // 클릭: 선택 표시, 더블클릭/더블탭: 이동
@@ -49868,7 +50122,7 @@ const App = {
                     li.remove();
                     // 목록이 비어있으면 메시지 표시
                     if (list.querySelectorAll('.recent-file-item').length === 0) {
-                        list.innerHTML = `<li class="empty-message" style="color:#999;font-size:12px;padding:5px 10px;">${t('no_recent_files','최근 파일이 없습니다')}</li>`;
+                        list.innerHTML = `<li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;">${t('no_recent_files','최근 파일이 없습니다')}</li>`;
                     }
                 }
             });
