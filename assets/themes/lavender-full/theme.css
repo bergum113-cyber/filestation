@@ -425,11 +425,7 @@ select,
 }
 
 /* ========== 토스트 ========== */
-.toast {
-    background: var(--theme-sidebar);
-    color: var(--theme-text);
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
-}
+/* ★ (2026-10-26) 색 없는 알림을 옅은 사이드바색으로 칠하던 옛 규칙 제거 — 다른 밝은 테마처럼 기본(진한 회색) 알림 */
 
 /* ========== 설정 탭 ========== */
 .settings-tabs {
@@ -1682,8 +1678,11 @@ body.is-mobile .header {
 .file-item:hover { background:#f3effe !important; }
 .file-item.selected, .file-list.list-view .file-item.selected, .file-list.grid-view .file-item.selected { background:#efeafe !important; border-color:#a78bfa !important; }
 .file-list, .file-area, .toolbar, .breadcrumb { background:#f8f6ff !important; }
-.file-list.grid-view .file-item:not(.selected) { background:#ffffff !important; box-shadow: inset 0 0 0 1px #e5dcfe !important; }
-.file-list.grid-view .file-item:not(.selected):hover { background:#f3effe !important; }
+/* ★ (2026-10-27 13시, 펜닐) 전체 테마는 목록·그리드 모두 선택 안 한 칸도 테마색(파일 목록 바탕과 같은 색), 선택·마우스 올림은 더 진하게 — 종전엔 그리드 칸이 흰색, 일부 테마는 목록 줄도 흰색이었음.
+   background-color 만 바꿔 공유 표시 그라디언트는 유지, 끌어다 놓기(drag-over) 칸은 공통 표시 그대로 */
+.file-list.list-view .file-item:not(.selected):not(.drag-over), .file-list.grid-view .file-item:not(.selected):not(.drag-over) { background-color:#f8f6ff !important; }
+.file-list.grid-view .file-item:not(.selected) { box-shadow: inset 0 0 0 1px #e5dcfe !important; }
+.file-list.list-view .file-item:not(.selected):hover, .file-list.grid-view .file-item:not(.selected):hover { background:#f3effe !important; }
 /* 목록 보기 크기·날짜·종류 글자 — style.css 공통 회색(--secondary #6c757d)이라 마우스 올린 줄(올림색) 위 3.9~4.3:1 → 이 테마 안내 글자색(#5f4f8e, 선택 칸 위에서도 4.6:1 이상) (2026-10-25 저녁) */
 .file-list.list-view .file-size, .file-list.list-view .file-date, .file-list.list-view .file-type, .file-list.list-view .file-item > .file-type { color:#5f4f8e !important; }
 .board-table thead tr, .board-table tbody tr.board-row-pinned { background:#f6f3fe !important; }

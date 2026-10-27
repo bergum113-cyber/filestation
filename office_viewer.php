@@ -12,6 +12,7 @@ require_once __DIR__ . '/php_version_check.php';
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/lang.php';
+require_once __DIR__ . '/api/FsIcons.php';   // ★ (2026-10-26) 선 그림 아이콘 — 아래 화면의 이모지를 바꿈
 
 $currentLang = getLang();
 
@@ -30,7 +31,7 @@ $_checkPath = $_GET['path'] ?? '';
 if ($_checkSid && !$storage->checkPermission($_checkSid, 'can_read')) {
     http_response_code(403);
     $currentLang = $_SESSION['lang'] ?? 'ko';
-    exit('<!DOCTYPE html><html><head><meta charset="utf-8"><title>403</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;background:#f5f5f5;"><div style="text-align:center;"><h2 style="color:#d32f2f;">🚫 ' . ($currentLang === 'en' ? 'Access Denied' : '접근 권한이 없습니다') . '</h2><p style="color:#666;">' . ($currentLang === 'en' ? 'You do not have permission to access this file.' : '이 파일에 대한 읽기 권한이 없습니다.') . '</p><a href="index.php" style="color:#1976d2;">' . ($currentLang === 'en' ? 'Go back' : '돌아가기') . '</a></div></body></html>');
+    exit('<!DOCTYPE html><html><head><meta charset="utf-8"><title>403</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;background:#f5f5f5;"><div style="text-align:center;"><h2 style="color:#d32f2f;">' . fsi_inline('ban') . ' ' . ($currentLang === 'en' ? 'Access Denied' : '접근 권한이 없습니다') . '</h2><p style="color:#666;">' . ($currentLang === 'en' ? 'You do not have permission to access this file.' : '이 파일에 대한 읽기 권한이 없습니다.') . '</p><a href="index.php" style="color:#1976d2;">' . ($currentLang === 'en' ? 'Go back' : '돌아가기') . '</a></div></body></html>');
 }
 if ($_checkSid && $_checkPath) {
     $_checkDir = dirname($_checkPath);
@@ -38,7 +39,7 @@ if ($_checkSid && $_checkPath) {
     if (!$storage->checkFolderPermission($_checkSid, $_checkDir ?: $_checkPath)) {
         http_response_code(403);
         $currentLang = $_SESSION['lang'] ?? 'ko';
-        exit('<!DOCTYPE html><html><head><meta charset="utf-8"><title>403</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;background:#f5f5f5;"><div style="text-align:center;"><h2 style="color:#d32f2f;">🚫 ' . ($currentLang === 'en' ? 'Access Denied' : '접근 권한이 없습니다') . '</h2><p style="color:#666;">' . ($currentLang === 'en' ? 'You do not have permission to access this folder.' : '이 폴더에 대한 접근 권한이 없습니다.') . '</p><a href="index.php" style="color:#1976d2;">' . ($currentLang === 'en' ? 'Go back' : '돌아가기') . '</a></div></body></html>');
+        exit('<!DOCTYPE html><html><head><meta charset="utf-8"><title>403</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;background:#f5f5f5;"><div style="text-align:center;"><h2 style="color:#d32f2f;">' . fsi_inline('ban') . ' ' . ($currentLang === 'en' ? 'Access Denied' : '접근 권한이 없습니다') . '</h2><p style="color:#666;">' . ($currentLang === 'en' ? 'You do not have permission to access this folder.' : '이 폴더에 대한 접근 권한이 없습니다.') . '</p><a href="index.php" style="color:#1976d2;">' . ($currentLang === 'en' ? 'Go back' : '돌아가기') . '</a></div></body></html>');
     }
 }
 
@@ -235,6 +236,8 @@ if (!isset($vaultUrl) || !$vaultUrl) {
 // 다크모드
 if (!isset($darkmode)) $darkmode = $_COOKIE['darkmode'] ?? 'light';
 
+// ★ (2026-10-26) 화면 HTML 의 이모지 → 선 그림 아이콘(index.php 와 같은 방식). 여기(화면 출력 직전)부터만 — 위쪽 파일 전송·오류 응답은 이미 exit
+ob_start('fs_icon_convert_html');
 ?>
 <!DOCTYPE html>
 <html lang="ko" data-theme="<?php echo htmlspecialchars($darkmode); ?>">
@@ -580,8 +583,12 @@ if (!isset($darkmode)) $darkmode = $_COOKIE['darkmode'] ?? 'light';
             .viewer-container { overflow: visible; }
         }
     </style>
+<style>/* ★ (2026-10-26) 선 그림 아이콘(이모지 대신, 원본 api/FsIcons.php) — 글자색을 따름 */ .fs-ico{width:1.2em;height:1.2em;vertical-align:-0.2em;flex-shrink:0} .fs-ico-ok{color:#157347} .fs-ico-err{color:#c62828} .fs-ico-warn{color:#b45309}</style>
 </head>
 <body>
+<?php /* ★ (2026-10-26) 선 그림 아이콘 묶음 + 스크립트가 넣는 이모지도 바꾸는 fs-icons.js (index.php·share.php 와 같음) */ echo fs_icon_sprite(); ?>
+<script>window.FS_ICO_EMOJI = <?= fs_icon_map_json() ?>;</script>
+<script src="assets/js/fs-icons.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-icons.js'), 0, 10) ?>"></script>
     <div class="header">
         <div class="header-left">
             <button class="back-btn" onclick="window.close()" title="<?php _e('viewer_close'); ?>">✕</button>

@@ -335,6 +335,9 @@ if (!headers_sent()) {
     header('Pragma: no-cache');
     header('Expires: 0');
 }
+// ★ (2026-10-26) 화면 HTML 의 이모지 → 선 그림 아이콘(index.php 와 같은 방식, 원본 api/FsIcons.php). 여기(HTML 출력 직전)부터만 — 위쪽 스트리밍·JSON 은 이미 exit
+require_once __DIR__ . '/api/FsIcons.php';
+ob_start('fs_icon_convert_html');
 ?>
 <!DOCTYPE html>
 <html lang="<?= htmlspecialchars($currentLang, ENT_QUOTES) ?>">
@@ -384,9 +387,10 @@ if (!headers_sent()) {
         .progress-speed { font-size: 12px; color: #999; margin-bottom: 15px; }
         .toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background: #333; color: white; padding: 14px 28px; border-radius: 30px; font-size: 14px; opacity: 0; transition: all 0.3s ease; z-index: 1000; max-width: 90%; text-align: center; }
         .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
-        .toast.success { background: #28a745; }
-        .toast.error { background: #dc3545; }
-        .toast.info { background: #17a2b8; }
+        .toast.success { background: #2e7d32; }
+        .toast.error { background: #c62828; }
+        .toast.info { background: #117a8b; }
+        .toast.warning { background: #f0ad4e; color: #212529; }
         .player-wrap { margin-bottom: 15px; border-radius: 12px; overflow: hidden; background: #000; position: relative; }
         /* ★ (2026-10-08) ⚙ 설정 창이 열려 있는 동안만 플레이어 밖(위)으로 넘쳐 보이게 — 음성이 많으면 플레이어 위 빈 곳까지 펼친다(fs-video-skin menuRoomAbove).
            모서리는 영상에 둥글기를 줘 그대로 보이게. 전체화면은 원래 overflow: visible. */
@@ -984,9 +988,18 @@ if (!headers_sent()) {
             max-width: 100%;
             /* min-height는 부모(.player-wrap.audio-wrap)에서 관리 (다중 트랙 플레이리스트 스크롤 위해) */
         }
+        /* ★ (2026-10-26) 선 그림 아이콘(이모지 대신) — 글자색을 따름. 크기는 글자의 1.2em, 상태 아이콘은 뜻 색 */
+        .fs-ico { width: 1.2em; height: 1.2em; vertical-align: -0.2em; flex-shrink: 0; }
+        .fs-ico-ok { color: #2e7d32; }
+        .fs-ico-err { color: #c62828; }
+        .fs-ico-warn { color: #b45309; }
+        .fs-dot-green { color: #2e9d4a; } .fs-dot-red { color: #d93025; } .fs-dot-gray { color: #9aa0a6; } .fs-dot-blue { color: #1a73e8; } .fs-dot-purple { color: #8e44ad; } .fs-dot-orange { color: #e8710a; }
     </style>
 </head>
 <body>
+<?= fs_icon_sprite() ?>
+<script nonce="<?= $cspNonce ?>">window.FS_ICO_EMOJI = <?= fs_icon_map_json() ?>;</script>
+<script src="assets/js/fs-icons.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-icons.js'), 0, 10) ?>"></script>
     <div class="container">
         <?php if ($error): ?>
             <div class="icon">❌</div>
@@ -1895,7 +1908,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 showToast(`${downloadFilename} ${S.complete}`, 'success');
                 resetUI();
             } catch (e) {
-                if (e.name === 'AbortError') showToast(S.cancelled, 'info');
+                if (e.name === 'AbortError') showToast(S.cancelled, 'warning');
                 else { console.error('Download error:', e); showToast(e.message || S.failed, 'error'); }
                 resetUI();
             }

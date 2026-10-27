@@ -165,7 +165,7 @@ if (version_compare(PHP_VERSION, FS_MIN_PHP_VERSION, '<')) {
 </head>
 <body>
     <div class="container">
-        <div class="icon">⚠️</div>
+        <div class="icon" style="color:#e65100;"><svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-0.15em"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><?php /* ★ (2026-10-26) 이모지 → 선 그림(이 파일은 옛 PHP 에서도 읽혀야 해서 api/FsIcons.php 를 쓰지 않고 직접 넣음) */ ?>
         <h1>PHP 버전 호환성 오류</h1>
         <h2>PHP version compatibility error</h2>
         
@@ -181,7 +181,7 @@ if (version_compare(PHP_VERSION, FS_MIN_PHP_VERSION, '<')) {
         </div>
         
         <div class="help">
-            <h3>🇰🇷 해결 방법</h3>
+            <h3>해결 방법</h3>
             <ul>
                 <li>웹 호스팅의 PHP 버전을 <strong>8.0 이상</strong>으로 변경하세요. (권장: PHP 8.3 ~ 8.4)</li>
                 <li>시놀로지 NAS의 경우: <strong>패키지 센터</strong>에서 PHP 8.x 패키지 설치 후 Web Station에서 변경</li>
@@ -189,7 +189,7 @@ if (version_compare(PHP_VERSION, FS_MIN_PHP_VERSION, '<')) {
                 <li>cPanel의 경우: <strong>MultiPHP Manager</strong>에서 도메인별 PHP 버전 설정</li>
             </ul>
             
-            <h3>🇺🇸 How to resolve</h3>
+            <h3>How to resolve</h3>
             <ul>
                 <li>Upgrade your PHP version to <strong>8.0 or higher</strong>. (Recommended: PHP 8.3 ~ 8.4)</li>
                 <li>For Synology NAS: Install PHP 8.x package via Package Center, then change in Web Station</li>
@@ -199,7 +199,7 @@ if (version_compare(PHP_VERSION, FS_MIN_PHP_VERSION, '<')) {
         </div>
         
         <div class="help">
-            <h3>📚 PHP 다운로드 / Download PHP</h3>
+            <h3><svg width="1em" height="1em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-0.15em"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> PHP 다운로드 / Download PHP</h3>
             <ul>
                 <li>공식 사이트: <a href="https://www.php.net/downloads.php" target="_blank">https://www.php.net/downloads.php</a></li>
                 <li>Windows: <a href="https://windows.php.net/download/" target="_blank">https://windows.php.net/download/</a></li>

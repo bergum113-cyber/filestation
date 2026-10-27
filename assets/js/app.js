@@ -6091,11 +6091,20 @@ window.tf = function(key, vars, defaultVal) {
     var str = t(key, defaultVal);
     if (vars && typeof vars === 'object') {
         for (var k in vars) {
-            str = str.replace(new RegExp('\\{' + k + '\\}', 'g'), vars[k]);
+            // ★ (2026-10-26) 값을 함수로 넘김 — 문자열로 넘기면 값 안의 $& · $' · $1 등이 치환 기호로 해석돼
+            //   파일명·오류 문구에 '$' 가 있으면 알림 글자가 깨졌음(예: "my$'icon" → 뒷부분이 중복)
+            var _v = vars[k];
+            str = str.replace(new RegExp('\\{' + k + '\\}', 'g'), function () { return String(_v); });
         }
     }
     return str;
 };
+
+// ★ (2026-10-26) 선 그림 아이콘 함수 fsIco()·fsIcoFrom()·fsIcoStrip() 는 assets/js/fs-icons.js(이 파일보다 먼저 읽음)에 있음 — 모양 원본 api/FsIcons.php
+//   안전장치: fs-icons.js 가 빠지거나 못 읽혔을 때 사이드바·메뉴를 그리다 멈추지 않도록, 없으면 아이콘 자리를 비우는 대체 함수
+if (typeof window.fsIco !== 'function') window.fsIco = function () { return ''; };
+if (typeof window.fsIcoFrom !== 'function') window.fsIcoFrom = function (v) { return v == null ? '' : String(v).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+if (typeof window.fsIcoStrip !== 'function') window.fsIcoStrip = function (s) { return s; };
 
 const App = {
     currentStorage: null,
@@ -7268,7 +7277,7 @@ const App = {
             const val = $('#app-password-value').text();
             navigator.clipboard.writeText(val).then(() => {
                 this._appPwCopied = true;
-                this.toast(t('copied', '복사되었습니다.'), 'success');
+                this.toast(t('nt_copied', '복사되었습니다.'), 'success');
                 $('#btn-copy-app-password').html('✅ ' + t('copied', '복사됨')).css('background', 'var(--fs-tint-ok, #d4edda)');
             });
         });
@@ -8064,12 +8073,12 @@ const App = {
                         { action: 'preview-selected', icon: '👁️', label: t('preview', '미리보기'), visible: isSingle && isFile },
                         { action: '_divider', visible: isSingle && isFile },
                         { action: 'rename-selected', icon: '✏️', label: t('rename', '이름 변경'), visible: isSingle },
-                        { action: 'copy-selected', icon: '📋', label: t('copy', '복사'), visible: true },
+                        { action: 'copy-selected', icon: 'copy', label: t('copy', '복사'), visible: true },
                         { action: 'cut-selected', icon: '✂️', label: t('cut', '잘라내기'), visible: true },
-                        { action: 'paste-selected', icon: '📌', label: t('paste', '붙여넣기'), visible: hasClipboardItems },
+                        { action: 'paste-selected', icon: 'clipboard', label: t('paste', '붙여넣기'), visible: hasClipboardItems },
                         { action: '_divider' },
-                        { action: 'encrypt-selected', icon: '🔐', label: `${t('vault_encrypt_selected', '선택 암호화')}${plainCount > 0 ? ` (${plainCount})` : ''}`, visible: plainCount > 0 },
-                        { action: 'decrypt-selected', icon: '🔓', label: `${t('vault_decrypt_selected', '선택 해제')}${(encCount + subVaultCount) > 0 ? ` (${encCount + subVaultCount})` : ''}`, visible: (encCount + subVaultCount) > 0 },
+                        { action: 'encrypt-selected', icon: 'lock', label: `${t('vault_encrypt_selected', '선택 암호화')}${plainCount > 0 ? ` (${plainCount})` : ''}`, visible: plainCount > 0 },
+                        { action: 'decrypt-selected', icon: 'unlock', label: `${t('vault_decrypt_selected', '선택 해제')}${(encCount + subVaultCount) > 0 ? ` (${encCount + subVaultCount})` : ''}`, visible: (encCount + subVaultCount) > 0 },
                         { action: 'download-selected', icon: '📥', label: t('download', '다운로드'), visible: subVaultCount === 0 && vaultSelected.every(f => !f.isDir) },
                         { action: 'info-selected', icon: 'ℹ️', label: t('info', '정보'), visible: isSingle },
                         { action: '_divider' },
@@ -8088,7 +8097,7 @@ const App = {
                         if (a.visible === false) return;
                         const div = document.createElement('div');
                         div.style.cssText = `padding:8px 16px;cursor:pointer;font-size:0.9em;${a.danger ? 'color:var(--fs-fg-err, #dc3545);' : ''}`;
-                        div.textContent = a.icon + ' ' + a.label;
+                        div.innerHTML = fsIcoFrom(a.icon) + ' ' + App.escapeHtml(a.label);   // ★ (2026-10-26) 이모지 → 선 그림 아이콘
                         div.addEventListener('mouseenter', () => div.style.background = 'var(--fs-surface-2, #f0f0f0)');
                         div.addEventListener('mouseleave', () => div.style.background = '');
                         div.addEventListener('click', () => {
@@ -9347,7 +9356,7 @@ const App = {
                     // 삭제 권한 체크 (컨텍스트 메뉴와 일관 — 권한 없으면 동작 안 함)
                     if (this.getSelectedOrCheckedItems().length > 0) {
                         if (this.currentPermissions && !this.currentPermissions.can_delete) {
-                            this.toast(t('no_delete_permission', '삭제 권한이 없습니다'), 'warning');
+                            this.toast(t('no_delete_permission', '삭제 권한이 없습니다'), 'error');
                             break;
                         }
                         this.deleteSelected();
@@ -9355,8 +9364,8 @@ const App = {
                     break;
                     
                 case 'F2':
-                    // 체크박스 또는 클릭 선택이 1개일 때만 이름 변경
-                    if (this.getSelectedOrCheckedItems().length === 1) {
+                    // 체크박스 또는 클릭 선택 — 1개면 이름 변경, 여러 개면 일괄 이름 변경(★ 2026-10-27, 탐색기처럼)
+                    if (this.getSelectedOrCheckedItems().length >= 1) {
                         this.showRenameModal();
                     }
                     break;
@@ -9815,15 +9824,15 @@ const App = {
         const username = document.getElementById('ldap-username').value.trim();
         const password = document.getElementById('ldap-password').value;
         const remember = document.getElementById('ldap-remember').checked;
-        if (!username || !password) { this.toast(t('enter_credentials', '계정과 비밀번호를 입력하세요.'), 'error'); return; }
+        if (!username || !password) { this.toast(t('enter_credentials', '계정과 비밀번호를 입력하세요.'), 'warning'); return; }
         try {
             const res = await this.api('sso_ldap_login', { username, password, remember });
             if (res.success) {
                 this.user = res.user;
                 if (res.csrf_token) document.querySelector('meta[name="csrf-token"]').content = res.csrf_token;
-                this.toast('LDAP ' + t('login_success', '로그인 성공'), 'success');
+                this.toast(t('nt_ldap_login_ok', 'LDAP 로그인 성공'), 'success');
                 this.showMain(); this.loadNotices(); this.loadUserPreferences();
-            } else { this.toast(res.error || 'LDAP 로그인 실패', 'error'); }
+            } else { this.toast(res.error || t('nt_ldap_login_failed', 'LDAP 로그인 실패'), 'error'); }
         } catch (e) { this.toast(e.message, 'error'); }
     },
     
@@ -9831,7 +9840,7 @@ const App = {
         try {
             const res = await this.api('sso_oidc_auth', {}, 'GET');
             if (res.success && res.redirect_url) window.location.href = res.redirect_url;
-            else this.toast(res.error || 'OIDC 인증 실패', 'error');
+            else this.toast(res.error || t('nt_oidc_auth_failed', 'OIDC 인증 실패'), 'error');
         } catch (e) { this.toast(e.message, 'error'); }
     },
     
@@ -9839,7 +9848,7 @@ const App = {
         try {
             const res = await this.api('sso_saml_auth', {}, 'GET');
             if (res.success && res.redirect_url) window.location.href = res.redirect_url;
-            else this.toast(res.error || 'SAML 인증 실패', 'error');
+            else this.toast(res.error || t('nt_saml_auth_failed', 'SAML 인증 실패'), 'error');
         } catch (e) { this.toast(e.message, 'error'); }
     },
     
@@ -10042,16 +10051,16 @@ const App = {
     
     async oidcDiscover() {
         const url = $('#sso-oidc-wellknown').val();
-        if (!url) { this.toast('Well-Known URL을 입력하세요', 'error'); return; }
+        if (!url) { this.toast(t('nt_enter_wellknown', 'Well-Known URL을 입력하세요.'), 'warning'); return; }
         try {
             const res = await this.api('sso_oidc_discover', { well_known_url: url });
             if (res.success && res.endpoints) {
                 $('#sso-oidc-auth-endpoint').val(res.endpoints.authorization_endpoint || '');
                 $('#sso-oidc-token-endpoint').val(res.endpoints.token_endpoint || '');
                 $('#sso-oidc-userinfo-endpoint').val(res.endpoints.userinfo_endpoint || '');
-                this.toast('엔드포인트 자동 설정 완료', 'success');
+                this.toast(t('nt_endpoint_auto_ok', '엔드포인트 자동 설정 완료'), 'success');
             } else {
-                this.toast(res.error || '가져오기 실패', 'error');
+                this.toast(res.error || t('nt_fetch_failed', '가져오기 실패'), 'error');
             }
         } catch (e) { this.toast(e.message, 'error'); }
     },
@@ -10335,8 +10344,8 @@ const App = {
         // 휴지통 아이콘/카운트 초기화
         const myTrashLink = document.getElementById('menu-my-trash');
         const trashLink = document.getElementById('menu-trash');
-        if (myTrashLink) myTrashLink.innerHTML = `🗑️ ${t('my_trash','내 휴지통')}`;
-        if (trashLink) trashLink.innerHTML = `🗑️ ${t('all_trash','전체 휴지통')}`;
+        if (myTrashLink) myTrashLink.innerHTML = `${fsIco('trash')} ${t('my_trash','내 휴지통')}`;
+        if (trashLink) trashLink.innerHTML = `${fsIco('trash')} ${t('all_trash','전체 휴지통')}`;
         
         // login-start(로고)는 숨긴 상태 유지 → showLogin()에서 바로 로그인창 표시
         const loginStart = document.getElementById('login-start');
@@ -10598,7 +10607,7 @@ const App = {
             item.className = 'notify-item';
             item.dataset.notifyId = id;
             item.innerHTML = `
-                <span class="notify-item-icon">${n.icon || '🔔'}</span>
+                <span class="notify-item-icon">${fsIcoFrom(n.icon, 'bell')}</span>
                 <span class="notify-item-content">
                     <span class="notify-item-text" title="${this.escapeHtml((n.text || '').replace(/<[^>]*>/g, ''))}">${n.text}</span>
                 </span>
@@ -11221,7 +11230,7 @@ const App = {
                 list.append(`
                     <li>
                         <a href="#" data-id="${s.id}" title="${this.escapeHtml(s.path)}">
-                            <span class="storage-icon">${this.escapeHtml(s.icon || '📁')}</span>
+                            <span class="storage-icon">${storageIcon(s, 'hard-drive')}</span>
                             <span class="storage-name">${this.escapeHtml(s.name)}</span>
                         </a>
                     </li>
@@ -11233,6 +11242,11 @@ const App = {
             return;
         }
         
+        // ★ (2026-10-26 오후) 스토리지 아이콘 — 저장된 이모지 대신 연결 방식(storage_type)으로 정함(펜닐: 홈 말고는 일반 폴더로 보여 연결 방식을 알 수 없었음)
+        //   내 파일 집 · 공용 폴더(열림) · 로컬 경로 하드디스크(\\서버\공유 형식이면 네트워크) · SMB/CIFS 네트워크 · FTP 서버 · SFTP 잠긴 서버 · WebDAV 지구 · S3 구름
+        //   새 연결 방식이 생기면: 표에 없으면 저장된 이모지(fs-icons 표) → 그것도 모르면 하드디스크 (_storageIconName)
+        const storageIcon = (s, fallback) => fsIco(this._storageIconName(s, fallback));
+
         // 스토리지 이름 번역 (DB 저장값 → 다국어)
         const translateStorageName = (name, type) => {
             if (type === 'home' && (name === '내 파일' || name === 'My Files')) return t('my_files', 'My Files');
@@ -11247,7 +11261,7 @@ const App = {
                 list.append(`
                     <li>
                         <a href="#" data-id="${s.id}" title="${this.escapeHtml(s.path)}">
-                            <span class="storage-icon">${this.escapeHtml(s.icon || '🏠')}</span>
+                            <span class="storage-icon">${storageIcon(s, 'home')}</span>
                             <span class="storage-name">${this.escapeHtml(translateStorageName(s.name, s.storage_type || 'home'))}</span>
                             <div class="storage-quota-mini" id="storage-quota-${s.id}"></div>
                         </a>
@@ -11263,7 +11277,7 @@ const App = {
                 list.append(`
                     <li>
                         <a href="#" data-id="${s.id}" title="${this.escapeHtml(s.path)}">
-                            <span class="storage-icon">${this.escapeHtml(s.icon || '📂')}</span>
+                            <span class="storage-icon">${storageIcon(s, 'folder-open')}</span>
                             <span class="storage-name">${this.escapeHtml(translateStorageName(s.name, s.storage_type || 'shared'))}</span>
                             <div class="storage-quota-mini" id="storage-quota-${s.id}"></div>
                         </a>
@@ -11279,7 +11293,7 @@ const App = {
                 list.append(`
                     <li>
                         <a href="#" data-id="${s.id}" title="${this.escapeHtml(s.path)}">
-                            <span class="storage-icon">${this.escapeHtml(s.icon || '📁')}</span>
+                            <span class="storage-icon">${storageIcon(s, 'hard-drive')}</span>
                             <span class="storage-name">${this.escapeHtml(translateStorageName(s.name, s.storage_type))}</span>
                             <div class="storage-quota-mini" id="storage-quota-${s.id}"></div>
                         </a>
@@ -11372,7 +11386,7 @@ const App = {
                     // 모바일 위치 바 업데이트
                     const bar = document.getElementById('mobile-location-bar');
                     if (bar) {
-                        bar.innerHTML = '<span>📂 ' + this.escapeHtml(exists.name) + '</span>';
+                        bar.innerHTML = '<span>' + fsIco(this._storageIconName(exists, 'folder-open')) + ' ' + this.escapeHtml(exists.name) + '</span>';
                         // sticky top 값 재계산
                         if (this._updateStickyTops) {
                             requestAnimationFrame(() => this._updateStickyTops());
@@ -11630,7 +11644,7 @@ const App = {
             const updateBar = () => {
                 const bar = document.getElementById('mobile-location-bar');
                 if (bar) {
-                    bar.innerHTML = '<span>📂 ' + self.escapeHtml(curStorage.name) + '</span>';
+                    bar.innerHTML = '<span>' + fsIco(self._storageIconName(curStorage, 'folder-open')) + ' ' + self.escapeHtml(curStorage.name) + '</span>';
                     // sticky top 값 재계산
                     if (self._updateStickyTops) {
                         requestAnimationFrame(() => self._updateStickyTops());
@@ -11976,7 +11990,7 @@ const App = {
         
         const isVault = item.is_vault === true;
         const vaultClass = isVault ? ' is-vault' : '';
-        const vaultBadge = isVault ? `<span class="vault-badge" title="${t('vault_locked','🔒 암호화 폴더')}">🔐</span>` : '';
+        const vaultBadge = isVault ? `<span class="vault-badge" title="${(window.fsIcoStrip || String)(t('vault_locked','🔒 암호화 폴더'))}">🔐</span>` : '';   // ★ (2026-10-26) 마우스 설명(title)엔 그림을 못 넣어 이모지만 뺌
         
         const isFav = this.isFavorite(item.path);
         const favIcon = isFav ? `<span class="fav-badge" title="${t('favorite','즐겨찾기')}">⭐</span>` : '';
@@ -12034,6 +12048,22 @@ const App = {
         this.updateMobileLocationBar(breadcrumb);
     },
     
+    /** ★ (2026-10-26 오후) 스토리지 연결 방식에 맞는 선 그림 아이콘 이름 (사이드바·모바일 현재 위치 줄 공통) */
+    _storageIconName(s, fallback) {
+        if (!s) return fallback || 'hard-drive';
+        const type = String(s.storage_type || '').toLowerCase();
+        const byType = { home: 'home', shared: 'folder-open', smb: 'network', cifs: 'network', nfs: 'network', ftp: 'server', ftps: 'server-lock', sftp: 'server-lock', webdav: 'globe', s3: 'cloud' };
+        if (byType[type]) return byType[type];
+        if (type === 'local' || type === '') {
+            const p = String(s.path || '');
+            if (/^(?:\\\\|\/\/)[^\\\/]+[\\\/]/.test(p)) return 'network';   // \\서버\공유 · //서버/공유 → 네트워크 경로
+            if (type === 'local') return 'hard-drive';
+        }
+        const hit = window.FS_ICO_EMOJI && window.FS_ICO_EMOJI[String(s.icon || '').replace(/\uFE0F/g, '')];
+        if (hit && hit[0] !== 'folder') return hit[0];
+        return fallback || 'hard-drive';
+    },
+
     updateMobileLocationBar(breadcrumb) {
         const bar = document.getElementById('mobile-location-bar');
         if (!bar) return;
@@ -12048,7 +12078,7 @@ const App = {
         }
         
         // 스토리지명만 표시
-        bar.innerHTML = '<span>📂 ' + this.escapeHtml(storageName) + '</span>';
+        bar.innerHTML = '<span>' + fsIco(this._storageIconName(storage, 'folder-open')) + ' ' + this.escapeHtml(storageName) + '</span>';
         
         // sticky top 값 재계산 (location-bar 높이 변경 반영)
         if (this._updateStickyTops) {
@@ -13017,7 +13047,7 @@ const App = {
         const text = el.textContent || '';
         // navigator.clipboard 는 HTTPS/사용자 제스처가 필요해 실패할 수 있어 폴백을 둔다.
         // ★ 이 프로젝트의 알림 함수는 this.toast() 다(showToast 는 존재하지 않음 — 감사에서 확인).
-        const done = () => this.toast(t('copied', '복사되었습니다.'), 'success');
+        const done = () => this.toast(t('nt_copied', '복사되었습니다.'), 'success');
         if (navigator.clipboard && navigator.clipboard.writeText) {
             navigator.clipboard.writeText(text).then(done).catch(() => {
                 try {
@@ -13058,11 +13088,11 @@ const App = {
         if (res.success) {
             const freedMB = (res.freed / 1024 / 1024).toFixed(1);
             $('#thumbcache-status').text(`✅ ${res.deleted}개 삭제 (${freedMB} MB 확보)`);
-            this.toast(`썸네일 캐시 ${res.deleted}개 삭제 완료`, 'success');
+            this.toast(tf('nt_thumb_cache_deleted', {n: res.deleted}, `썸네일 캐시 ${res.deleted}개 삭제 완료`), 'success');
             // 캐시 상태 새로고침
             this.loadThumbCapabilities();
         } else {
-            this.toast(res.error || '캐시 삭제 실패', 'error');
+            this.toast(res.error || t('nt_cache_delete_failed', '캐시 삭제 실패'), 'error');
         }
     },
     
@@ -15059,7 +15089,7 @@ const App = {
                 } else if (favAlready > 0 && favOk === 0) {
                     this.toast(favAlready === 1 ? t('already_favorite', '이미 즐겨찾기에 등록되어 있습니다') : `${favAlready}${t('items_already_favorite', '개 항목이 이미 즐겨찾기에 등록되어 있습니다')}`, 'warning');
                 } else if (favOk > 0 && favAlready > 0) {
-                    this.toast(`${favOk}${t('items_added_to_favorites', '개 추가')} / ${favAlready}${t('items_already_favorite_short', '개 이미 등록됨')}`, 'success');
+                    this.toast(`${tf('nt_fav_added_s', {n: favOk}, `${favOk}개 즐겨찾기 추가`)}, ${tf('nt_fav_already_s', {n: favAlready}, `${favAlready}개 이미 등록됨`)}`, 'success');
                 }
                 if (favFail > 0) this.toast(`${favFail}${t('items_favorite_add_failed', '개 즐겨찾기 추가 실패')}`, 'error');
                 break;
@@ -15099,7 +15129,7 @@ const App = {
                 if (lockOk > 0 && lockFail === 0) {
                     this.toast(lockOk === 1 ? t('file_locked', '파일이 잠겼습니다') : `${lockOk}${t('files_locked', '개 파일이 잠겼습니다')}`, 'success');
                 } else if (lockFail > 0 && lockOk > 0) {
-                    this.toast(`${lockOk}${t('files_locked', '개 잠금')} / ${lockFail}${t('files_lock_failed', '개 실패')}`, 'error');
+                    this.toast(`${tf('nt_lock_done_s', {n: lockOk}, `${lockOk}개 잠금`)}, ${tf('nt_failed_s', {n: lockFail}, `${lockFail}개 실패`)}`, 'warning');
                 } else if (lockFail > 0) {
                     this.toast(t('file_lock_failed', '파일 잠금 실패'), 'error');
                 }
@@ -15117,7 +15147,7 @@ const App = {
                 if (unlockOk > 0 && unlockFail === 0) {
                     this.toast(unlockOk === 1 ? t('file_unlocked', '파일 잠금이 해제되었습니다') : `${unlockOk}${t('files_unlocked', '개 파일 잠금 해제')}`, 'success');
                 } else if (unlockFail > 0 && unlockOk > 0) {
-                    this.toast(`${unlockOk}${t('files_unlocked', '개 해제')} / ${unlockFail}${t('files_unlock_failed', '개 실패')}`, 'error');
+                    this.toast(`${tf('nt_unlock_done_s', {n: unlockOk}, `${unlockOk}개 잠금 해제`)}, ${tf('nt_failed_s', {n: unlockFail}, `${unlockFail}개 실패`)}`, 'warning');
                 } else if (unlockFail > 0) {
                     this.toast(t('file_unlock_failed', '파일 잠금 해제 실패'), 'error');
                 }
@@ -15443,10 +15473,10 @@ const App = {
             // 단일은 _convertOneFile 내부 토스트로 충분 (중복 방지 위해 생략)
         } else {
             const parts = [];
-            if (okCount) parts.push(`${t('convert_done','변환 완료')} ${okCount}`);
-            if (skipCount) parts.push(`${t('convert_skip_short','건너뜀')} ${skipCount}`);
-            if (failCount) parts.push(`${t('convert_fail_short','실패')} ${failCount}`);
-            this.toast(`${total}${t('count_items','개 항목')}: ${parts.join(', ')}`, failCount ? 'error' : 'success');
+            if (okCount) parts.push(tf('nt_convert_done_s', {n: okCount}, `${okCount}개 변환 완료`));
+            if (skipCount) parts.push(tf('nt_skipped_s', {n: skipCount}, `${skipCount}개 건너뜀`));
+            if (failCount) parts.push(tf('nt_failed_s', {n: failCount}, `${failCount}개 실패`));
+            this.toast(parts.join(', '), failCount ? (okCount ? 'warning' : 'error') : 'success');
         }
     },
 
@@ -15490,7 +15520,7 @@ const App = {
             if (cancelBtn) {
                 cancelBtn.onclick = () => {
                     convCancelled = true;
-                    this.toast(t('convert_cancelled', '변환을 취소했습니다.'), 'info');
+                    this.toast(t('convert_cancelled', '변환을 취소했습니다.'), 'warning');
                     finish('cancel'); // es.close() → 서버 connection_aborted → ffmpeg kill
                 };
             }
@@ -16223,8 +16253,8 @@ const App = {
         
         await this._createJob('delete', jobItems, { storage_id: storageId }, (session, job) => {
             if (session.status === 'cancelled') {
-                if (session.success > 0) this.toast(`${session.success}${t('items_deleted','개 항목 삭제')}, ${session.totalFiles - session.success - session.failed}${t('items_cancelled','개 취소')}`, 'warning');
-                else this.toast(t('cancelled','취소되었습니다.'), 'error');
+                if (session.success > 0) this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_cancelled_s', {n: session.totalFiles - session.success - session.failed}, `${session.totalFiles - session.success - session.failed}개 취소됨`)}`, 'warning');
+                else this.toast(t('cancelled','취소되었습니다.'), 'warning');
             } else {
                 if (session.failed > 0) {
                     const errors = job?.progress?.errors || [];
@@ -16238,7 +16268,11 @@ const App = {
                         failMsg = `${session.failed}${t('items_delete_failed','개 항목 삭제 실패')}`;
                     }
                     if (session.success > 0) {
-                        this.toast(`${session.success}${t('items_deleted','개 항목 삭제')} / ${failMsg}`, 'error');
+                        // ★ (2026-10-26) 일부만 실패 → "3개 삭제 완료, 1개 실패"(경고). 종전엔 "…삭제되었습니다. / …" 빨강
+                        const _fs = (lockedErrors.length > 0 && lockedErrors.length === session.failed)
+                            ? tf('nt_locked_excluded_s', {n: session.failed}, `잠긴 파일 ${session.failed}개 제외`)
+                            : tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`);
+                        this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${_fs}`, 'warning');
                     } else {
                         this.toast(failMsg, 'error');
                     }
@@ -16258,7 +16292,7 @@ const App = {
     // 파일 업로드 (멀티 업로드 지원)
     async handleUpload(files) {
         if (!this.currentStorage) {
-            this.toastResponsive(t('prompt_select_storage', '스토리지를 먼저 선택하세요'), t('storage_select_required', '스토리지 선택 필요'), 'error');
+            this.toastResponsive(t('prompt_select_storage', '스토리지를 먼저 선택하세요'), t('storage_select_required', '스토리지 선택 필요'), 'warning');
             return;
         }
         
@@ -16446,7 +16480,7 @@ const App = {
                 session.uploadedSize += file.size;
             } else if (result?.error) {
                 // 에러 발생해도 계속 진행
-                this.toast(`${file.name}: ${result.error}`, 'error');
+                this.toast(`${file.name}: ${result.error || t('nt_error_generic', '오류가 발생했습니다.')}`, 'error');
             }
         }
         
@@ -16955,7 +16989,7 @@ const App = {
     // 폴더 업로드
     async handleFolderUpload(files) {
         if (!this.currentStorage) {
-            this.toastResponsive(t('prompt_select_storage', '스토리지를 먼저 선택하세요'), t('storage_select_required', '스토리지 선택 필요'), 'error');
+            this.toastResponsive(t('prompt_select_storage', '스토리지를 먼저 선택하세요'), t('storage_select_required', '스토리지 선택 필요'), 'warning');
             return;
         }
         
@@ -17050,7 +17084,7 @@ const App = {
         // 건너뛰기
         newSkipBtn.onclick = async () => {
             closeModal();
-            this.toastResponsive(t('upload_cancelled', '업로드가 취소되었습니다'), t('cancel_upload', '업로드 취소'), 'info');
+            this.toastResponsive(t('upload_cancelled', '업로드가 취소되었습니다'), t('cancel_upload', '업로드 취소'), 'warning');
             $('#folder-input').val('');
         };
         
@@ -17124,7 +17158,7 @@ const App = {
     // 드래그 앤 드롭 항목 처리
     async handleDropEntries(entries) {
         if (!this.currentStorage) {
-            this.toastResponsive(t('prompt_select_storage', '스토리지를 먼저 선택하세요'), t('storage_select_required', '스토리지 선택 필요'), 'error');
+            this.toastResponsive(t('prompt_select_storage', '스토리지를 먼저 선택하세요'), t('storage_select_required', '스토리지 선택 필요'), 'warning');
             return;
         }
         
@@ -17391,7 +17425,7 @@ const App = {
                 session.uploadedSize += file.size;
             } else if (result?.error) {
                 session.failedCount = (session.failedCount || 0) + 1;
-                this.toast(`${file.name}: ${result.error}`, 'error');
+                this.toast(`${file.name}: ${result.error || t('nt_error_generic', '오류가 발생했습니다.')}`, 'error');
             }
         }
         
@@ -18053,7 +18087,7 @@ const App = {
                 if (el) el.remove();
             });
             this.multiDownload.sessions.clear();
-            this.toast(t('download_cancelled', '다운로드가 취소되었습니다.'), 'error');
+            this.toast(t('download_cancelled', '다운로드가 취소되었습니다.'), 'warning');
             
             if (this.multiUpload.sessions.size === 0 && this.multiTransfer.sessions.size === 0) {
                 container.style.display = 'none';
@@ -18101,7 +18135,7 @@ const App = {
                 session.status = 'cancelled';
                 session.abortController.abort();
                 this._updateMultiDownloadItem(session);
-                this.toast(t('download_cancelled', '다운로드가 취소되었습니다.'), 'error');
+                this.toast(t('download_cancelled', '다운로드가 취소되었습니다.'), 'warning');
                 setTimeout(() => this._removeMultiDownloadItem(session.id), 1500);
             }
         };
@@ -18560,8 +18594,8 @@ const App = {
         
         const count = items.length;
         this.toastResponsive(
-            `${count}${t('items_cut_msg','개 항목이 잘라내기되었습니다. 붙여넣기할 위치로 이동하세요.')}`,
-            `${count}${t('items_cut','개 잘라내기')}`,
+            tf('nt_clip_cut_pc', {n: count}, `${count}개 항목을 잘라냈습니다.`),
+            tf('nt_clip_cut_m', {n: count}, `${count}개 잘라냄`),
             'info'
         );
         this.updatePasteButton();
@@ -18594,8 +18628,8 @@ const App = {
         
         const count = items.length;
         this.toastResponsive(
-            `${count}${t('items_copied_msg','개 항목이 복사되었습니다. 붙여넣기할 위치로 이동하세요.')}`,
-            `${count}${t('items_copy','개 복사')}`,
+            tf('nt_clip_copy_pc', {n: count}, `${count}개 항목을 복사했습니다.`),
+            tf('nt_clip_copy_m', {n: count}, `${count}개 복사됨`),
             'info'
         );
         this.updatePasteButton();
@@ -18662,7 +18696,7 @@ const App = {
                 const mode = this.clipboard.mode === 'cut' ? t('move') : t('copy');
                 // ★ (2026-10-23) 글자만 바꾸고 앞의 선 그림 아이콘(index.php .fs-ico, 이모지 대신)은 유지 — textContent 는 아이콘까지 지우므로 떼어 뒀다 다시 붙임
                 const _ico = btn.querySelector('svg.fs-ico');
-                btn.textContent = `${_ico ? ' ' : '📋 '}${t('paste','붙여넣기')} (${this.clipboard.items.length} ${mode})`;
+                btn.textContent = `${_ico ? ' ' : '📋 '}${tf('nt_paste_btn', {n: this.clipboard.items.length, mode: mode}, `붙여넣기 (${this.clipboard.items.length}개 · ${mode})`)}`;
                 if (_ico) btn.prepend(_ico);
             } else {
                 btn.style.display = 'none';
@@ -18827,19 +18861,23 @@ const App = {
                 this.updatePasteButton();
             }
             
-            const actionName = transferType === 'move' ? t('move') : t('copy');
+            // ★ (2026-10-26) 알림 문구 정리 — "1 복사"(개·완료 빠짐) → "1개 항목 복사 완료", 일부 실패는 실패 수도 함께(종전엔 성공만 보이고 실패는 숨겨짐)
+            const _mv = transferType === 'move';
             if (session.status === 'cancelled') {
                 if (session.success > 0) {
-                    this.toast(`${session.success}${t('items_count','개')} ${actionName}, ${session.totalFiles - session.success - session.failed}${t('items_cancelled','개 취소')}`, 'warning');
+                    this.toast(`${_mv ? tf('nt_move_done_s', {n: session.success}, `${session.success}개 이동 완료`) : tf('nt_copy_done_s', {n: session.success}, `${session.success}개 복사 완료`)}, ${tf('nt_cancelled_s', {n: session.totalFiles - session.success - session.failed}, `${session.totalFiles - session.success - session.failed}개 취소됨`)}`, 'warning');
                 } else {
-                    this.toast(t('cancelled','취소되었습니다.'), 'error');
+                    this.toast(t('cancelled','취소되었습니다.'), 'warning');
                 }
                 if (this.currentStorage === destStorageId) this.loadFiles();
+            } else if (session.success > 0 && session.failed > 0) {
+                this.toast(`${_mv ? tf('nt_move_done_s', {n: session.success}, `${session.success}개 이동 완료`) : tf('nt_copy_done_s', {n: session.success}, `${session.success}개 복사 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
+                if (this.currentStorage === destStorageId) this.loadFiles();
             } else if (session.success > 0) {
-                this.toast(`${session.success} ${actionName}`, 'success');
+                this.toast(_mv ? tf('nt_move_done', {n: session.success}, `${session.success}개 항목 이동 완료`) : tf('nt_copy_done', {n: session.success}, `${session.success}개 항목 복사 완료`), 'success');
                 if (this.currentStorage === destStorageId) this.loadFiles();
             } else if (session.failed > 0) {
-                this.toast(`${session.failed} ${t('failed_count','실패')}`, 'error');
+                this.toast(_mv ? tf('nt_move_failed', {n: session.failed}, `${session.failed}개 이동 실패`) : tf('nt_copy_failed', {n: session.failed}, `${session.failed}개 복사 실패`), 'error');
             }
             if (transferType === 'move') {
                 this.updateShareBadges();
@@ -19178,8 +19216,8 @@ const App = {
             // 결과 요약
             if (sizeEl) {
                 const parts = [];
-                if (session.success > 0) parts.push(`${session.success} ${t('success_count','성공')}`);
-                if (session.failed > 0) parts.push(`${session.failed} ${t('failed_count','실패')}`);
+                if (session.success > 0) parts.push(tf('nt_success_s', {n: session.success}, `${session.success}개 성공`));
+                if (session.failed > 0) parts.push(tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`));
                 if (session.totalSize > 0) parts.push(this.formatSize(session.processedSize));
                 sizeEl.textContent = parts.join(' · ');
                 if (session.status === 'failed') sizeEl.style.color = '#f44336';
@@ -19618,7 +19656,7 @@ const App = {
     async createFolder() {
         const name = $('#new-folder-name').val().trim();
         if (!name) {
-            this.toast(t('prompt_enter_folder_name', '폴더 이름을 입력하세요.'), 'error');
+            this.toast(t('prompt_enter_folder_name', '폴더 이름을 입력하세요.'), 'warning');
             return;
         }
         
@@ -19920,11 +19958,13 @@ const App = {
         
         await this._createJob('delete', jobItems, { storage_id: this.currentStorage }, (session) => {
             if (session.status === 'cancelled') {
-                if (session.success > 0) this.toast(`${session.success}${t('items_deleted','개 항목 삭제')}, ${session.totalFiles - session.success - session.failed}${t('items_cancelled','개 취소')}`, 'warning');
-                else this.toast(t('cancelled','취소되었습니다.'), 'error');
+                if (session.success > 0) this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_cancelled_s', {n: session.totalFiles - session.success - session.failed}, `${session.totalFiles - session.success - session.failed}개 취소됨`)}`, 'warning');
+                else this.toast(t('cancelled','취소되었습니다.'), 'warning');
             } else {
-                if (session.success > 0) this.toast(`${session.success}${t('items_deleted','개 항목이 삭제되었습니다')}`, 'success');
-                if (session.failed > 0) this.toast(`${session.failed}${t('items_delete_failed','개 항목 삭제 실패')}`, 'error');
+                // ★ (2026-10-26) 성공·실패 알림을 연달아 띄우면 앞의 것이 바로 덮여 안 보임 → 한 줄로
+                if (session.success > 0 && session.failed > 0) this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
+                else if (session.success > 0) this.toast(`${session.success}${t('items_deleted','개 항목이 삭제되었습니다')}`, 'success');
+                else if (session.failed > 0) this.toast(`${session.failed}${t('items_delete_failed','개 항목 삭제 실패')}`, 'error');
             }
             this.loadFiles();
             this.updateTrashIcon();
@@ -19944,9 +19984,15 @@ const App = {
     },
     
     showRenameModal() {
+        // ★ (2026-10-27 15시) 일괄 이름 변경이 진행 중이면 새로 열지 않음 — 도중에 다시 열면 앞의 작업이 끝날 때 새 목록이 지워져 '변경'을 눌러도 아무 일도 안 일어났음
+        if (this._renameBatchRunning) { this.toast(t('nt_rename_batch_busy', '이름을 바꾸는 중입니다. 끝난 뒤 다시 시도하세요.'), 'info'); return; }
         // 체크박스 또는 클릭 선택된 항목 가져오기
         let items = this.getSelectedOrCheckedItems();
         if (!items.length) return;
+        
+        // ★ (2026-10-27, 펜닐 요청) 여러 개 골랐으면 윈도우 탐색기처럼 일괄 이름 변경 — 종전엔 첫 항목만 바뀌었음
+        this._setRenameBatch(items.length > 1 ? items : null);
+        if (items.length > 1) return;
         
         const item = items[0];
         const isDir = item.isDir;
@@ -20001,6 +20047,134 @@ const App = {
         renameEl.scrollLeft = 0;
     },
     
+    /**
+     * ★ (2026-10-27, 펜닐 요청) 여러 개 일괄 이름 변경 — 윈도우 탐색기 방식
+     *   이름 하나를 받아 화면 순서대로 '이름 (1).확장자', '이름 (2).확장자' … (폴더·확장자 없는 파일은 '이름 (n)')
+     *   확장자는 항목마다 원래 것 유지. 같은 이름이 이미 있으면 다음 빈 번호로 넘어감(덮어쓰기 없음)
+     *   items 가 null 이면 일괄 모드 해제(한 개 이름 변경·금고 단일 이름 변경이 부름)
+     */
+    _setRenameBatch(items) {
+        const hint = document.getElementById('rename-batch-hint');
+        const title = document.querySelector('#modal-rename .modal-header h2');
+        if (title && title.dataset.baseTitle === undefined) title.dataset.baseTitle = title.textContent;
+        if (!items) {
+            this.renameBatch = null;
+            if (hint) { hint.style.display = 'none'; hint.textContent = ''; }
+            if (title) title.textContent = title.dataset.baseTitle;
+            return;
+        }
+        // 화면(목록) 순서로 정렬 — 클릭 선택은 고른 순서라서
+        const order = new Map();
+        document.querySelectorAll('#file-list .file-item').forEach((el, i) => {
+            const key = el.dataset.path || el.dataset.name;
+            if (key != null && !order.has(key)) order.set(key, i);
+        });
+        const list = items.slice().sort((a, b) => {
+            const ia = order.has(a.path) ? order.get(a.path) : (order.has(a.name) ? order.get(a.name) : 1e9);
+            const ib = order.has(b.path) ? order.get(b.path) : (order.has(b.name) ? order.get(b.name) : 1e9);
+            return ia - ib;
+        });
+        this.renameBatch = list;
+        this.renameOriginal = null;
+        const first = list[0];
+        let base = first.name;
+        if (!first.isDir) { const d = first.name.lastIndexOf('.'); if (d > 0) base = first.name.substring(0, d); }
+        document.getElementById('rename-ext-row').style.display = 'none';
+        document.getElementById('rename-show-ext').checked = false;
+        if (title) title.textContent = tf('nt_rename_batch_title', { n: list.length }, `이름 변경 (${list.length}개)`);
+        if (hint) {
+            hint.textContent = tf('nt_rename_batch_hint', { n: list.length }, `${list.length}개 항목의 이름을 '새 이름 (1)', '새 이름 (2)' … 처럼 화면 순서대로 바꿉니다. 확장자는 그대로 둡니다.`);
+            hint.style.display = 'block';
+        }
+        $('#rename-input').val(base);
+        this.showModal('modal-rename');
+        const el = document.getElementById('rename-input');
+        el.focus(); el.setSelectionRange(0, el.value.length); el.scrollLeft = 0;
+    },
+
+    /** 일괄 이름 변경 실행 — renameFile() 이 일괄 모드일 때 부름 */
+    async _renameBatchRun(baseName) {
+        const list = this.renameBatch || [];
+        if (!list.length) return;
+        // 이름에 쓸 수 없는 글자는 서버(sanitizeFilename)도 걸러내지만 미리 막아 번호만 남는 이름을 방지
+        if (/[\\/:*?"<>|]/.test(baseName) || baseName === '.' || baseName === '..') {
+            this.toast(tf('nt_rename_batch_bad_name', {}, '이름에 \\ / : * ? " < > | 는 쓸 수 없습니다.'), 'error');
+            return;
+        }
+        const inVault = !!(this.vault && this.vault.isVaultView);
+        let vaultKey = null;
+        const vaultNames = new Set();
+        if (inVault) {
+            vaultKey = this.getVaultKey(this.currentStorage, this.vault.currentVaultPath);
+            (this.files || []).forEach(f => { if (f && f.name) vaultNames.add(String(f.name).toLowerCase()); });
+        }
+        const nameFor = (it, n) => {
+            let ext = '';
+            if (!it.isDir) { const d = it.name.lastIndexOf('.'); if (d > 0) ext = it.name.substring(d); }
+            return `${baseName} (${n})${ext}`;
+        };
+        let n = 0, ok = 0, same = 0;
+        const fails = [];
+        // ★ (2026-10-27 14시, 펜닐) 진행 표시 — 항목이 많으면 끝날 때까지 아무 표시가 없었음 → '변경' 버튼에 '변경 중 3/10', 버튼·입력칸 잠금(끝나면 되돌림)
+        const btn = document.getElementById('btn-rename-confirm');
+        const inp = document.getElementById('rename-input');
+        const btnText = btn ? btn.textContent : '';
+        if (btn) btn.disabled = true;
+        if (inp) inp.disabled = true;
+        let idx = 0;
+        try {
+        for (const it of list) {
+            idx++;
+            if (btn) btn.textContent = tf('nt_rename_batch_progress', { i: idx, n: list.length }, `변경 중 ${idx}/${list.length}`);
+            n++;
+            let done = false;
+            for (let tries = 0; tries < 500 && !done; tries++) {
+                const newName = nameFor(it, n);
+                if (newName === it.name) { same++; done = true; break; }
+                let res;
+                try {
+                    if (inVault && it._vault && it._uuid) {
+                        if (!vaultKey) { res = { success: false, error: t('vault_password_wrong') }; }
+                        // 대소문자만 다른 자기 이름은 같은 이름으로 보지 않음(★ 2026-10-27 14시)
+                        else if (newName.toLowerCase() !== String(it.name).toLowerCase() && vaultNames.has(newName.toLowerCase())) { res = { success: false, code: 'name_exists' }; }
+                        else {
+                            const encMeta = await E2ECrypto.encryptMeta(vaultKey, { name: newName, size: it.size, type: it._mimeType || 'application/octet-stream' });
+                            res = await this.api('vault_rename', { storage_id: this.currentStorage, path: this.vault.currentVaultPath, uuid: it._uuid, enc_meta: encMeta });
+                            if (res && res.success) { vaultNames.delete(String(it.name).toLowerCase()); vaultNames.add(newName.toLowerCase()); }
+                        }
+                    } else {
+                        res = await this.api('rename', { storage_id: it.storageId || this.currentStorage, path: it.path, new_name: newName });
+                    }
+                } catch (e) { res = { success: false, error: e && e.message }; }
+                if (res && res.success) { ok++; done = true; }
+                else if (res && res.code === 'name_exists') { n++; }   // 같은 이름이 있으면 다음 번호로
+                else { fails.push(`${it.name}: ${(res && res.error) || t('error', '오류')}`); done = true; }
+            }
+            if (!done) fails.push(`${it.name}: ${t('api_err_same_name_exists', '같은 이름이 이미 있습니다.')}`);
+        }
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = btnText; }
+            if (inp) inp.disabled = false;
+        }
+        if (this.renameBatch === list) this.renameBatch = null;   // ★ (2026-10-27 15시) 이번에 처리한 목록일 때만 지움(다른 목록이 들어와 있으면 그대로)
+        // ★ (2026-10-27 14시) 이름 변경 창이 아직 열려 있을 때만 닫음 — 도중에 창을 닫고 다른 창을 열었으면 그 창을 닫지 않게(closeModal 은 열린 창을 모두 닫음)
+        const rnModal = document.getElementById('modal-rename');
+        if (rnModal && getComputedStyle(rnModal).display !== 'none') closeModal();
+        // ★ (2026-10-27 14시) 이미 그 이름인 항목은 따로 알림 — 종전엔 모두 같은 이름이면 '0개 이름을 변경했습니다'
+        const sameNote = same ? ' ' + tf('nt_rename_batch_same', { n: same }, `(${same}개는 이미 같은 이름)`) : '';
+        if (!fails.length && !ok && same) this.toast(t('nt_rename_batch_all_same', '이미 모두 같은 이름입니다.'), 'info');
+        else if (!fails.length) this.toast(tf('nt_rename_batch_done', { n: ok }, `${ok}개 이름을 변경했습니다.`) + sameNote, 'success');
+        else {
+            this.toast(tf('nt_rename_batch_partial', { ok: ok, fail: fails.length }, `${ok}개 변경, ${fails.length}개 실패`) + sameNote + ' — ' + fails.slice(0, 3).join(' · ') + (fails.length > 3 ? ' …' : ''), ok ? 'warning' : 'error', 7000);   // 알림은 한 줄 글자라 ' · ' 로 이음
+        }
+        if (inVault) this.vaultLoadFiles();
+        else {
+            this._reloadFilesKeepScroll();
+            document.querySelectorAll('.file-checkbox:checked').forEach(cb => cb.checked = false);
+            this.updateCheckboxSelection();
+        }
+    },
+
     // 확장자 표시 토글
     toggleRenameExtension() {
         const showExt = document.getElementById('rename-show-ext').checked;
@@ -20030,6 +20204,12 @@ const App = {
         if (this._renaming) return;
         
         let newName = $('#rename-input').val().trim();
+        // ★ (2026-10-27) 여러 개 일괄 이름 변경
+        if (newName && this.renameBatch && this.renameBatch.length > 1) {
+            this._renaming = true; this._renameBatchRunning = true;
+            try { await this._renameBatchRun(newName); } finally { this._renaming = false; this._renameBatchRunning = false; }
+            return;
+        }
         if (!newName || !this.renameOriginal) return;
         
         const showExt = document.getElementById('rename-show-ext').checked;
@@ -20568,7 +20748,7 @@ const App = {
         $('#share-filename').html(
             `<b>${list.length}${t('items_count_unit', '개 항목')}</b>` +
             `<div style="max-height:120px;overflow-y:auto;margin-top:6px;font-size:12px;opacity:.85;">` +
-            list.map(f => `${(f.is_dir || f.isDir) ? '📁' : '📄'} ${this.escapeHtml ? this.escapeHtml(f.name) : f.name}`).join('<br>') +
+            list.map(f => `${fsIco((f.is_dir || f.isDir) ? 'folder' : 'file')} ${this.escapeHtml ? this.escapeHtml(f.name) : f.name}`).join('<br>') +
             `</div>`
         );
         $('#share-result').hide();
@@ -20742,7 +20922,7 @@ const App = {
         const item = items[0];
         
         if (!item) {
-            this.toast(t('prompt_select_share_files'), 'error');
+            this.toast(t('prompt_select_share_files'), 'warning');
             return;
         }
         
@@ -20781,7 +20961,7 @@ const App = {
     async _createShareBulk(list) {
         const MAX = 100;   // 과도한 연속 요청 방지 (게시판 일괄삭제 500건 상한과 같은 취지)
         if (list.length > MAX) {
-            this.toast(`${t('err_share_bulk_limit', '한 번에 공유할 수 있는 최대 개수를 넘었습니다')} (${MAX})`, 'error');
+            this.toast(tf('nt_share_bulk_limit', {n: MAX}, `한 번에 최대 ${MAX}개까지 공유할 수 있습니다.`), 'warning');
             return;
         }
         const opts = {
@@ -21043,7 +21223,7 @@ const App = {
         
         if (res.success) {
             $('#storage-used-size').text(`(${t('used','사용')}: ${res.used_size_formatted})`);
-            this.toast((t('recalc_complete', '재계산 완료: ')) + res.used_size_formatted, 'success');
+            this.toast(t('recalc_complete', '재계산 완료:').trim() + ' ' + res.used_size_formatted, 'success');
         } else {
             this.toast(res.error || t('recalc_failed', '재계산 실패'), 'error');
         }
@@ -21566,7 +21746,7 @@ const App = {
             this.toast(t('fperm_delete_success', '폴더 권한이 삭제되었습니다.'), 'success');
             this.loadFolderPermissions(storageId);
         } else {
-            this.toast(res.error || '삭제 실패', 'error');
+            this.toast(res.error || t('nt_delete_failed', '삭제 실패'), 'error');
         }
     },
     
@@ -21767,7 +21947,7 @@ const App = {
         
         // 유효성 검사 - 이름
         if (!name) {
-            this.toast(t('prompt_enter_storage_name', '스토리지 이름을 입력하세요.'), 'error');
+            this.toast(t('prompt_enter_storage_name', '스토리지 이름을 입력하세요.'), 'warning');
             $('#storage-name').focus();
             return;
         }
@@ -22103,7 +22283,7 @@ const App = {
         if (res.success) {
             this.toast(t('toast_saved'), 'success');
         } else {
-            this.toast(res.error || 'Error', 'error');
+            this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
     },
     
@@ -22354,7 +22534,7 @@ const App = {
             schedule
         };
         
-        if (!data.name) { this.toast(t('enter_task_name', '작업 이름을 입력하세요.'), 'error'); return; }
+        if (!data.name) { this.toast(t('enter_task_name', '작업 이름을 입력하세요.'), 'warning'); return; }
         if (data.source_storage_id === data.target_storage_id && data.source_path === data.target_path) {
             this.toast(t('same_source_target', '원본과 대상이 동일합니다.'), 'error'); return;
         }
@@ -22379,7 +22559,7 @@ const App = {
             
             await this._loadSyncTasks();
         } else {
-            this.toast(res.error || 'Error', 'error');
+            this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
     },
     
@@ -22475,7 +22655,7 @@ const App = {
                             const modeNames = {'one-way': t('one_way_backup','단방향 백업'), 'two-way': t('two_way_sync','양방향 동기화'), 'incremental': t('incremental_backup','증분 백업')};
                             const modeName = modeNames[d.mode] || '';
                             progressText.textContent = `✅ ${modeName} ${t('sync_complete_label', '완료')} - ${t('copied', '복사')}: ${s.copied}, ${t('updated', '업데이트')}: ${s.updated}, ${t('deleted', '삭제')}: ${s.deleted}, ${t('skipped', '건너뜀')}: ${s.skipped}, ${t('errors', '오류')}: ${s.errors}`;
-                            this.toast(`${modeName} ${t('sync_complete', '완료')} (C:${s.copied} U:${s.updated} D:${s.deleted} E:${s.errors})`, s.errors > 0 ? 'warning' : 'success');
+                            this.toast(`${modeName} ${t('sync_complete_label', '완료')} · ${tf('nt_sync_stats', {c: s.copied, u: s.updated, d: s.deleted, e: s.errors}, `복사 ${s.copied} · 갱신 ${s.updated} · 삭제 ${s.deleted} · 오류 ${s.errors}`)}`, s.errors > 0 ? 'warning' : 'success');
                         } else if (msg.type === 'error') {
                             progressBar.style.width = '100%';
                             progressBar.style.background = '#e74c3c';
@@ -22624,7 +22804,7 @@ const App = {
         // 신규 사용자일 때 아이디 검증
         if (!id) {
             if (!username) {
-                this.toast(t('api_err_username_required', '아이디를 입력하세요.'), 'error');
+                this.toast(t('api_err_username_required', '아이디를 입력하세요.'), 'warning');
                 return;
             }
             if (username.length < 3 || username.length > 20) {
@@ -22636,7 +22816,7 @@ const App = {
                 return;
             }
             if (!password) {
-                this.toast(t('api_err_password_required', '비밀번호를 입력하세요.'), 'error');
+                this.toast(t('api_err_password_required', '비밀번호를 입력하세요.'), 'warning');
                 return;
             }
         }
@@ -22749,7 +22929,7 @@ const App = {
     async addRole() {
         const name = $('#new-role-name').val().trim();
         if (!name) {
-            this.toast(t('prompt_enter_role_name', '역할 이름을 입력하세요.'), 'error');
+            this.toast(t('prompt_enter_role_name', '역할 이름을 입력하세요.'), 'warning');
             return;
         }
         
@@ -22805,7 +22985,7 @@ const App = {
             const roleQos = qosSettings.roles?.[role.id] || { download: 0, upload: 0 };
             rolesList.append(`
                 <div class="qos-item" data-role-id="${role.id}">
-                    <div class="qos-item-name">🏷️ ${this.escapeHtml(role.name)}</div>
+                    <div class="qos-item-name">🏷️ <span class="fs-noico">${this.escapeHtml(role.name)}</span></div>
                     <div class="qos-item-settings">
                         <label>
                             <span>⬇️ ${t('download','다운로드')}</span>
@@ -22866,8 +23046,8 @@ const App = {
             usersList.append(`
                 <div class="qos-item" data-user-id="${user.id}">
                     <div class="qos-item-name">
-                        👤 ${this.escapeHtml(displayName)}
-                        <span class="qos-username">@${this.escapeHtml(user.username)}</span>
+                        👤 <span class="fs-noico">${this.escapeHtml(displayName)}</span>
+                        <span class="qos-username fs-noico">@${this.escapeHtml(user.username)}</span>
                     </div>
                     <div class="qos-item-settings">
                         <label>
@@ -24057,7 +24237,7 @@ const App = {
         const res = await this.api('share_update_type', { id: shareId, share_type: newType });
         if (res.success) {
             const msg = newType === 'stream' ? t('switch_to_stream','스트리밍으로 변경') : t('switch_to_download','다운로드로 변경');
-            this.toast(`${msg} ✅`, 'success');
+            this.toast(msg, 'success');
             const fileList = document.getElementById('file-list');
             const scrollTop = fileList ? fileList.scrollTop : 0;
             this.hideModal('modal-detailed-info');
@@ -24212,7 +24392,7 @@ const App = {
         });
         
         if (!ids.length) {
-            this.toast(t('prompt_no_items'), 'error');
+            this.toast(t('prompt_no_items'), 'warning');
             return;
         }
         
@@ -24221,7 +24401,7 @@ const App = {
         const res = await this.api('login_logs_delete', { ids });
         
         if (res.success) {
-            this.toast(`${res.deleted} ${t('deleted','삭제됨')}`, 'success');
+            this.toast(tf('n_logs_deleted', {count: res.deleted}, `${res.deleted}건의 로그가 삭제되었습니다.`), 'success');
             this.showAllLoginsModal();
         } else {
             this.toast(res.error, 'error');
@@ -24251,7 +24431,7 @@ const App = {
         const res = await this.api('login_logs_delete_old', { days });
         
         if (res.success) {
-            this.toast(`${res.deleted} ${t('deleted','삭제됨')}`, 'success');
+            this.toast(tf('n_logs_deleted', {count: res.deleted}, `${res.deleted}건의 로그가 삭제되었습니다.`), 'success');
             this.showAllLoginsModal();
         } else {
             this.toast(res.error, 'error');
@@ -24421,7 +24601,7 @@ const App = {
                     }
                 }
                 return `<li><a href="#" class="board-sidebar-item" data-board-id="${b.id}">
-                    ${this.escapeHtml(b.icon || '📋')} ${this.escapeHtml(b.name)}${badge}
+                    ${fsIcoFrom(b.icon && b.icon !== '📋' ? b.icon : '', 'clipboard-list')} ${this.escapeHtml(b.name)}${badge}
                     <span style="float:right;color:var(--fs-text-3, #999);font-size:11px;"></span>
                 </a></li>`;
             }).join('');
@@ -24584,7 +24764,7 @@ const App = {
         this._setDocTitle(board.name || '');
         
         // 브레드크럼 업데이트
-        document.getElementById('board-inline-breadcrumb').innerHTML = `<span style="font-weight:600;cursor:pointer;" onclick="App._boardSearchQuery='';App.currentBoardPage=1;App.loadBoardPosts();">${this.escapeHtml(board.icon || '📋')} ${this.escapeHtml(board.name)}</span>`;
+        document.getElementById('board-inline-breadcrumb').innerHTML = `<span style="font-weight:600;cursor:pointer;" onclick="App._boardSearchQuery='';App.currentBoardPage=1;App.loadBoardPosts();">${fsIcoFrom(board.icon && board.icon !== '📋' ? board.icon : '', 'clipboard-list')} <span class="fs-noico">${this.escapeHtml(board.name)}</span></span>`;
         document.getElementById('board-inline-count').textContent = `${res.total}${t('count_items','개 항목')}`;
         
         // 글쓰기 버튼 표시
@@ -24645,7 +24825,7 @@ const App = {
                         return `<tr class="board-postlist-row${rowCls}" onclick="App.viewBoardPost(${p.id})">
                             ${checkCell}
                             <td class="board-col-num">${isPinned ? `<span class="board-pin-label">공지</span>` : (p.num || '')}</td>
-                            <td class="board-col-title">${pinIcon}<strong${titleColor}>${titleHtml}</strong>${noticeBadge}${attachIcon}${commentBadge}</td>
+                            <td class="board-col-title">${pinIcon}<strong class="fs-noico"${titleColor}>${titleHtml}</strong>${noticeBadge}${attachIcon}${commentBadge}</td>
                             <td class="board-col-author">${this.escapeHtml(p.author_name || '')}</td>
                             <td class="board-col-date">${dateStr}</td>
                             <td class="board-col-views">${p.views || 0}</td>
@@ -24980,7 +25160,7 @@ const App = {
         detailEl.innerHTML = `
             <div class="board-detail-wrap">
                 <div class="board-detail-header">
-                    <h2${detailNoticeColor ? ` style="color:${detailNoticeColor}"` : ''}>${p.is_pinned ? '📌 ' : ''}${this.escapeHtml(p.title)}${noticeBadge}</h2>
+                    <h2${detailNoticeColor ? ` style="color:${detailNoticeColor}"` : ''}>${p.is_pinned ? '📌 ' : ''}<span class="fs-noico">${this.escapeHtml(p.title)}</span>${noticeBadge}</h2>
                     <div class="board-detail-meta">
                         <span class="board-detail-author">${this.escapeHtml(p.author_name)}</span>
                         <span>${p.created_at}</span>
@@ -25034,7 +25214,7 @@ const App = {
         };
         
         const board = this.currentBoardData || {};
-        const boardTitle = this.escapeHtml(board.icon || '📋') + ' ' + this.escapeHtml(board.name || '');
+        const boardTitle = fsIcoFrom(board.icon && board.icon !== '📋' ? board.icon : '', 'clipboard-list') + ' <span class="fs-noico">' + this.escapeHtml(board.name || '') + '</span>';
         
         let html = `<div style="padding:10px 14px 6px;font-weight:600;font-size:14px;color:var(--theme-text,var(--fs-text, #333));cursor:pointer;" onclick="App._boardSearchQuery='';App.currentBoardPage=1;App.boardShowList();">${boardTitle}</div>`;
         html += `<table class="board-table">
@@ -25059,7 +25239,7 @@ const App = {
             
             html += `<tr class="board-postlist-row${rowCls}" onclick="App.viewBoardPost(${p.id})" data-post-id="${p.id}">
                 <td class="board-col-num">${isPinned ? '<span class="board-pin-label">공지</span>' : (p.num || '')}</td>
-                <td class="board-col-title">${isCurrent ? '▶ ' : ''}${isPinned ? '📌 ' : ''}<strong>${title}</strong>${commentCount}${p.attachments?.length ? ' <span class="board-attach-icon">📎</span>' : ''}</td>
+                <td class="board-col-title">${isCurrent ? '▶ ' : ''}${isPinned ? '📌 ' : ''}<strong class="fs-noico">${title}</strong>${commentCount}${p.attachments?.length ? ' <span class="board-attach-icon">📎</span>' : ''}</td>
                 <td class="board-col-author">${this.escapeHtml(p.author_name || '')}</td>
                 <td class="board-col-date">${dateStr}</td>
                 <td class="board-col-views">${p.views || 0}</td>
@@ -26168,7 +26348,7 @@ const App = {
             this.loadBoardSidebar();
             this.loadBoardUnreadCounts();
         } else {
-            this.toast(res.error || 'Error', 'error');
+            this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
         } finally {
             const saveBtn = document.getElementById('btn-board-save');
@@ -26290,11 +26470,11 @@ const App = {
                     }
                 });
             } else {
-                this.toast(res.error || 'Error', 'error');
+                this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
             }
         } catch(e) {
             this._hideCmtUploadProgress(progressId);
-            this.toast('Error: ' + e.message, 'error');
+            this.toast(e && e.message ? tf('nt_error_with', {msg: e.message}, `오류: ${e.message}`) : t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
     },
 
@@ -26420,11 +26600,11 @@ const App = {
                     }
                 });
             } else {
-                this.toast(res.error || 'Error', 'error');
+                this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
             }
         } catch(e) {
             this._hideCmtUploadProgress(progressId);
-            this.toast('Error: ' + e.message, 'error');
+            this.toast(e && e.message ? tf('nt_error_with', {msg: e.message}, `오류: ${e.message}`) : t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
     },
 
@@ -26731,11 +26911,11 @@ const App = {
                     }
                 });
             } else {
-                this.toast(res.error || 'Error', 'error');
+                this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
             }
         } catch(e) {
             this._hideCmtUploadProgress(progressId);
-            this.toast('Error: ' + e.message, 'error');
+            this.toast(e && e.message ? tf('nt_error_with', {msg: e.message}, `오류: ${e.message}`) : t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
     },
 
@@ -26769,7 +26949,7 @@ const App = {
             this.toast(t('file_deleted','파일이 삭제되었습니다.'), 'success');
             this.viewBoardPost(postId, false);
         } else {
-            this.toast(res.error || 'Error', 'error');
+            this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
     },
 
@@ -26893,7 +27073,7 @@ const App = {
             this.loadBoardManageList();
             this.loadBoardSidebar();
         } else {
-            this.toast(res.error || 'Error', 'error');
+            this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
     },
 
@@ -27355,7 +27535,7 @@ const App = {
             let totalSize = 0;
             res.items.forEach(item => {
                 totalSize += item.size || 0;
-                const icon = item.is_dir ? '📁' : this.getFileIcon(item.name);
+                const icon = item.is_dir ? this.getFolderIcon() : this.getFileIcon(item.name);   // ★ (2026-10-27 16시, 펜닐) 폴더도 탐색기와 같은 폴더 그림(종전 📁 → 검은 선 그림이라 칸을 꽉 채워 파일 아이콘보다 커 보였음)
                 
                 listEl.innerHTML += `
                     <div class="trash-item" data-id="${item.id}">
@@ -27421,7 +27601,7 @@ const App = {
             let totalSize = 0;
             res.items.forEach(item => {
                 totalSize += item.size || 0;
-                const icon = item.is_dir ? '📁' : this.getFileIcon(item.name);
+                const icon = item.is_dir ? this.getFolderIcon() : this.getFileIcon(item.name);   // ★ (2026-10-27 16시, 펜닐) 폴더도 탐색기와 같은 폴더 그림(종전 📁 → 검은 선 그림이라 칸을 꽉 채워 파일 아이콘보다 커 보였음)
                 
                 listEl.innerHTML += `
                     <div class="trash-item" data-id="${item.id}">
@@ -27459,7 +27639,7 @@ const App = {
     fileIconPath: 'assets/file-icons/',
     fileIcons: {
         // HWP만 인라인 (vscode-icons에 없음)
-        hwp: '<svg viewBox="0 0 48 48" width="100%" height="100%"><path d="M12 4h18l10 10v30c0 1.1-.9 2-2 2H12c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" fill="#00BCD4"/><path d="M28 4v10h10" fill="#B2EBF2"/><text x="24" y="34" text-anchor="middle" fill="#fff" font-size="8" font-weight="bold" font-family="Arial">HWP</text></svg>'
+        hwp: '<svg width="100%" height="100%" viewBox="0 0 48 48" fill="none" stroke="#099bb4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13 5h15l10 10v26a2 2 0 0 1-2 2H13a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z"/><path d="M28 5v10h10"/><path d="M18.6 35V32.35H15.9V35H14.6V28.81H15.9V31.27H18.6V28.81H19.89V35ZM27.39 35H25.85L25.01 31.42Q24.86 30.79 24.75 30.1Q24.65 30.67 24.58 30.97Q24.51 31.27 23.64 35H22.1L20.51 28.81H21.82L22.72 32.81L22.92 33.77Q23.05 33.16 23.16 32.61Q23.28 32.05 24.04 28.81H25.49L26.27 32.1Q26.36 32.47 26.58 33.77L26.69 33.26L26.93 32.25L27.67 28.81H28.99ZM34.69 30.77Q34.69 31.37 34.42 31.84Q34.15 32.31 33.64 32.56Q33.13 32.82 32.43 32.82H30.89V35H29.6V28.81H32.38Q33.49 28.81 34.09 29.32Q34.69 29.83 34.69 30.77ZM33.39 30.79Q33.39 29.81 32.23 29.81H30.89V31.82H32.27Q32.81 31.82 33.1 31.56Q33.39 31.29 33.39 30.79Z" fill="#099bb4" stroke="none"/></svg>'
     },
     
     // 확장자 → 아이콘 파일명 매핑 (assets/file-icons/{value}.svg)
@@ -27475,26 +27655,28 @@ const App = {
         'ppt': 'powerpoint', 'pptx': 'powerpoint', 'odp': 'powerpoint',
         'md': 'markdown', 'markdown': 'markdown',
         // 코드
-        'html': 'html', 'htm': 'html',
-        'css': 'css', 'scss': 'css', 'sass': 'css', 'less': 'css',
-        'js': 'js', 'jsx': 'js', 'mjs': 'js', 'cjs': 'js',
-        // 주의: ts는 동영상 (MPEG-TS), tsx만 JS 아이콘
-        'tsx': 'js',
+        'html': 'html', 'htm': 'html-htm',
+        'css': 'css', 'scss': 'css-scss', 'sass': 'css-sass', 'less': 'css-less',
+        'js': 'js', 'jsx': 'js-jsx', 'mjs': 'js-mjs', 'cjs': 'js-cjs',
+        // 주의: ts는 동영상 (MPEG-TS). tsx 는 TypeScript(★ 2026-10-26 밤 — 종전 JS 그림, 이제 파란 'TSX')
+        // ★ (2026-10-26 밤) 글자 든 그림을 여러 확장자가 같이 써서 xlsx 에 'XLS' 처럼 나왔음(펜닐 제보) → 확장자별 그림(이름-확장자.svg). 서버 FileManager::getFileIcon 과 같은 표
+        // ★ (2026-10-27 01:56) 오피스·PDF 는 예전 색 그림으로 되돌림(펜닐 요청) — 확장자 구분은 라벨
+        'tsx': 'tsx',
         'json': 'json', 'json5': 'json',
-        'xml': 'xml', 'xsd': 'xml', 'xsl': 'xml',
-        'php': 'php', 'phtml': 'php',
-        'py': 'python', 'pyw': 'python',
-        'java': 'java', 'class': 'java', 'jar': 'java',
-        'c': 'c', 'h': 'c',
-        'cpp': 'cpp', 'cc': 'cpp', 'cxx': 'cpp', 'hpp': 'cpp', 'hxx': 'cpp',
+        'xml': 'xml', 'xsd': 'xml-xsd', 'xsl': 'xml-xsl',
+        'php': 'php', 'phtml': 'php-phtml',
+        'py': 'python', 'pyw': 'python-pyw',
+        'java': 'java', 'class': 'java-class', 'jar': 'java-jar',
+        'c': 'c', 'h': 'c-h',
+        'cpp': 'cpp', 'cc': 'cpp-cc', 'cxx': 'cpp-cxx', 'hpp': 'cpp-hpp', 'hxx': 'cpp-hxx',
         'rb': 'ruby',
         'go': 'go',
         'rs': 'rust',
         'swift': 'swift',
-        'yaml': 'yaml', 'yml': 'yaml',
+        'yaml': 'yaml-yaml', 'yml': 'yaml',
         'toml': 'toml',
-        'ini': 'ini', 'conf': 'ini', 'cfg': 'ini', 'env': 'ini',
-        'sql': 'sql', 'db': 'sql', 'sqlite': 'sql', 'sqlite3': 'sql',
+        'ini': 'ini', 'conf': 'ini-conf', 'cfg': 'ini-cfg', 'env': 'ini-env',
+        'sql': 'sql', 'db': 'database', 'sqlite': 'database', 'sqlite3': 'database',
         'sh': 'shell', 'bash': 'shell', 'zsh': 'shell', 'fish': 'shell',
         'ps1': 'powershell', 'psm1': 'powershell', 'psd1': 'powershell',
         // Windows 배치 스크립트
@@ -27510,9 +27692,11 @@ const App = {
         'flv': 'video', 'webm': 'video', 'ts': 'video', 'm2ts': 'video', 'mts': 'video',
         'vob': 'video', 'rmvb': 'video', 'rm': 'video', '3gp': 'video', '3g2': 'video',
         'mpg': 'video', 'mpeg': 'video', 'm4v': 'video', 'f4v': 'video', 'asf': 'video',
-        // 음악: extToIconFile에서 제외 — 이모지 🎵 유지 (펜닐 선호)
+        // 음악: extToIconFile 에는 없고 getFileIcon 의 EMOJI_ICONS 폴백에서 audio.svg 로 그림 (★ 2026-10-26 — 종전 🎵 이모지)
         // 폰트
-        'ttf': 'font', 'otf': 'font', 'woff': 'font', 'woff2': 'font', 'eot': 'font'
+        'ttf': 'font', 'otf': 'font', 'woff': 'font', 'woff2': 'font', 'eot': 'font',
+        // ★ (2026-10-27) 디스크 이미지 — 디스크 그림 + 라벨 (서버와 같음)
+        'iso': 'disc', 'dmg': 'disc', 'img': 'disc'
     },
     
     async restoreTrash(id, isAdmin = false) {
@@ -27526,7 +27710,7 @@ const App = {
         }];
         
         await this._createJob('restore', sessionItems, {}, (session) => {
-            if (session.status === 'cancelled') this.toast(t('cancelled','취소되었습니다.'), 'error');
+            if (session.status === 'cancelled') this.toast(t('cancelled','취소되었습니다.'), 'warning');
             else if (session.success > 0) this.toast(t('toast_restored', '복구 완료'), 'success');
             else this.toast(t('restore_failed', '복구 실패'), 'error');
             if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
@@ -27546,14 +27730,14 @@ const App = {
             return;
         }
         
-        const icon = item.is_dir ? '📁' : this.getFileIcon(item.name);
+        const icon = item.is_dir ? this.getFolderIcon() : this.getFileIcon(item.name);   // ★ (2026-10-27 16시) 폴더도 탐색기와 같은 폴더 그림
         const typeText = item.is_dir ? t('folder') : t('file');
         const sizeText = item.is_dir ? '' : ` · ${this.formatSize(item.size)}`;
         
         // 1차 확인
         const content1 = `
             <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 15px;">
-                <span style="font-size: 32px;">${icon}</span>
+                <span class="trash-confirm-icon">${icon}</span>
                 <div style="flex: 1; min-width: 0;">
                     <div style="font-weight: 600; word-break: break-all; font-size: 14px;">${this.escapeHtml(item.name)}</div>
                     <div style="color: var(--fs-text-3, #888); font-size: 12px;">${typeText}${sizeText}</div>
@@ -27610,7 +27794,7 @@ const App = {
             }];
             
             await this._createJob('trash_delete', sessionItems, {}, (session) => {
-                if (session.status === 'cancelled') this.toast(t('cancelled','취소되었습니다.'), 'error');
+                if (session.status === 'cancelled') this.toast(t('cancelled','취소되었습니다.'), 'warning');
                 else if (session.success > 0) this.toast(t('toast_deleted', '삭제 완료'), 'success');
                 else this.toast(t('delete_failed', '삭제 실패'), 'error');
                 if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
@@ -27704,10 +27888,10 @@ const App = {
             
             await this._createJob('trash_empty', sessionItems, {}, (session) => {
                 if (session.status === 'cancelled') {
-                    if (session.success > 0) this.toast(`${session.success}${t('items_deleted','개 삭제')}, ${session.totalFiles - session.success - session.failed}${t('items_cancelled','개 취소')}`, 'warning');
-                    else this.toast(t('cancelled','취소되었습니다.'), 'error');
+                    if (session.success > 0) this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_cancelled_s', {n: session.totalFiles - session.success - session.failed}, `${session.totalFiles - session.success - session.failed}개 취소됨`)}`, 'warning');
+                    else this.toast(t('cancelled','취소되었습니다.'), 'warning');
                 } else if (session.failed === 0) this.toast(t('trash_emptied', '휴지통을 비웠습니다.'), 'success');
-                else this.toast(`${session.success} ${t('deleted','삭제')}, ${session.failed} ${t('failed_count','실패')}`, 'warning');
+                else this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
                 if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
                 this.updateTrashIcon();
                 this.updateShareBadges();
@@ -27789,10 +27973,10 @@ const App = {
 
         await this._createJob('restore', sessionItems, {}, (session) => {
             if (session.status === 'cancelled') {
-                if (session.success > 0) this.toast(`${session.success}${t('items_restored','개 복구')}, ${session.totalFiles - session.success - session.failed}${t('items_cancelled','개 취소')}`, 'warning');
-                else this.toast(t('cancelled','취소되었습니다.'), 'error');
+                if (session.success > 0) this.toast(`${tf('nt_restore_done_s', {n: session.success}, `${session.success}개 복구 완료`)}, ${tf('nt_cancelled_s', {n: session.totalFiles - session.success - session.failed}, `${session.totalFiles - session.success - session.failed}개 취소됨`)}`, 'warning');
+                else this.toast(t('cancelled','취소되었습니다.'), 'warning');
             } else if (session.failed === 0) this.toast(`${session.success}${t('items_restored','개 항목을 복구했습니다')}`, 'success');
-            else this.toast(`${session.success} ${t('restored','복구')}, ${session.failed} ${t('failed_count','실패')}`, 'warning');
+            else this.toast(`${tf('nt_restore_done_s', {n: session.success}, `${session.success}개 복구 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
             if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
             this.loadFiles();
             this.updateTrashIcon();
@@ -27829,10 +28013,10 @@ const App = {
 
         await this._createJob('trash_delete', sessionItems, {}, (session) => {
             if (session.status === 'cancelled') {
-                if (session.success > 0) this.toast(`${session.success}${t('items_deleted','개 삭제')}, ${session.totalFiles - session.success - session.failed}${t('items_cancelled','개 취소')}`, 'warning');
-                else this.toast(t('cancelled','취소되었습니다.'), 'error');
+                if (session.success > 0) this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_cancelled_s', {n: session.totalFiles - session.success - session.failed}, `${session.totalFiles - session.success - session.failed}개 취소됨`)}`, 'warning');
+                else this.toast(t('cancelled','취소되었습니다.'), 'warning');
             } else if (session.failed === 0) this.toast(`${session.success}${t('items_deleted','개 항목을 삭제했습니다')}`, 'success');
-            else this.toast(`${session.success} ${t('deleted','삭제')}, ${session.failed} ${t('failed_count','실패')}`, 'warning');
+            else this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
             if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
             this.updateTrashIcon();
             this.updateShareBadges();
@@ -27893,10 +28077,10 @@ const App = {
             
             await this._createJob('restore', sessionItems, {}, (session) => {
                 if (session.status === 'cancelled') {
-                    if (session.success > 0) this.toast(`${session.success}${t('items_restored','개 복구')}, ${session.totalFiles - session.success - session.failed}${t('items_cancelled','개 취소')}`, 'warning');
-                    else this.toast(t('cancelled','취소되었습니다.'), 'error');
+                    if (session.success > 0) this.toast(`${tf('nt_restore_done_s', {n: session.success}, `${session.success}개 복구 완료`)}, ${tf('nt_cancelled_s', {n: session.totalFiles - session.success - session.failed}, `${session.totalFiles - session.success - session.failed}개 취소됨`)}`, 'warning');
+                    else this.toast(t('cancelled','취소되었습니다.'), 'warning');
                 } else if (session.failed === 0) this.toast(`${session.success}${t('items_restored','개 항목을 복구했습니다')}`, 'success');
-                else this.toast(`${session.success} ${t('restored','복구')}, ${session.failed} ${t('failed_count','실패')}`, 'warning');
+                else this.toast(`${tf('nt_restore_done_s', {n: session.success}, `${session.success}개 복구 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
                 if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
                 this.updateTrashIcon();
                 this.loadFiles();
@@ -27921,8 +28105,8 @@ const App = {
         
         if (myTrashLink) {
             myTrashLink.innerHTML = hasItems 
-                ? `♻️ ${t('my_trash','내 휴지통')} <span class="trash-count">(${myCount})</span>` 
-                : `🗑️ ${t('my_trash','내 휴지통')}`;
+                ? `${fsIco('trash')} ${t('my_trash','내 휴지통')} <span class="trash-count">(${myCount})</span>`   // ★ (2026-10-26) ♻️/🗑️ 이모지 → 선 그림(비었는지는 개수로 구분)
+                : `${fsIco('trash')} ${t('my_trash','내 휴지통')}`;
         }
         
         // 전체 휴지통 (관리자용)
@@ -27931,8 +28115,8 @@ const App = {
             const hasAllItems = allRes.success && allRes.items && allRes.items.length > 0;
             const allCount = allRes.items?.length || 0;
             trashLink.innerHTML = hasAllItems 
-                ? `♻️ ${t('all_trash','전체 휴지통')} <span class="trash-count">(${allCount})</span>` 
-                : `🗑️ ${t('all_trash','전체 휴지통')}`;
+                ? `${fsIco('trash')} ${t('all_trash','전체 휴지통')} <span class="trash-count">(${allCount})</span>` 
+                : `${fsIco('trash')} ${t('all_trash','전체 휴지통')}`;
         }
     },
     
@@ -27950,7 +28134,7 @@ const App = {
     // ===== 조건부 일괄 삭제 =====
     showBulkDeleteModal() {
         if (!this.currentStorage) {
-            this.toast(t('prompt_select_storage'), 'error');
+            this.toast(t('prompt_select_storage'), 'warning');
             return;
         }
         
@@ -27973,7 +28157,7 @@ const App = {
     async bulkDeleteSearch() {
         const patterns = $('#bulk-delete-patterns').val().trim();
         if (!patterns) {
-            this.toast(t('prompt_enter_pattern', '삭제할 패턴을 입력하세요.'), 'error');
+            this.toast(t('prompt_enter_pattern', '삭제할 패턴을 입력하세요.'), 'warning');
             return;
         }
         
@@ -28037,7 +28221,7 @@ const App = {
     async bulkDeleteExecute() {
         const checkboxes = document.querySelectorAll('.bulk-delete-check:checked');
         if (checkboxes.length === 0) {
-            this.toast(t('prompt_select_items'), 'error');
+            this.toast(t('prompt_select_items'), 'warning');
             return;
         }
         
@@ -28050,7 +28234,7 @@ const App = {
             paths.push(cb.dataset.path);
         });
         
-        this.toast('status_deleting', 'info');
+        this.toast(t('status_deleting', '삭제 중...'), 'info');
         
         const res = await this.api('bulk_delete', {
             storage_id: this.currentStorage,
@@ -28058,7 +28242,7 @@ const App = {
         });
         
         if (res.success) {
-            this.toast(`${res.deleted}${t('delete_complete','개 삭제 완료')}` + (res.failed > 0 ? `, ${res.failed} ${t('failed_count','실패')}` : ''), 'success');
+            this.toast(tf('nt_delete_done_s', {n: res.deleted}, `${res.deleted}개 삭제 완료`) + (res.failed > 0 ? `, ${tf('nt_failed_s', {n: res.failed}, `${res.failed}개 실패`)}` : ''), res.failed > 0 ? 'warning' : 'success');
             $('#bulk-delete-results').hide();
             await this.loadFiles();
             this.updateTrashIcon();
@@ -28268,7 +28452,7 @@ const App = {
         
         if (res.success) {
             const count = res.deleted || 0;
-            this.toast(`${count}${t('items_deleted', '건 삭제됨')}`, 'success');
+            this.toast(tf('n_logs_deleted', {count: count}, `${count}건의 로그가 삭제되었습니다.`), 'success');
             this.loadActivityLogs(1);
         } else {
             this.toast(res.error || t('err_delete_failed', '삭제 실패'), 'error');
@@ -28282,7 +28466,7 @@ const App = {
         
         if (res.success) {
             const count = res.deleted || 0;
-            this.toast(`${count}${t('items_deleted', '건 삭제됨')}`, 'success');
+            this.toast(tf('n_logs_deleted', {count: count}, `${count}건의 로그가 삭제되었습니다.`), 'success');
             this.loadActivityLogs(1);
         } else {
             this.toast(res.error || t('err_delete_failed', '삭제 실패'), 'error');
@@ -28740,7 +28924,7 @@ const App = {
             }
             
         } catch (e) {
-            this.toast((t('index_rebuild_error', '인덱스 재구축 중 오류 발생: ')) + e.message, 'error');
+            this.toast(t('index_rebuild_error', '인덱스 재구축 중 오류 발생:').trim() + ' ' + e.message, 'error');
             $('#index-status').html(`
                 <div class="index-error">
                     ${t('rebuild_failed', '❌ 재구축 실패: ')}${e.message || t('server_error', '서버 오류')}
@@ -28804,7 +28988,7 @@ const App = {
                     if (res.success) {
                         this.toast(t('auto_purge_saved', '자동 삭제 설정이 저장되었습니다.'), 'success');
                     } else {
-                        this.toast(res.error || t('save_failed', '저장 실패'), 'error');
+                        this.toast(res.error || t('nt_settings_save_failed', '설정 저장 실패'), 'error');
                     }
                 } catch(e) {
                     newBtn.textContent = '❌';
@@ -30148,7 +30332,7 @@ const App = {
                 this.toast(res.error || t('err_delete_failed', '삭제 실패'), 'error');
             }
         } catch (e) {
-            this.toast(t('err_deleting', '삭제 중 오류: ') + e.message, 'error');
+            this.toast(t('err_deleting', '삭제 중 오류:').trim() + ' ' + e.message, 'error');
         }
     },
     
@@ -30172,7 +30356,7 @@ const App = {
                 this.toast(res.error || t('err_delete_failed', '삭제 실패'), 'error');
             }
         } catch (e) {
-            this.toast(t('err_deleting', '삭제 중 오류: ') + e.message, 'error');
+            this.toast(t('err_deleting', '삭제 중 오류:').trim() + ' ' + e.message, 'error');
         }
     },
     
@@ -30195,7 +30379,7 @@ const App = {
                 this.toast(res.error || t('err_save_failed', '저장 실패'), 'error');
             }
         } catch (e) {
-            this.toast(t('err_saving', '저장 중 오류: ') + e.message, 'error');
+            this.toast(t('err_saving', '저장 중 오류:').trim() + ' ' + e.message, 'error');
         }
     },
     
@@ -30235,7 +30419,7 @@ const App = {
             this.toast(t('settings_saved', '설정이 저장되었습니다.'), 'success');
             this.hideModal('modal-upload-settings');
         } else {
-            this.toast(res.error || t('settings_save_failed', '설정 저장 실패'), 'error');
+            this.toast(res.error || t('nt_settings_save_failed', '설정 저장 실패'), 'error');
         }
     },
     
@@ -30315,7 +30499,7 @@ const App = {
                 this.toast(res.error || t('err_save_failed', '저장 실패'), 'error');
             }
         } catch (e) {
-            this.toast(t('err_saving', '저장 중 오류: ') + e.message, 'error');
+            this.toast(t('err_saving', '저장 중 오류:').trim() + ' ' + e.message, 'error');
         }
     },
     
@@ -30365,7 +30549,7 @@ const App = {
                 this.toast(res.error || t('err_delete_failed', '삭제 실패'), 'error');
             }
         } catch (e) {
-            this.toast(t('err_deleting', '삭제 중 오류: ') + e.message, 'error');
+            this.toast(t('err_deleting', '삭제 중 오류:').trim() + ' ' + e.message, 'error');
         }
     },
     
@@ -31020,6 +31204,27 @@ const App = {
             $('#icon-mgr-search').on('input', () => this._iconMgrRenderList());
             $('#icon-mgr-filter').on('change', () => this._iconMgrRenderList());
             
+            // ★ (2026-10-27) 라벨 표시 켜기·끄기 — 즉시 적용(<html> 의 fs-label-off) + 서버 저장, 끄면 위치 버튼 흐리게
+            document.getElementById('icon-mgr-label-enabled')?.addEventListener('change', async (ev) => {
+                const on = !!ev.target.checked;
+                document.documentElement.classList.toggle('fs-label-off', !on);
+                window.LABEL_ENABLED = on;
+                const grid = document.getElementById('icon-mgr-label-pos-grid');
+                if (grid) { grid.style.opacity = on ? '' : '.4'; grid.style.pointerEvents = on ? '' : 'none'; }
+                const res = await this.api('icon_manager&op=set_label_enabled', { enabled: on }, 'POST');
+                if (res && res.success) {
+                    this.toast(on ? t('nt_icon_label_on', '라벨을 표시합니다.') : t('nt_icon_label_off', '라벨을 숨깁니다.'), 'success');
+                    this._iconMgrDirty = true;
+                } else {
+                    // 저장 실패 → 화면도 되돌림
+                    ev.target.checked = !on;
+                    document.documentElement.classList.toggle('fs-label-off', on);
+                    window.LABEL_ENABLED = !on;
+                    if (grid) { grid.style.opacity = !on ? '' : '.4'; grid.style.pointerEvents = !on ? '' : 'none'; }
+                    this.toast(res?.error || t('nt_icon_label_save_failed', '라벨 설정 저장 실패'), 'error');
+                }
+            });
+            
             // 라벨 위치 버튼 (3x3 그리드)
             //   클릭 즉시 CSS 변수 적용 + 서버 저장 + 리스트 리렌더
             document.querySelectorAll('.label-pos-btn').forEach(btn => {
@@ -31040,11 +31245,11 @@ const App = {
                     // 4. 서버 저장
                     const res = await this.api('icon_manager&op=set_label_position', { position }, 'POST');
                     if (res && res.success) {
-                        this.toast('라벨 위치가 변경되었습니다', 'success');
+                        this.toast(t('nt_icon_label_pos_changed', '라벨 위치가 변경되었습니다.'), 'success');
                         // dirty 플래그 켜서 모달 닫을 때 파일 리스트도 리렌더
                         this._iconMgrDirty = true;
                     } else {
-                        this.toast(res?.error || '라벨 위치 저장 실패', 'error');
+                        this.toast(res?.error || t('nt_icon_label_pos_failed', '라벨 위치 저장 실패'), 'error');
                     }
                 });
             });
@@ -31086,7 +31291,7 @@ const App = {
             $('#btn-icon-add-ext-ok').on('click', async () => {
                 const ext = ($('#icon-add-ext-input').val() || '').trim().toLowerCase().replace(/^\./, '');
                 if (!/^[a-z0-9]{1,16}$/.test(ext)) {
-                    this.toast('영숫자 1~16자만 허용됩니다', 'warning');
+                    this.toast(t('nt_icon_ext_invalid', '영숫자 1~16자만 허용됩니다.'), 'warning');
                     return;
                 }
                 // 중복 체크: 이미 등록된 확장자인지 확인
@@ -31105,24 +31310,24 @@ const App = {
             $('#btn-icon-add-ext-register').on('click', async () => {
                 const ext = ($('#icon-add-ext-input').val() || '').trim().toLowerCase().replace(/^\./, '');
                 if (!/^[a-z0-9]{1,16}$/.test(ext)) {
-                    this.toast('영숫자 1~16자만 허용됩니다', 'warning');
+                    this.toast(t('nt_icon_ext_invalid', '영숫자 1~16자만 허용됩니다.'), 'warning');
                     return;
                 }
                 // 중복 체크: 이미 등록된 확장자인지 확인
                 const allExts = this._iconMgrCollectAllExts();
                 if (allExts.includes(ext)) {
-                    this.toast(`.${ext} 은(는) 이미 등록된 확장자입니다. 리스트에서 해당 확장자를 찾아 변경하세요.`, 'warning');
+                    this.toast(tf('nt_icon_ext_exists', {ext: ext}, `.${ext} 은(는) 이미 등록된 확장자입니다. 목록에서 찾아 변경하세요.`), 'warning');
                     return;
                 }
                 
                 // 기본 아이콘('default')로 매핑 등록 — 확장자가 리스트에 나타나서 나중에 변경 가능
                 const res = await this.api('icon_manager&op=set_mapping', { ext, icon: 'default' }, 'POST');
                 if (res && res.success) {
-                    this.toast(`.${ext} 등록됨 (기본 아이콘)`, 'success');
+                    this.toast(tf('nt_icon_ext_added', {ext: ext}, `.${ext} 등록됨 (기본 아이콘)`), 'success');
                     this._iconMgrCloseSubModal('modal-icon-add-ext');
                     await this._iconMgrRefresh();
                 } else {
-                    this.toast(res?.error || '등록 실패', 'error');
+                    this.toast(res?.error || t('nt_icon_register_failed', '등록 실패'), 'error');
                 }
             });
             
@@ -31289,7 +31494,7 @@ const App = {
         try {
             const res = await this.api('icon_manager&op=list', {}, 'GET');
             if (!res || !res.success) {
-                this.toast(res?.error || '아이콘 정보 로드 실패', 'error');
+                this.toast(res?.error || t('nt_icon_load_failed', '아이콘 정보 로드 실패'), 'error');
                 return;
             }
             this._iconMgrData = res.data;
@@ -31303,7 +31508,7 @@ const App = {
             }
         } catch (e) {
             console.error('Icon manager load error:', e);
-            this.toast('아이콘 정보 로드 중 오류 발생', 'error');
+            this.toast(t('nt_icon_load_error', '아이콘 정보를 불러오는 중 오류가 발생했습니다.'), 'error');
         }
     },
     
@@ -31426,6 +31631,10 @@ const App = {
             return { path: null, name: ext.toUpperCase() + ' (인라인)', source: 'inline' };
         }
         
+        // ★ (2026-10-27) 윈도우 11 느낌 확장자별 그림이 있으면 파일 목록처럼 그 그림(라벨 없음) — 분류는 _iconMgrClassify 가 code_map 으로 종전처럼
+        if (/^[a-z0-9]{1,10}$/.test(ext) && window.ICON_BUSTER_MAP && window.ICON_BUSTER_MAP['ext-' + ext]) {
+            return { path: `assets/file-icons/ext-${ext}.svg`, name: 'ext-' + ext, source: 'builtin' };
+        }
         if (bm.special && bm.special[ext]) {
             return { path: `assets/file-icons/${bm.special[ext]}.svg`, name: bm.special[ext], source: 'builtin' };
         }
@@ -31483,8 +31692,8 @@ const App = {
             iconName = customIcon;
             iconSource = 'user';
         } else {
-            // 기본 노란 폴더 (인라인 SVG)
-            iconHtml = `<svg viewBox="0 0 48 48" width="32" height="32"><path fill="#FFC107" d="M40 12H22l-4-4H8c-2.2 0-4 1.8-4 4v8h40v-4c0-2.2-1.8-4-4-4z"/><path fill="#FFCA28" d="M40 12H8c-2.2 0-4 1.8-4 4v20c0 2.2 1.8 4 4 4h32c2.2 0 4-1.8 4-4V16c0-2.2-1.8-4-4-4z"/></svg>`;
+            // 기본 폴더 (인라인 SVG — ★ 2026-10-26 파일 목록과 같은 선 그림)
+            iconHtml = `<svg viewBox="0 0 48 48" width="32" height="32" stroke="#a8740a" stroke-width="2" stroke-linejoin="round"><path fill="#e9a922" d="M6 37V11a3 3 0 0 1 3-3h9l4 5h17a3 3 0 0 1 3 3v21a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/><path fill="#ffcc4d" d="M6 19.5h36V37a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/></svg>`;
             iconName = '(기본 폴더)';
             iconSource = 'default';
         }
@@ -31519,12 +31728,17 @@ const App = {
         if (!this._iconMgrData) return 'other';
         const bm = this._iconMgrData.builtin_map || {};
         const cm = bm.code_map || {};
-        const icon = cm[ext] || '';
-        
+        // ★ (2026-10-26 밤) 확장자별 그림(이름-확장자, 예: excel-xlsx)은 앞 이름(excel)으로 분류 — 종전엔 docx·xlsx 등이 '코드'로 빠졌음.
+        //   음악·실행 파일·링크도 이제 선 그림 이름(audio·app·link)이 있어 '코드'로 빠지던 것 → 음악·기타로
+        const icon = String(cm[ext] || '').split('-')[0];
+
         if (bm.subtitle_exts && bm.subtitle_exts.indexOf(ext) !== -1) return 'subtitle';
         if (bm.archive_exts && bm.archive_exts.indexOf(ext) !== -1) return 'archive';
         if (icon === 'image') return 'image';
         if (icon === 'video') return 'video';
+        if (icon === 'disc') return 'archive';   // ★ (2026-10-27) 디스크 이미지(iso·dmg·img)는 종전처럼 '압축' 분류
+        if (icon === 'audio') return 'audio';
+        if (icon === 'app' || icon === 'link') return 'other';
         if (['pdf','word','excel','powerpoint','markdown'].indexOf(icon) !== -1) return 'document';
         if (bm.emoji_exts && bm.emoji_exts.indexOf(ext) !== -1 && !icon) {
             // 이모지만 있는 경우: 음악 계열 확인
@@ -31618,19 +31832,23 @@ const App = {
             // 아이콘 HTML (캐시 버스터 적용 - 관리 UI 미리보기도 최신 반영)
             const iconUrlWithBuster = (path, name) => this._iconUrlWithBuster(path, name);
             let iconHtml = '';
-            if (icon.source === 'archive' || icon.source === 'subtitle') {
+            // ★ (2026-10-27) 기본 그림에 확장자 글자가 없으면 파일 목록처럼 라벨(MP3·EXE 등)도 미리보기에 — 파일 목록과 같은 규칙(_fsIconNeedsLabel)
+            const builtinLabel = (icon.source === 'builtin' && icon.path && this._fsIconNeedsLabel(icon.name, ext)) ? ext.toUpperCase() : '';
+            if (icon.source === 'archive' || icon.source === 'subtitle' || builtinLabel) {
                 const url = iconUrlWithBuster(icon.path, icon.name);
-                iconHtml = `<div style="position:relative; width:40px; height:40px;">
-                    <img src="${this.escapeHtml(url)}" style="width:40px; height:40px;">
-                    <span style="position:absolute; top:0; right:0; background:#ffd54f; color:#333; font-size:8px; font-weight:bold; padding:1px 3px; border-radius:2px;">${this.escapeHtml(icon.label)}</span>
+                const lblText = builtinLabel || icon.label;
+                // ★ (2026-10-26 밤) 미리보기 40 → 48px·라벨 8 → 9px — 선 그림 아이콘이 작아 안 보였음(펜닐 제보)
+                iconHtml = `<div style="position:relative; width:48px; height:48px;">
+                    <img src="${this.escapeHtml(url)}" style="width:48px; height:48px;">
+                    <span class="fs-preview-label" style="position:absolute; top:0; right:0; background:#ffd54f; color:#333; font-size:9px; font-weight:bold; padding:1px 3px; border-radius:2px;">${this.escapeHtml(lblText)}</span>
                 </div>`;
             } else if (icon.path) {
                 const url = iconUrlWithBuster(icon.path, icon.name);
-                iconHtml = `<img src="${this.escapeHtml(url)}" style="width:32px; height:32px;" onerror="this.outerHTML='<span style=color:#aaa;font-size:20px;>?</span>'">`;
+                iconHtml = `<img src="${this.escapeHtml(url)}" style="width:48px; height:48px;" onerror="this.outerHTML='<span style=color:#aaa;font-size:20px;>?</span>'">`;
             } else if (icon.source === 'emoji') {
                 // 실제 이모지 문자 사용 (🎵/🎬/🖼️/📦 등) — 하드코딩 📄 대신
                 const emojiChar = icon.emoji || '📄';
-                iconHtml = `<span style="font-size:24px;">${this.escapeHtml(emojiChar)}</span>`;
+                iconHtml = `<span style="font-size:32px;">${this.escapeHtml(emojiChar)}</span>`;
             } else {
                 iconHtml = '<span style="color:var(--fs-text-3, #aaa); font-size:20px;">?</span>';
             }
@@ -31672,7 +31890,7 @@ const App = {
             
             htmlParts.push(`
                 <div class="icon-ext-row" style="display:flex; align-items:center; padding:8px 15px; border-bottom:1px solid var(--fs-border, #f0f0f0); gap:12px;">
-                    <div style="width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:var(--fs-surface-2, #fafafa); border:1px solid var(--fs-border, #e0e0e0); border-radius:4px; flex-shrink:0;">
+                    <div style="width:56px; height:56px; display:flex; align-items:center; justify-content:center; background:var(--fs-surface-2, #fafafa); border:1px solid var(--fs-border, #e0e0e0); border-radius:4px; flex-shrink:0;">
                         ${iconHtml}
                     </div>
                     <div style="flex:1; min-width:0;">
@@ -31719,10 +31937,10 @@ const App = {
             if (!await this.confirm('폴더 아이콘을 기본값(노란 폴더)으로 복원하시겠습니까?', '기본값 복원')) return;
             const res = await this.api('icon_manager&op=set_folder_icon', { icon: '' }, 'POST');
             if (res && res.success) {
-                this.toast('폴더 아이콘 기본값으로 복원됨', 'success');
+                this.toast(t('nt_icon_folder_reset', '폴더 아이콘 기본값으로 복원됨'), 'success');
                 await this._iconMgrRefresh();
             } else {
-                this.toast(res?.error || '초기화 실패', 'error');
+                this.toast(res?.error || t('nt_reset_failed', '초기화 실패'), 'error');
             }
         });
         
@@ -31732,10 +31950,10 @@ const App = {
             if (!await this.confirm(`.${ext}의 사용자 설정을 초기화하고 기본 아이콘으로 복원하시겠습니까?`, '기본값 복원')) return;
             const res = await this.api('icon_manager&op=remove_mapping', { ext }, 'POST');
             if (res && res.success) {
-                this.toast(`.${ext} 기본 아이콘으로 복원됨`, 'success');
+                this.toast(tf('nt_icon_ext_reset', {ext: ext}, `.${ext} 기본 아이콘으로 복원됨`), 'success');
                 await this._iconMgrRefresh();
             } else {
-                this.toast(res?.error || '초기화 실패', 'error');
+                this.toast(res?.error || t('nt_reset_failed', '초기화 실패'), 'error');
             }
         });
         
@@ -31745,10 +31963,10 @@ const App = {
             if (!await this.confirmDelete(`.${ext} 확장자를 완전히 삭제하시겠습니까?\n(리스트에서 사라집니다)`, '확장자 삭제')) return;
             const res = await this.api('icon_manager&op=remove_mapping', { ext }, 'POST');
             if (res && res.success) {
-                this.toast(`.${ext} 삭제됨`, 'success');
+                this.toast(tf('nt_icon_ext_deleted', {ext: ext}, `.${ext} 삭제됨`), 'success');
                 await this._iconMgrRefresh();
             } else {
-                this.toast(res?.error || '삭제 실패', 'error');
+                this.toast(res?.error || t('nt_delete_failed', '삭제 실패'), 'error');
             }
         });
         
@@ -31760,10 +31978,10 @@ const App = {
             if (!await this.confirm(`.${ext}의 전용 아이콘을 제거하고 기본 아이콘으로 표시하시겠습니까?`, '아이콘 제거')) return;
             const res = await this.api('icon_manager&op=set_mapping', { ext, icon: 'default' }, 'POST');
             if (res && res.success) {
-                this.toast(`.${ext} 기본 아이콘으로 변경됨`, 'success');
+                this.toast(tf('nt_icon_ext_set_default', {ext: ext}, `.${ext} 기본 아이콘으로 변경됨`), 'success');
                 await this._iconMgrRefresh();
             } else {
-                this.toast(res?.error || '변경 실패', 'error');
+                this.toast(res?.error || t('nt_change_failed', '변경 실패'), 'error');
             }
         });
     },
@@ -31792,7 +32010,7 @@ const App = {
         const curEl = $('#icon-change-current');
         if (isFolder && !currentIcon) {
             // 기본 폴더 아이콘
-            curEl.html(`<svg viewBox="0 0 48 48" width="48" height="48"><path fill="#FFC107" d="M40 12H22l-4-4H8c-2.2 0-4 1.8-4 4v8h40v-4c0-2.2-1.8-4-4-4z"/><path fill="#FFCA28" d="M40 12H8c-2.2 0-4 1.8-4 4v20c0 2.2 1.8 4 4 4h32c2.2 0 4-1.8 4-4V16c0-2.2-1.8-4-4-4z"/></svg>`);
+            curEl.html(`<svg viewBox="0 0 48 48" width="48" height="48" stroke="#a8740a" stroke-width="2" stroke-linejoin="round"><path fill="#e9a922" d="M6 37V11a3 3 0 0 1 3-3h9l4 5h17a3 3 0 0 1 3 3v21a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/><path fill="#ffcc4d" d="M6 19.5h36V37a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/></svg>`);
         } else if (currentIcon && currentIcon.path) {
             curEl.html(`<img src="${this.escapeHtml(currentIcon.path)}" style="width:48px; height:48px;">`);
         } else if (currentIcon && currentIcon.source === 'emoji' && currentIcon.emoji) {
@@ -31918,7 +32136,7 @@ const App = {
             
             const res = await this.api('icon_manager&op=delete_custom', { name }, 'POST');
             if (res && res.success) {
-                this.toast(`아이콘 "${name}" 삭제됨`, 'success');
+                this.toast(tf('nt_icon_deleted', {name: name}, `아이콘 "${name}" 삭제됨`), 'success');
                 // 삭제된 아이콘이 현재 선택 중이었으면 선택 해제
                 if (this._iconChangePendingIcon === name) {
                     this._iconChangePendingIcon = null;
@@ -31931,7 +32149,7 @@ const App = {
                     this._iconMgrRenderGallery();
                 }
             } else {
-                this.toast(res?.error || '삭제 실패', 'error');
+                this.toast(res?.error || t('nt_delete_failed', '삭제 실패'), 'error');
             }
         });
         
@@ -32018,7 +32236,7 @@ const App = {
                 });
                 const ures = await resp.json();
                 if (!ures || !ures.success) {
-                    this.toast(ures?.error || '업로드 실패', 'error');
+                    this.toast(ures?.error || t('nt_upload_failed', '업로드 실패'), 'error');
                     applyBtn.prop('disabled', false).text('✅ 적용');
                     return;
                 }
@@ -32047,7 +32265,7 @@ const App = {
                     
                     const cres = await this.api('icon_manager&op=clone_from_gallery', cloneParams, 'POST');
                     if (!cres || !cres.success) {
-                        this.toast(cres?.error || '아이콘 복사 실패', 'error');
+                        this.toast(cres?.error || t('nt_icon_copy_failed', '아이콘 복사 실패'), 'error');
                         applyBtn.prop('disabled', false).text('✅ 적용');
                         return;
                     }
@@ -32057,7 +32275,7 @@ const App = {
                     iconName = this._iconChangePendingIcon;
                 }
             } else {
-                this.toast('파일 또는 아이콘을 선택하세요', 'warning');
+                this.toast(t('nt_icon_select', '파일 또는 아이콘을 선택하세요.'), 'warning');
                 applyBtn.prop('disabled', false).text('✅ 적용');
                 return;
             }
@@ -32090,27 +32308,27 @@ const App = {
             if (ext === '__folder') {
                 const fres = await this.api('icon_manager&op=set_folder_icon', { icon: iconName }, 'POST');
                 if (fres && fres.success) {
-                    this.toast('폴더 아이콘이 변경되었습니다', 'success');
+                    this.toast(t('nt_icon_folder_changed', '폴더 아이콘이 변경되었습니다.'), 'success');
                     this._iconMgrCloseSubModal('modal-icon-change');
                     await this._iconMgrRefresh();
                 } else {
-                    this.toast(fres?.error || '폴더 아이콘 저장 실패', 'error');
+                    this.toast(fres?.error || t('nt_icon_folder_save_failed', '폴더 아이콘 저장 실패'), 'error');
                 }
             } else {
                 const mres = await this.api('icon_manager&op=set_mapping', { 
                     ext, icon: iconName, label_mode: labelModeForMap ? 1 : 0 
                 }, 'POST');
                 if (mres && mres.success) {
-                    this.toast(`.${ext} 아이콘이 변경되었습니다`, 'success');
+                    this.toast(tf('nt_icon_ext_changed', {ext: ext}, `.${ext} 아이콘이 변경되었습니다.`), 'success');
                     this._iconMgrCloseSubModal('modal-icon-change');
                     await this._iconMgrRefresh();
                 } else {
-                    this.toast(mres?.error || '매핑 저장 실패', 'error');
+                    this.toast(mres?.error || t('nt_icon_map_save_failed', '매핑 저장 실패'), 'error');
                 }
             }
         } catch (e) {
             console.error('Apply change error:', e);
-            this.toast('적용 중 오류 발생', 'error');
+            this.toast(t('nt_icon_apply_error', '적용 중 오류가 발생했습니다.'), 'error');
         } finally {
             applyBtn.prop('disabled', false).text('✅ 적용');
         }
@@ -32529,8 +32747,8 @@ const App = {
                             <th>WebDAV</th>
                             <td><span class="status-ok">${t('il_status_active', '✅ 활성')}</span></td>
                             <td style="font-size:12px;color:var(--fs-text-3, #888);">
-                                <code style="user-select:all;cursor:pointer;" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavUrl)}');App.toast('${t('copied','복사됨')}','success')">${this.escapeHtml(webdavUrl)}</code>
-                                ${webdavExternal !== webdavUrl ? `<br><code style="user-select:all;cursor:pointer;color:var(--fs-text-2, #666);" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavExternal)}');App.toast('${t('copied','복사됨')}','success')">${this.escapeHtml(webdavExternal)}</code> <small>(${t('il_external','외부')})</small>` : ''}
+                                <code style="user-select:all;cursor:pointer;" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavUrl)}');App.toast('${t('nt_copied','복사되었습니다.')}','success')">${this.escapeHtml(webdavUrl)}</code>
+                                ${webdavExternal !== webdavUrl ? `<br><code style="user-select:all;cursor:pointer;color:var(--fs-text-2, #666);" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavExternal)}');App.toast('${t('nt_copied','복사되었습니다.')}','success')">${this.escapeHtml(webdavExternal)}</code> <small>(${t('il_external','외부')})</small>` : ''}
                             </td>
                         </tr>
                     </table>
@@ -32869,7 +33087,7 @@ const App = {
             this.toastResponsive(
                 (t('il_enter_6digit_code', '6자리 인증 코드를 입력하세요.')),
                 t('verification_code_required', '인증 코드 필요'),
-                'error'
+                'warning'
             );
             return;
         }
@@ -33259,8 +33477,8 @@ const App = {
                     logoEl.appendChild(img);
                     logoEl.appendChild(document.createTextNode(' ' + siteName));
                 } else {
-                    // 이미지가 없으면 이모지 + 텍스트
-                    logoEl.textContent = '📁 ' + siteName;
+                    // 이미지가 없으면 아이콘 + 텍스트 (★ 2026-10-26 이모지 → 선 그림, index.php 로고와 같은 구조)
+                    logoEl.innerHTML = fsIco('folder', 'logo-ico') + ' <span class="logo-text">' + this.escapeHtml(siteName) + '</span>';
                 }
             }
             document.title = siteName;
@@ -33784,7 +34002,7 @@ const App = {
             this.toastResponsive(
                 (t('il_smtp_info_msg', 'SMTP 서버와 사용자명을 입력하세요.')),
                 (t('il_smtp_info_title', 'SMTP 정보 필요')),
-                'error'
+                'warning'
             );
             return;
         }
@@ -33795,7 +34013,7 @@ const App = {
             this.toastResponsive(
                 t('enter_test_email', '테스트 이메일 주소를 입력하세요.'),
                 t('email_required', '이메일 주소 필요'),
-                'error'
+                'warning'
             );
             return;
         }
@@ -33822,7 +34040,7 @@ const App = {
         const serverUrl = $('#setting-onlyoffice-server').val().trim();
         
         if (!serverUrl) {
-            this.toast(t('enter_doc_server_url', 'Document Server URL을 입력하세요.'), 'error');
+            this.toast(t('enter_doc_server_url', 'Document Server URL을 입력하세요.'), 'warning');
             return;
         }
         
@@ -33875,7 +34093,7 @@ const App = {
     async checkOnlyOfficeVersion() {
         const serverUrl = $('#setting-onlyoffice-server').val().trim();
         if (!serverUrl) {
-            this.toast(t('enter_doc_server_url', 'Document Server URL을 입력하세요.'), 'error');
+            this.toast(t('enter_doc_server_url', 'Document Server URL을 입력하세요.'), 'warning');
             return;
         }
         const resultEl = $('#onlyoffice-version-result');
@@ -33989,7 +34207,7 @@ const App = {
         const confirmPw = $('#confirm-password').val();
         
         if (!currentPw || !newPw) {
-            this.toast(t('enter_password_please', '비밀번호를 입력하세요.'), 'error');
+            this.toast(t('enter_password_please', '비밀번호를 입력하세요.'), 'warning');
             return;
         }
         
@@ -35972,7 +36190,7 @@ const App = {
             );
             this.loadSessions();
         } else {
-            this.toast(res.error || t('failed', '실패'), 'error');
+            this.toast(res.error || t('nt_logout_all_failed', '전체 로그아웃 실패'), 'error');
         }
     },
     
@@ -36722,7 +36940,7 @@ const App = {
             this.updateGalleryCounter();
             
         } catch (e) {
-            this.toast('❌ ' + (e.message || 'Error'), 'error');
+            this.toast(e && e.message ? tf('nt_error_with', {msg: e.message}, `오류: ${e.message}`) : t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
         this._switchingArchive = false;
     },
@@ -36802,10 +37020,10 @@ const App = {
                 // 스크롤하여 생성된 비밀번호가 보이게
                 document.getElementById('app-password-created')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             } else {
-                this.toast(res.error || 'Error', 'error');
+                this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
             }
         } catch (e) {
-            this.toast('Error', 'error');
+            this.toast(t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
     },
     
@@ -37130,7 +37348,7 @@ const App = {
         if (_upMenuP) _upMenuP.style.display = 'none';
         
         if (!item || !item.path) {
-            this.toast(t('select_files', '파일 또는 폴더를 선택하세요.'), 'error');
+            this.toast(t('select_files', '파일 또는 폴더를 선택하세요.'), 'warning');
             return;
         }
         
@@ -45585,6 +45803,14 @@ const App = {
     
     // 토스트
     toast(message, type = '', duration = 3000) {
+        // ★ (2026-10-26) 알림 글자 속 이모지는 빼고 글자만(펜닐 — 색으로 종류가 구분되므로). fs-icons.js 가 없으면 그대로
+        if (typeof message === 'string' && typeof window.fsIcoStrip === 'function') message = window.fsIcoStrip(message);
+        // ★ (2026-10-26) 서버가 error 없이 실패를 돌려주거나 메시지가 비면 빈 알림·'undefined' 가 떴음 → 오류는 일반 문구, 성공은 '완료되었습니다.', 그 밖은 띄우지 않음
+        if (message === undefined || message === null || (typeof message === 'string' && (message.trim() === '' || message === 'undefined' || message === 'null'))) {
+            if (type === 'error') message = t('nt_error_generic', '오류가 발생했습니다.');
+            else if (type === 'success') message = t('nt_done', '완료되었습니다.');
+            else return;
+        }
         const toast = $('#toast');
         
         // 이전 타이머 취소 (중복 방지)
@@ -45617,6 +45843,7 @@ const App = {
         const toast = $('#toast');
         if (toast.hasClass('show')) {
             // 이미 보이는 상태 → 텍스트만 교체
+            if (typeof message === 'string' && typeof window.fsIcoStrip === 'function') message = window.fsIcoStrip(message);   // ★ (2026-10-26) 이모지 빼고 글자만
             toast.text(message);
             // 타이머 리셋
             if (this.toastTimer) clearTimeout(this.toastTimer);
@@ -45732,7 +45959,7 @@ const App = {
     },
     
     // PC/모바일 구분 토스트 (화면 크기 기준으로 확실히 분리)
-    toastResponsive(pcMessage, mobileMessage, type = '', pcDuration = 3000, mobileDuration = 1500) {
+    toastResponsive(pcMessage, mobileMessage, type = '', pcDuration = 3000, mobileDuration = 3000) {   // ★ (2026-10-26) 모바일 1.5초 → 3초(긴 문장을 다 읽기 전에 사라짐)
         // 768px 이하면 모바일 메시지 사용
         const isMobile = window.innerWidth <= 1024;
         if (isMobile) {
@@ -45829,7 +46056,7 @@ const App = {
         
         
         if (!name) {
-            this.toast(t('prompt_enter_folder_name', '폴더 이름을 입력하세요.'), 'error');
+            this.toast(t('prompt_enter_folder_name', '폴더 이름을 입력하세요.'), 'warning');
             return;
         }
         if (pw1.length < 1) {
@@ -45936,7 +46163,7 @@ const App = {
                 this._hideConvertProgress();
                 
                 if (errors.length > 0) {
-                    this.toast(`${converted}/${files.length} ${t('vault_convert_partial', '개 변환 완료')} (${errors.length} ${t('vault_convert_errors', '개 실패')})`, 'warning');
+                    this.toast(`${converted}/${files.length}${t('vault_convert_partial', '개 변환 완료')} (${errors.length}${t('vault_convert_errors', '개 실패')})`, 'warning');
                 } else {
                     this.toast(`${converted}${t('vault_convert_complete', '개 파일 암호화 변환 완료')}`, 'success');
                 }
@@ -45969,7 +46196,7 @@ const App = {
                 this.toast(res.error, 'error');
             }
         } catch (e) {
-            this.toast(e.message || 'Vault creation failed', 'error');
+            this.toast(e.message || t('nt_vault_create_failed', '암호화 폴더 생성 실패'), 'error');
         }
         
         btn.prop('disabled', false).text('🔒 ' + t('create', '생성'));
@@ -46435,7 +46662,7 @@ const App = {
         }
         
         if (success > 0) {
-            this.toast(`✅ ${success}${t('vault_decrypt_complete', '개 암호화 해제 완료')}` + (fail > 0 ? ` (${fail}${t('failed_count', '개 실패')})` : ''), 'success');
+            this.toast(`${success}${t('vault_decrypt_complete', '개 암호화 해제 완료')}` + (fail > 0 ? ` (${fail}${t('count_failed', '개 실패')})` : ''), fail > 0 ? 'warning' : 'success');
             this.vaultLoadFiles();
         }
     },
@@ -46747,9 +46974,9 @@ const App = {
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(a.href), 5000);
             
-            this.toast(`✅ ${tf('vault_zip_complete', { count: selectedItems.length }, `${selectedItems.length}개 파일 ZIP 다운로드 완료`)}`, 'success');
+            this.toast(`${tf('vault_zip_complete', { count: selectedItems.length }, `${selectedItems.length}개 파일 ZIP 다운로드 완료`)}`, 'success');
         } catch (e) {
-            this.toast(e.message || 'ZIP download failed', 'error');
+            this.toast(e.message || t('nt_zip_download_failed', 'ZIP 다운로드 실패'), 'error');
         }
     },
     /** vault에 파일 하나를 암호화 업로드 (단일/청크 자동 선택) */
@@ -46842,21 +47069,21 @@ const App = {
                 uuid: item._uuid
             });
             if (res.success) success++;
-            else this.toast(`${item.name}: ${res.error}`, 'error');
+            else this.toast(`${item.name}: ${res.error || t('nt_error_generic', '오류가 발생했습니다.')}`, 'error');
         }
         
         // sub-vault 폴더 삭제 (영구 삭제 — 휴지통 안 감)
         for (const sv of subVaultItems) {
             const res = await this.api('delete', { storage_id: this.currentStorage, path: sv.path, permanent: true });
             if (res.success) success++;
-            else this.toast(`${sv.name}: ${res.error}`, 'error');
+            else this.toast(`${sv.name}: ${res.error || t('nt_error_generic', '오류가 발생했습니다.')}`, 'error');
         }
         
         // 일반(plain) 파일/폴더 삭제 (영구 삭제)
         for (const pl of plainItems) {
             const res = await this.api('delete', { storage_id: this.currentStorage, path: pl.path, permanent: true });
             if (res.success) success++;
-            else this.toast(`${pl.name}: ${res.error}`, 'error');
+            else this.toast(`${pl.name}: ${res.error || t('nt_error_generic', '오류가 발생했습니다.')}`, 'error');
         }
         
         if (success > 0) {
@@ -46893,8 +47120,10 @@ const App = {
             _fromVault: true
         };
         
-        const label = mode === 'cut' ? t('cut', '잘라내기') : t('copy', '복사');
-        this.toast(`${selectedItems.length}${t('count_items', '개 항목')} ${label}`, 'success');
+        // ★ (2026-10-26) 일반 복사/잘라내기와 같은 문구·색(안내)으로
+        const _n = selectedItems.length;
+        if (mode === 'cut') this.toastResponsive(tf('nt_clip_cut_pc', {n: _n}, `${_n}개 항목을 잘라냈습니다.`), tf('nt_clip_cut_m', {n: _n}, `${_n}개 잘라냄`), 'info');
+        else this.toastResponsive(tf('nt_clip_copy_pc', {n: _n}, `${_n}개 항목을 복사했습니다.`), tf('nt_clip_copy_m', {n: _n}, `${_n}개 복사됨`), 'info');
     },
     
     /** vault 출처 파일/폴더를 일반 폴더에 붙여넣기 (복호화→일반 업로드) */
@@ -47115,7 +47344,7 @@ const App = {
                             this._vaultDecryptProgress = null;
                             
                             // 업로드 진행률
-                            this.toastUpdate(`⬆️ ${_fileLabel} ${t('uploading', '업로드 중...')}`, 'info', 60000);
+                            this.toastUpdate(`⬆️ ${_fileLabel} ${t('nt_uploading', '업로드 중...')}`, 'info', 60000);
                             const fileData = await blob.arrayBuffer();
                             await _chunkedUpload(fileData, af.meta.name, destStorageId, af.destRelPath, pasteAbort.signal, (upPct) => {
                                 this.toastUpdate(`⬆️ ${_fileLabel} ${upPct}%`, 'info', 60000);
@@ -47191,7 +47420,7 @@ const App = {
                     }
                     
                     // 업로드 진행률
-                    this.toastUpdate(`⬆️ ${_itemLabel} ${t('uploading', '업로드 중...')}`, 'info', 60000);
+                    this.toastUpdate(`⬆️ ${_itemLabel} ${t('nt_uploading', '업로드 중...')}`, 'info', 60000);
                     await _chunkedUpload(fileData, it.name, destStorageId, destPath, pasteAbort.signal, (upPct) => {
                         this.toastUpdate(`⬆️ ${_itemLabel} ${upPct}%`, 'info', 60000);
                     });
@@ -47217,7 +47446,7 @@ const App = {
             } catch (e) {
                 this._vaultAbortSignal = null;
                 if (e.name === 'AbortError') {
-                    this.toast(t('paste_cancelled', '붙여넣기가 취소되었습니다.'), 'error');
+                    this.toast(t('paste_cancelled', '붙여넣기가 취소되었습니다.'), 'warning');
                     break;
                 }
                 this.toast(`${it.name}: ${e.message}`, 'error');
@@ -47226,7 +47455,7 @@ const App = {
         this._vaultPasteAbort = null;
         
         if (success > 0) {
-            this.toast(`✅ ${success}${t('count_items', '개 항목')} ${t('paste_complete', '붙여넣기 완료')}`, 'success');
+            this.toast(`${success}${t('count_items', '개 항목')} ${t('paste_complete', '붙여넣기 완료')}`, 'success');
             if (mode === 'cut') this.clipboard = { items: [], mode: 'copy', storageId: null };
             this.loadFiles();
         }
@@ -47355,7 +47584,7 @@ const App = {
                 success++;
             } catch (e) {
                 if (e.name === 'AbortError') {
-                    this.toast(t('paste_cancelled', '붙여넣기가 취소되었습니다.'), 'error');
+                    this.toast(t('paste_cancelled', '붙여넣기가 취소되었습니다.'), 'warning');
                     break;
                 }
                 this.toast(`${it.name}: ${e.message}`, 'error');
@@ -47390,7 +47619,7 @@ const App = {
         }, 2000);
         
         if (success > 0) {
-            this.toast(`✅ ${success}${t('count_files_vault_paste_complete', '개 파일 암호화 붙여넣기 완료')}`, 'success');
+            this.toast(`${success}${t('count_files_vault_paste_complete', '개 파일 암호화 붙여넣기 완료')}`, 'success');
             if (mode === 'cut') this.clipboard = { items: [], mode: 'copy', storageId: null };
             this.vaultLoadFiles();
         }
@@ -47526,7 +47755,7 @@ const App = {
         }, 2000);
         
         if (success > 0) {
-            this.toast(`✅ ${success}${t('vault_upload_complete', '개 파일 암호화 업로드 완료')}`, 'success');
+            this.toast(`${success}${t('vault_upload_complete', '개 파일 암호화 업로드 완료')}`, 'success');
             this.vaultLoadFiles();
         }
     },
@@ -47635,7 +47864,7 @@ const App = {
                         const pct = cancelItem.querySelector('.upload-session-percent');
                         if (pct) { pct.textContent = t('cancelled', '취소됨'); pct.style.color = '#e67e22'; }
                     }
-                    this.toast(t('upload_cancelled', '업로드가 취소되었습니다.'), 'error');
+                    this.toast(t('upload_cancelled', '업로드가 취소되었습니다.'), 'warning');
                     break;
                 }
                 this.toast(`${file.name}: ${e.message}`, 'error');
@@ -47903,7 +48132,7 @@ const App = {
             }
             session.status = 'error';
             this._updateMultiDownloadItem(session);
-            this.toast(e.message || 'Download failed', 'error');
+            this.toast(e.message || t('nt_download_failed', '다운로드 실패'), 'error');
             setTimeout(() => this._removeMultiDownloadItem(sessionId), 3000);
         }
     },
@@ -48440,7 +48669,7 @@ const App = {
                 return;
             }
             this.hideModal('modal-preview');
-            this.toast(e.message || 'Preview failed', 'error');
+            this.toast(e.message || t('nt_preview_failed', '미리보기 실패'), 'error');
         }
     },
     
@@ -48559,7 +48788,7 @@ const App = {
     /** 일반 파일을 암호화 (다운로드 → 암호화 → vault_upload → 원본 삭제) */
     async vaultEncryptPlainFile(item) {
         if (!item._plain) {
-            this.toast('Already encrypted', 'info');
+            this.toast(t('nt_already_encrypted', '이미 암호화된 파일입니다.'), 'info');
             return;
         }
         
@@ -48640,10 +48869,10 @@ const App = {
                 await this.api('delete', { storage_id: storageId, path: item.path });
             }
             
-            this.toastUpdate(`✅ ${item.name} ${t('vault_encrypt_complete', '암호화 완료')}`, 'success');
+            this.toastUpdate(`${item.name} ${t('vault_encrypt_complete', '암호화 완료')}`, 'success');
             this.vaultLoadFiles();
         } catch (e) {
-            this.toast(e.message || 'Encrypt failed', 'error');
+            this.toast(e.message || t('nt_encrypt_failed', '암호화 실패'), 'error');
         }
     },
     
@@ -48692,7 +48921,7 @@ const App = {
         if (errors.length > 0) {
             this.toast(`${tf('vault_migrate_partial', { count: success, total: legacyItems.length }, `${success}/${legacyItems.length} 마이그레이션 완료`)} (${tf('vault_migrate_errors', { count: errors.length }, `${errors.length}개 실패`)})`, 'warning');
         } else {
-            this.toast(`✅ ${tf('vault_migrate_complete', { count: success }, `${success}개 마이그레이션 완료`)}`, 'success');
+            this.toast(`${tf('vault_migrate_complete', { count: success }, `${success}개 마이그레이션 완료`)}`, 'success');
         }
         
         this.vaultLoadFiles();
@@ -48746,7 +48975,7 @@ const App = {
         }
         
         if (success > 0) {
-            this.toast(`✅ ${success}${t('vault_encrypt_complete_count', '개 암호화 완료')}`, 'success');
+            this.toast(`${success}${t('vault_encrypt_complete_count', '개 암호화 완료')}`, 'success');
             this.vaultLoadFiles();
         }
     },
@@ -48875,7 +49104,7 @@ const App = {
     /** 개별 파일 암호화 해제 (복호화 → 원본으로 저장 → .enc 삭제) */
     async vaultDecryptFile(item) {
         if (!item._vault || !item._uuid) {
-            this.toast('Not an encrypted file', 'error');
+            this.toast(t('nt_not_encrypted', '암호화된 파일이 아닙니다.'), 'error');
             return;
         }
         
@@ -48974,7 +49203,7 @@ const App = {
             session.status = 'error';
             session.filename = '❌ ' + item.name;
             this._updateMultiDownloadItem(session);
-            this.toast(e.message || 'Decrypt failed', 'error');
+            this.toast(e.message || t('nt_decrypt_failed', '암호화 해제 실패'), 'error');
             setTimeout(() => this._removeMultiDownloadItem(sessionId), 3000);
         }
     },
@@ -49160,7 +49389,7 @@ const App = {
         this._hideConvertProgress();
         
         if (errors.length > 0) {
-            this.toast(`${decrypted}/${allFiles.length} ${t('vault_decrypt_partial', '개 암호화 해제 완료')} (${errors.length} ${t('vault_convert_errors', '개 실패')})`, 'warning');
+            this.toast(`${decrypted}/${allFiles.length}${t('vault_decrypt_partial', '개 암호화 해제 완료')} (${errors.length}${t('vault_convert_errors', '개 실패')})`, 'warning');
             return;
         }
         
@@ -49220,7 +49449,7 @@ const App = {
             actions.push({ action: '_divider' });
         }
         actions.push({ action: 'rename', icon: '✏️', label: t('rename', '이름 변경') });
-        actions.push({ action: 'copy', icon: '📋', label: t('copy', '복사') });
+        actions.push({ action: 'copy', icon: 'copy', label: t('copy', '복사') });
         actions.push({ action: 'cut', icon: '✂️', label: t('cut', '잘라내기') });
         if (isEncrypted || isSubVault) {
             actions.push({ action: 'decrypt', icon: '🔓', label: t('vault_decrypt_file', '암호화 해제') });
@@ -49251,7 +49480,7 @@ const App = {
             div.className = 'vault-ctx-item';
             div.dataset.action = a.action;
             div.style.cssText = `padding:8px 16px;cursor:pointer;font-size:0.9em;${a.danger ? 'color:var(--fs-fg-err, #dc3545);' : ''}`;
-            div.textContent = a.icon + ' ' + a.label;
+            div.innerHTML = fsIcoFrom(a.icon) + ' ' + App.escapeHtml(a.label);   // ★ (2026-10-26) 이모지 → 선 그림 아이콘
             div.addEventListener('mouseenter', () => div.style.background = 'var(--fs-surface-2, #f0f0f0)');
             div.addEventListener('mouseleave', () => div.style.background = '');
             div.addEventListener('click', () => {
@@ -49313,6 +49542,10 @@ const App = {
             this.vaultCopyToClipboard('cut');
             return;
         } else if (action === 'rename') {
+            // ★ (2026-10-27) 여러 개 골랐으면 일괄 이름 변경(탐색기 방식), 한 개면 종전대로
+            if (this.getSelectedOrCheckedItems().length > 1) { this.showRenameModal(); return; }
+            if (this._renameBatchRunning) { this.toast(t('nt_rename_batch_busy', '이름을 바꾸는 중입니다. 끝난 뒤 다시 시도하세요.'), 'info'); return; }   // ★ (2026-10-27 15시) 위 showRenameModal 과 같음
+            this._setRenameBatch(null);
             // vault 파일 정보로 renameOriginal 설정 후 모달 표시
             const ext = (item.name.lastIndexOf('.') > 0) ? item.name.substring(item.name.lastIndexOf('.') + 1) : '';
             const baseName = ext ? item.name.substring(0, item.name.lastIndexOf('.')) : item.name;
@@ -49550,7 +49783,7 @@ const App = {
             
             if (errors.length > 0) {
                 console.error('[Vault Convert] Errors:', errors);
-                this.toast(`${converted}/${files.length} ${t('vault_convert_partial', '개 변환 완료')} (${errors.length} ${t('vault_convert_errors', '개 실패')})`, 'warning');
+                this.toast(`${converted}/${files.length}${t('vault_convert_partial', '개 변환 완료')} (${errors.length}${t('vault_convert_errors', '개 실패')})`, 'warning');
             } else {
                 this.toast(`${converted}${t('vault_convert_complete', '개 파일 암호화 변환 완료')}`, 'success');
             }
@@ -49560,7 +49793,7 @@ const App = {
             
         } catch (e) {
             console.error('[Vault Convert] Fatal error:', e);
-            this.toast(e.message || 'Conversion failed', 'error');
+            this.toast(e.message || t('nt_convert_failed', '변환 실패'), 'error');
             btn.prop('disabled', false).text('🔒 ' + t('create', '생성'));
             $('#vault-create-name').prop('disabled', false);
             btn.off('click').on('click', () => this.vaultCreate());
@@ -49642,16 +49875,27 @@ const App = {
      */
     _applyLabelPosition(position) {
         // 9개 위치 → {top, right, bottom, left, transform}
+        // ★ (2026-10-26 오후) 펜닐: 라벨은 '종이 오른쪽으로 살짝 나오면서 가운데보다 살짝 위' (압축 프로그램 아이콘처럼)
+        //   좌우 간격은 종전 4% 그대로(선 그림 종이는 가로 23~79% 라 라벨이 종이 가장자리 밖으로 살짝 나옴),
+        //   가운데 줄(center-left·center-right)은 50% → 42%(살짝 위)
+        // ★ (2026-10-26 밤) 9방향을 선 그림 종이(가로 23~79%, 세로 10~90%, 접힌 귀퉁이 세로 10~31%)에 맞춰 정리(펜닐: 위 18% 가 보통):
+        //   위 줄(↖↑↗) 4% → 18%  : 종이 위 가장자리보다 안쪽 — 4% 면 라벨이 종이 위로 떠 보였음
+        //   아래 줄(↙↓↘) 4% → 18%: 위 줄과 대칭, 종이 아래 가장자리보다 안쪽 — 4% 면 종이 아래로 빠져나갔음
+        //   가운데 줄 ←→ 42%, • 은 정가운데 그대로
+        // ★ (2026-10-26 밤 2) 좌우도 칸이 아니라 종이에 맞춤(펜닐: PC 그리드·목록에서 위치가 안 맞음) — 종이 바깥 선이 칸의 가로 20.4~81.7% 라
+        //   좌우 4% 는 왼쪽으로 16%·오른쪽으로 14% 나와 양쪽이 다르고 많이 삐져나왔음 → 양쪽 모두 종이 선 밖으로 8%(48px 칸에서 약 4px)만 나오게
+        //   왼쪽 12%·오른쪽 10%, 가운데 열은 종이 가운데(51%)
+        // ★ (2026-10-26 밤 3) 가운데 줄 ←→ 42% → 50% — 42% 면 • 보다 위로 떠서 '가운데에서 좌우'가 아니었음(펜닐 PC 캡처). 가운데 줄 셋이 같은 높이(종이 세로 가운데 50%)
         const positions = {
-            'top-left':      { top: '4%',  left: '4%' },
-            'top-center':    { top: '4%',  left: '50%', transform: 'translateX(-50%)' },
-            'top-right':     { top: '4%',  right: '4%' },
-            'center-left':   { top: '50%', left: '4%',  transform: 'translateY(-50%)' },
-            'center':        { top: '50%', left: '50%', transform: 'translate(-50%, -50%)' },
-            'center-right':  { top: '50%', right: '4%', transform: 'translateY(-50%)' },
-            'bottom-left':   { bottom: '4%', left: '4%' },
-            'bottom-center': { bottom: '4%', left: '50%', transform: 'translateX(-50%)' },
-            'bottom-right':  { bottom: '4%', right: '4%' },
+            'top-left':      { top: '18%', left: '12%' },
+            'top-center':    { top: '18%', left: '51%', transform: 'translateX(-50%)' },
+            'top-right':     { top: '18%', right: '10%' },
+            'center-left':   { top: '50%', left: '12%', transform: 'translateY(-50%)' },
+            'center':        { top: '50%', left: '51%', transform: 'translate(-50%, -50%)' },
+            'center-right':  { top: '50%', right: '10%', transform: 'translateY(-50%)' },
+            'bottom-left':   { bottom: '18%', left: '12%' },
+            'bottom-center': { bottom: '18%', left: '51%', transform: 'translateX(-50%)' },
+            'bottom-right':  { bottom: '18%', right: '10%' },
         };
         
         const cfg = positions[position] || positions['top-right'];
@@ -49665,6 +49909,22 @@ const App = {
         root.style.setProperty('--fs-label-transform', cfg.transform || 'none');
     },
     
+    /** ★ (2026-10-27) 기본 그림 + (필요하면) 확장자 라벨 — 서버 FileManager::extIconHtml 과 같음(펜닐: 확장자와 아이콘이 맞게) */
+    _fsExtIconHtml(iconName, ext) {
+        const path = this.fileIconPath || 'assets/file-icons/';
+        const e = String(ext || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const img = `<img src="${this._iconUrlWithBuster(`${path}${iconName}.svg`, iconName)}" alt="${e}" class="fs-file-icon-img" draggable="false" loading="lazy">`;
+        if (!this._fsIconNeedsLabel(iconName, e)) return img;
+        const lbl = e.toUpperCase();
+        return `<span class="fs-archive-icon">${img}<span class="archive-ext${lbl.length >= 5 ? ' fs-ext-long' : ''}">${lbl}</span></span>`;
+    },
+
+    /** ★ (2026-10-27) 라벨 붙일 그림인지 — 펜닐 결정 '형식이 중요한 것만'(동영상·음악·실행 파일·텍스트·디스크 이미지). 서버 FileManager::iconNeedsExtLabel 과 같은 표 */
+    _fsIconNeedsLabel(iconName, ext) {
+        if (!ext) return false;
+        return ['video', 'audio', 'app', 'text', 'disc', 'word', 'excel', 'powerpoint'].indexOf(String(iconName || '')) !== -1;   // (01:56) 오피스 로고 그림도 라벨. (02:18) hwp·hwpx 는 라벨 없음
+    },
+
     /** 파일 아이콘 - vscode-icons + 기존 인라인 SVG 혼용
      *  인자: 파일명 또는 확장자 (둘 다 허용, '.' 포함 여부로 자동 판별)
      *  반환: <img> 태그 또는 인라인 <svg> 또는 <span> 오버레이 문자열
@@ -49712,24 +49972,32 @@ const App = {
             }
         }
         
-        // HWP/HWPX — 인라인 SVG
-        if (ext === 'hwp' || ext === 'hwpx') {
-            return this.fileIcons.hwp || '';
+        // ★ (2026-10-27) 윈도우 11 느낌 확장자별 그림(ext-확장자.svg) — 서버 FileManager::getFileIcon 과 같음.
+        //   있는지는 index.php 가 넘기는 아이콘 파일 목록(ICON_BUSTER_MAP)으로 판단(파일 목록을 따로 두지 않음). (13:07) 오피스·PDF·한글도 ext 그림이 먼저
+        if (/^[a-z0-9]{1,10}$/.test(ext) && window.ICON_BUSTER_MAP && window.ICON_BUSTER_MAP['ext-' + ext]) {
+            const _wp = this.fileIconPath || 'assets/file-icons/';
+            return `<img src="${this._iconUrlWithBuster(`${_wp}ext-${ext}.svg`, 'ext-' + ext)}" alt="${ext}" class="fs-file-icon-img" draggable="false" loading="lazy">`;
         }
+
+        // HWP/HWPX — ★ (2026-10-27) 줄 그은 문서 + 파란 접힘 판·흰 '한' 그림(hwp.svg, 펜닐 선택 시안 C), 라벨 없음 (서버와 같음)
+        if (ext === 'hwp' || ext === 'hwpx') {
+            return this._fsExtIconHtml('hwp', ext);
+        }
+        
         
         // TEXT (txt/log) - 파일 기반 text.svg (서버 getFileIcon()과 동일)
         if (ext === 'txt' || ext === 'log') {
-            const path = this.fileIconPath || 'assets/file-icons/';
-            const url = this._iconUrlWithBuster(`${path}text.svg`, 'text');
-            return `<img src="${url}" alt="text" class="fs-file-icon-img" draggable="false" loading="lazy">`;
+            return this._fsExtIconHtml('text', ext);   // ★ (2026-10-27) TXT·LOG 라벨 (서버와 같음)
         }
         
         // 압축 파일: 공용 archive.svg + 라벨 오버레이
         const archiveMap = {
             'zip': 'ZIP', '7z': '7Z', 'rar': 'RAR',
             'tar': 'TAR', 'gz': 'GZ', 'bz2': 'BZ2', 'xz': 'XZ',
-            'tgz': 'TGZ', 'tbz2': 'TBZ', '001': '001',
-            'iso': 'ISO'
+            'tgz': 'TGZ', 'tbz2': 'TBZ2', '001': '001',
+            // ★ (2026-10-27) iso 는 디스크 이미지 — extToIconFile 의 disc + 라벨 (서버와 같음)
+            // ★ (2026-10-26 밤) lz·cab·lzma·z 도 라벨 (서버와 같음)
+            'lz': 'LZ', 'cab': 'CAB', 'lzma': 'LZMA', 'z': 'Z'
         };
         if (archiveMap[ext]) {
             const path = this.fileIconPath || 'assets/file-icons/';
@@ -49758,15 +50026,18 @@ const App = {
         // 외부 SVG 매핑 (archive 제외)
         const iconFile = (this.extToIconFile && this.extToIconFile[ext]);
         if (iconFile) {
-            const path = this.fileIconPath || 'assets/file-icons/';
-            const url = this._iconUrlWithBuster(`${path}${iconFile}.svg`, iconFile);
-            return `<img src="${url}" alt="${ext}" class="fs-file-icon-img" draggable="false" loading="lazy">`;
+            return this._fsExtIconHtml(iconFile, ext);   // ★ (2026-10-27) 그림에 확장자 글자가 없으면 라벨 (서버와 같음)
         }
         
         // 이모지 폴백: EMOJI_ICONS에 있으면 해당 이모지 문자 반환 (서버 getFileIcon()과 동일)
         //   music 🎵, video 🎬 (iconMap에 없는 경우), exe/msi ⚙️, apk 📱 등
         //   window.EMOJI_ICONS는 index.php가 config.php의 EMOJI_ICONS 상수를 주입
         if (window.EMOJI_ICONS && window.EMOJI_ICONS[ext]) {
+            // ★ (2026-10-26) 이모지 → 같은 뜻의 선 그림 파일(서버 FileManager::emojiIconFile 과 같은 표). 모르는 이모지는 종전처럼 글자
+            const _emoFile = { '🎵': 'audio', '⚙': 'app', '🔗': 'link', '📦': 'archive', '🖼': 'image', '🎬': 'video', '🔤': 'font' }[String(window.EMOJI_ICONS[ext]).replace(/\uFE0F/g, '')];
+            if (_emoFile) {
+                return this._fsExtIconHtml(_emoFile, ext);   // ★ (2026-10-27) MP3·EXE 같은 라벨 (서버와 같음)
+            }
             return window.EMOJI_ICONS[ext];
         }
         
@@ -49777,7 +50048,7 @@ const App = {
         return `<img src="${fbUrl}" alt="${ext || 'file'}" class="fs-file-icon-img" draggable="false" loading="lazy">`;
     },
     
-    /** 폴더 아이콘 - 기존 인라인 SVG 유지 (펜닐 선호) */
+    /** 폴더 아이콘 - 인라인 SVG (★ 2026-10-26 선 그림 테두리 + 윈도우 탐색기 같은 노란 칠, assets/file-icons/folder.svg 와 같음) */
     getFolderIcon() {
         // 사용자 정의 폴더 아이콘이 있으면 그걸 사용 (window.USER_ICON_MAP.__folder)
         //   매핑값에서 |label 서픽스 제거 (폴더는 라벨 의미 없음)
@@ -49794,8 +50065,8 @@ const App = {
                 return `<img src="${url}" alt="folder" class="fs-file-icon-img" draggable="false" loading="lazy">`;
             }
         }
-        // 기본: config.php의 SVG_ICONS['folder']와 동일한 노란 폴더 SVG
-        return '<svg viewBox="0 0 48 48" width="100%" height="100%"><path fill="#FFC107" d="M40 12H22l-4-4H8c-2.2 0-4 1.8-4 4v8h40v-4c0-2.2-1.8-4-4-4z"/><path fill="#FFCA28" d="M40 12H8c-2.2 0-4 1.8-4 4v20c0 2.2 1.8 4 4 4h32c2.2 0 4-1.8 4-4V16c0-2.2-1.8-4-4-4z"/></svg>';
+        // 기본: config.php의 SVG_ICONS['folder'] 와 같은 폴더 그림 (★ 2026-10-26 테두리 + 노란 칠 — 펜닐: 윈도우 탐색기처럼 노란색, assets/file-icons/folder.svg 와 같음)
+        return '<svg width="100%" height="100%" viewBox="0 0 48 48" stroke="#a8740a" stroke-width="2" stroke-linejoin="round"><path fill="#e9a922" d="M6 37V11a3 3 0 0 1 3-3h9l4 5h17a3 3 0 0 1 3 3v21a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/><path fill="#ffcc4d" d="M6 19.5h36V37a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/></svg>';
     },
     
     // ===== 즐겨찾기 =====

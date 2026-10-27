@@ -2,6 +2,7 @@
 require_once __DIR__ . '/php_version_check.php';
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/lang.php';
+require_once __DIR__ . '/api/FsIcons.php';   // ★ (2026-10-26) 선 그림 아이콘 모음 — fsi('이름')·fs_icon_sprite()
 
 // 언어 변경 요청 처리
 if (isset($_GET['lang']) && in_array($_GET['lang'], ['ko', 'en'])) {
@@ -102,6 +103,9 @@ $filterPresets = [
     'neon' => ['brightness' => 110, 'blur' => 0, 'saturate' => 150, 'overlay' => '#d946ef', 'opacity' => 25],
 ];
 $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
+// ★ (2026-10-26) 화면 HTML 의 이모지 → 선 그림 아이콘(2단계). 글자 부분만 바꾸고 태그 속성·<script>·<style>·<textarea> 안은 그대로,
+//   선택 목록(<option>)은 이모지를 빼고 글자만. 여기부터 출력되는 HTML 에만 적용(위쪽의 JSON·리다이렉트 응답은 해당 없음). 원본 api/FsIcons.php
+ob_start('fs_icon_convert_html');
 ?>
 <!DOCTYPE html>
 <html lang="<?php echo htmlspecialchars($currentLang); ?>">
@@ -121,7 +125,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
     <?php if ($faviconPath): ?>
     <link rel="icon" href="<?= htmlspecialchars($faviconPath) ?>">
     <?php else: ?>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E📁%3C/text%3E%3C/svg%3E">
+    <?php /* ★ (2026-10-26) 탭 아이콘도 📁 이모지 → 선 그림 폴더(로고와 같은 모양, 파랑) */ ?><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234a7bd0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z'/%3E%3C/svg%3E">
     <?php endif; ?>
     <link rel="stylesheet" href="assets/css/style.css?v=<?php echo substr(md5_file(__DIR__ . '/assets/css/style.css'), 0, 10); ?>">
     <!-- ★ (2026-09-23) 동영상 새 껍데기(기본 켜짐 — ?vskin=0 으로 끔). 규칙은 .fsvs-* 로만 적용돼 꺼져 있으면 영향 없음 -->
@@ -213,6 +217,9 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
     </style>
 </head>
 <body>
+<?php /* ★ (2026-10-26) 선 그림 아이콘 묶음(<symbol>) — PHP fsi()·JS fsIco() 가 <use href="#fsi-이름"> 로 가져다 씀. 원본은 api/FsIcons.php */ echo fs_icon_sprite(); ?>
+<script>window.FS_ICO_EMOJI = <?= fs_icon_map_json() ?>;</script>
+<script src="assets/js/fs-icons.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-icons.js'), 0, 10) ?>"></script><?php /* ★ (2026-10-26) 스크립트가 화면에 넣는 이모지도 넣는 즉시 선 그림으로 — app.js 보다 먼저 */ ?>
     <script>
         // 테마 로드 완료 후 body 표시
         (function() {
@@ -464,7 +471,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                     <span class="logo" style="cursor:pointer;"><img src="<?= htmlspecialchars($logoImage) ?>" alt="Logo" class="header-logo"> <span class="logo-text"><?= htmlspecialchars($siteName) ?></span></span>
                     <span class="header-version" style="font-size:10px;color:var(--fs-text-3, #999);margin-left:4px;vertical-align:middle;">v<?php echo APP_VERSION; ?></span>
                     <?php else: ?>
-                    <span class="logo" style="cursor:pointer;">📁 <span class="logo-text"><?= htmlspecialchars($siteName) ?></span></span>
+                    <span class="logo" style="cursor:pointer;"><?= fsi('folder', 'logo-ico') ?> <span class="logo-text"><?= htmlspecialchars($siteName) ?></span></span>
                     <span class="header-version" style="font-size:10px;color:var(--fs-text-3, #999);margin-left:4px;vertical-align:middle;">v<?php echo APP_VERSION; ?></span>
                     <?php endif; ?>
                 </div>
@@ -474,10 +481,10 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                         <input type="text" style="display:none" aria-hidden="true">
                         <input type="password" style="display:none" aria-hidden="true">
                         <input type="search" id="search-input" placeholder="<?php echo $currentLang === 'en' ? 'Search... (e.g. *.mp4, doc*)' : '전체 검색... (예: *.mp4, 문서*)'; ?>" autocomplete="off" name="q_search_<?= time() ?>" readonly onfocus="this.removeAttribute('readonly')">
-                        <button id="search-btn" title="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>">🔍</button>
-                        <button id="search-filter-toggle" title="<?php echo $currentLang === 'en' ? 'Toggle Filter' : '필터 표시/숨김'; ?>">⚙️</button>
+                        <button id="search-btn" title="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>"><?= fsi('search') ?></button>
+                        <button id="search-filter-toggle" title="<?php echo $currentLang === 'en' ? 'Toggle Filter' : '필터 표시/숨김'; ?>"><?= fsi('sliders') ?></button>
                     </div>
-                    <div class="search-hint"><?php echo $currentLang === 'en' ? '🔍 Integrated: fast (indexed) | ⚙️ Filter: real-time (no index needed)' : '🔍 통합검색: 빠름 (인덱스) | ⚙️ 필터 검색: 실시간 (인덱스 불필요)'; ?></div>
+                    <div class="search-hint"><?= fsi('search') ?> <?php echo $currentLang === 'en' ? 'Integrated: fast (indexed)' : '통합검색: 빠름 (인덱스)'; ?> | <?= fsi('sliders') ?> <?php echo $currentLang === 'en' ? 'Filter: real-time (no index needed)' : '필터 검색: 실시간 (인덱스 불필요)'; ?></div>
                 </div>
                 <div class="header-right">
                     <button id="mobile-search-btn" class="mobile-search-btn" aria-label="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>" title="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
@@ -498,11 +505,11 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                 <input type="password" style="display:none" aria-hidden="true">
                 <div class="mobile-search-row">
                     <input type="search" id="mobile-search-input" placeholder="<?php echo $currentLang === 'en' ? 'Search...' : '검색...'; ?>" autocomplete="off" name="q_mobile_<?= time() ?>" readonly onfocus="this.removeAttribute('readonly')">
-                    <button id="mobile-search-submit">🔍</button>
-                    <button id="mobile-filter-toggle" title="<?php echo $currentLang === 'en' ? 'Filter' : '필터'; ?>">⚙️</button>
-                    <button id="mobile-search-close">✕</button>
+                    <button id="mobile-search-submit" aria-label="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>"><?= fsi('search') ?></button>
+                    <button id="mobile-filter-toggle" title="<?php echo $currentLang === 'en' ? 'Filter' : '필터'; ?>"><?= fsi('sliders') ?></button>
+                    <button id="mobile-search-close" aria-label="<?php echo $currentLang === 'en' ? 'Close' : '닫기'; ?>"><?= fsi('x') ?></button>
                 </div>
-                <div class="search-hint mobile-search-hint"><?php echo $currentLang === 'en' ? '🔍 Integrated: fast (indexed) | ⚙️ Filter: real-time (no index needed)' : '🔍 통합검색: 빠름 (인덱스) | ⚙️ 필터 검색: 실시간 (인덱스 불필요)'; ?></div>
+                <div class="search-hint mobile-search-hint"><?= fsi('search') ?> <?php echo $currentLang === 'en' ? 'Integrated: fast (indexed)' : '통합검색: 빠름 (인덱스)'; ?> | <?= fsi('sliders') ?> <?php echo $currentLang === 'en' ? 'Filter: real-time (no index needed)' : '필터 검색: 실시간 (인덱스 불필요)'; ?></div>
             </div>
             
             <!-- 본문 -->
@@ -510,7 +517,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                 <!-- 사이드바 -->
                 <aside class="sidebar">
                     <div class="sidebar-close-wrap">
-                        <button class="sidebar-close-btn" onclick="$('.sidebar').removeClass('open'); document.body.classList.remove('sidebar-open'); App.toggleSidebarOverlay();">✕</button>
+                        <button class="sidebar-close-btn" onclick="$('.sidebar').removeClass('open'); document.body.classList.remove('sidebar-open'); App.toggleSidebarOverlay();" aria-label="<?php echo $currentLang === 'en' ? 'Close' : '닫기'; ?>"><?= fsi('x') ?></button>
                     </div>
                     <div class="sidebar-section sidebar-main">
                         <h3><?php _e('storage'); ?></h3>
@@ -520,7 +527,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                         <div id="board-sidebar-section" style="display:none;">
                         <div class="sidebar-divider"></div>
                         <h3 class="section-toggle" data-target="board-list-sidebar">
-                            <span class="toggle-icon">−</span> 📋 <?php echo $currentLang === 'en' ? 'Boards' : '게시판'; ?>
+                            <span class="toggle-icon">−</span> <?= fsi('clipboard-list') ?> <?php echo $currentLang === 'en' ? 'Boards' : '게시판'; ?>
                         </h3>
                         <ul class="menu-list collapsible" id="board-list-sidebar">
                         </ul>
@@ -528,17 +535,17 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
 
                         <div class="sidebar-divider"></div>
                         <ul class="menu-list">
-                            <li><a href="#" id="menu-my-shares">🔗 <?php echo $currentLang === 'en' ? 'My Shares' : '내 공유 링크'; ?><span id="my-shares-badge" class="menu-badge" style="display:none;">0</span></a></li>
-                            <li><a href="#" id="menu-my-ishares">👤 <?php echo $currentLang === 'en' ? 'My User Shares' : '내 사용자 공유'; ?><span id="my-ishares-badge" class="menu-badge" style="display:none;">0</span></a></li>
-                            <li><a href="#" id="menu-shared-with-me">📨 <?php echo $currentLang === 'en' ? 'Shared with Me' : '나에게 공유됨'; ?><span id="shared-with-me-badge" class="menu-badge" style="display:none;">0</span></a></li>
-                            <li><a href="#" id="menu-my-trash">🗑️ <?php echo $currentLang === 'en' ? 'My Trash' : '내 휴지통'; ?></a></li>
-                            <li id="menu-webdav-item" style="display:none;"><a href="#" id="menu-webdav">🌐 <?php echo $currentLang === 'en' ? 'WebDAV Guide' : 'WebDAV 접속 안내'; ?></a></li>
+                            <li><a href="#" id="menu-my-shares"><?= fsi('link') ?> <?php echo $currentLang === 'en' ? 'My Shares' : '내 공유 링크'; ?><span id="my-shares-badge" class="menu-badge" style="display:none;">0</span></a></li>
+                            <li><a href="#" id="menu-my-ishares"><?= fsi('user-plus') ?> <?php echo $currentLang === 'en' ? 'My User Shares' : '내 사용자 공유'; ?><span id="my-ishares-badge" class="menu-badge" style="display:none;">0</span></a></li>
+                            <li><a href="#" id="menu-shared-with-me"><?= fsi('inbox') ?> <?php echo $currentLang === 'en' ? 'Shared with Me' : '나에게 공유됨'; ?><span id="shared-with-me-badge" class="menu-badge" style="display:none;">0</span></a></li>
+                            <li><a href="#" id="menu-my-trash"><?= fsi('trash') ?> <?php echo $currentLang === 'en' ? 'My Trash' : '내 휴지통'; ?></a></li>
+                            <li id="menu-webdav-item" style="display:none;"><a href="#" id="menu-webdav"><?= fsi('globe') ?> <?php echo $currentLang === 'en' ? 'WebDAV Guide' : 'WebDAV 접속 안내'; ?></a></li>
                         </ul>
                         
                         <!-- 즐겨찾기 섹션 -->
                         <div class="sidebar-divider"></div>
                         <h3 class="section-toggle" data-target="favorites-list">
-                            <span class="toggle-icon">+</span> ⭐ <?php _e('favorites'); ?>
+                            <span class="toggle-icon">+</span> <?= fsi('star') ?> <?php _e('favorites'); ?>
                         </h3>
                         <ul class="menu-list collapsible" id="favorites-list" style="display:none;">
                             <li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;"><?php _e('no_favorites'); ?></li>
@@ -547,7 +554,7 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                         <!-- 최근 파일 섹션 -->
                         <div class="sidebar-divider"></div>
                         <h3 class="section-toggle" data-target="recent-files-list">
-                            <span class="toggle-icon">+</span> 🕐 <?php _e('recent_files'); ?>
+                            <span class="toggle-icon">+</span> <?= fsi('clock') ?> <?php _e('recent_files'); ?>
                         </h3>
                         <ul class="menu-list collapsible" id="recent-files-list" style="display:none;">
                             <li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;"><?php _e('no_recent_files'); ?></li>
@@ -560,33 +567,33 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             </h3>
                             <ul class="menu-list collapsible" id="admin-menu-list" style="display:none;">
                                 <li class="menu-group-label"><?php echo $currentLang === 'en' ? 'Users/Permissions' : '사용자/권한'; ?></li>
-                                <li><a href="#" id="menu-users">👥 <?php _e('user_management'); ?></a></li>
-                                <li><a href="#" id="menu-roles">🏷️ <?php echo $currentLang === 'en' ? 'Role Management' : '역할 관리'; ?></a></li>
-                                <li><a href="#" id="menu-deleted-users">👻 <?php echo $currentLang === 'en' ? 'Deleted Users' : '탈퇴/삭제 기록'; ?></a></li>
+                                <li><a href="#" id="menu-users"><?= fsi('users') ?> <?php _e('user_management'); ?></a></li>
+                                <li><a href="#" id="menu-roles"><?= fsi('tag') ?> <?php echo $currentLang === 'en' ? 'Role Management' : '역할 관리'; ?></a></li>
+                                <li><a href="#" id="menu-deleted-users"><?= fsi('user-x') ?> <?php echo $currentLang === 'en' ? 'Deleted Users' : '탈퇴/삭제 기록'; ?></a></li>
                                 <li class="menu-group-label"><?php echo $currentLang === 'en' ? 'Storage/Files' : '스토리지/파일'; ?></li>
-                                <li><a href="#" id="menu-storages">💾 <?php _e('storage_management'); ?></a></li>
-                                <li><a href="#" id="menu-shares">🔗 <?php echo $currentLang === 'en' ? 'Share Management' : '공유 관리'; ?><span id="all-shares-badge" class="menu-badge" style="display:none;">0</span></a></li>
-                                <li><a href="#" id="menu-all-ishares">👤 <?php echo $currentLang === 'en' ? 'User Share Management' : '사용자 공유 관리'; ?><span id="all-ishares-badge" class="menu-badge" style="display:none;">0</span></a></li>
-                                <li><a href="#" id="menu-trash">🗑️ <?php echo $currentLang === 'en' ? 'All Trash' : '전체 휴지통'; ?></a></li>
-                                <li><a href="#" id="menu-bulk-delete">🧹 <?php echo $currentLang === 'en' ? 'Bulk Delete' : '조건부 삭제'; ?></a></li>
+                                <li><a href="#" id="menu-storages"><?= fsi('hard-drive') ?> <?php _e('storage_management'); ?></a></li>
+                                <li><a href="#" id="menu-shares"><?= fsi('link') ?> <?php echo $currentLang === 'en' ? 'Share Management' : '공유 관리'; ?><span id="all-shares-badge" class="menu-badge" style="display:none;">0</span></a></li>
+                                <li><a href="#" id="menu-all-ishares"><?= fsi('user-plus') ?> <?php echo $currentLang === 'en' ? 'User Share Management' : '사용자 공유 관리'; ?><span id="all-ishares-badge" class="menu-badge" style="display:none;">0</span></a></li>
+                                <li><a href="#" id="menu-trash"><?= fsi('trash') ?> <?php echo $currentLang === 'en' ? 'All Trash' : '전체 휴지통'; ?></a></li>
+                                <li><a href="#" id="menu-bulk-delete"><?= fsi('eraser') ?> <?php echo $currentLang === 'en' ? 'Bulk Delete' : '조건부 삭제'; ?></a></li>
                                 <li class="menu-group-label"><?php echo $currentLang === 'en' ? 'Logs/History' : '로그/기록'; ?></li>
-                                <li><a href="#" id="menu-all-logins">📋 <?php echo $currentLang === 'en' ? 'Login History' : '로그인 기록'; ?></a></li>
-                                <li><a href="#" id="menu-activity-logs">📜 <?php echo $currentLang === 'en' ? 'Activity Logs' : '활동 로그'; ?></a></li>
-                                <li><a href="#" id="menu-access-stats">📊 <?php echo $currentLang === 'en' ? 'Access Stats' : '접속 통계'; ?></a></li>
-                                <li><a href="#" id="menu-search-index">🔍 <?php _e('search_index_settings'); ?></a></li>
+                                <li><a href="#" id="menu-all-logins"><?= fsi('clipboard-list') ?> <?php echo $currentLang === 'en' ? 'Login History' : '로그인 기록'; ?></a></li>
+                                <li><a href="#" id="menu-activity-logs"><?= fsi('history') ?> <?php echo $currentLang === 'en' ? 'Activity Logs' : '활동 로그'; ?></a></li>
+                                <li><a href="#" id="menu-access-stats"><?= fsi('bar-chart') ?> <?php echo $currentLang === 'en' ? 'Access Stats' : '접속 통계'; ?></a></li>
+                                <li><a href="#" id="menu-search-index"><?= fsi('search') ?> <?php _e('search_index_settings'); ?></a></li>
                                 <li class="menu-group-label"><?php echo $currentLang === 'en' ? 'System' : '시스템'; ?></li>
                                 <li><a href="#" id="menu-qos"><?php _e('speed_limit'); ?></a></li>
-                                <li><a href="#" id="menu-security">🔒 <?php echo $currentLang === 'en' ? 'IP/Country Blocking' : 'IP/국가 차단 설정'; ?></a></li>
-                                <li><a href="#" id="menu-sso">🔐 <?php echo $currentLang === 'en' ? 'SSO Settings' : 'SSO 인증 설정'; ?></a></li>
-                                <li><a href="#" id="menu-antivirus">🛡️ <?php echo $currentLang === 'en' ? 'Antivirus Settings' : '백신 설정'; ?></a></li>
-                                <li><a href="#" id="menu-ransomware">🔐 <?php echo $currentLang === 'en' ? 'Ransomware Protection' : '랜섬웨어 방지'; ?></a></li>
-                                <li><a href="#" id="menu-upload-settings">📤 <?php echo $currentLang === 'en' ? 'Upload Settings' : '업로드 설정'; ?></a></li>
-                                <li><a href="#" id="menu-notice">📢 <?php _e('notice_settings'); ?></a></li>
-                                <li><a href="#" id="menu-boards">📋 <?php echo $currentLang === 'en' ? 'Board Management' : '게시판 관리'; ?></a></li>
-                                <li><a href="#" id="menu-terms">📜 <?php echo $currentLang === 'en' ? 'Terms of Service' : '가입시 이용약관'; ?></a></li>
-                                <li><a href="#" id="menu-system-settings">🔧 <?php _e('system_settings'); ?></a></li>
-                                <li><a href="#" id="menu-icon-manager">🎨 <?php echo $currentLang === 'en' ? 'Extension Icon Management' : '확장자 아이콘 관리'; ?></a></li>
-                                <li><a href="#" id="menu-system-info">📊 <?php echo $currentLang === 'en' ? 'System Info' : '시스템 정보'; ?></a></li>
+                                <li><a href="#" id="menu-security"><?= fsi('lock') ?> <?php echo $currentLang === 'en' ? 'IP/Country Blocking' : 'IP/국가 차단 설정'; ?></a></li>
+                                <li><a href="#" id="menu-sso"><?= fsi('key') ?> <?php echo $currentLang === 'en' ? 'SSO Settings' : 'SSO 인증 설정'; ?></a></li>
+                                <li><a href="#" id="menu-antivirus"><?= fsi('shield') ?> <?php echo $currentLang === 'en' ? 'Antivirus Settings' : '백신 설정'; ?></a></li>
+                                <li><a href="#" id="menu-ransomware"><?= fsi('shield-check') ?> <?php echo $currentLang === 'en' ? 'Ransomware Protection' : '랜섬웨어 방지'; ?></a></li>
+                                <li><a href="#" id="menu-upload-settings"><?= fsi('upload') ?> <?php echo $currentLang === 'en' ? 'Upload Settings' : '업로드 설정'; ?></a></li>
+                                <li><a href="#" id="menu-notice"><?= fsi('megaphone') ?> <?php _e('notice_settings'); ?></a></li>
+                                <li><a href="#" id="menu-boards"><?= fsi('clipboard-list') ?> <?php echo $currentLang === 'en' ? 'Board Management' : '게시판 관리'; ?></a></li>
+                                <li><a href="#" id="menu-terms"><?= fsi('file-text') ?> <?php echo $currentLang === 'en' ? 'Terms of Service' : '가입시 이용약관'; ?></a></li>
+                                <li><a href="#" id="menu-system-settings"><?= fsi('wrench') ?> <?php _e('system_settings'); ?></a></li>
+                                <li><a href="#" id="menu-icon-manager"><?= fsi('palette') ?> <?php echo $currentLang === 'en' ? 'Extension Icon Management' : '확장자 아이콘 관리'; ?></a></li>
+                                <li><a href="#" id="menu-system-info"><?= fsi('bar-chart') ?> <?php echo $currentLang === 'en' ? 'System Info' : '시스템 정보'; ?></a></li>
                             </ul>
                         </div>
                     </div>
@@ -671,43 +678,43 @@ $bgFilter = $filterPresets[$bgFilterPreset] ?? $filterPresets['none'];
                             <div class="action-dropdown" id="toolbar-action-dropdown">
                                 <button id="btn-toolbar-action" class="btn"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> <?php echo $currentLang === 'en' ? 'Actions' : '작업'; ?> ▾</button>
                                 <div id="toolbar-action-menu" class="toolbar-action-menu">
-                                    <div class="action-option" data-action="open">📂 <?php echo $currentLang === 'en' ? 'Open' : '열기'; ?></div>
-                                    <div class="action-option" data-action="preview">👁️ <?php echo $currentLang === 'en' ? 'Preview' : '미리보기'; ?></div>
-                                    <div class="action-option" data-action="onlyoffice">📝 <?php echo $currentLang === 'en' ? 'Edit with OnlyOffice' : 'OnlyOffice로 편집'; ?></div>
-                                    <div class="action-option" data-action="rhwp-edit">📝 <?php echo $currentLang === 'en' ? 'Edit with rHWP' : 'rHWP로 편집'; ?></div>
-                                    <div class="action-option" data-action="download">⬇️ <?php _e('download'); ?></div>
-                                    <div class="action-option" data-action="save-as">💾 <?php echo $currentLang === 'en' ? 'Save As' : '다른 이름으로 저장'; ?></div>
-                                    <div class="action-option" data-action="share">🔗 <?php _e('share'); ?></div>
-                                    <div class="action-option" data-action="internal_share">👤 <?php echo $currentLang === 'en' ? 'Share with User' : '사용자에게 공유'; ?></div>
+                                    <div class="action-option" data-action="open"><?= fsi('folder-open') ?> <?php echo $currentLang === 'en' ? 'Open' : '열기'; ?></div>
+                                    <div class="action-option" data-action="preview"><?= fsi('eye') ?> <?php echo $currentLang === 'en' ? 'Preview' : '미리보기'; ?></div>
+                                    <div class="action-option" data-action="onlyoffice"><?= fsi('file-text') ?> <?php echo $currentLang === 'en' ? 'Edit with OnlyOffice' : 'OnlyOffice로 편집'; ?></div>
+                                    <div class="action-option" data-action="rhwp-edit"><?= fsi('file-text') ?> <?php echo $currentLang === 'en' ? 'Edit with rHWP' : 'rHWP로 편집'; ?></div>
+                                    <div class="action-option" data-action="download"><?= fsi('download') ?> <?php _e('download'); ?></div>
+                                    <div class="action-option" data-action="save-as"><?= fsi('save') ?> <?php echo $currentLang === 'en' ? 'Save As' : '다른 이름으로 저장'; ?></div>
+                                    <div class="action-option" data-action="share"><?= fsi('link') ?> <?php _e('share'); ?></div>
+                                    <div class="action-option" data-action="internal_share"><?= fsi('user-plus') ?> <?php echo $currentLang === 'en' ? 'Share with User' : '사용자에게 공유'; ?></div>
                                     <div class="action-divider"></div>
-                                    <div class="action-option" data-action="favorite-add">⭐ <?php echo $currentLang === 'en' ? 'Add to Favorites' : '즐겨찾기 추가'; ?></div>
-                                    <div class="action-option" data-action="favorite-remove">☆ <?php echo $currentLang === 'en' ? 'Remove from Favorites' : '즐겨찾기 제거'; ?></div>
-                                    <div class="action-option" data-action="file-lock">🔒 <?php echo $currentLang === 'en' ? 'Lock' : '잠금'; ?></div>
-                                    <div class="action-option" data-action="file-unlock">🔓 <?php echo $currentLang === 'en' ? 'Unlock' : '잠금 해제'; ?></div>
+                                    <div class="action-option" data-action="favorite-add"><?= fsi('star') ?> <?php echo $currentLang === 'en' ? 'Add to Favorites' : '즐겨찾기 추가'; ?></div>
+                                    <div class="action-option" data-action="favorite-remove"><?= fsi('star-off') ?> <?php echo $currentLang === 'en' ? 'Remove from Favorites' : '즐겨찾기 제거'; ?></div>
+                                    <div class="action-option" data-action="file-lock"><?= fsi('lock') ?> <?php echo $currentLang === 'en' ? 'Lock' : '잠금'; ?></div>
+                                    <div class="action-option" data-action="file-unlock"><?= fsi('unlock') ?> <?php echo $currentLang === 'en' ? 'Unlock' : '잠금 해제'; ?></div>
                                     <div class="action-divider"></div>
-                                    <div class="action-option" data-action="copy">📋 <?php _e('copy'); ?></div>
-                                    <div class="action-option" data-action="move">✂️ <?php _e('cut'); ?></div>
-                                    <div class="action-option" data-action="paste">📥 <?php echo $currentLang === 'en' ? 'Paste Here' : '여기에 붙여넣기'; ?></div>
+                                    <div class="action-option" data-action="copy"><?= fsi('copy') ?> <?php _e('copy'); ?></div>
+                                    <div class="action-option" data-action="move"><?= fsi('scissors') ?> <?php _e('cut'); ?></div>
+                                    <div class="action-option" data-action="paste"><?= fsi('clipboard') ?> <?php echo $currentLang === 'en' ? 'Paste Here' : '여기에 붙여넣기'; ?></div>
                                     <div class="action-divider"></div>
-                                    <div class="action-option" data-action="extract">📦 <?php echo $currentLang === 'en' ? 'Extract' : '압축 해제'; ?></div>
-                                    <div class="action-option" data-action="compress">🗜️ <?php echo $currentLang === 'en' ? 'Compress (ZIP)' : '압축 (ZIP)'; ?></div>
-                                    <div class="action-option" data-action="convert-h264">🎬 <?php echo $currentLang === 'en' ? 'Convert to H264/MP4' : 'H264/MP4로 변환'; ?></div>
-                                    <div class="action-option" data-action="exif-strip">🧹 <?php echo $currentLang === 'en' ? 'Remove EXIF Privacy Info' : 'EXIF 개인정보 삭제'; ?></div>
-                                    <div class="action-option" data-action="convert-to-vault">🔒 <?php echo $currentLang === 'en' ? 'Encrypt This Folder' : '이 폴더 암호화'; ?></div>
+                                    <div class="action-option" data-action="extract"><?= fsi('package') ?> <?php echo $currentLang === 'en' ? 'Extract' : '압축 해제'; ?></div>
+                                    <div class="action-option" data-action="compress"><?= fsi('archive') ?> <?php echo $currentLang === 'en' ? 'Compress (ZIP)' : '압축 (ZIP)'; ?></div>
+                                    <div class="action-option" data-action="convert-h264"><?= fsi('film') ?> <?php echo $currentLang === 'en' ? 'Convert to H264/MP4' : 'H264/MP4로 변환'; ?></div>
+                                    <div class="action-option" data-action="exif-strip"><?= fsi('eraser') ?> <?php echo $currentLang === 'en' ? 'Remove EXIF Privacy Info' : 'EXIF 개인정보 삭제'; ?></div>
+                                    <div class="action-option" data-action="convert-to-vault"><?= fsi('folder-lock') ?> <?php echo $currentLang === 'en' ? 'Encrypt This Folder' : '이 폴더 암호화'; ?></div>
                                     <div class="action-divider"></div>
-                                    <div class="action-option" data-action="rename">✏️ <?php _e('rename'); ?></div>
-                                    <div class="action-option" data-action="versions">📜 <?php echo $currentLang === 'en' ? 'Previous Versions' : '이전 버전'; ?></div>
-                                    <div class="action-option" data-action="info">ℹ️ <?php _e('info'); ?></div>
+                                    <div class="action-option" data-action="rename"><?= fsi('edit') ?> <?php _e('rename'); ?></div>
+                                    <div class="action-option" data-action="versions"><?= fsi('history') ?> <?php echo $currentLang === 'en' ? 'Previous Versions' : '이전 버전'; ?></div>
+                                    <div class="action-option" data-action="info"><?= fsi('info') ?> <?php _e('info'); ?></div>
                                     <div class="action-divider"></div>
-                                    <div class="action-option danger" data-action="delete">🗑️ <?php _e('delete'); ?></div>
+                                    <div class="action-option danger" data-action="delete"><?= fsi('trash') ?> <?php _e('delete'); ?></div>
                                 </div>
                             </div>
                             <div class="upload-dropdown">
-                                <div class="upload-drag-hint"><?php echo $currentLang === 'en' ? '💡 Drag & Drop supported (files/folders)' : '💡 드래그 앤 드롭 (파일/폴더) 지원'; ?></div>
+                                <div class="upload-drag-hint"><?= fsi('lightbulb') ?> <?php echo $currentLang === 'en' ? 'Drag & Drop supported (files/folders)' : '드래그 앤 드롭 (파일/폴더) 지원'; ?></div>
                                 <button id="btn-upload" class="btn btn-primary"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> <?php _e('upload'); ?> ▾</button>
                                 <div id="upload-menu" class="upload-menu">
-                                    <div class="upload-option" data-type="file">📄 <?php echo $currentLang === 'en' ? 'Upload Files' : '파일 업로드'; ?></div>
-                                    <div class="upload-option" data-type="folder">📁 <?php echo $currentLang === 'en' ? 'Upload Folder' : '폴더 업로드'; ?></div>
+                                    <div class="upload-option" data-type="file"><?= fsi('upload') ?> <?php echo $currentLang === 'en' ? 'Upload Files' : '파일 업로드'; ?></div>
+                                    <div class="upload-option" data-type="folder"><?= fsi('folder-open') ?> <?php echo $currentLang === 'en' ? 'Upload Folder' : '폴더 업로드'; ?></div>
                                 </div>
                             </div>
                             <button id="btn-new-folder" class="btn"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg> <?php _e('new_folder'); ?></button>
@@ -1313,7 +1320,7 @@ password=mypass</pre>
                         </div>
                         <p style="margin:6px 0 0;font-size:11px;color:var(--fs-text-2, #666);">💡 <?php echo $currentLang === 'en' ? '<b>DAV</b>: When enabled, the WebDAV guide menu appears in the user\'s sidebar.' : '<b>DAV</b>: 활성화하면 해당 사용자의 사이드바에 WebDAV 안내 메뉴가 표시됩니다.'; ?></p>
                         <div class="permission-list" id="permission-list">
-                            <input type="text" id="perm-user-search" placeholder="<?php echo $currentLang === 'en' ? '🔍 Search users...' : '🔍 사용자 검색...'; ?>" style="width:100%; padding:6px 10px; margin-bottom:8px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:4px; font-size:13px; box-sizing:border-box;">
+                            <input type="text" id="perm-user-search" placeholder="<?php echo $currentLang === 'en' ? 'Search users...' : '사용자 검색...'; ?>" style="width:100%; padding:6px 10px; margin-bottom:8px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:4px; font-size:13px; box-sizing:border-box;">
                             <div id="perm-user-list">
                             <!-- 유저별 권한 목록 -->
                             </div>
@@ -1545,6 +1552,8 @@ password=mypass</pre>
                 </div>
                 <div class="modal-body">
                     <input type="text" id="rename-input" placeholder="<?php echo $currentLang === 'en' ? 'New name' : '새 이름'; ?>">
+                    <!-- ★ (2026-10-27) 여러 개 일괄 이름 변경 안내(윈도우 탐색기 방식) — 여러 개 골랐을 때만 app.js 가 글자를 넣고 보임 -->
+                    <div id="rename-batch-hint" style="margin-top:10px; display:none; font-size:13px; line-height:1.5; color:var(--fs-text-2, #666);"></div>
                     <div id="rename-ext-row" style="margin-top:10px; display:none;">
                         <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:14px; color:var(--fs-text-2, #666);">
                             <input type="checkbox" id="rename-show-ext" style="width:auto; margin:0;">
@@ -1609,7 +1618,7 @@ password=mypass</pre>
                     <div style="margin-bottom:15px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
                         <button class="btn btn-primary" id="btn-add-user"><?php echo $currentLang === 'en' ? '➕ Add User' : '➕ 사용자 추가'; ?></button>
                         <button class="btn" id="btn-bulk-quota">💾 <?php echo $currentLang === 'en' ? 'Bulk Quota Settings' : '일괄 용량 설정'; ?></button>
-                        <input type="text" id="users-search" placeholder="<?php echo $currentLang === 'en' ? '🔍 Search users...' : '🔍 사용자 검색...'; ?>" style="margin-left:auto; width:200px; padding:6px 10px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:4px; font-size:13px;">
+                        <input type="text" id="users-search" placeholder="<?php echo $currentLang === 'en' ? 'Search users...' : '사용자 검색...'; ?>" style="margin-left:auto; width:200px; padding:6px 10px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:4px; font-size:13px;">
                     </div>
                     <div style="margin-bottom:10px; display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
                         <span style="font-size:13px; color:var(--fs-text-2, #666);"><?php echo $currentLang === 'en' ? '🆕 New User Default Quota:' : '🆕 신규회원 기본 용량:'; ?></span>
@@ -1866,48 +1875,48 @@ password=mypass</pre>
             <!-- 설정 모달 -->
             <div id="modal-settings" class="modal modal-large" style="display:none;">
                 <div class="modal-header">
-                    <h2>⚙️ <?php _e('settings'); ?></h2>
+                    <h2><?= fsi('settings') ?> <?php _e('settings'); ?></h2>
                     <button class="modal-close">&times;</button>
                 </div>
                 <div class="modal-body">
                     <!-- 탭 -->
                     <div class="settings-tabs">
-                        <button class="tab-btn active" data-tab="tab-profile">👤 <?php echo $currentLang === 'en' ? 'My Info' : '내 정보'; ?></button>
-                        <button class="tab-btn" data-tab="tab-twofa">🔐 <?php echo $currentLang === 'en' ? '2FA' : '2단계 인증'; ?></button>
-                        <button class="tab-btn" data-tab="tab-app-passwords">🔑 <?php echo $currentLang === 'en' ? 'App Passwords' : '앱 비밀번호'; ?></button>
-                        <button class="tab-btn" data-tab="tab-theme">🎨 <?php _e('theme'); ?></button>
-                        <button class="tab-btn" data-tab="tab-sessions"><?php echo $currentLang === 'en' ? '📱 Sessions' : '📱 세션 관리'; ?></button>
-                        <button class="tab-btn" data-tab="tab-login-logs"><?php echo $currentLang === 'en' ? '📋 Login History' : '📋 로그인 기록'; ?></button>
+                        <button class="tab-btn active" data-tab="tab-profile"><?= fsi('user') ?> <?php echo $currentLang === 'en' ? 'My Info' : '내 정보'; ?></button>
+                        <button class="tab-btn" data-tab="tab-twofa"><?= fsi('shield-check') ?> <?php echo $currentLang === 'en' ? '2FA' : '2단계 인증'; ?></button>
+                        <button class="tab-btn" data-tab="tab-app-passwords"><?= fsi('key') ?> <?php echo $currentLang === 'en' ? 'App Passwords' : '앱 비밀번호'; ?></button>
+                        <button class="tab-btn" data-tab="tab-theme"><?= fsi('palette') ?> <?php _e('theme'); ?></button>
+                        <button class="tab-btn" data-tab="tab-sessions"><?= fsi('smartphone') ?> <?php echo $currentLang === 'en' ? 'Sessions' : '세션 관리'; ?></button>
+                        <button class="tab-btn" data-tab="tab-login-logs"><?= fsi('clipboard-list') ?> <?php echo $currentLang === 'en' ? 'Login History' : '로그인 기록'; ?></button>
                     </div>
                     
                     <!-- 내 정보 탭 -->
                     <div id="tab-profile" class="tab-content active">
                         <!-- 계정 정보 표시 -->
                         <div class="my-account-info">
-                            <h4>👤 <?php echo $currentLang === 'en' ? 'My Info' : '내 정보'; ?></h4>
+                            <h4><?= fsi('user') ?> <?php echo $currentLang === 'en' ? 'My Info' : '내 정보'; ?></h4>
                             <div class="account-info-card">
                                 <div class="info-row">
-                                    <span class="info-label">🔑 <?php _e('username'); ?></span>
+                                    <span class="info-label"><?= fsi('key') ?> <?php _e('username'); ?></span>
                                     <span class="info-value" id="my-info-username">-</span>
                                 </div>
                                 <div class="info-row">
-                                    <span class="info-label">👤 <?php echo $currentLang === 'en' ? 'Display Name' : '표시 이름'; ?></span>
+                                    <span class="info-label"><?= fsi('user') ?> <?php echo $currentLang === 'en' ? 'Display Name' : '표시 이름'; ?></span>
                                     <span class="info-value" id="my-info-displayname">-</span>
                                 </div>
                                 <div class="info-row">
-                                    <span class="info-label">📧 <?php _e('email'); ?></span>
+                                    <span class="info-label"><?= fsi('mail') ?> <?php _e('email'); ?></span>
                                     <span class="info-value" id="my-info-email">-</span>
                                 </div>
                                 <div class="info-row">
-                                    <span class="info-label">📅 <?php _e('join_date'); ?></span>
+                                    <span class="info-label"><?= fsi('calendar') ?> <?php _e('join_date'); ?></span>
                                     <span class="info-value" id="my-info-created">-</span>
                                 </div>
                                 <div class="info-row">
-                                    <span class="info-label">🌐 <?php echo $currentLang === 'en' ? 'IP Address' : '접속 IP'; ?></span>
+                                    <span class="info-label"><?= fsi('globe') ?> <?php echo $currentLang === 'en' ? 'IP Address' : '접속 IP'; ?></span>
                                     <span class="info-value" id="my-info-ip">-</span>
                                 </div>
                                 <div class="info-row">
-                                    <span class="info-label">🌍 <?php echo $currentLang === 'en' ? 'Country' : '접속 국가'; ?></span>
+                                    <span class="info-label"><?= fsi('map-pin') ?> <?php echo $currentLang === 'en' ? 'Country' : '접속 국가'; ?></span>
                                     <span class="info-value" id="my-info-country">-</span>
                                 </div>
                             </div>
@@ -1915,7 +1924,7 @@ password=mypass</pre>
                         
                         <hr style="margin: 20px 0;">
                         
-                        <h4>🌐 <?php echo $currentLang === 'en' ? 'Language' : '언어'; ?></h4>
+                        <h4><?= fsi('globe') ?> <?php echo $currentLang === 'en' ? 'Language' : '언어'; ?></h4>
                         <div class="form-group">
                             <select id="language-select" class="form-control" style="max-width:200px;">
                                 <option value="ko" <?php echo $currentLang === 'ko' ? 'selected' : ''; ?>>🇰🇷 한국어</option>
@@ -3101,7 +3110,13 @@ docker run -d -p 8080:80 --restart=always \
                                 🏷️ <?php echo $currentLang === 'en' ? 'Label Overlay Position' : '라벨 오버레이 위치'; ?>
                                 <span style="font-weight:normal; color:var(--fs-text-3, #5f6368); font-size:11px; margin-left:6px;"><?php echo $currentLang === 'en' ? '(applies to CSS overlay mode only)' : '(CSS 오버레이 모드 아이콘에만 적용)'; ?></span>
                             </summary>
-                            <div style="margin-top:10px; display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; max-width:180px;">
+                            <!-- ★ (2026-10-27) 라벨 표시 켜기·끄기 (펜닐 요청) — 끄면 노란 확장자 라벨을 모두 숨김, 위치 버튼은 흐리게 -->
+                            <?php require_once __DIR__ . '/api/IconManager.php'; $_labelEnabled = (new IconManager())->getLabelEnabled(); ?>
+                            <label style="display:flex; align-items:center; gap:6px; margin-top:10px; font-size:13px; cursor:pointer; user-select:none;">
+                                <input type="checkbox" id="icon-mgr-label-enabled" <?= $_labelEnabled ? 'checked' : '' ?>>
+                                <?php echo $currentLang === 'en' ? 'Show extension labels' : '라벨 표시'; ?>
+                            </label>
+                            <div id="icon-mgr-label-pos-grid" style="margin-top:10px; display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; max-width:180px;<?= $_labelEnabled ? '' : ' opacity:.4; pointer-events:none;' ?>">
                                 <?php
                                 $_labelPositions = [
                                     'top-left'      => '↖', 'top-center'    => '↑', 'top-right'     => '↗',
@@ -3124,7 +3139,7 @@ docker run -d -p 8080:80 --restart=always \
                         
                         <!-- 상단 안내 + 검색 + 필터 -->
                         <div class="icon-mgr-toolbar" style="display:flex; gap:10px; align-items:center; margin-bottom:15px; flex-wrap:wrap;">
-                            <input type="text" id="icon-mgr-search" class="form-control" placeholder="🔍 확장자 검색 (예: jpg, pdf)" style="flex:1; min-width:200px; padding:5px 12px;">
+                            <input type="text" id="icon-mgr-search" class="form-control" placeholder="확장자 검색 (예: jpg, pdf)" style="flex:1; min-width:200px; padding:5px 12px;">
                             <select id="icon-mgr-filter" class="form-control" style="width:auto; min-width:150px; padding:5px 12px;">
                                 <option value="all"><?php echo $currentLang === 'en' ? 'All' : '전체'; ?></option>
                                 <option value="customized"><?php echo $currentLang === 'en' ? 'User Customized' : '사용자 변경'; ?></option>
@@ -5686,7 +5701,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <div style="margin-top:10px;padding:8px;background:var(--fs-surface-2, #f5f5f5);border-radius:6px;">
                     <small style="font-size:11px;color:var(--fs-text-2, #666);">
                         📄 SP Metadata URL: <code id="sso-saml-metadata-url">api.php?action=sso_saml_metadata</code>
-                        <button class="btn btn-xs" onclick="navigator.clipboard.writeText(location.origin+'/api.php?action=sso_saml_metadata');App.toast('복사됨','success');" style="margin-left:4px;">📋 <?php echo $currentLang === 'en' ? 'Copy' : '복사'; ?></button>
+                        <button class="btn btn-xs" onclick="navigator.clipboard.writeText(location.origin+'/api.php?action=sso_saml_metadata');App.toast(t('nt_copied','복사되었습니다.'),'success');" style="margin-left:4px;">📋 <?php echo $currentLang === 'en' ? 'Copy' : '복사'; ?></button>
                     </small>
                 </div>
             </div>
@@ -5702,38 +5717,38 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
         <div id="context-menu" class="context-menu" style="display:none;">
             <ul>
                 <!-- 파일/폴더 선택 시 -->
-                <li data-action="open">📂 <?php echo $currentLang === 'en' ? 'Open' : '열기'; ?></li>
-                <li data-action="preview">👁️ <?php echo $currentLang === 'en' ? 'Preview' : '미리보기'; ?></li>
-                <li data-action="onlyoffice">📝 <?php echo $currentLang === 'en' ? 'Edit with OnlyOffice' : 'OnlyOffice로 편집'; ?></li>
-                <li data-action="rhwp-edit">📝 <?php echo $currentLang === 'en' ? 'Edit with rHWP' : 'rHWP로 편집'; ?></li>
-                <li data-action="download">⬇️ <?php _e('download'); ?></li>
-                <li data-action="save-as">💾 <?php echo $currentLang === 'en' ? 'Save As' : '다른 이름으로 저장'; ?></li>
-                <li data-action="share">🔗 <?php _e('share'); ?></li>
-                <li data-action="internal_share">👤 <?php echo $currentLang === 'en' ? 'Share with User' : '사용자에게 공유'; ?></li>
+                <li data-action="open"><?= fsi('folder-open') ?> <?php echo $currentLang === 'en' ? 'Open' : '열기'; ?></li>
+                <li data-action="preview"><?= fsi('eye') ?> <?php echo $currentLang === 'en' ? 'Preview' : '미리보기'; ?></li>
+                <li data-action="onlyoffice"><?= fsi('file-text') ?> <?php echo $currentLang === 'en' ? 'Edit with OnlyOffice' : 'OnlyOffice로 편집'; ?></li>
+                <li data-action="rhwp-edit"><?= fsi('file-text') ?> <?php echo $currentLang === 'en' ? 'Edit with rHWP' : 'rHWP로 편집'; ?></li>
+                <li data-action="download"><?= fsi('download') ?> <?php _e('download'); ?></li>
+                <li data-action="save-as"><?= fsi('save') ?> <?php echo $currentLang === 'en' ? 'Save As' : '다른 이름으로 저장'; ?></li>
+                <li data-action="share"><?= fsi('link') ?> <?php _e('share'); ?></li>
+                <li data-action="internal_share"><?= fsi('user-plus') ?> <?php echo $currentLang === 'en' ? 'Share with User' : '사용자에게 공유'; ?></li>
                 <li class="divider"></li>
-                <li data-action="favorite-add">⭐ <?php echo $currentLang === 'en' ? 'Add to Favorites' : '즐겨찾기 추가'; ?></li>
-                <li data-action="favorite-remove">☆ <?php echo $currentLang === 'en' ? 'Remove from Favorites' : '즐겨찾기 제거'; ?></li>
-                <li data-action="file-lock">🔒 <?php echo $currentLang === 'en' ? 'Lock' : '잠금'; ?></li>
-                <li data-action="file-unlock">🔓 <?php echo $currentLang === 'en' ? 'Unlock' : '잠금 해제'; ?></li>
+                <li data-action="favorite-add"><?= fsi('star') ?> <?php echo $currentLang === 'en' ? 'Add to Favorites' : '즐겨찾기 추가'; ?></li>
+                <li data-action="favorite-remove"><?= fsi('star-off') ?> <?php echo $currentLang === 'en' ? 'Remove from Favorites' : '즐겨찾기 제거'; ?></li>
+                <li data-action="file-lock"><?= fsi('lock') ?> <?php echo $currentLang === 'en' ? 'Lock' : '잠금'; ?></li>
+                <li data-action="file-unlock"><?= fsi('unlock') ?> <?php echo $currentLang === 'en' ? 'Unlock' : '잠금 해제'; ?></li>
                 <li class="divider"></li>
-                <li data-action="copy">📋 <?php _e('copy'); ?></li>
-                <li data-action="move">✂️ <?php _e('cut'); ?></li>
-                <li data-action="paste">📥 <?php echo $currentLang === 'en' ? 'Paste Here' : '여기에 붙여넣기'; ?></li>
+                <li data-action="copy"><?= fsi('copy') ?> <?php _e('copy'); ?></li>
+                <li data-action="move"><?= fsi('scissors') ?> <?php _e('cut'); ?></li>
+                <li data-action="paste"><?= fsi('clipboard') ?> <?php echo $currentLang === 'en' ? 'Paste Here' : '여기에 붙여넣기'; ?></li>
                 <li class="divider"></li>
-                <li data-action="extract">📦 <?php echo $currentLang === 'en' ? 'Extract (ZIP)' : '압축 해제 (ZIP)'; ?></li>
-                <li data-action="compress">🗜️ <?php echo $currentLang === 'en' ? 'Compress (ZIP)' : '압축 (ZIP)'; ?></li>
-                <li data-action="convert-h264">🎬 <?php echo $currentLang === 'en' ? 'Convert to H264/MP4' : 'H264/MP4로 변환'; ?></li>
-                <li data-action="exif-strip">🧹 <?php echo $currentLang === 'en' ? 'Remove EXIF Privacy Info' : 'EXIF 개인정보 삭제'; ?></li>
-                <li data-action="convert-to-vault">🔒 <?php echo $currentLang === 'en' ? 'Encrypt This Folder' : '이 폴더 암호화'; ?></li>
+                <li data-action="extract"><?= fsi('package') ?> <?php echo $currentLang === 'en' ? 'Extract (ZIP)' : '압축 해제 (ZIP)'; ?></li>
+                <li data-action="compress"><?= fsi('archive') ?> <?php echo $currentLang === 'en' ? 'Compress (ZIP)' : '압축 (ZIP)'; ?></li>
+                <li data-action="convert-h264"><?= fsi('film') ?> <?php echo $currentLang === 'en' ? 'Convert to H264/MP4' : 'H264/MP4로 변환'; ?></li>
+                <li data-action="exif-strip"><?= fsi('eraser') ?> <?php echo $currentLang === 'en' ? 'Remove EXIF Privacy Info' : 'EXIF 개인정보 삭제'; ?></li>
+                <li data-action="convert-to-vault"><?= fsi('folder-lock') ?> <?php echo $currentLang === 'en' ? 'Encrypt This Folder' : '이 폴더 암호화'; ?></li>
                 <li class="divider"></li>
-                <li data-action="rename">✏️ <?php _e('rename'); ?></li>
-                <li data-action="versions">📜 <?php echo $currentLang === 'en' ? 'Previous Versions' : '이전 버전'; ?></li>
-                <li data-action="info">ℹ️ <?php _e('info'); ?></li>
+                <li data-action="rename"><?= fsi('edit') ?> <?php _e('rename'); ?></li>
+                <li data-action="versions"><?= fsi('history') ?> <?php echo $currentLang === 'en' ? 'Previous Versions' : '이전 버전'; ?></li>
+                <li data-action="info"><?= fsi('info') ?> <?php _e('info'); ?></li>
                 <li class="divider"></li>
-                <li data-action="delete" class="danger">🗑️ <?php _e('delete'); ?></li>
+                <li data-action="delete" class="danger"><?= fsi('trash') ?> <?php _e('delete'); ?></li>
                 <!-- 빈 공간 우클릭 시 -->
-                <li data-action="new-folder">📁 <?php _e('new_folder'); ?></li>
-                <li data-action="new-vault-folder">🔒 <?php echo $currentLang === 'en' ? 'New Encrypted Folder' : '새 암호화 폴더'; ?></li>
+                <li data-action="new-folder"><?= fsi('folder-plus') ?> <?php _e('new_folder'); ?></li>
+                <li data-action="new-vault-folder"><?= fsi('folder-lock') ?> <?php echo $currentLang === 'en' ? 'New Encrypted Folder' : '새 암호화 폴더'; ?></li>
                 <li class="divider new-file-divider"></li>
                 <li data-action="new-file-txt"><img src="assets/file-icons/text.svg?v=<?= APP_VERSION ?>" alt="txt" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New Text File' : '새 텍스트 파일'; ?></li>
                 <li data-action="new-file-docx"><img src="assets/file-icons/word.svg?v=<?= APP_VERSION ?>" alt="docx" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New Word Document' : '새 Word 문서'; ?></li>
@@ -5741,9 +5756,9 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <li data-action="new-file-pptx"><img src="assets/file-icons/powerpoint.svg?v=<?= APP_VERSION ?>" alt="pptx" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New PowerPoint' : '새 PowerPoint'; ?></li>
                 <li data-action="new-file-hwp"><img src="assets/file-icons/hwp.svg?v=<?= APP_VERSION ?>" alt="hwp" style="width:16px;height:16px;display:inline-block;vertical-align:-4px;margin-right:5px;user-select:none;-webkit-user-drag:none;"><?php echo $currentLang === 'en' ? 'New HWP Document' : '새 한글 문서'; ?></li>
                 <li class="divider"></li>
-                <li data-action="upload-file">📄 <?php echo $currentLang === 'en' ? 'Upload Files' : '파일 업로드'; ?></li>
-                <li data-action="upload-folder">📂 <?php echo $currentLang === 'en' ? 'Upload Folder' : '폴더 업로드'; ?></li>
-                <li data-action="refresh">🔄 <?php _e('refresh'); ?></li>
+                <li data-action="upload-file"><?= fsi('upload') ?> <?php echo $currentLang === 'en' ? 'Upload Files' : '파일 업로드'; ?></li>
+                <li data-action="upload-folder"><?= fsi('folder-open') ?> <?php echo $currentLang === 'en' ? 'Upload Folder' : '폴더 업로드'; ?></li>
+                <li data-action="refresh"><?= fsi('refresh') ?> <?php _e('refresh'); ?></li>
             </ul>
         </div>
         
@@ -5782,6 +5797,7 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
             // 라벨 위치 (CSS 오버레이 전용)
             require_once __DIR__ . '/api/IconManager.php';
             $_labelPosition = (new IconManager())->getLabelPosition();
+            $_labelEnabled = (new IconManager())->getLabelEnabled();   // ★ (2026-10-27) 라벨 표시 켜기·끄기
             // 이모지 맵 (JS의 getFileIcon 폴백에서 사용 - 음악 🎵, 실행 ⚙️ 등)
             //   주의: 이모지가 매핑되는 것보다 iconMap/code_map이 우선
             $_emojiIcons = defined('EMOJI_ICONS') ? EMOJI_ICONS : [];
@@ -5790,6 +5806,8 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
         window.CUSTOM_ICONS = <?= json_encode($_customIcons, JSON_UNESCAPED_UNICODE) ?>;
         window.ICON_BUSTER_MAP = <?= json_encode($_iconBusterMap, JSON_UNESCAPED_UNICODE) ?>;
         window.LABEL_POSITION = <?= json_encode($_labelPosition) ?>;
+        window.LABEL_ENABLED = <?= json_encode((bool)$_labelEnabled) ?>;
+        if (!window.LABEL_ENABLED) document.documentElement.classList.add('fs-label-off');   // 그려지기 전에 — 라벨이 잠깐 보였다 사라지지 않게
         window.EMOJI_ICONS = <?= json_encode($_emojiIcons, JSON_UNESCAPED_UNICODE) ?>;
     </script>
     <script src="assets/lib/viewerjs/viewer.min.js"></script>

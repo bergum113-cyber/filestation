@@ -16403,6 +16403,12 @@ try {
                     $result = $im->setLabelPosition((string)$position);
                     break;
                 
+                case 'set_label_enabled':
+                    // ★ (2026-10-27) 라벨 오버레이 표시 켜기·끄기 (true/false, '1'/'0')
+                    $en = $input['enabled'] ?? true;
+                    $result = $im->setLabelEnabled(filter_var($en, FILTER_VALIDATE_BOOLEAN));
+                    break;
+                
                 case 'set_folder_icon':
                     // 폴더 아이콘 설정 (전체 폴더 동일 적용)
                     //   icon: 아이콘 이름 (custom 또는 builtin 파일명) - 비면 기본값 복원

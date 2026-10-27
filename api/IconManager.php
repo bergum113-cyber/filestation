@@ -1573,12 +1573,38 @@ class IconManager {
         }
         
         $file = $dir . '/icon_label_position.json';
-        $ok = @file_put_contents($file, json_encode(['position' => $position], JSON_UNESCAPED_UNICODE), LOCK_EX);
+        // ★ (2026-10-27) 같은 파일의 라벨 표시 켜기·끄기(enabled) 값을 지우지 않게 함께 저장
+        $ok = @file_put_contents($file, json_encode(['position' => $position, 'enabled' => $this->getLabelEnabled()], JSON_UNESCAPED_UNICODE), LOCK_EX);
         if ($ok === false) {
             return ['success' => false, 'error' => '위치 저장 실패'];
         }
         
         return ['success' => true, 'position' => $position];
+    }
+    
+    /**
+     * ★ (2026-10-27) 라벨 오버레이 표시 켜기·끄기 (펜닐 요청) — data/icon_label_position.json 의 'enabled'(없으면 켜짐 = 종전 동작)
+     *   끄면 파일 목록·아이콘 관리 미리보기의 노란 확장자 라벨(.archive-ext·.subtitle-ext)을 모두 숨김. 아이콘 그림 자체는 그대로
+     */
+    public function getLabelEnabled(): bool {
+        $file = dirname(__DIR__) . '/data/icon_label_position.json';
+        if (!file_exists($file)) return true;
+        $data = @json_decode(@file_get_contents($file), true);
+        if (!is_array($data) || !array_key_exists('enabled', $data)) return true;
+        return (bool)$data['enabled'];
+    }
+    
+    public function setLabelEnabled(bool $enabled): array {
+        $dir = dirname(__DIR__) . '/data';
+        if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
+            return ['success' => false, 'error' => 'data 디렉토리 생성 실패'];
+        }
+        $file = $dir . '/icon_label_position.json';
+        $ok = @file_put_contents($file, json_encode(['position' => $this->getLabelPosition(), 'enabled' => $enabled], JSON_UNESCAPED_UNICODE), LOCK_EX);
+        if ($ok === false) {
+            return ['success' => false, 'error' => '저장 실패'];
+        }
+        return ['success' => true, 'enabled' => $enabled];
     }
     
     /** 유효한 라벨 위치 값 (9개) */

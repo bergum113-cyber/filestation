@@ -1991,31 +1991,36 @@ img.fs-file-icon-img {
     box-shadow: 0 1px 2px rgba(0,0,0,0.15);
 }
 
-/* 라벨 위치 기본값 (top-right) — JS가 덮어쓰기 전 fallback */
+/* 라벨 위치 기본값 (top-right) — JS가 덮어쓰기 전 fallback (app.js _applyLabelPosition 의 top-right 와 같음) */
 :root {
-    --fs-label-top: 4%;
-    --fs-label-right: 4%;
+    --fs-label-top: 18%;   /* ★ (2026-10-26 밤) 4% → 18% — 종이 위 가장자리 안쪽 (app.js _applyLabelPosition 과 같이) */
+    --fs-label-right: 10%;   /* ★ (2026-10-26 밤 2) 4% → 10% — 종이 선 밖으로 8% 만 (app.js 와 같이) */
     --fs-label-bottom: auto;
     --fs-label-left: auto;
     --fs-label-transform: none;
 }
 
 .file-list.grid-view .file-icon {
-    width: 48px;
-    height: 48px;
+    /* ★ (2026-10-27) 48 → 64px (PC·모바일) — 선 그림 종이는 칸 가로의 56% 라 48px 면 종이 폭이 27px 뿐이라 작아 보였음(펜닐 요청: 그리드만 키움)
+       → (00:41 펜닐 지정) 60px */
+    width: 60px;
+    height: 60px;
     margin-bottom: 10px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 42px;
-    line-height: 48px;
+    line-height: 60px;
 }
 
 .file-list.grid-view .file-icon svg,
 .file-list.grid-view .file-icon img.fs-file-icon-img {
-    width: 48px;
-    height: 48px;
+    width: 60px;
+    height: 60px;
 }
+/* ★ (2026-10-27) 그리드 라벨 고정 크기 — 종전 0.22em(글자 크기 38~44px → 8.4~9.7px). 60px 칸(종이 폭 약 34px)에 맞춰 10px, 다섯 글자 이상(WOFF2·SQLITE 등) 8px */
+.file-list.grid-view .file-icon .archive-ext, .file-list.grid-view .file-icon .subtitle-ext { font-size: 10px; }
+.file-list.grid-view .file-icon .archive-ext.fs-ext-long { font-size: 8px; }
 
 /* 썸네일 스타일 */
 .file-list.grid-view .file-thumbnail {
@@ -2142,19 +2147,22 @@ img.fs-file-icon-img {
 .file-list.list-view .file-item.selected { background: #bbdefb; }
 
 .file-list.list-view .file-icon { 
-    width: 24px; 
-    height: 24px;
+    /* ★ (2026-10-26 밤) 24px → 32px — 선 그림 아이콘·확장자 라벨이 작아 알아보기 힘들었음(펜닐 제보). 모바일은 아래 @media 에서 40px
+       → (22:53) PC 는 조금 더 → 36px (펜닐 제보). 위 칸 이름 줄의 아이콘 자리(#file-list-header .fh-icon)도 같은 폭
+       → (10-27 00:41 펜닐 지정) PC·모바일 모두 40px */
+    width: 40px; 
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 20px;
-    line-height: 24px;
+    font-size: 32px;
+    line-height: 40px;
 }
 
 .file-list.list-view .file-icon svg,
 .file-list.list-view .file-icon img.fs-file-icon-img {
-    width: 24px;
-    height: 24px;
+    width: 40px;
+    height: 40px;
 }
 
 .file-list.list-view .file-name-wrap {
@@ -2226,7 +2234,7 @@ img.fs-file-icon-img {
 
 /* 체크박스/아이콘 자리 — file-item과 동일한 크기 */
 #file-list-header .fh-icon {
-    width: 24px;
+    width: 40px;   /* ★ (2026-10-26 밤) 목록 아이콘 폭과 같게 24 → 36px — 아이콘을 키운 뒤 이름·날짜 칸 제목이 줄 내용과 어긋났음. (10-27) 40px */
     height: 1px;
     flex-shrink: 0;
 }
@@ -2234,7 +2242,7 @@ img.fs-file-icon-img {
     width: 18px;
     height: 1px;
     flex-shrink: 0;
-    margin-right: 10px;
+    margin-right: 0;   /* ★ (2026-10-26 밤) 목록 체크박스와 같이 10px → 0 */
 }
 
 .file-list-header .col-header {
@@ -2881,7 +2889,8 @@ body.modal-open.trash-modal-active .transfer-progress {
     bottom: 30px;
     left: 50%;
     transform: translateX(-50%) translateY(100px);
-    background: var(--dark);
+    /* ★ (2026-10-26) var(--dark) → 고정 진한 회색. 옛 전체 테마 5종이 --dark 를 테마 글자색으로 바꿔 알림만 보라·남색 등으로 달랐음(다크·미드나잇은 테마 파일에서 따로 지정) */
+    background: #343a40;
     color: white;
     padding: 12px 25px;
     border-radius: 30px;
@@ -2899,9 +2908,10 @@ body.modal-open.trash-modal-active .transfer-progress {
 
 /* ★ (2026-10-23) 색 토스트 글자 — 일부 테마가 .toast 글자를 테마 글자색(어두운 테마는 밝은 회색)으로 바꿔 색 배경 위에서 흐렸다(경고 1.5:1).
    성공·오류·안내는 흰 글자 고정(기본과 같음), 경고(주황)는 짙은 글자(#212529, 경고 버튼과 같음) */
-.toast.error { background: var(--danger); color: #fff; }
+/* ★ (2026-10-26) 안내 #17a2b8(흰 글자 3.0:1, 22개 테마 전부 미달) → #117a8b(5.0:1), 오류 --danger(4.5:1, 겨우 통과) → #c62828(5.6:1). 버튼 등 --danger 는 그대로 */
+.toast.error { background: #c62828; color: #fff; }
 .toast.success { background: var(--success); color: #fff; }
-.toast.info { background: #17a2b8; color: #fff; }
+.toast.info { background: #117a8b; color: #fff; }
 .toast.warning { background: #f0ad4e; color: #212529; }
 
 /* 승인 대기 알림 */
@@ -3315,6 +3325,13 @@ body.board-mode #transfer-progress {
     flex-wrap: nowrap;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
+    /* ★ (2026-10-27 13시, 펜닐 제보) 모바일은 설정 창 안이 세로 flex 라 아래 내용이 길수록 메뉴 줄이 눌려
+       버튼 높이가 16~33px 로 탭·테마마다 달라지고, 눌려 잘린 줄이 위아래로도 끌렸음 →
+       줄어들지 않게(flex-shrink 0) 하고 세로 넘침은 숨겨 좌우로만 움직이게. PC(블록 배치)는 변화 없음 */
+    flex-shrink: 0;
+    overflow-y: hidden;
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
 }
 .settings-tabs::-webkit-scrollbar { display: none; }
 
@@ -7394,6 +7411,37 @@ video::cue {
     width: 32px;
     height: 32px;
 }
+/* ★ (2026-10-27) 휴지통 '영구 삭제' 확인 창 아이콘 — 종전엔 글자 크기(32px)만 주고 칸 크기가 없어 그림 파일 아이콘이
+   라벨형(압축·동영상 등)은 300px 로 커지고 일반 그림은 0px 로 안 보였음(원본부터, 펜닐 승인) → 공유 목록 아이콘처럼 32px 칸에 고정.
+   폴더(📁 → 선 그림)는 글자 크기 32px 그대로 */
+.trash-confirm-icon {
+    font-size: 32px;
+    line-height: 1;
+    flex-shrink: 0;
+    width: 40px;    /* ★ (2026-10-27 16시, 펜닐) 32 → 40px — 휴지통 목록·파일 목록 아이콘과 같은 크기(이름 + 종류 두 줄 높이에 맞음), PC·모바일 공통 */
+    height: 40px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.trash-confirm-icon img.fs-file-icon-img,
+.trash-confirm-icon .fs-archive-icon > img,
+.trash-confirm-icon .fs-subtitle-icon > img,
+.trash-confirm-icon > svg {
+    width: 40px;
+    height: 40px;
+}
+.trash-confirm-icon .fs-archive-icon,
+.trash-confirm-icon .fs-subtitle-icon {
+    width: 40px;
+    height: 40px;
+    display: inline-block;
+    position: relative;
+}
+.trash-confirm-icon .archive-ext, .trash-confirm-icon .subtitle-ext { font-size: 7px; padding: 1px 2px; }
+.trash-confirm-icon .fs-ico { width: 40px; height: 40px; }
+/* ★ (2026-10-27) 라벨 표시 끄기(아이콘 관리 '라벨 표시' 해제 → <html class="fs-label-off">) — 노란 확장자 라벨을 모두 숨김 */
+html.fs-label-off .archive-ext, html.fs-label-off .subtitle-ext, html.fs-label-off .fs-preview-label { display: none !important; }   /* 폴더(📁 → 선 그림)도 칸에 맞춤 — 종전 38px 로 칸을 넘었음 */
 /* 압축/자막 라벨 오버레이도 정상 표시되도록 */
 .share-file-icon .fs-archive-icon,
 .share-file-icon .fs-subtitle-icon {
@@ -8445,7 +8493,9 @@ body.is-mobile #board-detail-search {
     position: relative;
     top: auto;
     left: auto;
-    margin-right: 10px;
+    /* ★ (2026-10-26 밤) 10px → 0 — 줄 간격(gap)에 더해져 체크박스~아이콘 사이가 아이콘~파일명보다 10px 넓었음(펜닐: 좌우 여백 적정하게).
+       선 그림 아이콘은 칸 안 좌우에 여백(칸의 약 20%)이 있어 0 이면 체크박스~종이·종이~파일명이 거의 같음(PC 약 22px, 모바일 약 16px) */
+    margin-right: 0;
 }
 
 /* ========== 중복 파일 모달 ========== */
@@ -8757,18 +8807,34 @@ body.is-mobile #board-detail-search {
 .trash-item-icon {
     font-size: 28px;
     flex-shrink: 0;
-    width: 48px;
-    height: 48px;
+    width: 40px;    /* ★ (2026-10-27 16시, 펜닐 '피씨/모바일 적절한 크기') 48 → 40px — 파일 목록 아이콘(목록 보기 40px)과 같게, PC·모바일 공통 */
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: center;
 }
 
 .trash-item-icon svg {
-    width: 48px;
-    height: 48px;
-    max-width: 48px;
-    max-height: 48px;
+    width: 40px;
+    height: 40px;
+    max-width: 40px;
+    max-height: 40px;
+}
+/* ★ (2026-10-27 15시, 펜닐 제보 — 아이폰에서 휴지통 목록 아이콘이 크게 나옴) 그림 파일 아이콘(<img>)은 크기 규칙이 없었음.
+   아이콘 SVG 에 가로·세로 값이 없어 크롬은 칸(48px)에 맞춰 그리지만 사파리(WebKit)는 기본 150×150 으로 그려 칸을 넘었음
+   (사파리 방식을 흉내 낸 확인에서 이 칸만 150×150) → '영구 삭제' 확인 창(32px)처럼 그림 크기를 직접 48px 로 */
+.trash-item-icon img.fs-file-icon-img,
+.trash-item-icon .fs-archive-icon > img,
+.trash-item-icon .fs-subtitle-icon > img {
+    width: 40px;
+    height: 40px;
+}
+.trash-item-icon .fs-archive-icon,
+.trash-item-icon .fs-subtitle-icon {
+    width: 40px;
+    height: 40px;
+    display: inline-block;
+    position: relative;
 }
 
 .trash-item-info {
@@ -11207,7 +11273,13 @@ tr:hover,
     }
     /* 모바일: 셀렉트 앞에 스피커 아이콘 */
     .video-audio-select::before {
-        content: '🔊';
+        /* ★ (2026-10-26 오후) 🔊 이모지 → 흰 선 그림 스피커(동영상 위 어두운 바탕) */
+        content: '';
+        display: inline-block;
+        width: 13px;
+        height: 13px;
+        vertical-align: -2px;
+        background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolygon points='11 5 6 9 2 9 2 15 6 15 11 19 11 5'/%3E%3Cpath d='M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07'/%3E%3C/svg%3E") center / contain no-repeat;
         font-size: 13px;
         margin-right: 3px;
         line-height: 1;
@@ -14012,6 +14084,59 @@ mark.search-highlight {
 .btn-icon > .fs-ico {
     vertical-align: middle;
 }
+/* ★ (2026-10-26) 이모지 → 선 그림 아이콘 1단계(로고·사이드바 스토리지·현재 위치·작업/우클릭/업로드 메뉴·설정 탭·내 정보·알림 목록).
+   모양 원본 api/FsIcons.php, 넣는 함수 PHP fsi() / JS fsIco()·fsIcoFrom(). 색은 글자색을 따름 */
+.storage-icon .fs-ico { display: block; width: 18px; height: 18px; margin-top: 1px; }
+.logo .logo-ico { width: 1.1em; height: 1.1em; vertical-align: middle; }
+.context-menu li .fs-ico, .action-option .fs-ico, .upload-option .fs-ico, .vault-ctx-item .fs-ico { width: 16px; height: 16px; vertical-align: -3px; margin-right: 2px; }
+.notify-item-icon .fs-ico { width: 18px; height: 18px; vertical-align: middle; }
+/* ★ (2026-10-26 오후) 즐겨찾기·최근 파일 앞 파일 그림 — 크기 지정이 없어 그림 파일 본래 크기(300×150)로 그려진 뒤 16px 칸에서 잘려 귀퉁이만 보였음(펜닐 제보) → 칸 크기에 맞춤, 라벨(ZIP 등)은 너무 작아 숨김 */
+.sidebar-icon img.fs-file-icon-img, .sidebar-icon .fs-archive-icon, .sidebar-icon .fs-subtitle-icon { width: 16px; height: 16px; }
+.sidebar-icon .fs-archive-icon > img.fs-file-icon-img, .sidebar-icon .fs-subtitle-icon > img.fs-file-icon-img { width: 100%; height: 100%; }
+.sidebar-icon .archive-ext, .sidebar-icon .subtitle-ext { display: none; }
+/* 목록 보기의 압축·자막 라벨 — 기본 0.22em 은 글자 크기 기준이라 너무 작아 읽을 수 없었음 → 고정 크기(아래 값, PC 목록 칸은 지금 36px) */
+/* ★ (2026-10-26 밤) 7px·좌우 여백 2px 면 라벨(약 17px)이 종이(약 15px)보다 넓어 9방향 중 왼쪽·가운데·오른쪽이 똑같이 보였음(펜닐 제보) → 6px·여백 1px
+   → (같은 날 22:27) 6px 는 너무 작아 알아보기 힘듦(펜닐 제보) → 아이콘 32px 로 키우고 라벨 7.5px·여백 1px 2px
+   → (22:53) 아이콘 36px·라벨 8px(약 18px, 종이 약 22px 의 82%) */
+.file-list.list-view .file-icon .archive-ext, .file-list.list-view .file-icon .subtitle-ext { font-size: 8px; padding: 1px 2px; letter-spacing: 0; }
+/* ★ (2026-10-27) 다섯 글자 이상 라벨(WOFF2·SQLITE·MARKDOWN 등)은 한 단계 작게 — 종이 폭을 크게 넘지 않게 */
+.file-list.list-view .file-icon .archive-ext.fs-ext-long { font-size: 6.5px; padding: 1px; }
+.fs-archive-icon .archive-ext.fs-ext-long { font-size: 0.18em; }
+/* 모바일 목록 보기: 줄이 두 줄(이름·날짜)이라 24px 아이콘이 작았음(펜닐 제보) → 36px, 라벨 8.5px */
+@media (max-width: 1024px) {
+    /* ★ (2026-10-26 밤) 36px → 40px — 알아보기 힘들었음(펜닐 제보) */
+    .file-list.list-view .file-item > .file-icon { width: 40px; height: 40px; }
+    .file-list.list-view .file-item > .file-icon svg,
+    .file-list.list-view .file-item > .file-icon img.fs-file-icon-img { width: 40px; height: 40px; }
+    .file-list.list-view .file-item > .file-icon .fs-archive-icon > img.fs-file-icon-img,
+    .file-list.list-view .file-item > .file-icon .fs-subtitle-icon > img.fs-file-icon-img { width: 100%; height: 100%; }
+    /* ★ (2026-10-26 밤) 8.5px 는 라벨(약 20px)이 종이(약 22px)만큼 넓어 좌우 위치 구분이 안 됐음 → 7px·여백 1px 2px
+       → (22:27) 작아 알아보기 힘듦 → 아이콘 40px·라벨 8.5px(약 19px, 종이 약 25px 의 77%) */
+    .file-list.list-view .file-icon .archive-ext, .file-list.list-view .file-icon .subtitle-ext { font-size: 8.5px; padding: 1px 2px; }
+    .file-list.list-view .file-icon .archive-ext.fs-ext-long { font-size: 7px; padding: 1px; }   /* ★ (2026-10-27) 다섯 글자 이상 */
+    body .file-list.list-view .file-item.is-vault .file-icon::after { width: 17px; height: 17px; }   /* 아래쪽 12px 규칙보다 우선 */
+}
+/* ★ (2026-10-26) 2단계 — 나머지 화면 이모지도 같은 선 그림(index.php·share.php 출력은 서버에서, 스크립트가 넣는 HTML 은 assets/js/fs-icons.js 가 넣는 즉시 바꿈).
+   ✅·❌·⚠️ 처럼 색이 뜻인 아이콘은 테마의 성공·오류·경고 글자색(없으면 대비 4.5 이상 기본색). 색 바탕 버튼·배지 안에서는 글자색 그대로(색 바탕 위 대비) */
+.fs-ico-ok { color: var(--fs-fg-ok, #157347); }
+.fs-ico-err { color: var(--fs-fg-err, #c62828); }
+.fs-ico-warn { color: var(--fs-fg-warn, #b45309); }
+/* ★ (2026-10-26 밤) 주의(⚠)는 흔한 경고 표시처럼 노란 칠 + 진한 갈색 선·느낌표(펜닐: 주의 아이콘 색 변경) — 테마와 상관없이 같은 색이라 어두운 테마에서도 느낌표가 노란 칠 위에서 보임.
+   정보(ℹ)는 파랑, 즐겨찾기 별(⭐)은 금색 칠. 색 바탕 버튼·배지 안에서는 아래 규칙대로 글자색 그대로(칠 없음) */
+.fs-ico.fs-ico-warn { color: #7a5200; fill: #ffc83d; }
+.fs-ico.fs-ico-info { color: var(--fs-fg-info, #1a73e8); }
+.fs-ico.fs-ico-star { color: #b07800; fill: #ffc83d; }
+.btn .fs-ico-ok, .btn .fs-ico-err, .btn .fs-ico-warn,
+button .fs-ico-ok, button .fs-ico-err, button .fs-ico-warn,
+.badge .fs-ico-ok, .badge .fs-ico-err, .badge .fs-ico-warn,
+.status-ok .fs-ico, .status-error .fs-ico, .status-warn .fs-ico { color: inherit; }
+.btn .fs-ico.fs-ico-warn, button .fs-ico.fs-ico-warn, .badge .fs-ico.fs-ico-warn,
+.btn .fs-ico.fs-ico-info, button .fs-ico.fs-ico-info, .badge .fs-ico.fs-ico-info,
+.btn .fs-ico.fs-ico-star, button .fs-ico.fs-ico-star, .badge .fs-ico.fs-ico-star,
+.status-ok .fs-ico, .status-error .fs-ico, .status-warn .fs-ico { color: inherit; fill: none; }
+/* 색이 뜻인 상태 점(🟢🔴⚪🔷)·배경 필터 색 하트(💜💙🧡⚫) → 같은 색의 점 */
+.fs-ico.fs-dot-green { color: #2e9d4a; } .fs-ico.fs-dot-red { color: #d93025; } .fs-ico.fs-dot-gray { color: #9aa0a6; }
+.fs-ico.fs-dot-blue { color: #1a73e8; } .fs-ico.fs-dot-purple { color: #8e44ad; } .fs-ico.fs-dot-orange { color: #e8710a; } .fs-ico.fs-dot-black { color: currentColor; }
 
 .btn-danger-icon {
     border-color: var(--fs-tint-err-border, #ffcdd2);
@@ -14685,6 +14810,12 @@ mark.search-highlight {
         width: 100%;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
+    }
+    /* ★ (2026-10-26 밤) 압축 파일 미리보기 목록은 제외 — 위 규칙으로 표가 블록이 되면 줄·칸이 화면 폭으로 늘어나지 않아
+       이름·크기·수정일이 왼쪽에 좁게 몰렸음(펜닐 제보, 모바일). 이 표는 칸 폭 고정(table-layout:fixed)·긴 이름 말줄임이라 가로 스크롤이 필요 없음 */
+    .modal-body .archive-viewer table {
+        display: table;
+        overflow-x: visible;
     }
     
     .modal-body .data-table {
@@ -15802,7 +15933,12 @@ body.video-pseudo-fs {
     position: relative;
 }
 .file-item.is-vault .file-icon::after {
-    content: '🔒';
+    /* ★ (2026-10-26 오후) 🔒 이모지 → 흰 동그라미 안 선 그림 자물쇠(펜닐: 암호화 폴더 자물쇠만 이모지로 남음). 크기·위치는 아래 width/height 와 종전 bottom/right */
+    /* ★ (2026-10-26 밤) 흰 동그라미 빼고 노란(금색) 자물쇠 — 펜닐 요청, 윈도우 EFS 암호화 표시처럼. 노란 폴더 위에서도 보이게 진한 갈색 테두리 + 바깥 흰 테두리(동그라미 대신 자물쇠 모양 그대로) */
+    content: '';
+    width: 1em;    /* 글자 크기(아래 font-size 0.6em) 기준 — 종전 이모지와 같은 크기 */
+    height: 1em;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7.5 11V7.5a4.5 4.5 0 0 1 9 0V11' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/%3E%3Crect x='3.5' y='9.5' width='17' height='13' rx='2.5' fill='%23ffffff'/%3E%3Cpath d='M7.5 11V7.5a4.5 4.5 0 0 1 9 0V11' fill='none' stroke='%235f6368' stroke-width='2.4' stroke-linecap='round'/%3E%3Crect x='5' y='11' width='14' height='10' rx='1.8' fill='%23ffc61a' stroke='%238a5a00' stroke-width='1.6'/%3E%3Ccircle cx='12' cy='15.2' r='1.6' fill='%236b4500'/%3E%3Crect x='11.25' y='15.6' width='1.5' height='3' rx='.6' fill='%236b4500'/%3E%3C/svg%3E") center / contain no-repeat;
     position: absolute;
     bottom: 3px;   /* ★ (2026-10-23 밤) 종전 -2px — 줄 높이 1 에선 폴더 아래로 10px 삐져나와 폴더 그림 아래 끝(칸의 83%)에 맞춤 */
     right: -2px;
@@ -15816,6 +15952,8 @@ body.video-pseudo-fs {
 .file-list.list-view .file-item.is-vault .file-icon::after {
     font-size: 12px;
     bottom: 1px;
+    width: 17px;   /* ★ (2026-10-26) 그림 자물쇠라 크기를 직접 — (밤) 목록 아이콘 24 → 32 → 36px 에 맞춰 12 → 16px, (10-27) 40px 에 맞춰 17px(모바일과 같음) */
+    height: 17px;
 }
 .vault-badge {
     font-size: 0.75em;

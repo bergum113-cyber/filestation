@@ -7413,6 +7413,19 @@ class FileManager {
     }
     
     // 이름 변경
+    /**
+     * ★ (2026-10-27 14시) 대소문자만 다른 자기 이름으로 바꾸는지 — rename() 의 '같은 이름 있음' 예외 판단용
+     *   원래 이름 ≠ 새 이름(글자 그대로), 소문자로 바꾸면 같고, 폴더 안에 원래 이름은 있고 새 이름(글자 그대로)은 없을 때만 true
+     */
+    private static function isCaseOnlyRename(string $fullPath, string $newName): bool {
+        $old = basename($fullPath);
+        if ($old === $newName || $newName === '') return false;
+        if (mb_strtolower($old, 'UTF-8') !== mb_strtolower($newName, 'UTF-8')) return false;
+        $entries = @scandir(dirname($fullPath));
+        if (!is_array($entries)) return false;
+        return in_array($old, $entries, true) && !in_array($newName, $entries, true);
+    }
+
     public function rename(int $storageId, string $relativePath, string $newName): array {
         if (!$this->storage->checkPermission($storageId, 'can_write')) {
             return ['success' => false, 'error' => __('api_err_no_write_perm', '쓰기 권한이 없습니다.')];
@@ -7443,7 +7456,7 @@ class FileManager {
                 : $parentDir . '/' . $safeNewName;
             
             if ($adapter->exists($newRelPath)) {
-                return ['success' => false, 'error' => __('api_err_same_name_exists', '같은 이름이 이미 있습니다.')];
+                return ['success' => false, 'error' => __('api_err_same_name_exists', '같은 이름이 이미 있습니다.'), 'code' => 'name_exists'];   // ★ (2026-10-27) code — 여러 개 일괄 이름 변경이 다음 번호로 넘어가는 판단용(문구는 언어마다 달라서)
             }
             
             if ($adapter->rename($relativePath, $newRelPath)) {
@@ -7466,8 +7479,11 @@ class FileManager {
             return ['success' => false, 'error' => __('file_not_found'), 'debug' => ['storage_id' => $storageId, 'path' => $relativePath, 'fullPath' => $fullPath, 'locale' => setlocale(LC_ALL, 0)]];
         }
         
-        if (file_exists($newPath)) {
-            return ['success' => false, 'error' => __('api_err_same_name_exists', '같은 이름이 이미 있습니다.')];
+        // ★ (2026-10-27 14시, 펜닐) 대소문자만 바꾸는 이름 변경(show.mkv → Show.mkv) 허용 — 윈도우는 대소문자를 구분하지 않아
+        //   file_exists 가 자기 자신을 '같은 이름 있음'으로 봐서 막혔음. 같은 폴더에 새 이름과 글자까지 똑같은 항목이 없고
+        //   원래 이름은 그대로 있을 때만(= 같은 파일) 통과 — 대소문자를 구분하는 리눅스에서 다른 파일을 덮어쓰는 일은 없음
+        if (file_exists($newPath) && !self::isCaseOnlyRename($fullPath, $safeNewName)) {
+            return ['success' => false, 'error' => __('api_err_same_name_exists', '같은 이름이 이미 있습니다.'), 'code' => 'name_exists'];   // ★ (2026-10-27) 위와 같음
         }
         
         if (!rename($fullPath, $newPath)) {
@@ -14536,7 +14552,7 @@ class FileManager {
     }
     
     private function getFileIcon(string $type, string $extension = ''): string {
-        // 폴더 / 기본 / TEXT(txt,log) / HWP는 기존 인라인 SVG 유지 (펜닐 선호)
+        // 폴더 / 기본 / TEXT(txt,log) / HWP는 인라인 SVG·파일 그림 (★ 2026-10-26 선 그림 계열 — 폴더는 테두리 + 노란 칠, config.php SVG_ICONS·assets/file-icons 와 같은 모양)
         if ($type === 'folder') {
             // 사용자 정의 폴더 아이콘 확인 (user_icon_map.json의 __folder 키)
             //   있으면 해당 svg 파일 사용, 없으면 기본 노란 SVG
@@ -14622,14 +14638,22 @@ class FileManager {
             }
         }
         
-        // HWP/HWPX
-        if ($ext === 'hwp' || $ext === 'hwpx') {
-            return SVG_ICONS['hwp'] ?? '';
+        // ★ (2026-10-27) 윈도우 11 느낌 확장자별 그림(assets/file-icons/ext-확장자.svg — 흰 종이 + 종류별 색 그림 + 확장자 글자, 펜닐 확정)
+        //   그림 안에 확장자가 있어 라벨 없음. (13:07 펜닐) 오피스·PDF·한글도 같은 흰 종이 + 로고 + 확장자 글자 그림(ext-docx 등) — 크기를 다른 아이콘과 똑같이.
+        //   그림이 없는 확장자는 아래 종전 처리
+        if ($ext !== '' && preg_match('/^[a-z0-9]{1,10}$/', $ext) && is_file(dirname(__DIR__) . '/assets/file-icons/ext-' . $ext . '.svg')) {
+            return '<img src="' . htmlspecialchars(IconUrl::get('ext-' . $ext, false)) . '" alt="' . htmlspecialchars($ext) . '" class="fs-file-icon-img" draggable="false" loading="lazy">';
         }
+
+        // HWP/HWPX — ★ (2026-10-27) 줄 그은 문서 + 파란 접힘 판·흰 '한' 그림(hwp.svg, 펜닐이 보낸 이미지 참고 — 시안 C). 라벨 없음(02:18 펜닐 — 라벨이 '한'을 가림)
+        if ($ext === 'hwp' || $ext === 'hwpx') {
+            return self::extIconHtml('hwp', $ext);
+        }
+        
         
         // TEXT (파란 카드 + 가로 라인 3개) - 파일 기반 (text.svg)
         if ($ext === 'txt' || $ext === 'log') {
-            return '<img src="' . htmlspecialchars(IconUrl::get('text', false)) . '" alt="text" class="fs-file-icon-img" draggable="false" loading="lazy">';
+            return self::extIconHtml('text', $ext);   // ★ (2026-10-27) TXT·LOG 라벨
         }
         
         // 압축 파일: 공용 archive.svg + 확장자 라벨 오버레이 (11개)
@@ -14638,8 +14662,10 @@ class FileManager {
         $archiveMap = [
             'zip' => 'ZIP', '7z' => '7Z', 'rar' => 'RAR',
             'tar' => 'TAR', 'gz' => 'GZ', 'bz2' => 'BZ2', 'xz' => 'XZ',
-            'tgz' => 'TGZ', 'tbz2' => 'TBZ', '001' => '001',
-            'iso' => 'ISO'
+            'tgz' => 'TGZ', 'tbz2' => 'TBZ2', '001' => '001',
+            // ★ (2026-10-27) iso 는 디스크 이미지 — 압축 그림 대신 디스크 그림(disc.svg) + 라벨(아래 $iconMap, 펜닐 결정)
+            // ★ (2026-10-26 밤) lz·cab·lzma·z 는 압축인데 라벨 없는 압축 그림만 나왔음 → 다른 압축처럼 라벨
+            'lz' => 'LZ', 'cab' => 'CAB', 'lzma' => 'LZMA', 'z' => 'Z'
         ];
         if (isset($archiveMap[$ext])) {
             return '<span class="fs-archive-icon">'
@@ -14663,6 +14689,9 @@ class FileManager {
         }
         
         // 확장자 → 아이콘 파일명 매핑 (vscode-icons)
+        // ★ (2026-10-26 밤) 글자가 들어간 그림(DOC·XLS·PPT·JS 등)을 여러 확장자가 같이 써서 xlsx 에도 'XLS' 처럼 다른 글자가 나왔음(펜닐 제보)
+        //   → 확장자별 그림(이름-확장자.svg, 예: excel-xlsx.svg 'XLSX')으로. tsx 는 JS 가 아니라 TypeScript(파란 'TSX'), sqlite·db 는 'DB'
+        //   ★ (2026-10-27 01:56) 오피스(word·excel·powerpoint)·PDF 는 예전 색 그림(vscode-icons)으로 되돌림(펜닐 요청) — 확장자 구분은 라벨
         $iconMap = [
             // 문서
             'pdf' => 'pdf',
@@ -14671,26 +14700,26 @@ class FileManager {
             'ppt' => 'powerpoint', 'pptx' => 'powerpoint', 'odp' => 'powerpoint',
             'md' => 'markdown', 'markdown' => 'markdown',
             // 코드
-            'html' => 'html', 'htm' => 'html',
-            'css' => 'css', 'scss' => 'css', 'sass' => 'css', 'less' => 'css',
-            'js' => 'js', 'jsx' => 'js', 'mjs' => 'js', 'cjs' => 'js',
+            'html' => 'html', 'htm' => 'html-htm',
+            'css' => 'css', 'scss' => 'css-scss', 'sass' => 'css-sass', 'less' => 'css-less',
+            'js' => 'js', 'jsx' => 'js-jsx', 'mjs' => 'js-mjs', 'cjs' => 'js-cjs',
             // 주의: ts는 video (TypeScript 아닌 MPEG-TS/동영상)
-            'tsx' => 'js',
+            'tsx' => 'tsx',
             'json' => 'json', 'json5' => 'json',
-            'xml' => 'xml', 'xsd' => 'xml', 'xsl' => 'xml',
-            'php' => 'php', 'phtml' => 'php',
-            'py' => 'python', 'pyw' => 'python',
-            'java' => 'java', 'class' => 'java', 'jar' => 'java',
-            'c' => 'c', 'h' => 'c',
-            'cpp' => 'cpp', 'cc' => 'cpp', 'cxx' => 'cpp', 'hpp' => 'cpp', 'hxx' => 'cpp',
+            'xml' => 'xml', 'xsd' => 'xml-xsd', 'xsl' => 'xml-xsl',
+            'php' => 'php', 'phtml' => 'php-phtml',
+            'py' => 'python', 'pyw' => 'python-pyw',
+            'java' => 'java', 'class' => 'java-class', 'jar' => 'java-jar',
+            'c' => 'c', 'h' => 'c-h',
+            'cpp' => 'cpp', 'cc' => 'cpp-cc', 'cxx' => 'cpp-cxx', 'hpp' => 'cpp-hpp', 'hxx' => 'cpp-hxx',
             'rb' => 'ruby',
             'go' => 'go',
             'rs' => 'rust',
             'swift' => 'swift',
-            'yaml' => 'yaml', 'yml' => 'yaml',
+            'yaml' => 'yaml-yaml', 'yml' => 'yaml',
             'toml' => 'toml',
-            'ini' => 'ini', 'conf' => 'ini', 'cfg' => 'ini', 'env' => 'ini',
-            'sql' => 'sql', 'db' => 'sql', 'sqlite' => 'sql', 'sqlite3' => 'sql',
+            'ini' => 'ini', 'conf' => 'ini-conf', 'cfg' => 'ini-cfg', 'env' => 'ini-env',
+            'sql' => 'sql', 'db' => 'database', 'sqlite' => 'database', 'sqlite3' => 'database',
             'sh' => 'shell', 'bash' => 'shell', 'zsh' => 'shell', 'fish' => 'shell',
             'ps1' => 'powershell', 'psm1' => 'powershell', 'psd1' => 'powershell',
             // Windows 배치 스크립트
@@ -14706,17 +14735,25 @@ class FileManager {
             'flv' => 'video', 'webm' => 'video', 'ts' => 'video', 'm2ts' => 'video', 'mts' => 'video',
             'vob' => 'video', 'rmvb' => 'video', 'rm' => 'video', '3gp' => 'video', '3g2' => 'video',
             'mpg' => 'video', 'mpeg' => 'video', 'm4v' => 'video', 'f4v' => 'video', 'asf' => 'video',
-            // 음악: iconMap에서 제외 — EMOJI_ICONS 폴백으로 🎵 (펜닐 선호)
+            // 음악: iconMap 에는 없고 아래 EMOJI_ICONS 폴백에서 audio.svg 로 그림 (★ 2026-10-26 — 종전 🎵 이모지)
             // 폰트
-            'ttf' => 'font', 'otf' => 'font', 'woff' => 'font', 'woff2' => 'font', 'eot' => 'font'
+            'ttf' => 'font', 'otf' => 'font', 'woff' => 'font', 'woff2' => 'font', 'eot' => 'font',
+            // ★ (2026-10-27) 디스크 이미지 — 디스크 그림 + 라벨 (iso 는 종전 압축 그림, dmg 는 실행 파일 그림이었음)
+            'iso' => 'disc', 'dmg' => 'disc', 'img' => 'disc'
         ];
         
         if (isset($iconMap[$ext])) {
-            return '<img src="' . htmlspecialchars(IconUrl::get($iconMap[$ext], false)) . '" alt="' . htmlspecialchars($ext) . '" class="fs-file-icon-img" draggable="false" loading="lazy">';
+            return self::extIconHtml($iconMap[$ext], $ext);   // ★ (2026-10-27) 그림에 확장자 글자가 없으면 라벨
         }
         
-        // 실행/설치 파일 등은 기존 이모지 유지 (msi, exe, deb, rpm, apk, dmg 등)
+        // 실행/설치 파일·음악 등 EMOJI_ICONS 에만 있는 확장자
+        //   ★ (2026-10-26) 이모지 → 같은 뜻의 선 그림 파일(펜닐: 아이콘 전부 선 그림으로 — 예전 '음악은 🎵' 선호는 이번 요청으로 바꿈)
+        //   🎵 audio · ⚙️ app · 🔗 link · 📦 archive · 🖼️ image · 🎬 video · 🔤 font. 모르는 이모지는 종전처럼 글자 그대로
         if (defined('EMOJI_ICONS') && isset(EMOJI_ICONS[$ext])) {
+            $_emoFile = self::emojiIconFile(EMOJI_ICONS[$ext]);
+            if ($_emoFile !== null) {
+                return self::extIconHtml($_emoFile, $ext);   // ★ (2026-10-27) MP3·EXE 같은 라벨
+            }
             return EMOJI_ICONS[$ext];
         }
         
@@ -14737,6 +14774,39 @@ class FileManager {
      *   'emoji_exts' => ['mp3', 'wav', ...],  // 이모지만 있는 확장자
      * ]
      */
+    /**
+     * ★ (2026-10-27) 기본 그림 + (필요하면) 확장자 라벨 — 펜닐: 확장자와 아이콘이 맞게.
+     *   형식이 중요한 묶음(동영상·음악·실행 파일·텍스트·디스크 이미지 — iconNeedsExtLabel)은 압축·자막처럼
+     *   노란 확장자 라벨(.archive-ext — 라벨 위치 설정을 따름)을 붙임. 다섯 글자 이상은 작은 글자(fs-ext-long)
+     *   app.js App._fsIconNeedsLabel 과 같은 규칙
+     */
+    private static function extIconHtml(string $iconName, string $ext): string {
+        $img = '<img src="' . htmlspecialchars(IconUrl::get($iconName, false)) . '" alt="' . htmlspecialchars($ext) . '" class="fs-file-icon-img" draggable="false" loading="lazy">';
+        if (!self::iconNeedsExtLabel($iconName, $ext)) return $img;
+        $lbl = strtoupper($ext);
+        return '<span class="fs-archive-icon">' . $img
+             . '<span class="archive-ext' . (strlen($lbl) >= 5 ? ' fs-ext-long' : '') . '">' . htmlspecialchars($lbl) . '</span></span>';
+    }
+
+    /**
+     * ★ (2026-10-27) 라벨을 붙일 그림인지 — 펜닐 결정: '형식이 중요한 것만'
+     *   라벨: 동영상(video)·음악(audio)·실행 파일(app)·텍스트(text)·디스크 이미지(disc) — 압축·자막은 위 전용 분기에서 종전처럼 라벨
+     *         + (01:56) 오피스 로고 그림(word·excel·powerpoint — 그림에 확장자 글자가 없어 DOC·DOCX·XLSX 구분). 한글(hwp)은 (02:18) 라벨 없음
+     *   라벨 없음: PDF(그림에 'PDF' 띠)·사진·글꼴·스크립트(셸·PowerShell·배치)·링크·torrent·데이터베이스·{ }·코드(종이 안 글자)
+     *   app.js App._fsIconNeedsLabel 과 같은 표
+     */
+    public static function iconNeedsExtLabel(string $iconName, string $ext): bool {
+        if ($ext === '') return false;
+        return in_array($iconName, ['video', 'audio', 'app', 'text', 'disc', 'word', 'excel', 'powerpoint'], true);   // (02:18 펜닐) hwp·hwpx 는 라벨 없음 — 둥근 네모 그림이 칸을 채워 라벨이 '한'을 가렸음
+    }
+
+    /** ★ (2026-10-26) EMOJI_ICONS 의 이모지 → 같은 뜻의 선 그림 파일 이름(assets/file-icons/이름.svg). 모르면 null */
+    public static function emojiIconFile(string $emoji): ?string {
+        $k = str_replace("\u{FE0F}", '', $emoji);
+        $m = ['🎵' => 'audio', '⚙' => 'app', '🔗' => 'link', '📦' => 'archive', '🖼' => 'image', '🎬' => 'video', '🔤' => 'font'];
+        return isset($m[$k]) && file_exists(dirname(__DIR__) . '/assets/file-icons/' . $m[$k] . '.svg') ? $m[$k] : null;
+    }
+
     public function getBuiltinIconMap(): array {
         // 위에 정의된 $iconMap과 동일하게 유지 (하드코딩)
         // 주의: 새 확장자 추가 시 getFileIcon()과 이 메서드 둘 다 업데이트 필요
@@ -14746,22 +14816,22 @@ class FileManager {
             'xls' => 'excel', 'xlsx' => 'excel', 'ods' => 'excel', 'csv' => 'excel',
             'ppt' => 'powerpoint', 'pptx' => 'powerpoint', 'odp' => 'powerpoint',
             'md' => 'markdown', 'markdown' => 'markdown',
-            'html' => 'html', 'htm' => 'html',
-            'css' => 'css', 'scss' => 'css', 'sass' => 'css', 'less' => 'css',
-            'js' => 'js', 'jsx' => 'js', 'mjs' => 'js', 'cjs' => 'js',
-            'tsx' => 'js',
+            'html' => 'html', 'htm' => 'html-htm',
+            'css' => 'css', 'scss' => 'css-scss', 'sass' => 'css-sass', 'less' => 'css-less',
+            'js' => 'js', 'jsx' => 'js-jsx', 'mjs' => 'js-mjs', 'cjs' => 'js-cjs',
+            'tsx' => 'tsx',
             'json' => 'json', 'json5' => 'json',
-            'xml' => 'xml', 'xsd' => 'xml', 'xsl' => 'xml',
-            'php' => 'php', 'phtml' => 'php',
-            'py' => 'python', 'pyw' => 'python',
-            'java' => 'java', 'class' => 'java', 'jar' => 'java',
-            'c' => 'c', 'h' => 'c',
-            'cpp' => 'cpp', 'cc' => 'cpp', 'cxx' => 'cpp', 'hpp' => 'cpp', 'hxx' => 'cpp',
+            'xml' => 'xml', 'xsd' => 'xml-xsd', 'xsl' => 'xml-xsl',
+            'php' => 'php', 'phtml' => 'php-phtml',
+            'py' => 'python', 'pyw' => 'python-pyw',
+            'java' => 'java', 'class' => 'java-class', 'jar' => 'java-jar',
+            'c' => 'c', 'h' => 'c-h',
+            'cpp' => 'cpp', 'cc' => 'cpp-cc', 'cxx' => 'cpp-cxx', 'hpp' => 'cpp-hpp', 'hxx' => 'cpp-hxx',
             'rb' => 'ruby', 'go' => 'go', 'rs' => 'rust', 'swift' => 'swift',
-            'yaml' => 'yaml', 'yml' => 'yaml',
+            'yaml' => 'yaml-yaml', 'yml' => 'yaml',
             'toml' => 'toml',
-            'ini' => 'ini', 'conf' => 'ini', 'cfg' => 'ini', 'env' => 'ini',
-            'sql' => 'sql', 'db' => 'sql', 'sqlite' => 'sql', 'sqlite3' => 'sql',
+            'ini' => 'ini', 'conf' => 'ini-conf', 'cfg' => 'ini-cfg', 'env' => 'ini-env',
+            'sql' => 'sql', 'db' => 'database', 'sqlite' => 'database', 'sqlite3' => 'database',
             'sh' => 'shell', 'bash' => 'shell', 'zsh' => 'shell', 'fish' => 'shell',
             'ps1' => 'powershell', 'psm1' => 'powershell', 'psd1' => 'powershell',
             'bat' => 'bat', 'cmd' => 'bat',
@@ -14773,12 +14843,23 @@ class FileManager {
             'flv' => 'video', 'webm' => 'video', 'ts' => 'video', 'm2ts' => 'video', 'mts' => 'video',
             'vob' => 'video', 'rmvb' => 'video', 'rm' => 'video', '3gp' => 'video', '3g2' => 'video',
             'mpg' => 'video', 'mpeg' => 'video', 'm4v' => 'video', 'f4v' => 'video', 'asf' => 'video',
-            'ttf' => 'font', 'otf' => 'font', 'woff' => 'font', 'woff2' => 'font', 'eot' => 'font'
+            'ttf' => 'font', 'otf' => 'font', 'woff' => 'font', 'woff2' => 'font', 'eot' => 'font',
+            // ★ (2026-10-27) 디스크 이미지 — 디스크 그림 + 라벨 (iso 는 종전 압축 그림, dmg 는 실행 파일 그림이었음)
+            'iso' => 'disc', 'dmg' => 'disc', 'img' => 'disc'
         ];
+        
+        // ★ (2026-10-26) EMOJI_ICONS 에만 있던 확장자(음악·실행 파일·링크 등)도 이제 선 그림 파일로 그려지므로 아이콘 관리에 '내장'으로 보이게
+        if (defined('EMOJI_ICONS')) {
+            foreach (EMOJI_ICONS as $_e => $_emo) {
+                if (isset($codeMap[$_e])) continue;
+                $_f = self::emojiIconFile($_emo);
+                if ($_f !== null) $codeMap[$_e] = $_f;   // 라벨 붙는 압축(zip·7z 등)은 아래 archive_exts 가 먼저 처리
+            }
+        }
         
         return [
             'code_map' => $codeMap,
-            'archive_exts' => ['zip', '7z', 'rar', 'tar', 'gz', 'bz2', 'xz', 'tgz', 'tbz2', '001', 'iso'],
+            'archive_exts' => ['zip', '7z', 'rar', 'tar', 'gz', 'bz2', 'xz', 'tgz', 'tbz2', '001', 'lz', 'cab', 'lzma', 'z'],
             'subtitle_exts' => ['srt', 'smi', 'ass', 'ssa', 'vtt', 'sub'],
             // text.svg, hwp.svg 파일 모두 존재 → special로 통합
             'special' => ['txt' => 'text', 'log' => 'text', 'hwp' => 'hwp', 'hwpx' => 'hwp'],

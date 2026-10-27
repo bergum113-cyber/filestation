@@ -8,6 +8,7 @@ require_once __DIR__ . '/php_version_check.php';
 
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/lang.php';
+require_once __DIR__ . '/api/FsIcons.php';   // ★ (2026-10-26) 선 그림 아이콘 — 아래 화면의 이모지를 바꿈
 
 // ★ (2026-09-02) HTML 캐시 방지 — index.php 와 동일 취지.
 //   이 페이지도 `?v=APP_VERSION` 으로 자산을 캐시버스팅하지만, **HTML 이 캐시되면
@@ -340,6 +341,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     }
     exit;
 }
+// ★ (2026-10-26) 화면 HTML 의 이모지 → 선 그림 아이콘(index.php 와 같은 방식). 여기(화면 출력 직전)부터만 — 위쪽 파일 전송·오류 응답은 이미 exit
+ob_start('fs_icon_convert_html');
 ?>
 <!DOCTYPE html>
 <html lang="ko">
@@ -444,8 +447,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
   </script>
   <script type="module" crossorigin src="index-D5MYs9RT.js?v=<?php echo APP_VERSION; ?>"></script>
   <link rel="stylesheet" crossorigin href="index-Dy0DTkWY.css?v=<?php echo APP_VERSION; ?>">
+<style>/* ★ (2026-10-26) 선 그림 아이콘(이모지 대신, 원본 api/FsIcons.php) — 글자색을 따름 */ .fs-ico{width:1.2em;height:1.2em;vertical-align:-0.2em;flex-shrink:0} .fs-ico-ok{color:#157347} .fs-ico-err{color:#c62828} .fs-ico-warn{color:#b45309} .tb-icon-text .fs-ico{display:block;width:18px;height:18px} .sb-highlight-icon .fs-ico{width:1em;height:1em}</style>
 </head>
 <body>
+<?php /* ★ (2026-10-26) 선 그림 아이콘 묶음 + 스크립트가 넣는 이모지도 바꾸는 fs-icons.js (index.php·share.php 와 같음) */ echo fs_icon_sprite(); ?>
+<script>window.FS_ICO_EMOJI = <?= fs_icon_map_json() ?>;</script>
+<script src="assets/js/fs-icons.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-icons.js'), 0, 10) ?>"></script>
   <div id="studio-root">
     <!-- 메뉴바 -->
     <div id="menu-bar">
@@ -1516,7 +1523,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             }
         } catch (e) {
             console.error('[rhwp_editor] 서버 저장 실패:', e);
-            if (statusEl) statusEl.textContent = '저장 실패: ' + e.message;
+            if (statusEl) statusEl.textContent = '저장 실패: ' + ((e && e.message) || (typeof e === 'string' && e) || '알 수 없는 오류');   // ★ (2026-10-26) WASM 이 문자열을 던지면 'undefined' 가 나왔음
         } finally {
             // 프로토타입/전역 함수 반드시 복원 (try 중 예외 발생해도 실행됨)
             HTMLAnchorElement.prototype.click = origClick;
@@ -1869,7 +1876,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             }
         } catch (e) {
             console.error('[rhwp_editor] 다른 이름으로 저장 실패:', e);
-            if (statusEl) statusEl.textContent = '저장 실패: ' + e.message;
+            if (statusEl) statusEl.textContent = '저장 실패: ' + ((e && e.message) || (typeof e === 'string' && e) || '알 수 없는 오류');   // ★ (2026-10-26) WASM 이 문자열을 던지면 'undefined' 가 나왔음
         } finally {
             // 안전장치: 조기 복원 전 예외 발생 가능성에 대비해 최종 한 번 더 복원
             // (이미 복원된 상태면 같은 값을 덮어쓰는 것이라 멱등적, no-op에 가까움)
