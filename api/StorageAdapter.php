@@ -76,13 +76,17 @@ class LocalAdapter implements StorageAdapterInterface {
     
     public function disconnect(): void {}
     
+    public bool $listFailed = false;   // ★ (2026-10-29 18:52, 22차 점검) 원격 어댑터와 같은 표시 — 폴더를 읽지 못했으면 true(없는 폴더는 빈 목록, 실패 아님)
     public function list(string $path): array {
+        $this->listFailed = false;
         $fullPath = $this->getFullPath($path);
         if (!is_dir($fullPath)) return [];
         
         static $skipDirs = ['$RECYCLE.BIN', 'System Volume Information', '$Recycle.Bin'];
         $items = [];
-        foreach (scandir($fullPath) as $item) {
+        $scanned = @scandir($fullPath);
+        if ($scanned === false) { $this->listFailed = true; return []; }
+        foreach ($scanned as $item) {
             if ($item === '.' || $item === '..') continue;
             if (in_array($item, $skipDirs)) continue;
             $itemPath = $fullPath . DIRECTORY_SEPARATOR . $item;
@@ -258,8 +262,10 @@ class FtpAdapter implements StorageAdapterInterface {
         }
     }
     
+    public bool $listFailed = false;   // ★ (2026-10-29 09:23, 20차) 목록 실패 표시 — list() 는 실패해도 [] 를 돌려줘 '빈 폴더' 와 구분이 안 돼, 원격 폴더 휴지통·이동 때 실패를 빈 폴더로 보고 원본을 지웠음. 호출부가 listFailed 로 확인
     public function list(string $path): array {
-        if (!$this->connection && !$this->_lazyConnect) return [];
+        $this->listFailed = false;
+        if (!$this->connection && !$this->_lazyConnect) { $this->listFailed = true; return []; }
         
         $root = $this->config['root'] ?? '/';
         $fullPath = rtrim($root, '/') . '/' . ltrim($path, '/');
@@ -274,7 +280,7 @@ class FtpAdapter implements StorageAdapterInterface {
         }
         
         // PHP FTP 확장 폴백 (curl 실패 시) - 지연 연결
-        if (!$this->connection && !$this->_doFtpConnect()) return $items;
+        if (!$this->connection && !$this->_doFtpConnect()) { $this->listFailed = true; return $items; }
         
         // 2차: ftp_mlsd (MLSD 지원 서버용)
         $origTimeout = @ftp_get_option($this->connection, FTP_TIMEOUT_SEC) ?: 90;
@@ -355,6 +361,7 @@ class FtpAdapter implements StorageAdapterInterface {
         }
         
         @ftp_set_option($this->connection, FTP_TIMEOUT_SEC, $origTimeout);
+        if ($rawlist === false && $files === false) $this->listFailed = true;   // 모든 방법이 실패(빈 폴더는 [] 로 옴)
         return $items;
     }
     
@@ -641,6 +648,51 @@ class FtpAdapter implements StorageAdapterInterface {
         $encodedPath = implode('/', array_map('rawurlencode', explode('/', $remotePath)));
         
         return "{$scheme}://{$user}:{$pass}@{$host}:{$port}{$encodedPath}";
+    }
+    
+    /**
+     * ★ (2026-10-29 01:12, 14차) 로컬 파일을 메모리에 통째로 올리지 않고 그대로 흘려 보냄(큰 파일 업로드용) — write() 와 같은 방식(curl 우선, 없으면 FTP 확장).
+     *   시간 제한은 '1분 동안 초당 1KB 미만이면 중단'(큰 파일이 고정 300초에 끊기지 않게). 실패하면 false
+     */
+    public function writeFromFile(string $path, string $localFile): bool {
+        $root = $this->config['root'] ?? '/';
+        $fullPath = rtrim($root, '/') . '/' . ltrim($path, '/');
+        $size = @filesize($localFile);
+        if ($size === false) return false;
+        
+        if (function_exists('curl_init')) {
+            $url = $this->_buildFtpUrl($fullPath);
+            if ($url) {
+                $fh = @fopen($localFile, 'rb');
+                if ($fh) {
+                    $ch = curl_init();
+                    curl_setopt_array($ch, [
+                        CURLOPT_URL => $url,
+                        CURLOPT_UPLOAD => true,
+                        CURLOPT_INFILE => $fh,
+                        CURLOPT_INFILESIZE => $size,
+                        CURLOPT_CONNECTTIMEOUT => 10,
+                        CURLOPT_LOW_SPEED_LIMIT => 1024,
+                        CURLOPT_LOW_SPEED_TIME => 60,
+                        CURLOPT_FTP_SSL => CURLFTPSSL_TRY,
+                        CURLOPT_FTP_CREATE_MISSING_DIRS => true,
+                    ]);
+                    $result = curl_exec($ch);
+                    $errno = curl_errno($ch);
+                    curl_close($ch);
+                    fclose($fh);
+                    if ($errno === 0 && $result !== false) return true;
+                }
+            }
+        }
+        
+        // 폴백: PHP FTP 확장
+        if (!$this->connection && !$this->_doFtpConnect()) return false;
+        $fh = @fopen($localFile, 'rb');
+        if (!$fh) return false;
+        $result = @ftp_fput($this->connection, $fullPath, $fh, FTP_BINARY);
+        fclose($fh);
+        return $result;
     }
     
     public function write(string $path, string $content): bool {
@@ -961,16 +1013,19 @@ class SftpAdapter implements StorageAdapterInterface {
     
     // ===== 파일 작업 (phpseclib3 우선) =====
     
+    public bool $listFailed = false;   // ★ (2026-10-29 09:23, 20차) 목록 실패 표시 — list() 는 실패해도 [] 를 돌려줘 '빈 폴더' 와 구분이 안 돼, 원격 폴더 휴지통·이동 때 실패를 빈 폴더로 보고 원본을 지웠음. 호출부가 listFailed 로 확인
     public function list(string $path): array {
+        $this->listFailed = false;
         $rawPath = $this->getRawPath($path);
         
         // phpseclib3
         if ($this->useSeclib && $this->seclib) {
             $entries = $this->seclib->rawlist($rawPath);
-            if (!is_array($entries)) return [];
+            if (!is_array($entries)) { $this->listFailed = true; return []; }
             
             $items = [];
             foreach ($entries as $name => $attrs) {
+                $name = (string)$name;   // ★ (2026-10-29 21:41, 24차 점검) 배열 키라 숫자 이름('2024')이 정수로 옴 → 문자열로(목록 화면 오류 방지)
                 if ($name === '.' || $name === '..') continue;
                 $isDir = ($attrs['type'] ?? 0) === 2;
                 $items[] = [
@@ -985,9 +1040,11 @@ class SftpAdapter implements StorageAdapterInterface {
         }
         
         // ssh2 확장 fallback
-        if (!$this->sftp) return [];
+        if (!$this->sftp) { $this->listFailed = true; return []; }
         
+        $sfOpenTried = false;
         if (!preg_match('/[#?]/', $rawPath)) {
+            $sfOpenTried = true;
             $handle = @opendir($this->getSftpPath($path));
             if ($handle) {
                 return $this->readDirItems($handle, $path);
@@ -995,8 +1052,11 @@ class SftpAdapter implements StorageAdapterInterface {
         }
         
         $items = $this->listViaSymlink($path);
-        if (!empty($items) || !$this->connection) return $items;
-        return $this->listViaSshExec($path);
+        if (empty($items) && $this->connection) $items = $this->listViaSshExec($path);
+        // 폴더 열기 실패 뒤 대체 방법도 비면 빈 폴더인지 알 수 없음 → 실패로
+        // ★ (2026-10-29 15:35, 21차 재점검) 이름에 #·? 가 있어 폴더 열기를 아예 건너뛴 경우는 종전처럼 빈 폴더로 봄 — 20차엔 이런 이름의 빈 폴더가 늘 '목록 실패' 가 되어 삭제·이동·복사가 실패했음
+        if (empty($items) && $sfOpenTried) $this->listFailed = true;
+        return $items;
     }
     
     public function read(string $path): string {
@@ -1361,7 +1421,8 @@ class WebDavAdapter implements StorageAdapterInterface {
         if (!empty($options['headers'])) {
             curl_setopt($ch, CURLOPT_HTTPHEADER, $options['headers']);
         }
-        if (!empty($options['body'])) {
+        // ★ (2026-10-29 01:43, 15차) empty() 는 문자열 "0" 도 비었다고 봐, 내용이 정확히 '0' 인 파일이 빈 파일로 저장됐음(재현) → 빈 문자열만 뺌
+        if (isset($options['body']) && (string)$options['body'] !== '') {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $options['body']);
         }
         
@@ -1403,21 +1464,38 @@ class WebDavAdapter implements StorageAdapterInterface {
     
     public function disconnect(): void {}
     
+    public bool $listFailed = false;   // ★ (2026-10-29 09:23, 20차) 목록 실패 표시 — list() 는 실패해도 [] 를 돌려줘 '빈 폴더' 와 구분이 안 돼, 원격 폴더 휴지통·이동 때 실패를 빈 폴더로 보고 원본을 지웠음. 호출부가 listFailed 로 확인
     public function list(string $path): array {
+        $this->listFailed = false;
         $result = $this->request('PROPFIND', $path, ['headers' => ['Depth: 1']]);
-        if ($result['code'] !== 207) return [];
+        if ($result['code'] !== 207) { $this->listFailed = true; return []; }
         
         $items = [];
         $xml = @simplexml_load_string($result['body']);
-        if (!$xml) return [];
+        if ($xml === false) { $this->listFailed = true; return []; }   // ★ (2026-10-29 18:10, 22차 점검) '=== false' 로 — DAV 응답은 'D:' 같은 접두어 이름공간이라 SimpleXML 뿌리 요소가 거짓으로 평가돼(!$xml 이 늘 참) 원격 WebDAV 의 목록·폴더 판정·크기·수정 시각이 늘 실패했음(재현)
         
         $xml->registerXPathNamespace('d', 'DAV:');
+        // ★ (2026-10-29 03:11, 16차) 목록 대상 폴더 자신(self)의 경로 — 이걸로 self 만 건너뛰어, 부모와 이름이 같은 하위 폴더(photos/photos)가 사라지지 않게.
+        //   또 href 해독을 rawurldecode 로 바꿔 '+' 가 공백으로 바뀌던 문제(a+b.txt → 'a b.txt')도 바로잡음
+        // ★ (2026-10-29 18:10, 22차 점검) 설정 주소의 경로도 해독해 비교(href 는 해독함) — 종전엔 주소에 %인코딩이 있으면(Nextcloud 'user%40mail.com' 등)
+        //   폴더 자신이 걸러지지 않아 자기 이름의 가짜 하위 폴더로 보였고, 그 안을 열면 404 → 목록 실패로 폴더 삭제가 늘 실패했음
+        $basePathPart = rtrim(rawurldecode((string)parse_url($this->config['url'] ?? '', PHP_URL_PATH)), '/');
+        $selfPath = rtrim($basePathPart . '/' . ltrim(str_replace('\\', '/', $path), '/'), '/');
         foreach ($xml->xpath('//d:response') as $response) {
-            $href = (string)$response->xpath('d:href')[0];
-            $props = $response->xpath('d:propstat/d:prop')[0];
-            
-            $name = basename(urldecode($href));
-            if (empty($name) || $name === basename($path)) continue;
+            // ★ (2026-10-29 18:10, 22차 점검) 하위 요소의 xpath 도 이름공간을 따로 등록해야 함 — 종전엔 등록이 뿌리에만 있어 'd:href' 가 늘 실패(false)해
+            //   모든 항목이 이름 없음으로 건너뛰어졌음(원격 WebDAV 폴더가 늘 비어 보임, 재현)
+            $response->registerXPathNamespace('d', 'DAV:');
+            $hrefNode = $response->xpath('d:href');
+            $propNode = $response->xpath('d:propstat/d:prop');
+            if (empty($hrefNode) || empty($propNode)) continue;
+            $href = (string)$hrefNode[0];
+            $props = $propNode[0];
+            $props->registerXPathNamespace('d', 'DAV:');
+
+            $hrefPath = rtrim(rawurldecode((string)parse_url($href, PHP_URL_PATH)), '/');
+            if ($hrefPath === $selfPath) continue;   // 폴더 자신만 건너뜀(이름이 같은 자식은 유지)
+            $name = basename(rawurldecode($href));
+            if (empty($name)) continue;
             
             $isDir = !empty($props->xpath('d:resourcetype/d:collection'));
             $size = (int)($props->xpath('d:getcontentlength')[0] ?? 0);
@@ -1459,6 +1537,43 @@ class WebDavAdapter implements StorageAdapterInterface {
         return '';
     }
     
+    /**
+     * ★ (2026-10-29 01:12, 14차) 로컬 파일을 메모리에 통째로 올리지 않고 PUT 으로 흘려 보냄(큰 파일 업로드용) — 주소·인증은 request() 와 같음.
+     *   시간 제한은 '1분 동안 초당 1KB 미만이면 중단'(write() 는 고정 30초라 느린 연결의 큰 파일은 끊길 수 있음 — 코드 확인, 실제 끊김은 미시험). 2xx 면 성공
+     */
+    public function writeFromFile(string $path, string $localFile): bool {
+        if (!function_exists('curl_init')) {
+            $this->lastError = __('api_err_webdav_no_curl', 'WebDAV 연결에 필요한 cURL 확장이 설치되지 않았습니다.');
+            return false;
+        }
+        $size = @filesize($localFile);
+        $fh = ($size === false) ? false : @fopen($localFile, 'rb');
+        if (!$fh) return false;
+        $encodedPath = implode('/', array_map('rawurlencode', explode('/', $path)));
+        $url = rtrim($this->config['url'] ?? '', '/') . '/' . ltrim($encodedPath, '/');
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_UPLOAD => true,
+            CURLOPT_INFILE => $fh,
+            CURLOPT_INFILESIZE => $size,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPAUTH => CURLAUTH_BASIC,
+            CURLOPT_USERPWD => ($this->config['username'] ?? '') . ':' . ($this->config['password'] ?? ''),
+            CURLOPT_CONNECTTIMEOUT => (int)($this->config['connect_timeout'] ?? 10),
+            CURLOPT_LOW_SPEED_LIMIT => 1024,
+            CURLOPT_LOW_SPEED_TIME => 60,
+        ]);
+        curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+        fclose($fh);
+        if ($curlError) {
+            $this->lastError = __('webdav_connect_error') . $curlError;
+        }
+        return $httpCode >= 200 && $httpCode < 300;
+    }
+    
     public function write(string $path, string $content): bool {
         $result = $this->request('PUT', $path, ['body' => $content]);
         return $result['code'] >= 200 && $result['code'] < 300;
@@ -1491,7 +1606,7 @@ class WebDavAdapter implements StorageAdapterInterface {
         $result = $this->request('PROPFIND', $path, ['headers' => ['Depth: 0']]);
         if ($result['code'] !== 207) return false;
         $xml = @simplexml_load_string($result['body']);
-        if (!$xml) return false;
+        if ($xml === false) return false;   // ★ (22차) 위 list 와 같음
         $xml->registerXPathNamespace('d', 'DAV:');
         return !empty($xml->xpath('//d:resourcetype/d:collection'));
     }
@@ -1500,7 +1615,7 @@ class WebDavAdapter implements StorageAdapterInterface {
         $result = $this->request('PROPFIND', $path, ['headers' => ['Depth: 0']]);
         if ($result['code'] !== 207) return 0;
         $xml = @simplexml_load_string($result['body']);
-        if (!$xml) return 0;
+        if ($xml === false) return 0;   // ★ (22차) 위 list 와 같음
         $xml->registerXPathNamespace('d', 'DAV:');
         return (int)($xml->xpath('//d:getcontentlength')[0] ?? 0);
     }
@@ -1513,7 +1628,7 @@ class WebDavAdapter implements StorageAdapterInterface {
         $result = $this->request('PROPFIND', $path, ['headers' => ['Depth: 0']]);
         if ($result['code'] !== 207) return 0;
         $xml = @simplexml_load_string($result['body']);
-        if (!$xml) return 0;
+        if ($xml === false) return 0;   // ★ (22차) 위 list 와 같음
         $xml->registerXPathNamespace('d', 'DAV:');
         return strtotime((string)($xml->xpath('//d:getlastmodified')[0] ?? ''));
     }
@@ -1534,7 +1649,7 @@ class S3Adapter implements StorageAdapterInterface {
         return $this->lastError;
     }
     
-    private function sign(string $method, string $uri, array $headers, string $payload = ''): array {
+    private function sign(string $method, string $uri, array $headers, string $payload = '', array $query = []): array {
         $accessKey = $this->config['access_key'] ?? '';
         $secretKey = $this->config['secret_key'] ?? '';
         $region = $this->config['region'] ?? 'us-east-1';
@@ -1548,7 +1663,20 @@ class S3Adapter implements StorageAdapterInterface {
         
         // URI 인코딩 (AWS Signature V4: canonical URI는 URI-encode 필요)
         $encodedUri = implode('/', array_map('rawurlencode', explode('/', $uri)));
-        
+
+        // ★ (2026-10-29 03:11, 16차) canonical query string 을 실제 쿼리로 채움 — 종전엔 '' 로 고정해, 목록 조회(?list-type=2&prefix=…) 등
+        //   쿼리가 붙는 모든 요청의 서명이 어긋나 S3·MinIO 가 SignatureDoesNotMatch 로 거부했음(연결·목록 자체 실패). S3 서버가 없어 소스로만 확인
+        $canonicalQuery = '';
+        if (!empty($query)) {
+            $qk = array_keys($query);
+            sort($qk);
+            $parts = [];
+            foreach ($qk as $k) {
+                $parts[] = rawurlencode((string)$k) . '=' . rawurlencode((string)$query[$k]);
+            }
+            $canonicalQuery = implode('&', $parts);
+        }
+
         // Canonical request
         ksort($headers);
         $signedHeaders = implode(';', array_map('strtolower', array_keys($headers)));
@@ -1560,7 +1688,7 @@ class S3Adapter implements StorageAdapterInterface {
         $canonicalRequest = implode("\n", [
             $method,
             $encodedUri,
-            '',
+            $canonicalQuery,
             $canonicalHeaders,
             $signedHeaders,
             $headers['x-amz-content-sha256']
@@ -1598,12 +1726,16 @@ class S3Adapter implements StorageAdapterInterface {
         $encodedFullPath = implode('/', array_map('rawurlencode', explode('/', $fullPath)));
         $uri = 'https://' . $endpoint . $encodedFullPath;
         
+        // ★ (2026-10-29 03:11, 16차) URL 의 쿼리도 서명과 똑같이 rawurlencode(정렬)로 만들어 서명과 어긋나지 않게(http_build_query 는 공백을 + 로 등 RFC3986 과 다름)
         if (!empty($query)) {
-            $uri .= '?' . http_build_query($query);
+            $qk = array_keys($query); sort($qk);
+            $qp = [];
+            foreach ($qk as $k) $qp[] = rawurlencode((string)$k) . '=' . rawurlencode((string)$query[$k]);
+            $uri .= '?' . implode('&', $qp);
         }
-        
+
         $headers = ['Host' => $endpoint];
-        $headers = $this->sign($method, $fullPath, $headers, $body);
+        $headers = $this->sign($method, $fullPath, $headers, $body, $query);
         
         $ch = curl_init($uri);
         curl_setopt_array($ch, [
@@ -1612,9 +1744,19 @@ class S3Adapter implements StorageAdapterInterface {
             CURLOPT_HTTPHEADER => array_map(fn($k, $v) => "$k: $v", array_keys($headers), $headers),
             CURLOPT_TIMEOUT => 30
         ]);
+        // ★ (2026-10-29 20:29, 23차 점검) HEAD 는 본문 없이 — CUSTOMREQUEST 만 HEAD 로 주면 curl 이 응답의 Content-Length(=파일 크기)만큼 본문을 기다리다
+        //   30초 시간 초과 뒤에야 돌아왔음(Content-Length 를 주는 서버로 재현). 22차에 삭제 전 HEAD 확인을 넣어 파일 삭제·이동마다 30초씩 걸릴 수 있었음
+        if ($method === 'HEAD') {
+            curl_setopt($ch, CURLOPT_NOBODY, true);
+        }
         
-        if (!empty($body)) {
+        // ★ (2026-10-29 01:43, 15차) WebDAV 와 같은 문제 — empty() 가 "0" 을 빈 값으로 봐 내용 '0' 인 파일의 본문이 빠졌음(서명은 '0' 기준이라 어긋남). 빈 문자열만 뺌 — S3 서버가 없어 소스로만 확인
+        if ($body !== '') {
             curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        } elseif ($method === 'PUT' || $method === 'POST') {
+            // ★ (2026-10-29 22:02, 24차 점검) 빈 본문 PUT 에도 Content-Length: 0 — 없으면 curl 이 길이 머리글을 안 보내(시험 서버로 확인) 실제 S3·MinIO 는
+            //   411(MissingContentLength)로 거부해 새 폴더 만들기(빈 '이름/' 객체)·0바이트 파일 저장이 실패함(moto 는 받아 줘 시험에서 안 드러났음)
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array_merge(array_map(fn($k, $v) => "$k: $v", array_keys($headers), $headers), ['Content-Length: 0']));
         }
         
         $response = curl_exec($ch);
@@ -1657,23 +1799,28 @@ class S3Adapter implements StorageAdapterInterface {
     
     public function disconnect(): void {}
     
+    public bool $listFailed = false;   // ★ (2026-10-29 09:23, 20차) 목록 실패 표시 — list() 는 실패해도 [] 를 돌려줘 '빈 폴더' 와 구분이 안 돼, 원격 폴더 휴지통·이동 때 실패를 빈 폴더로 보고 원본을 지웠음. 호출부가 listFailed 로 확인
     public function list(string $path): array {
+        $this->listFailed = false;
         $prefix = ltrim($path, '/');
         if (!empty($prefix) && !str_ends_with($prefix, '/')) {
             $prefix .= '/';
         }
         
-        $result = $this->request('GET', '', '', [
-            'list-type' => '2',
-            'prefix' => $prefix,
-            'delimiter' => '/'
-        ]);
-        
-        if ($result['code'] !== 200) return [];
-        
+        // ★ (2026-10-29 22:02, 24차 점검) 다음 쪽 이어 받기(ListObjectsV2 는 한 번에 최대 1000개) — 종전엔 첫 1000개만 읽어 큰 폴더가 일부만 보였고,
+        //   폴더 이동·삭제가 앞 1000개만 처리한 뒤 실패했음
         $items = [];
+        $contToken = null;
+        $pages = 0;
+        do {
+        $q = ['list-type' => '2', 'prefix' => $prefix, 'delimiter' => '/'];
+        if ($contToken !== null) $q['continuation-token'] = $contToken;
+        $result = $this->request('GET', '', '', $q);
+        
+        if ($result['code'] !== 200) { $this->listFailed = true; return []; }
+        
         $xml = @simplexml_load_string($result['body']);
-        if (!$xml) return [];
+        if (!$xml) { $this->listFailed = true; return []; }
         
         // 폴더
         foreach ($xml->CommonPrefixes ?? [] as $cp) {
@@ -1701,8 +1848,26 @@ class S3Adapter implements StorageAdapterInterface {
                 'modified' => strtotime((string)$content->LastModified)
             ];
         }
+        $contToken = (strtolower((string)($xml->IsTruncated ?? '')) === 'true' && (string)($xml->NextContinuationToken ?? '') !== '') ? (string)$xml->NextContinuationToken : null;
+        } while ($contToken !== null && ++$pages < 1000);
         
         return $items;
+    }
+    
+    /** ★ (2026-10-29 22:02, 24차 점검) 접두어 아래 모든 객체 키(하위 폴더 포함, 이어 받기) — 폴더 이름 바꾸기용. 실패면 null */
+    private function listAllKeys(string $prefix): ?array {
+        $keys = []; $tok = null; $pages = 0;
+        do {
+            $q = ['list-type' => '2', 'prefix' => $prefix];
+            if ($tok !== null) $q['continuation-token'] = $tok;
+            $r = $this->request('GET', '', '', $q);
+            if ($r['code'] !== 200) return null;
+            $xml = @simplexml_load_string($r['body']);
+            if (!$xml) return null;
+            foreach ($xml->Contents ?? [] as $c) $keys[] = (string)$c->Key;
+            $tok = (strtolower((string)($xml->IsTruncated ?? '')) === 'true' && (string)($xml->NextContinuationToken ?? '') !== '') ? (string)$xml->NextContinuationToken : null;
+        } while ($tok !== null && ++$pages < 1000);
+        return $keys;
     }
     
     public function read(string $path): string {
@@ -1747,6 +1912,14 @@ class S3Adapter implements StorageAdapterInterface {
     }
     
     public function delete(string $path): bool {
+        // ★ (2026-10-29 18:18, 22차 점검) 그 이름의 객체(파일)가 없으면 폴더 표시 객체('이름/')를 지움 — 폴더 삭제(deleteRemoteDir)는 마지막에 delete('폴더') 를 부르는데
+        //   S3 는 'folder' 와 'folder/' 가 다른 키라, 내용을 다 지워도 빈 폴더가 남아 목록에 계속 보였음(moto S3 로 재현).
+        //   파일이면 종전대로 그 키만 지움(버전 관리 버킷에 쓸데없는 삭제 표시가 쌓이지 않게 — 변경 검토 반영)
+        // ★ (2026-10-29 20:29, 23차 점검) '없음(404)'일 때만 폴더 표시로 봄 — 권한 없음(403) 등에서 파일은 남긴 채 성공으로 돌려주던 것 막음(그때는 종전대로 그 키를 지움)
+        if (!str_ends_with($path, '/') && trim($path, '/') !== '' && $this->request('HEAD', $path)['code'] === 404) {
+            $result = $this->request('DELETE', rtrim($path, '/') . '/');
+            return $result['code'] === 204 || $result['code'] === 200;
+        }
         $result = $this->request('DELETE', $path);
         return $result['code'] === 204 || $result['code'] === 200;
     }
@@ -1759,8 +1932,30 @@ class S3Adapter implements StorageAdapterInterface {
     
     public function rename(string $from, string $to): bool {
         // S3는 rename이 없으므로 copy + delete
-        $content = $this->read($from);
-        if ($this->write($to, $content)) {
+        // ★ (2026-10-29 09:23, 20차) 읽기 성공(200)을 확인한 뒤에만 쓰고 지움 — 종전엔 read() 가 실패해도 '' 를 돌려줘(시간 초과·403 등) 빈 객체를 만들고 원본을 지웠음
+        $r = $this->request('GET', $from);
+        if ($r['code'] === 404 && $this->isDir($from)) {
+            // ★ (2026-10-29 22:02, 24차 점검) 폴더(키 앞부분)는 아래 객체를 모두 새 이름으로 복사한 뒤에만 원본을 지움(하나라도 실패하면 만든 사본을 지우고 실패) —
+            //   종전엔 '그 키 GET' 만 해서 폴더는 늘 404 → S3 폴더 이름 바꾸기·같은 S3 안 폴더 이동이 늘 실패했음
+            $src = rtrim(ltrim($from, '/'), '/') . '/';
+            $dst = rtrim(ltrim($to, '/'), '/') . '/';
+            $keys = $this->listAllKeys($src);
+            if ($keys === null) return false;
+            $made = [];
+            foreach ($keys as $k) {
+                $nk = $dst . substr($k, strlen($src));
+                if (str_ends_with($k, '/')) { $ok = $this->request('PUT', $nk)['code'] === 200; }
+                else { $g = $this->request('GET', $k); $ok = $g['code'] === 200 && is_string($g['body']) && $this->write($nk, $g['body']); }
+                if (!$ok) { foreach ($made as $m) $this->request('DELETE', $m); return false; }
+                $made[] = $nk;
+            }
+            if (!in_array($dst, $made, true)) $this->request('PUT', $dst);   // 새 이름의 폴더 표시
+            foreach ($keys as $k) $this->request('DELETE', $k);
+            if (!in_array($src, $keys, true)) $this->request('DELETE', $src);
+            return true;
+        }
+        if ($r['code'] !== 200 || !is_string($r['body'])) return false;
+        if ($this->write($to, $r['body'])) {
             return $this->delete($from);
         }
         return false;
@@ -1768,15 +1963,35 @@ class S3Adapter implements StorageAdapterInterface {
     
     public function exists(string $path): bool {
         $result = $this->request('HEAD', $path);
-        return $result['code'] === 200;
+        // ★ (2026-10-29 18:18, 22차 점검) 폴더(그 이름 아래 객체가 있음)도 있는 것으로 — 종전엔 객체 키만 봐서 S3 폴더는 늘 '없음'(이름 바꾸기·이동이 '파일을 찾을 수 없음')
+        return $result['code'] === 200 || (!str_ends_with($path, '/') && $this->isDir($path));
     }
     
     public function isDir(string $path): bool {
-        return str_ends_with($path, '/');
+        if (str_ends_with($path, '/')) return true;
+        // ★ (2026-10-29 18:18, 22차 점검) 끝에 '/' 가 없어도 그 이름 아래에 객체가 있으면 폴더 — list() 는 폴더 경로를 '/' 없이 돌려주는데 종전엔
+        //   '/' 로 끝날 때만 폴더로 봐서, 폴더 삭제가 '파일'로 처리돼 0바이트 휴지통 항목만 생기고 폴더와 내용은 그대로 남았음(moto S3 로 재현)
+        $key = trim($path, '/');
+        if ($key === '') return true;
+        $r = $this->request('GET', '', '', ['list-type' => '2', 'prefix' => $key . '/', 'max-keys' => '1']);
+        if ($r['code'] !== 200) return false;
+        $xml = @simplexml_load_string((string)$r['body']);
+        if ($xml === false) return false;
+        return (int)($xml->KeyCount ?? 0) > 0 || count($xml->Contents ?? []) > 0 || count($xml->CommonPrefixes ?? []) > 0;
     }
     
     public function getSize(string $path): int {
-        // HEAD 요청으로 Content-Length 가져오기
+        // ★ (2026-10-29 09:23, 20차) 실제 크기 — 종전엔 늘 0 을 돌려줘 S3 파일을 받으면 0바이트(Content-Length: 0)·이어받기 416 이 났고,
+        //   '내용이 비었는데 크기가 0 보다 크면 읽기 실패' 판정도 S3 에선 늘 거짓이었음. 목록 요청(ListObjectsV2, list() 와 같은 방식)으로 그 키의 Size 를 읽음
+        $key = ltrim($path, '/');
+        if ($key === '' || str_ends_with($key, '/')) return 0;
+        $r = $this->request('GET', '', '', ['list-type' => '2', 'prefix' => $key, 'max-keys' => '10']);
+        if ($r['code'] !== 200) return 0;
+        $xml = @simplexml_load_string((string)$r['body']);
+        if (!$xml) return 0;
+        foreach ($xml->Contents ?? [] as $c) {
+            if ((string)$c->Key === $key) return (int)$c->Size;
+        }
         return 0;
     }
     
@@ -1850,19 +2065,27 @@ class SmbAdapter implements StorageAdapterInterface {
     
     private function fullPath(string $path): string {
         // 경로 조작 방어
-        $path = str_replace(['../', '..\\', "\0"], '', $path);
-        $path = str_replace('/', '\\', ltrim($path, '/\\'));
+        // ★ (2026-10-29 09:14, 20차) 구간 단위로 '.'·'..'·빈 구간을 버림 — 종전엔 '../' 를 한 번만 지워 '....//x' 가 '../x' 가 되어
+        //   설정한 하위 폴더 밖(같은 공유의 다른 폴더)을 열 수 있었음
+        $segs = [];
+        foreach (preg_split('#[\\\\/]+#', str_replace("\0", '', $path)) as $seg) {
+            if ($seg === '' || $seg === '.' || $seg === '..' || rtrim($seg, ' .') === '') continue;
+            $segs[] = $seg;
+        }
+        $path = implode('\\', $segs);
         return $this->basePath . ($path ? "\\{$path}" : '');
     }
     
+    public bool $listFailed = false;   // ★ (2026-10-29 09:23, 20차) 목록 실패 표시 — list() 는 실패해도 [] 를 돌려줘 '빈 폴더' 와 구분이 안 돼, 원격 폴더 휴지통·이동 때 실패를 빈 폴더로 보고 원본을 지웠음. 호출부가 listFailed 로 확인
     public function list(string $path): array {
-        if (!$this->connected) return [];
+        $this->listFailed = false;
+        if (!$this->connected) { $this->listFailed = true; return []; }
         
         $dir = $this->fullPath($path);
         $items = [];
         
         $entries = @scandir($dir);
-        if ($entries === false) return [];
+        if ($entries === false) { $this->listFailed = true; return []; }
         
         foreach ($entries as $entry) {
             if ($entry === '.' || $entry === '..') continue;

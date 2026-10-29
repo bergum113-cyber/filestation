@@ -27,6 +27,9 @@ if (!$auth->isLoggedIn()) {
     header('Location: index.php');
     exit;
 }
+// ★ (2026-10-29 11:16, 20차 점검) 보관함 미리보기 연장(touch)·정리(cleanup) 요청에 붙일 보안 토큰 — 종전엔 토큰 없이(본문에 빈 값) 보내 늘 403 이라
+//   열어 둔 사이 연장이 안 되고 닫을 때 임시 파일도 지워지지 않았음(재현). 서버는 POST 토큰을 머리글·폼·주소에서 읽음
+$fsViewerCsrf = getCsrfToken();
 
 // 스토리지 읽기 권한 체크
 $_checkSid = (int)($_GET['storage_id'] ?? 0);
@@ -149,7 +152,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     header('Content-Type: application/octet-stream');
     header('Content-Length: ' . $filesize);
     header('Accept-Ranges: bytes');
-    header('Cache-Control: public, max-age=86400');
+    header('Cache-Control: private, max-age=86400');   // ★ (2026-10-29 11:17, 20차 점검) public → private — 로그인한 사람의 파일이라 중간 공유 캐시(리버스 프록시 등)에 남지 않게(브라우저 캐시는 그대로)
     
     // Range 요청 처리
     if (isset($_SERVER['HTTP_RANGE'])) {
@@ -192,7 +195,9 @@ $vaultUrl = $_GET['vault_url'] ?? '';
 $vaultName = $_GET['name'] ?? '';
 
 // vault_url 화이트리스트 검증 (SSRF 방지)
-if ($vaultUrl && strpos($vaultUrl, 'api.php?action=vault_preview_serve&') !== 0) {
+// ★ (2026-10-29 09:10, 20차) 앞부분만이 아니라 전체 형식까지 — 화면이 만드는 주소(encodeURIComponent 값)에 쓰이는 글자만 허용.
+//   종전엔 앞부분만 봐서 뒤에 '"><img onerror=…>' 를 붙인 링크를 열면 오류 화면의 다운로드 링크(innerHTML)로 스크립트가 실행됐음(반사형 XSS)
+if ($vaultUrl && !preg_match("#^api\\.php\\?action=vault_preview_serve&[A-Za-z0-9_\\-.!~*'()%=&]*$#", $vaultUrl)) {
     $vaultUrl = '';
 }
 
@@ -266,7 +271,8 @@ if ($filesize > 0 && $filesize > $hwp_settings['max_file_size']) {
 
 $darkmode = $_COOKIE['darkmode'] ?? 'light';
 $file_url = "hwp_viewer.php?action=stream&storage_id=" . rawurlencode($storageId) . "&path=" . rawurlencode($filePath);
-$download_url = "download.php?storage_id=" . rawurlencode($storageId) . "&path=" . rawurlencode($filePath);
+// ★ (2026-10-29 09:10, 20차) download.php 는 없는 파일(404) — rhwp_viewer.php 와 같이 api.php 내려받기로
+$download_url = "api.php?action=download&storage_id=" . rawurlencode($storageId) . "&path=" . rawurlencode($filePath);
 
 } // end else (non-vault mode)
 
@@ -1158,7 +1164,7 @@ ob_start('fs_icon_convert_html');
                     </div>
                     <div style="display:flex;gap:10px;justify-content:center;margin-top:10px;flex-wrap:nowrap;">
                         <a href="${rhwpUrl}" class="error-btn" style="background:#00897B;color:white;">📗 RHWP <?= $currentLang === 'en' ? 'Viewer' : '뷰어' ?></a>
-                        <a href="${downloadUrl}" class="error-btn">📥 <?= $currentLang === 'en' ? 'Download' : '다운로드' ?></a>
+                        <a href="${escapeHtml(downloadUrl).replace(/"/g, '&quot;')}" class="error-btn">📥 <?= $currentLang === 'en' ? 'Download' : '다운로드' ?></a>
                         <button class="error-btn" onclick="window.close()"><?= $currentLang === 'en' ? 'Close' : '닫기' ?></button>
                     </div>
                 </div>
@@ -1187,7 +1193,7 @@ ob_start('fs_icon_convert_html');
                     <div class="error-message">${escapeHtml(message)}</div>
                     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:nowrap;">
                         <a href="${rhwpUrl}" class="error-btn">🔄 rhwp 뷰어로 보기</a>
-                        <a href="${downloadUrl}" class="error-btn">📥 ${HWP_I18N.download}</a>
+                        <a href="${escapeHtml(downloadUrl).replace(/"/g, '&quot;')}" class="error-btn">📥 ${HWP_I18N.download}</a>
                         <button class="error-btn" onclick="window.close()">${HWP_I18N.close}</button>
                     </div>
                 </div>
@@ -1288,7 +1294,7 @@ ob_start('fs_icon_convert_html');
             if (tempId && storageId) {
                 // 뷰어 열린 동안 2분마다 touch (서버 정리에서 제외)
                 const keepAlive = setInterval(function() {
-                    fetch('api.php?action=vault_preview_touch', {
+                    fetch('api.php?action=vault_preview_touch&csrf_token=' + encodeURIComponent(<?php echo json_encode($fsViewerCsrf); ?>), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ temp_id: tempId, storage_id: parseInt(storageId), path: path || '' })
@@ -1301,7 +1307,7 @@ ob_start('fs_icon_convert_html');
                     if (document.visibilityState === 'hidden') {
                         cleanupTimer = setTimeout(function() {
                             clearInterval(keepAlive);
-                            navigator.sendBeacon('api.php?action=vault_preview_cleanup',
+                            navigator.sendBeacon('api.php?action=vault_preview_cleanup&csrf_token=' + encodeURIComponent(<?php echo json_encode($fsViewerCsrf); ?>),
                                 JSON.stringify({ temp_id: tempId, storage_id: parseInt(storageId), path: path || '', csrf_token: '' }));
                         }, 5000);
                     } else {

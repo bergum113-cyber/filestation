@@ -64,6 +64,10 @@ class TOTP {
      * TOTP 코드 검증 (전후 1개 윈도우 허용)
      */
     public static function verify(string $secret, string $code, int $window = 1): bool {
+        // ★ (2026-10-29 09:14, 20차) 비밀키가 비었거나(복호화 실패 등) 풀어 보니 10바이트 미만이면 항상 실패 — 종전엔 빈 키로도 검증을 진행해,
+        //   누구나 계산할 수 있는 코드(HMAC(빈 키, 시각))로 2FA 를 통과할 수 있었음. 코드 형식도 숫자 6자리만
+        if (trim($secret) === '' || strlen(self::base32Decode($secret)) < 10) return false;
+        if (!preg_match('/^\d{' . self::DIGITS . '}$/', $code)) return false;
         $timestamp = time();
         
         // 현재 시간 및 전후 윈도우 체크

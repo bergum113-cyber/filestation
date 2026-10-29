@@ -61,7 +61,15 @@
         '[contenteditable=""]', '[contenteditable="true"]', '.fs-noico', '#toast', '.toast', '.cke',
         '.file-name', '.trash-item-name', '.share-filename', '.ishare-filename',
         '.upload-session-filename', '.bulk-item-name', '.board-detail-title', '.board-detail-body', '.cmt-body',
-        '#breadcrumb', '.storage-name', '.logo-text', '.user-welcome', '.info-value', '.notify-item-text'
+        '#breadcrumb', '.storage-name', '.logo-text', '.user-welcome', '.info-value', '.notify-item-text',
+        // ★ (2026-10-28 18:04, 소스 점검 4단계) 오늘 새로 생긴 사용자 글자 칸 — 삭제 확인 창 이름, 검색 결과 경로·스토리지 이름, 모바일 검색어 칸
+        //   (이름 속 이모지 '🎵 노래.mp3' 가 선 그림으로 바뀌어 사용자가 쓴 이름과 다르게 보였음)
+        '.fs-del-name', '.search-path', '.search-storage', '.sr-qfield-text',
+        // ★ (2026-10-29 11:19, 20차 점검) 음악 플레이어의 사용자 글자(곡 제목·목록 곡 이름·가사) — 종전엔 이름·가사 속 이모지가 선 그림으로 바뀌었음(재현)
+        '.fap-now-title', '.fap-pl-name', '.fap-lyrics-content', '.fap-lyrics-scroll', '.fap-lyrics-modal-text', '.fap-lyrics-modal-track',
+        // ★ (2026-10-29 21:57, 24차 점검) 동영상 스킨의 ⚙ 메뉴 항목 이름·값(자막·음성 트랙 이름)과 짧은 알림('자막: 파일 이름') — 이름 속 이모지가 선 그림으로 바뀌었음(20차 음악 플레이어와 같은 누락)
+        //   22:39 — '.fsvs-ml'(항목 이름 칸) 통째 제외는 앱 기호('↺ 싱크 0초로')까지 글자로 남겨 빼고, 사용자 이름이 들어가는 선택지 줄에만 fs-noico(fs-video-skin.js optRow)
+        '.fsvs-mv', '.fsvs-volosd'
     ].join(',');
 
     function makeSvg(name, cls) {

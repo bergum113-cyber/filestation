@@ -1490,6 +1490,11 @@ body {
     font-size: 16px;
 }
 
+/* ★ (2026-10-28 11:49 → 13:22, 펜닐) 검색창 안 ✕ — 직접 만든 ✕ 는 13:22 펜닐 요청으로 뺐고(검색 종료는 검색 결과 띠의 ✕),
+   브라우저 기본 ✕(크롬·엣지·사파리만, 글자만 지움)도 계속 숨김 */
+#search-input::-webkit-search-cancel-button,
+#mobile-search-input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; display: none; }
+
 #user-name {
     display: inline-flex; align-items: center; gap: 6px;
     background: rgba(74, 144, 226, 0.08);
@@ -3238,6 +3243,22 @@ body.board-mode #transfer-progress {
     background: var(--fs-tint-info, #e3f2fd);
     color: var(--fs-fg-info, #1976d2);
 }
+/* ★ (2026-10-28, 펜닐) 정렬 메뉴 '숨긴 항목 표시' 줄 + 구분선, 숨긴 항목은 흐리게(윈도우 탐색기처럼 아이콘·이름 반투명) */
+.sort-menu-divider { height: 1px; margin: 6px 0; background: var(--fs-border, #eee); }
+.sort-extra-option {
+    padding: 9px 15px;
+    cursor: pointer;
+    white-space: nowrap;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    transition: background 0.2s;
+}
+.sort-extra-option:hover { background: var(--fs-surface-2, #f5f5f5); }
+.sort-extra-option input[type="checkbox"] { width: auto; margin: 0; pointer-events: none; }
+.file-item.is-hidden-item .file-icon,
+.file-item.is-hidden-item .file-name { opacity: 0.55; }
 
 /* ========== 드래그앤드롭 ========== */
 .file-item.dragging {
@@ -7440,6 +7461,16 @@ video::cue {
 }
 .trash-confirm-icon .archive-ext, .trash-confirm-icon .subtitle-ext { font-size: 7px; padding: 1px 2px; }
 .trash-confirm-icon .fs-ico { width: 40px; height: 40px; }
+/* ★ (2026-10-28, 펜닐) 삭제 확인 창 목록 — 폴더·파일 아이콘(탐색기와 같은 그림, 24px) · 이름 · 오른쪽에 '폴더' 또는 크기. PC·모바일 공통 */
+.fs-del-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; margin: 4px 0; background: var(--fs-surface-2, #f8f9fa); border-radius: 4px; font-size: 13px; }
+.fs-del-idx { color: var(--fs-text-3, #888); flex-shrink: 0; min-width: 1.4em; }
+.fs-del-icon { width: 24px; height: 24px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+.fs-del-icon img.fs-file-icon-img, .fs-del-icon > svg, .fs-del-icon .fs-ico,
+.fs-del-icon .fs-archive-icon > img, .fs-del-icon .fs-subtitle-icon > img { width: 24px; height: 24px; }
+.fs-del-icon .fs-archive-icon, .fs-del-icon .fs-subtitle-icon { width: 24px; height: 24px; display: inline-block; position: relative; }
+.fs-del-icon .archive-ext, .fs-del-icon .subtitle-ext { display: none; }   /* 24px 칸엔 라벨 글자가 안 들어감 — 이름에 확장자가 보임 */
+.fs-del-name { flex: 1; min-width: 0; word-break: break-all; }
+.fs-del-meta { flex-shrink: 0; color: var(--fs-text-3, #888); font-size: 12px; }
 /* ★ (2026-10-27) 라벨 표시 끄기(아이콘 관리 '라벨 표시' 해제 → <html class="fs-label-off">) — 노란 확장자 라벨을 모두 숨김 */
 html.fs-label-off .archive-ext, html.fs-label-off .subtitle-ext, html.fs-label-off .fs-preview-label { display: none !important; }   /* 폴더(📁 → 선 그림)도 칸에 맞춤 — 종전 38px 로 칸을 넘었음 */
 /* 압축/자막 라벨 오버레이도 정상 표시되도록 */
@@ -13279,39 +13310,211 @@ body:has(#login-screen.active) .pending-notification {
 }
 
 /* 검색 결과 헤더 */
+/* ★ (2026-10-28, 펜닐 선택 05) 테마 강조색 띠(흰 글자 4.5:1 이상인 --fs-grad-a/b, 없으면 진한 남색) — 종전 연파랑 그라디언트(--fs-search-from/to)
+   ★ (2026-10-28 11:15, 펜닐 선택 A — Google Drive·Gmail·Synology·윈도우 탐색기 방식) 검색어는 위 검색창에 그대로 두고 띠에는
+     '검색 결과 N개' + 범위·유형·날짜·크기 칩(테두리+▾ = 고르기 / 흰 칩+✕ = 걸린 조건) + 오른쪽 끝 원형 ✕(검색 종료).
+     모바일은 위 검색창이 안 보여 첫 줄에 검색어 칸(.sr-qfield, 누르면 검색창 열림) */
 .search-result-header {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    padding: 10px 15px;
-    /* ★ (2026-10-24) 끝 색·아래 선도 테마 변수 — 종전엔 시작 색만 변수(--fs-tint-info)라 일반·밝은 전체 테마는 기본 연파랑 그대로,
-       어두운 테마는 왼쪽만 어둡고 오른쪽은 연파랑(#bbdefb)으로 번졌다. 변수가 없는 테마(기본)는 종전 값 그대로 */
-    background: linear-gradient(135deg, var(--fs-search-from, var(--fs-tint-info, #e3f2fd)) 0%, var(--fs-search-to, #bbdefb) 100%);
-    border-bottom: 1px solid var(--fs-search-line, #90caf9);
+    gap: 8px 12px;
+    padding: 9px 14px;
+    background: linear-gradient(135deg, var(--fs-grad-a, #1e3a5f) 0%, var(--fs-grad-b, #24476f) 100%);
+    color: #fff;
+    border-bottom: none;
 }
 
-.search-result-header #btn-exit-search {
-    min-width: 80px;
-    min-height: 36px;
-    touch-action: manipulation;
-    cursor: pointer;
-    -webkit-tap-highlight-color: rgba(0,0,0,0.1);
-}
-
-.search-result-header .search-info {
+.search-result-header .sr-main {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px 10px;
+    flex-wrap: wrap;
+    flex: 1;
+    min-width: 0;
 }
 
-.search-result-header .search-query {
-    font-weight: 600;
-    color: var(--fs-search-query, var(--fs-fg-info, #1565c0));
+.search-result-header .sr-title {
+    font-weight: 700;
+    font-size: 15px;
+    white-space: nowrap;
 }
 
 .search-result-header .search-count {
-    color: var(--fs-search-count, var(--fs-text-2, #666));
+    font-weight: 700;
+    font-size: 15px;
+    white-space: nowrap;
+    margin-left: -4px;   /* '검색 결과 4개' 를 한 덩어리로 */
+}
+
+.search-result-header .sr-chips {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    min-width: 0;
+    margin-left: 4px;
+}
+
+/* 칩 — 기본: 테두리 + ▾(눌러서 고르기) */
+.search-result-header .sr-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    max-width: 100%;
+    min-height: 28px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    background: transparent;
+    color: #fff;
     font-size: 13px;
+    line-height: 1.3;
+    cursor: pointer;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+.search-result-header .sr-chip:hover,
+.search-result-header .sr-chip[aria-expanded="true"] { background: rgba(255, 255, 255, 0.14); }
+.search-result-header .sr-chip:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+/* 조건이 걸린 칩 — 흰 바탕 · 테마 강조색 굵은 글자 + ✕ */
+.search-result-header .sr-chip.is-on {
+    background: #fff;
+    border-color: #fff;
+    color: var(--fs-grad-b, #1e3a5f);
+    font-weight: 600;
+}
+.search-result-header .sr-chip.is-on:hover,
+.search-result-header .sr-chip.is-on[aria-expanded="true"] { background: rgba(255, 255, 255, 0.88); }
+.search-result-header .sr-chip .fs-ico { width: 14px; height: 14px; vertical-align: 0; flex-shrink: 0; }
+.search-result-header .sr-chip .sr-caret { width: 13px; height: 13px; margin-right: -3px; opacity: 0.85; }
+.search-result-header .sr-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.search-result-header .sr-chip-x {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    margin: 0 -5px 0 1px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    opacity: 0.8;
+}
+.search-result-header .sr-chip-x:hover { background: rgba(30, 58, 95, 0.12); opacity: 1; }
+.search-result-header .sr-chip-x .fs-ico { width: 12px; height: 12px; }
+
+/* 검색 종료 — 오른쪽 끝 원형 ✕ (테마의 '.search-result-header #btn-exit-search' 보다 우선하도록 id 두 개) */
+#search-result-header #btn-exit-search {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    align-self: flex-start;
+    width: 32px;
+    height: 32px;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.5);
+    background: transparent;
+    color: #fff;
+    box-shadow: none;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: rgba(0,0,0,0.1);
+}
+#search-result-header #btn-exit-search:hover { background: rgba(255, 255, 255, 0.16); }
+#search-result-header #btn-exit-search .fs-ico { width: 16px; height: 16px; }
+
+/* 모바일 전용 검색어 칸 — PC 는 위 검색창에 검색어가 있어 숨김 */
+.search-result-header .sr-qfield { display: none; }
+
+/* 칩 고르기 창 (body 에 붙임 — 띠·목록의 overflow 에 안 잘리게) */
+.sr-pop {
+    position: fixed;
+    z-index: 3000;
+    min-width: 180px;
+    max-width: min(320px, calc(100vw - 16px));
+    padding: 6px;
+    border-radius: 10px;
+    background: var(--fs-surface, #fff);
+    color: var(--fs-text, #1f2937);
+    border: 1px solid var(--fs-border-2, #e5e7eb);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    font-size: 13px;
+}
+.sr-pop .sr-pop-list { display: flex; flex-direction: column; max-height: min(320px, 60vh); overflow-y: auto; }
+.sr-pop .sr-pop-opt {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.sr-pop .sr-pop-opt:hover, .sr-pop .sr-pop-opt:focus-visible { background: var(--fs-surface-2, #f1f5f9); outline: none; }
+.sr-pop .sr-pop-opt.is-cur { font-weight: 600; color: var(--fs-accent, var(--fs-grad-b, #1e3a5f)); }
+.sr-pop .sr-pop-check { display: inline-flex; width: 16px; flex-shrink: 0; }
+.sr-pop .sr-pop-check .fs-ico { width: 15px; height: 15px; }
+.sr-pop .sr-pop-form { display: flex; flex-direction: column; gap: 8px; padding: 6px 6px 4px; }
+.sr-pop .sr-pop-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fs-text-2, #555); }
+.sr-pop .sr-pop-form input {
+    padding: 6px 8px;
+    border: 1px solid var(--fs-border-2, #d1d5db);
+    border-radius: 6px;
+    background: var(--fs-surface, #fff);
+    color: var(--fs-text, #1f2937);
+    font-size: 14px;
+}
+.sr-pop .sr-pop-btns { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 6px 4px; }
+
+/* 모바일: 첫 줄 = 검색어 칸 + ✕ / 둘째 줄 = '검색 결과 N개' / 셋째 줄 = 칩(옆으로 밀어서 보기)
+   ★ (2026-10-28 12:35) 768px → 1024px — 위 검색창(.header-center)은 1024px 이하에서 숨겨지므로 769~1024px(태블릿·좁은 창)에서 검색어가 어디에도 안 보였음(재검토 발견). 기준을 같게 */
+@media (max-width: 1024px) {
+    .search-result-header { flex-wrap: wrap; padding: 9px 12px; }
+    .search-result-header .sr-qfield {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
+        order: 0;
+        height: 34px;
+        padding: 0 12px;
+        border: none;
+        border-radius: 999px;
+        background: #fff;
+        color: #1f2937;   /* 바탕이 늘 흰색이라 글자도 고정(어두운 테마의 --fs-text 는 밝은 색이라 안 보임) */
+        font-size: 14px;
+        font-weight: 600;
+        text-align: left;
+        cursor: text;
+    }
+    .search-result-header .sr-qfield .fs-ico { width: 15px; height: 15px; flex-shrink: 0; color: #6b7280; }
+    .search-result-header .sr-qfield-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+    #search-result-header #btn-exit-search { order: 1; align-self: center; }
+    .search-result-header .sr-main { order: 2; flex-basis: 100%; }
+    .search-result-header .sr-chips {
+        flex-basis: 100%;
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        margin: 0 -12px;
+        padding: 0 12px 2px;
+        scrollbar-width: none;
+    }
+    .search-result-header .sr-chips::-webkit-scrollbar { display: none; }
+    .search-result-header .sr-chip { flex-shrink: 0; }
+    .search-result-header .sr-chip-text { max-width: 200px; }
 }
 
 /* 검색 페이지네이션 */
@@ -15959,6 +16162,28 @@ body.video-pseudo-fs {
     font-size: 0.75em;
     line-height: 1;
     opacity: 0.9;
+}
+/* ★ (2026-10-28, 펜닐) 노란 자물쇠 배지 — 파일 잠금(🔒)·암호화 폴더(목록 배지)·암호화 폴더 안 암호화 파일·하위 암호화 폴더.
+   종전엔 이모지가 검은 선 그림으로 바뀌어, 암호화 폴더 아이콘의 노란 자물쇠(.file-item.is-vault .file-icon::after)와 달랐음 → 같은 그림.
+   크기는 종전 선 그림(.fs-ico 1.2em)과 같게 — 배지 글자 크기(목록 12px·그리드 14px·암호화 0.75em)를 따름 */
+.fs-gold-lock {
+    display: inline-block;
+    width: 1.2em;
+    height: 1.2em;
+    vertical-align: -0.2em;
+    flex-shrink: 0;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7.5 11V7.5a4.5 4.5 0 0 1 9 0V11' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/%3E%3Crect x='3.5' y='9.5' width='17' height='13' rx='2.5' fill='%23ffffff'/%3E%3Cpath d='M7.5 11V7.5a4.5 4.5 0 0 1 9 0V11' fill='none' stroke='%235f6368' stroke-width='2.4' stroke-linecap='round'/%3E%3Crect x='5' y='11' width='14' height='10' rx='1.8' fill='%23ffc61a' stroke='%238a5a00' stroke-width='1.6'/%3E%3Ccircle cx='12' cy='15.2' r='1.6' fill='%236b4500'/%3E%3Crect x='11.25' y='15.6' width='1.5' height='3' rx='.6' fill='%236b4500'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+.vault-badge.fs-gold-lock { opacity: 1; }
+/* ★ (2026-10-28 08:21, 펜닐) 파일 잠금(다른 사람이 수정·이동·삭제 못 하게) 자물쇠는 암호화(노란 자물쇠·열쇠 구멍)와 헷갈리지 않게
+   청회색 몸통 + 가로 막대(열쇠 구멍 없음). 크기는 노란 자물쇠와 같음(1.2em, 배지 글자 크기를 따름) */
+.fs-filelock {
+    display: inline-block;
+    width: 1.2em;
+    height: 1.2em;
+    vertical-align: -0.2em;
+    flex-shrink: 0;
+    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M7.5 11V7.5a4.5 4.5 0 0 1 9 0V11' fill='none' stroke='%23ffffff' stroke-width='5' stroke-linecap='round'/%3E%3Crect x='3.5' y='9.5' width='17' height='13' rx='2.5' fill='%23ffffff'/%3E%3Cpath d='M7.5 11V7.5a4.5 4.5 0 0 1 9 0V11' fill='none' stroke='%23475569' stroke-width='2.4' stroke-linecap='round'/%3E%3Crect x='5' y='11' width='14' height='10' rx='1.8' fill='%2364748b' stroke='%23334155' stroke-width='1.6'/%3E%3Crect x='8.5' y='15.2' width='7' height='1.8' rx='.9' fill='%23ffffff'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 .grid-badges .vault-badge {
     position: static !important;

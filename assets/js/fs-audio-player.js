@@ -350,7 +350,8 @@ class FSAudioPlayer {
         // 서버 응답이 제때 오면 대량 다운로드를 피할 수 있음
         this._durationLoadScheduled = true;
         const checkAndLoad = () => {
-            if (this._destroyed) return;
+            // ★ (2026-10-29 11:18, 20차 점검) 30초 대체 경로 등으로 이미 시작했으면 멈춤 — 공유 페이지는 서버 재생 시간을 넘겨주지 않아 종전엔 페이지를 닫을 때까지 0.5초마다 돌았음
+            if (this._destroyed || this._durationLoadStarted) return;
             if (this._serverResponseReceived) {
                 // 서버 응답 도착 → 즉시 시작 (부족한 것만 측정)
                 this._loadPlaylistDurations();
@@ -1845,6 +1846,9 @@ class FSAudioPlayer {
                 if (this.$.lyricsWrap) this.$.lyricsWrap.style.display = 'none';
                 if (this.$.lyricsContent) this.$.lyricsContent.innerHTML = '';
             }
+        } finally {
+            // ★ (2026-10-29 18:30, 22차 점검) 이 곡 가사가 없으면(204·오류·빈 가사) 열려 있던 가사 창을 닫음 — 종전엔 '가사 주소 없음'일 때만 닫아, 가사 없는 곡으로 넘기면 앞 곡 가사·제목이 창에 남았음
+            if (!this._destroyed && token === this._lyricsLoadToken && !this._lyrics && this.$.lyricsModal && this.$.lyricsModal.style.display !== 'none') this._closeLyricsModal();
         }
     }
     
@@ -3875,8 +3879,10 @@ class FSAudioPlayer {
     // 커버 이미지 로딩/스킨 전환으로 인한 크기 변동에 안전하게 대응
     _setPlMarquee(nameEl) {
         if (!nameEl) return;
+        // ★ (2026-10-29 11:20, 20차 점검) 흐르는 중이면 글자가 '이름+이름' 이라 저장해 둔 원래 이름을 씀 — 종전엔 그 겹친 글자를 원래 이름으로 저장해 이름이 두 번 붙었음(재현)
+        const wasScrolling = nameEl.classList.contains('pl-scrolling');
         nameEl.classList.remove('pl-scrolling');
-        const text = nameEl.textContent || nameEl._origText || '';
+        const text = (wasScrolling && nameEl._origText) ? nameEl._origText : (nameEl.textContent || nameEl._origText || '');
         nameEl._origText = text;
         nameEl.textContent = text;
         
@@ -4477,17 +4483,21 @@ class FSAudioPlayer {
             tmpAudio._trackIndex = i;
             this._durLoaders.push(tmpAudio);
             tmpAudio.preload = 'metadata';
+            // ★ (2026-10-29 18:21, 22차 점검) 한 곡에서 다음 곡으로는 한 번만 — 측정 뒤 src='' + load() 가 error 이벤트를 다시 일으켜(빈 주소) 두 리스너가
+            //   모두 loadNext 를 불러, 곡마다 동시 측정 수가 두 배로 늘었음(원격 저장소에서 받기 폭주)
+            let _durSettled = false;
+            const _durNext = () => { if (_durSettled) return; _durSettled = true; loadNext(); };
             tmpAudio.addEventListener('loadedmetadata', () => {
                 if (this._destroyed) { tmpAudio.src = ''; tmpAudio.load(); return; }
                 // 취소된 tmpAudio인지 확인 (서버 응답에 의해 취소됐을 수 있음)
-                if (!tmpAudio.src) { loadNext(); return; }
+                if (!tmpAudio.src) { _durNext(); return; }
                 if (tmpAudio.duration && isFinite(tmpAudio.duration)) {
                     // 서버가 이미 더 정확한 값을 제공했는지 확인 (race condition 방지)
                     if (track && track.fullName && this._serverAudioDetails && this._serverAudioDetails[track.fullName]) {
                         // 서버 값 우선 → 클라이언트 측정값 버림
                         tmpAudio.src = '';
                         tmpAudio.load();
-                        loadNext();
+                        _durNext();
                         return;
                     }
                     this._vsDurations[i] = this._fmt(tmpAudio.duration);
@@ -4507,13 +4517,13 @@ class FSAudioPlayer {
                 }
                 tmpAudio.src = '';
                 tmpAudio.load();
-                loadNext();
+                _durNext();
             }, { once: true });
             tmpAudio.addEventListener('error', () => {
                 if (this._destroyed) return;
                 tmpAudio.src = '';
                 tmpAudio.load();
-                loadNext();
+                _durNext();
             }, { once: true });
             tmpAudio.src = this.playlist[i].url;
         };

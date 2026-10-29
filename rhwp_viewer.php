@@ -91,7 +91,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
         }
         
         // ★ office_viewer.php 패턴 통일: read() + file_put_contents() (download() 메서드 없음)
-        $tempFile = tempnam(sys_get_temp_dir(), 'rhwp_');
+        // ★ (2026-10-30 01:55, 26차 점검) 남은 임시 파일 정리(편집기와 같은 안전망 — 내려받는 중 창을 닫으면 아래 unlink 전에 끝남) + 이름 직접 만들기(Windows tempnam 은 접두어 3글자만 씀)
+        foreach (@glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'rhwpv_*') ?: [] as $_old) {
+            if (is_file($_old) && filemtime($_old) < time() - 3600) @unlink($_old);
+        }
+        $tempFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'rhwpv_' . bin2hex(random_bytes(8)) . '.tmp';
         $content = $adapter->read($filePath);
         $adapter->disconnect();
         
@@ -115,7 +119,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
         $realBase = realpath($basePath);
         $realTarget = realpath($realFile);
         
-        if (!$realBase || !$realTarget || strpos($realTarget, $realBase) !== 0) {
+        if (!$realBase || !$realTarget || !\isSubPath($realTarget, $realBase)) {
             http_response_code(403);
             exit('Invalid path');
         }
@@ -641,5 +645,25 @@ ob_start('fs_icon_convert_html');
     
     start();
     </script>
+<?php if ($vaultUrl): /* ★ (2026-10-30 01:56, 26차 점검) 보관함 모드면 열어 둔 동안 2분마다 임시 복호화 파일 연장(hwp_viewer·office_viewer 와 같음) — 종전엔 이 뷰어만 없어 5분 뒤 서버 정리로 지워져 📥 내려받기가 오류 응답을 받았음.
+                            닫을 때 정리는 hwp_viewer 로 되돌아갈 때 같은 파일을 쓰므로 하지 않음(서버의 5분 자동 정리가 맡음) */ ?>
+    <script>
+    (function() {
+        try {
+            const vu = <?php echo json_encode($vaultUrl); ?>;
+            const ps = new URLSearchParams(vu.split('?')[1] || '');
+            const tempId = ps.get('temp_id'), storageId = ps.get('storage_id'), path = ps.get('path');
+            if (tempId && storageId) {
+                setInterval(function() {
+                    fetch('api.php?action=vault_preview_touch&csrf_token=' + encodeURIComponent(<?php echo json_encode(getCsrfToken()); ?>), {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ temp_id: tempId, storage_id: parseInt(storageId), path: path || '' })
+                    }).catch(function(){});
+                }, 120000);
+            }
+        } catch (e) {}
+    })();
+    </script>
+<?php endif; ?>
 </body>
 </html>

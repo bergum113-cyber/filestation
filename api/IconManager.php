@@ -131,7 +131,8 @@ class IconManager {
         $content = preg_replace('/^\xEF\xBB\xBF/', '', $content);
         
         // SVG 태그로 시작하는지 확인
-        if (!preg_match('/^\s*(<\?xml[^?]*\?>\s*)?(<!DOCTYPE[^>]*>\s*)?<svg\b/i', $content)) {
+        // ★ (2026-10-29 22:39, 24차 점검) 앞에 주석(<!-- -->)이 있어도 허용 — Inkscape 등으로 저장한 SVG 는 xml 선언 다음에 주석이 와서 늘 '유효한 SVG 아님'으로 거부됐음(2회차 재검토, 재현). 이 뒤 정제·DOM 검사는 그대로
+        if (!preg_match('/^\s*(<\?xml[^?]*\?>\s*)?(<!--.*?-->\s*)*(<!DOCTYPE[^>]*>\s*)?(<!--.*?-->\s*)*<svg\b/is', $content)) {
             return '';
         }
         
@@ -187,6 +188,11 @@ class IconManager {
         // 내부 콘텐츠 추출 (<svg...>와 </svg> 사이)
         if (preg_match('/<svg\b[^>]*>(.*)<\/svg\s*>/is', $content, $m)) {
             $innerContent = $m[1];
+            // ★ (2026-10-29 23:35, 24차 점검) 편집기 전용 이름공간(inkscape:·sodipodi: 등) 요소·속성 제거 — 새 루트로 감싸면 그 선언이 빠져 브라우저가 그림을 못 그렸음
+            //   (24차에 주석으로 시작하는 Inkscape SVG 를 받게 하면서 드러남, 4회차 재검토·재현). svg 기본·xlink·xml 은 그대로
+            $innerContent = preg_replace('#<(?!/?(?:svg|xlink|xml):)([a-zA-Z][\w.-]*):[\w.-]+\b[^>]*/>#s', '', $innerContent);
+            $innerContent = preg_replace('#<((?!(?:svg|xlink|xml):)[a-zA-Z][\w.-]*:[\w.-]+)\b[^>]*>.*?</\1\s*>#s', '', $innerContent);
+            $innerContent = preg_replace('#\s(?!(?:xlink|xml):)[a-zA-Z][\w.-]*:[\w.-]+\s*=\s*(?:"[^"]*"|\'[^\']*\')#', '', $innerContent);
             
             // 48x48 표준 viewBox로 래핑
             // preserveAspectRatio="xMidYMid meet" → 원본 비율 유지하며 48x48에 맞게 자동 조정
@@ -198,7 +204,57 @@ class IconManager {
                      . "\n</svg>";
         }
         
-        return $content;
+        // ★ (2026-10-29 09:50, 20차 점검) 정규식만으론 우회됐음(재현: 겹친 <scr<script></script>ipt>, &#106;avascript: 문자 참조,
+        //   <animate attributeName="href"> 로 javascript: 주소 넣기) — 이 파일은 주소로 직접 열려 같은 사이트에서 스크립트가 돌 수 있어
+        //   마지막에 XML 로 파싱해 위험 요소·속성을 한 번 더 뺌. XML 로 안 읽히면(브라우저도 못 그림) 거부
+        return $this->domScrubSvg($content);
+    }
+    
+    /** sanitizeSvg 마지막 단계 — 파싱된 구조에서 스크립트성 요소·이벤트 속성·위험 주소 제거. 실패 시 '' */
+    private function domScrubSvg(string $content): string {
+        if (!class_exists('DOMDocument')) {
+            // DOM 확장이 없을 때: 더 이상 안 바뀔 때까지 반복 제거 + 문자 참조·주소 속성은 통째로 거부
+            do {
+                $before = $content;
+                $content = preg_replace('#<\s*/?\s*(script|foreignObject|iframe|object|embed|handler|listener)\b[^>]*>#i', '', $content);
+                $content = preg_replace('/([\s"\'\/])on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)/i', '$1', $content);
+            } while ($content !== $before);
+            if (preg_match('/&#|javascript\s*:|vbscript\s*:|attributeName\s*=\s*["\']?\s*(on|[a-z:]*href)/i', $content)) return '';
+            return $content;
+        }
+        $prevErr = libxml_use_internal_errors(true);
+        $doc = new \DOMDocument();
+        $ok = $doc->loadXML($content, LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($prevErr);
+        if (!$ok || !$doc->documentElement || strtolower($doc->documentElement->localName) !== 'svg') return '';
+        
+        $badTags = ['script', 'foreignobject', 'iframe', 'object', 'embed', 'handler', 'listener'];
+        $animTags = ['set', 'animate', 'animatetransform', 'animatemotion', 'animatecolor'];
+        $removeEls = [];
+        foreach ((new \DOMXPath($doc))->query('//*') as $el) {
+            $ln = strtolower($el->localName);
+            if (in_array($ln, $badTags, true)) { $removeEls[] = $el; continue; }
+            if (in_array($ln, $animTags, true)) {
+                $an = strtolower(trim($el->getAttribute('attributeName')));
+                if ($an !== '' && (strpos($an, 'on') === 0 || preg_match('/(^|:)href$/', $an))) { $removeEls[] = $el; continue; }
+            }
+            $dropAttrs = [];
+            foreach ($el->attributes as $attr) {
+                $an = strtolower($attr->localName ?: $attr->nodeName);
+                $v = strtolower(preg_replace('/[\x00-\x20]+/', '', (string)$attr->value));
+                if (strpos($an, 'on') === 0) { $dropAttrs[] = $attr; continue; }
+                if ($an === 'href') {
+                    // 그림 안 참조(#id)와 내장 이미지(data:image/)만 허용
+                    if ($v !== '' && $v[0] !== '#' && strpos($v, 'data:image/') !== 0) { $dropAttrs[] = $attr; continue; }
+                }
+                if (preg_match('/(javascript|vbscript|livescript):|data:text\/html/', $v)) { $dropAttrs[] = $attr; continue; }
+            }
+            foreach ($dropAttrs as $attr) $el->removeAttributeNode($attr);
+        }
+        foreach ($removeEls as $el) { if ($el->parentNode) $el->parentNode->removeChild($el); }
+        $out = $doc->saveXML();
+        return $out === false ? '' : $out;
     }
     
     /**

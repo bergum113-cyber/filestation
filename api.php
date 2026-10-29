@@ -143,6 +143,54 @@ function fs_utf8_env_prefix(): string {
     return 'LANG=C.UTF-8 LC_ALL=C.UTF-8 ';
 }
 
+/**
+ * ★ (2026-10-28, 펜닐 승인) 옛 검색 API(search · search_all) 결과 걸러내기 — search_advanced 와 같은 기준
+ *   1) 폴더 권한: 결과가 든 폴더에 읽기 권한(checkFolderPermission can_read)이 없으면 뺌(관리자 포함 — 폴더 권한은 모든 사용자에게 적용)
+ *   2) 숨김 항목: 자기 자신이나 상위 폴더가 숨김(시스템 이름·~$·속성 숨김)이면 뺌, $showHidden 이면 hidden 표시만
+ *   경로는 인덱스 결과 'path', 실시간 결과 'filepath'(+'path') — 둘 다 받음. 스토리지 ID 는 결과의 storage_id, 없으면 $defaultSid
+ */
+function _fsFilterSearchResults(Storage $storage, array $items, int $defaultSid, bool $showHidden): array {
+    $maps = [];
+    $out = [];
+    foreach ($items as $item) {
+        if (!is_array($item)) continue;
+        $sid = (int)($item['storage_id'] ?? $defaultSid);
+        $path = (string)($item['filepath'] ?? ($item['path'] ?? ''));
+        $dir = dirname(str_replace('\\', '/', $path));
+        if ($dir !== '.' && $dir !== '' && $dir !== '/' && !$storage->checkFolderPermission($sid, $dir)) continue;
+        if (class_exists('HiddenItems')) {
+            if (!isset($maps[$sid])) $maps[$sid] = HiddenItems::mapFor($sid);
+            if (HiddenItems::isHiddenPath($sid, $path, $maps[$sid])) {
+                if (!$showHidden) continue;
+                $item['hidden'] = true;
+            }
+        }
+        $out[] = $item;
+    }
+    return $out;
+}
+
+/**
+ * ★ (2026-10-28 20:42, 7차 점검) ZIP 내려받기용 — 스토리지 상대 경로가 실제로 스토리지 안인지(realpath, 없으면 상위 폴더로 판단).
+ *   FileManager::isPathSafe 와 같은 기준(연결·바로가기로 밖을 가리키면 밖으로 봄)
+ */
+function fsZipPathInside(string $basePath, string $realBase, string $rel): bool {
+    $full = $basePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+    $real = realpath($full);
+    if ($real !== false) return isSubPath($real, $realBase);
+    $bn = basename($full);
+    if ($bn === '.' || $bn === '..') return false;
+    $parent = realpath(dirname($full));
+    return $parent !== false && isSubPath($parent, $realBase);
+}
+/** ★ (2026-10-28 20:42, 7차 점검) ZIP 에 넣을 하위 항목이 폴더 권한상 읽기 가능한지(폴더는 그 폴더, 파일은 들어 있는 폴더 기준) */
+function fsZipEntryAllowed($storage, int $storageId, string $rel, bool $isDir): bool {
+    $rel = trim($rel, '/');
+    $chk = $isDir ? $rel : dirname($rel);
+    if ($chk === '.') $chk = '';
+    return $storage->checkFolderPermission($storageId, $chk, 'can_read');
+}
+
 function getClientIP(): string {
     $remoteAddr = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
     
@@ -248,6 +296,9 @@ function resolveOnlyOfficePath(JsonDB $db, int $storageId, string $filePath): ?a
     }
     
     $basePath = $storageInfo['path'] ?? '';
+    // ★ (2026-10-29 22:39, 24차 점검) 기준 경로가 비면(원격 FTP·SFTP·WebDAV·S3 — 로컬 경로 없음) 거부 — realpath('') 가 앱 폴더를 돌려줘,
+    //   원격 스토리지 번호로 앱 폴더 아래 아무 파일(data/users.json 등)이나 내려받기·저장할 수 있었음(2회차 재검토, 재현). FileManager::isPathSafe 24차와 같은 기준
+    if (trim((string)$basePath) === '') return null;
     $fullPath = rtrim($basePath, '/\\') . DIRECTORY_SEPARATOR . ltrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $filePath), '/\\');
     
     // 경로 탐색 방지
@@ -363,6 +414,7 @@ $rateLimitExclude = [
     'storage_quota', 'storage_recalc', 'storage_get', 'storage_permissions',
     'board_list_all', 'board_posts', 'board_manage_list', 'board_notifications',
     'board_unread_count', 'board_post_view',
+    'board_post_download', 'board_comment_download',   // ★ (2026-10-30 01:55, 26차 점검) 글·댓글 그림(본문 그림 수만큼 한꺼번에) — 종전엔 그림 많은 글 하나로 그 IP 의 일반 요청이 1분간 막혔음
     'share_count', 'shares', 'share_check', 'notice_active',
     'user_preferences_get', 'pending_users_count', 'qos_user',
     'video_progress_get',   // ★ (2026-10-04) 동영상 이어 보기 위치 조회 — 영상을 열 때마다(다음·이전으로 넘길 때 연달아)
@@ -479,7 +531,9 @@ $csrfExclude = [
     // 파일 다운로드 (GET 요청 또는 세션만으로 보호)
     'download', 'temp_download',
     // 압축 스트리밍 (SSE)
-    'extract_stream', 'compress_stream', 'folder_download_stream', 'multi_download_stream', 'index_rebuild_stream',
+    // ★ (2026-10-28 19:55, 6차 점검) extract_stream·compress_stream 은 파일을 만드는 작업이라 제외 목록에서 뺌(아래 GET 검사에서 토큰 확인, 화면은 주소에 토큰을 붙임)
+    // ★ (2026-10-29 18:02, 22차 점검) index_rebuild_stream(인덱스를 지우고 다시 만듦)도 제외 목록에서 뺌 — 다른 사이트의 링크 하나로 관리자가 재구축을 돌리게 할 수 있었음(화면은 주소에 토큰을 붙임)
+    'folder_download_stream', 'multi_download_stream',
     // OnlyOffice (외부 서버 콜백 - JWT로 보호)
     'onlyoffice_download', 'onlyoffice_callback', 'onlyoffice_config',
     // 읽기 전용 API (세션 인증으로 보호됨)
@@ -538,8 +592,38 @@ $csrfExcludeGet = [
 ];
 $isCsrfExcluded = in_array($action, $csrfExclude) || in_array($action, $csrfExcludeGet);
 
+// ★ (2026-10-28 17:23, 소스 점검 2단계) GET 으로 오는 요청 — 종전엔 CSRF 를 POST 에만 검사해서, 상태를 바꾸는 액션도
+//   GET 주소로 부르면 토큰 없이 실행됐음(GET 이면 쿼리가 입력으로 합쳐짐). 이제 GET 은 위 읽기 전용 목록(csrfExclude·csrfExcludeGet)과
+//   아래 '화면이 실제로 GET 으로 부르는 액션'(이미지·다운로드 링크, api(…,'GET') 호출 — 소스에서 뽑아 확인한 목록)만 토큰 없이 허용, 나머지는 토큰 필요.
+//   화면은 상태를 바꾸는 요청을 POST(+토큰)로 보내므로 동작은 그대로
+$csrfGetAllowed = [
+    'access_stats', 'antivirus_logs', 'antivirus_settings', 'antivirus_test', 'app_password_list',
+    'board_comment_download', 'board_list_all', 'board_manage_list', 'board_notifications',
+    'board_post_download', 'board_post_view', 'board_posts', 'bruteforce_logs',
+    'copy_progress', 'delete_progress', 'deleted_users', 'file_version_download', 'folder_list_for_perm',
+    'folder_permissions', 'get_upload_settings', 'image_exif', 'internal_share_count',
+    'internal_share_download', 'job_list', 'job_status', 'media_detail', 'my_account_info', 'notice_active',
+    'notice_settings', 'qos_user', 'ransomware_logs', 'ransomware_settings', 'security_block_logs',
+    'security_test', 'share_count', 'share_upload_notify_list', 'storage_quota', 'storage_recalc',
+    'sync_tasks', 'terms', 'thumb_capabilities', 'totp_settings', 'transcode_log', 'vault_preview_serve',
+    'vault_preview_temp', 'vault_preview_touch', 'video_keytimes', 'video_progress_get'
+];
+// ★ (2026-10-28 19:55, 6차 점검) convert_h264(파일 생성·원본 휴지통)는 허용 목록에서 뺌(화면이 주소에 토큰을 붙임). HEAD 도 GET 과 같이 검사
+// ★ (2026-10-28 20:42, 7차 점검) 아이콘 관리 목록(icon_manager&op=list)은 화면이 GET 으로 부름 — 2단계 때 목록에서 빠져 403 으로 목록이 안 열렸음(재현).
+//   같은 액션의 다른 op(업로드·삭제 등)는 GET 이어도 토큰 필요하도록 list 만 허용
+$csrfGetIconList = ($action === 'icon_manager' && ($_GET['op'] ?? '') === 'list');
+if (in_array($_SERVER['REQUEST_METHOD'], ['GET', 'HEAD'], true) && !$isCsrfExcluded && !in_array($action, $csrfGetAllowed, true) && !$csrfGetIconList) {
+    $csrfTokenGet = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? $_GET['csrf_token'] ?? null;
+    if (!validateCsrfToken($csrfTokenGet)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => __('api_err_invalid_csrf', '보안 토큰이 유효하지 않습니다. 페이지를 새로고침 해주세요.'), 'csrf_error' => true]);   // POST 와 같은 응답(화면이 토큰 갱신 후 다시 시도)
+        exit;
+    }
+}
+
 // POST 요청이고 CSRF 검증 필요한 액션인 경우
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$isCsrfExcluded) {
+// ★ (2026-10-28 19:55, 6차 점검) PUT·DELETE·PATCH 등도 POST 와 같이 검사 — 종전엔 POST 만 봐서 다른 메서드로 보내면 본문이 입력으로 쓰이면서 토큰 검사를 건너뜀
+if (!in_array($_SERVER['REQUEST_METHOD'], ['GET', 'HEAD'], true) && !$isCsrfExcluded) {
     // 헤더 또는 POST/GET 데이터에서 토큰 확인
     $csrfToken = $_SERVER['HTTP_X_CSRF_TOKEN'] ?? $_POST['csrf_token'] ?? $_GET['csrf_token'] ?? null;
     
@@ -682,6 +766,37 @@ function convertVideoSrcPlaceholders(string $content): string {
             if (preg_match('/\bheight="(\d+)"/', $attrs, $hm2)) $hAttr = ' height="' . $hm2[1] . '"';
             if (!preg_match('#^(https?://|api\.php\?)#i', $videoSrc)) $videoSrc = '';
             return '<video controls playsinline src="' . $videoSrc . '"' . $wAttr . $hAttr . ' style="' . $style . '"></video>';
+        },
+        $content
+    );
+}
+
+/**
+ * ★ (2026-10-30 02:02, 26차 점검) 본문의 동영상 자리표시(<img data-video-pending="이름">)를 재생되는 <video src> 로 — 댓글 조각 업로드가 끝난 뒤에 씀(저장 때 변환과 같은 모양)
+ */
+/**
+ * ★ (2026-10-30 03:03, 26차 재검토) 자리표시 속성값 정규식 조각 — 저장된 본문은 sanitizeHtml(DOMDocument)을 거쳐 작은따옴표를 그대로('Don't.mp4') 쓰므로
+ *   ENT_QUOTES('&#039;') 로만 찾으면 이름에 ' 가 있는 파일은 자리가 채워지지 않고 남았음(재현). 두 모양 모두 찾음
+ */
+function pendingNameRegex(string $name): string {
+    $vs = array_unique([htmlspecialchars($name, ENT_QUOTES), htmlspecialchars($name, ENT_COMPAT), htmlspecialchars($name, ENT_QUOTES | ENT_HTML5)]);
+    return '(?:' . implode('|', array_map(fn($v) => preg_quote($v, '/'), $vs)) . ')';
+}
+
+function convertPendingVideoPlaceholder(string $content, string $name, string $url): string {
+    if (!preg_match('#^(https?://|api\.php\?)#i', $url)) return $content;
+    return preg_replace_callback(
+        '/<img([^>]*?)data-video-pending="' . pendingNameRegex($name) . '"([^>]*?)\/?>/i',
+        function ($m) use ($url) {
+            $attrs = $m[1] . $m[2];
+            $style = 'max-width:100%;border-radius:6px;';
+            if (preg_match('/style="([^"]*)"/', $attrs, $sm)) {
+                $parts = [];
+                if (preg_match('/width\s*:\s*[^;]+/', $sm[1], $wm)) $parts[] = $wm[0];
+                if (preg_match('/height\s*:\s*[^;]+/', $sm[1], $hm)) $parts[] = $hm[0];
+                if ($parts) $style = implode(';', $parts) . ';max-width:100%;border-radius:6px;';
+            }
+            return '<video controls playsinline src="' . $url . '" style="' . $style . '"></video>';
         },
         $content
     );
@@ -1296,7 +1411,11 @@ function sendSmtpEmail(array $smtp, string $to, string $subject, string $message
                 fclose($socket);
                 return __('smtp_starttls_fail') . trim($response);
             }
-            stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+            // ★ (2026-10-29 18:02, 22차 점검) 암호화 전환 실패면 중단(Auth::sendMail 과 같음) — 종전엔 결과를 안 봐서 실패해도 평문으로 계정·비밀번호(AUTH)를 보냈음
+            if (!@stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+                @fclose($socket);
+                return __('smtp_starttls_fail') . 'TLS';
+            }
             $sendCommand($socket, "EHLO " . $ehloHost);
         }
         
@@ -1493,11 +1612,16 @@ try {
     // 경로 파라미터에서 상위 디렉토리 접근 시도 감지 (이중 인코딩 대응)
     $pathParams = ['path', 'source', 'dest', 'file_path', 'paths', 'zip_name', 'new_name'];
     foreach ($pathParams as $param) {
-        $value = $input[$param] ?? null;
-        if ($value === null) continue;
+        // ★ (2026-10-29 09:14, 20차) 주소(?path=…) 값도 같이 — 종전엔 POST 요청이면 $input 에 주소 값이 안 합쳐져 검사되지 않았는데,
+        //   archive_preview·archive_list 처럼 POST 여도 주소에서 path 를 읽는 action 이 있어 '..' 가 그대로 통과했음
+        $values = [];
+        foreach ([$input[$param] ?? null, ($method !== 'GET') ? ($_GET[$param] ?? null) : null] as $value) {
+            if ($value === null) continue;
+            foreach ((is_array($value) ? $value : [$value]) as $vv) $values[] = $vv;
+        }
+        if (!$values) continue;
         
         // 배열인 경우 처리
-        $values = is_array($value) ? $value : [$value];
         foreach ($values as $v) {
             if (!is_string($v)) continue;
             
@@ -1509,6 +1633,28 @@ try {
                 $hackReason = __f('hack_path_traversal', ['param' => $param]);
                 break 2;
             }
+        }
+    }
+    
+    // ★ (2026-10-30 02:03, 26차 점검) 경로 값의 겹친 구분자('a//b')·'.' 마디('a/./b')를 정리 — 잠금(locked_files)·숨김·폴더 규칙은 경로 글자로 비교하는데, 파일 시스템은 같은 파일로 보므로
+    //   종전엔 'lk/a.txt' 가 잠겨 있어도 'lk//a.txt' 로 보내면 잠금 검사를 지나 영구 삭제됐음(재현). 정상 경로는 바뀌지 않음
+    if (!$hackDetected) {
+        $_fsNormPath = function ($v) {
+            if (!is_string($v) || ($v === '') || (strpos($v, '//') === false && strpos($v, '\\\\') === false && strpos($v, '/\\') === false && strpos($v, '\\/') === false && !preg_match('#(^|[/\\\\])\.([/\\\\]|$)#', $v))) return $v;
+            // ★ (2026-10-30 02:21, 26차 재검토) 맨 앞의 겹친 구분자(UNC '\\\\nas\\share', '//nas/share')는 그대로 — 스토리지 추가·수정의 경로까지 바꿔 UNC 스토리지를 저장할 수 없었음
+            $lead = preg_match('#^[/\\\\]{2}#', $v) ? substr($v, 0, 2) : '';
+            $n = $lead !== '' ? substr($v, 2) : $v;
+            $n = preg_replace('#(^|[/\\\\])\.(?=[/\\\\]|$)#', '$1', $n);
+            $n = preg_replace('#[/\\\\]{2,}#', '/', $n);
+            return $lead . $n;
+        };
+        foreach (['path', 'source', 'dest', 'file_path', 'sub_path', 'folder_path', 'paths'] as $_np) {
+            foreach ([&$input, &$_GET, &$_POST] as &$_bag) {
+                if (!isset($_bag[$_np])) continue;
+                if (is_array($_bag[$_np])) { foreach ($_bag[$_np] as $_k => $_vv) $_bag[$_np][$_k] = $_fsNormPath($_vv); }
+                else $_bag[$_np] = $_fsNormPath($_bag[$_np]);
+            }
+            unset($_bag);
         }
     }
     
@@ -1525,7 +1671,10 @@ try {
     
     // Remember Me 토큰으로 자동 로그인 시도 (로그인 안 된 상태에서)
     $noAuthActions = ['login', 'signup', 'signup_status', 'csrf_token', 'terms', 'server_config', '2fa_verify', 'password_reset_request', 'find_username', 'share_access', 'share_download', 'filedrop_upload', 'filedrop_chunk_upload', 'sso_config', 'sso_ldap_login', 'sso_oidc_auth', 'sso_oidc_callback', 'sso_oidc_silent_auth', 'sso_saml_auth', 'sso_saml_callback', 'sso_saml_metadata', 'debug_log'];
-    if (!$auth->isLoggedIn() && !in_array($action, $noAuthActions)) {
+    // ★ (2026-10-29 23:24, 24차 점검) 공유 링크 동작(받기·파일받기 올리기)에서는 로그인 확인을 부르지 않음 — isLoggedIn 이 만료 세션을 지우며(session_destroy)
+    //   share.php 에서 저장한 공유 비밀번호 인증까지 지워, 비밀번호 걸린 파일받기의 첫 업로드가 '비밀번호가 올바르지 않습니다'로 실패했음(3회차 재검토 — 2회차 share.php 와 같은 원인)
+    $_shareNoAuth = in_array($action, ['share_access', 'share_download', 'filedrop_upload', 'filedrop_chunk_upload'], true);
+    if (!$_shareNoAuth && !$auth->isLoggedIn() && !in_array($action, $noAuthActions)) {
         if (method_exists($auth, 'checkRememberToken')) {
             $auth->checkRememberToken();
         }
@@ -1729,6 +1878,8 @@ try {
             $settings = $db->load('settings');
             $onlyofficeSecret = $settings['onlyoffice']['secret'] ?? '';
             $authenticated = false;
+            $ooJwtUrl = null;        // ★ (2026-10-28 18:22) 서명된 토큰 안의 문서 주소(대상 파일과 묶기)
+            $ooKeyCandidate = null;  // ★ (2026-10-28 18:22) 토큰 없이 온 key(발급 기록과 대조)
             
             if (!empty($onlyofficeSecret)) {
                 // JWT 토큰 검증 (OnlyOffice 서버에서 호출 시)
@@ -1749,6 +1900,9 @@ try {
                         ), '+/', '-_'), '=');
                         if (hash_equals($expectedSig, $signature)) {
                             $authenticated = true;
+                            // ★ (2026-10-28 18:22, 소스 점검 5단계) 토큰 안의 문서 주소 — 아래에서 요청한 파일과 같은지 확인(다른 파일용 토큰 재사용 방지)
+                            $ooPl = json_decode(base64_decode(strtr($payload, '-_', '+/')), true) ?: [];
+                            $ooJwtUrl = $ooPl['url'] ?? ($ooPl['payload']['url'] ?? ($ooPl['document']['url'] ?? null));
                         } else {
                             // ★ JWT 검증 실패 디버그 (펜닐 v5.8.1e — 파일 존재 시만)
                             if (file_exists($ooDbgDir . '/onlyoffice_debug.log')) {
@@ -1762,7 +1916,8 @@ try {
                     // 세션 fallback 대신 secret이 설정돼 있으면 key 파라미터로 간접 인증
                     $docKey = $_GET['key'] ?? '';
                     if ($docKey && strlen($docKey) === 32 && ctype_xdigit($docKey)) {
-                        $authenticated = true; // document key가 유효하면 허용
+                        // ★ (2026-10-28 18:22, 소스 점검 5단계) 형식만 보고 허용하던 것 → 아래에서 발급 기록(fsOoKeyCheck)과 대조해 결정
+                        $ooKeyCandidate = $docKey;
                         if (file_exists($ooDbgDir . '/onlyoffice_debug.log')) {
                             @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_BYPASS key=$docKey\n", FILE_APPEND);
                         }
@@ -1775,6 +1930,19 @@ try {
             } else {
                 if (file_exists($ooDbgDir . '/onlyoffice_debug.log')) {
                     @file_put_contents($ooDbgDir . '/onlyoffice_debug.log', date('H:i:s') . " JWT_FAIL no_secret\n", FILE_APPEND);
+                }
+            }
+            
+            // ★ (2026-10-28 18:22, 소스 점검 5단계) 대상 파일과 묶기 — key 는 이 파일에 대해 발급한 키여야, 토큰은 안의 문서 주소가 이 파일이어야 인정
+            {
+                $ooSid = (int)($_GET['storage_id'] ?? 0);
+                $ooPath = (string)($_GET['path'] ?? '');
+                if ($ooKeyCandidate !== null) {
+                    $authenticated = fsOoKeyCheck($ooKeyCandidate, $ooSid, $ooPath);
+                }
+                if ($authenticated && $ooJwtUrl !== null) {
+                    parse_str((string)parse_url((string)$ooJwtUrl, PHP_URL_QUERY), $ooQ);
+                    if ((int)($ooQ['storage_id'] ?? -1) !== $ooSid || (string)($ooQ['path'] ?? "\0") !== $ooPath) $authenticated = false;
                 }
             }
             
@@ -1796,7 +1964,9 @@ try {
             }
             
             // 세션 인증 fallback인 경우 스토리지 읽기 권한 확인
-            if (!$authenticated && !$storage->checkPermission($storageId, 'can_read')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 폴더 권한도 확인 — 종전엔 세션 경로에서 스토리지 권한만 봐서 폴더별 권한으로 막힌 파일을 내려받을 수 있었음
+            if (!$authenticated && (!$storage->checkPermission($storageId, 'can_read')
+                || !$storage->checkFolderPermission($storageId, (($ooFd = dirname(str_replace('\\', '/', (string)$filePath))) === '.' ? '' : $ooFd) ?: (string)$filePath, 'can_read'))) {
                 http_response_code(403);
                 header('Content-Type: text/plain; charset=utf-8');
                 exit('No permission');
@@ -1908,6 +2078,24 @@ try {
                 exit;
             }
             
+            // ★ (2026-10-28 18:22, 소스 점검 5단계) 서명만 보고 대상 파일(storage_id·path 는 서명 밖 주소에서 옴)과 묶지 않았음 →
+            //   ① 편집기 설정 토큰(브라우저에 내려가는 것 — document/editorConfig 가 있음)은 콜백으로 인정 안 함
+            //   ② 상태·주소·키는 서명된 내용에서 읽음(본문 값 대신) ③ 그 키가 이 파일에 대해 '편집' 으로 발급한 키여야 저장(fsOoKeyCheck)
+            $ooCbPl = json_decode(base64_decode(strtr($payload, '-_', '+/')), true) ?: [];
+            if (isset($ooCbPl['document']) || isset($ooCbPl['editorConfig'])) {
+                error_log('OnlyOffice callback: editor config token rejected');
+                echo json_encode(['error' => 1]);
+                exit;
+            }
+            $ooCb = (isset($ooCbPl['payload']) && is_array($ooCbPl['payload'])) ? $ooCbPl['payload'] : $ooCbPl;
+            foreach (['status', 'url', 'key'] as $ooF) { if (array_key_exists($ooF, $ooCb)) $input[$ooF] = $ooCb[$ooF]; }
+            $ooCbStatus = (int)($input['status'] ?? 0);
+            if (in_array($ooCbStatus, [2, 6], true) && !fsOoKeyCheck((string)($input['key'] ?? ''), $storageId, $filePath, true)) {
+                error_log('OnlyOffice callback: key not issued for this file (edit)');
+                echo json_encode(['error' => 1]);
+                exit;
+            }
+            
             $status = $input['status'] ?? 0;
             
             // 디버그 로그 (펜닐 v5.8.1e — 파일 존재 시만 기록, 운영 부담 방지)
@@ -1985,6 +2173,14 @@ try {
                     exit;
                 }
                 $fullPath = $resolved['fullPath'];
+                // ★ (2026-10-29 10:26, 20차 점검) 편집 중에 잠긴 파일이면 저장하지 않음(열 때 잠겨 있던 파일은 onlyoffice.php 가 보기 모드로 엶)
+                if ($db->find('locked_files', ['storage_id' => (int)$storageId, 'path' => $filePath])) {
+                    if (file_exists($ooDataDir . '/onlyoffice_debug.log')) {
+                        @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " SAVE REJECTED: locked file $filePath\n", FILE_APPEND);
+                    }
+                    echo json_encode(['error' => 1]);
+                    exit;
+                }
                 
                 // OnlyOffice에서 파일 다운로드 (SSRF TOCTOU 방어: resolved IP 고정)
                 $dlPort = $parsedUrl['port'] ?? ($parsedUrl['scheme'] === 'https' ? 443 : 80);
@@ -2002,6 +2198,15 @@ try {
                 $curlErrMsg = curl_error($ch);
                 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
                 curl_close($ch);
+                // ★ (2026-10-29 02:36, 16차) 응답 코드가 200 이 아니거나 내용이 비면 저장하지 않음 — 종전엔 응답 코드를 기록만 해서, 문서 서버의
+                //   오류 페이지(403·404·500)나 빈 응답으로 사용자 문서를 덮어쓸 수 있었음
+                if ($newContent !== false && !$curlErr && ($httpCode !== 200 || $newContent === '')) {
+                    if (file_exists($ooDataDir . '/onlyoffice_debug.log')) {
+                        @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " DOWNLOAD REJECTED: http=$httpCode bytes=" . strlen((string)$newContent) . "\n", FILE_APPEND);
+                    }
+                    echo json_encode(['error' => 1]);
+                    exit;
+                }
                 if ($newContent === false || $curlErr) {
                     if (file_exists($ooDataDir . '/onlyoffice_debug.log')) {
                         @file_put_contents($ooDataDir . '/onlyoffice_debug.log', date('H:i:s') . " CURL FAIL: err=$curlErr msg=$curlErrMsg http=$httpCode url=$downloadUrl\n", FILE_APPEND);
@@ -2014,10 +2219,16 @@ try {
                 }
                 
                 // 파일 저장
+                // ★ (2026-10-29 21:47, 24차 점검) 저장 전후 크기 차이를 사용량에 반영(22차 텍스트 저장과 같게) — 종전엔 빠져 다음 재계산까지 틀렸음.
+                //   용량 한도로 거부하지는 않음(문서 서버의 저장 요청이라 거부하면 편집 내용을 잃음)
+                clearstatcache(true, $fullPath);
+                $ooOld = is_file($fullPath) ? (int)@filesize($fullPath) : 0;
                 if (@file_put_contents($fullPath, $newContent) === false) {
                     echo json_encode(['error' => 1]);
                     exit;
                 }
+                $ooDiff = strlen($newContent) - $ooOld;
+                if ($ooDiff !== 0) { try { (new Storage())->updateUsedSize((int)$storageId, $ooDiff); } catch (\Throwable $e) {} }
             }
             
             echo json_encode(['error' => 0]);
@@ -2114,16 +2325,33 @@ try {
                 $result = ['success' => false, 'error' => __('login_required_fields', '사용자명과 비밀번호를 입력하세요.')];
                 break;
             }
+            // ★ (2026-10-29 07:45, 18차) IP·국가 제한을 LDAP 인증 전에(일반 로그인과 같은 순서)
+            if (($ipDeny = $auth->ssoIpDenied((string)$username, 'ldap')) !== null) {
+                $result = ['success' => false, 'error' => $ipDeny];
+                break;
+            }
+            // ★ (2026-10-29 03:51, 17차) 일반 로그인과 같은 시도 횟수 잠금(종전엔 제한이 없었음)
+            if (!$auth->ssoAttemptAllowed((string)$username)) {
+                $result = ['success' => false, 'error' => __('api_err_login_locked', '로그인 시도 횟수 초과. 잠시 후 다시 시도하세요.')];
+                break;
+            }
             try {
                 $ssoAuth = new SSOAuth();
                 $ldapUser = $ssoAuth->ldapAuth($username, $password);
                 if (!$ldapUser) {
+                    $auth->ssoAttemptFailed((string)$username);
                     $result = ['success' => false, 'error' => __('ldap_auth_failed', 'LDAP 인증 실패: 사용자명 또는 비밀번호가 올바르지 않습니다.')];
                     break;
                 }
+                $auth->ssoAttemptSucceeded((string)$username);
                 // FileStation 계정 매핑/생성
                 $fsUser = $ssoAuth->mapOrCreateUser($ldapUser, 'ldap');
-                
+
+                // ★ (2026-10-29 03:51, 17차) IP 제한·2FA (일반 로그인과 같은 기준) — 2FA 계정이면 세션을 열지 않고 코드 입력으로
+                $gate = $auth->ssoGate($fsUser, $remember, 'ldap');
+                if (empty($gate['success'])) { $result = $gate; break; }
+                if (!empty($gate['2fa_required'])) { $result = $gate; break; }
+
                 // 세션 설정
                 session_regenerate_id(true);
                 $_SESSION['user_id'] = $fsUser['id'];
@@ -2138,6 +2366,8 @@ try {
                 }
                 
                 $safeUser = $auth->getUser();
+                // ★ (2026-10-29 21:18, 24차 점검) 일반 로그인·me·2FA 와 같게 WebDAV 사용 여부를 붙임 — 종전엔 LDAP 로그인 직후 WebDAV 메뉴가 숨겨졌음(새로고침하면 보임)
+                if (is_array($safeUser) && isset($safeUser['id'])) $safeUser['webdav_enabled'] = checkWebDAVEnabled((int)$safeUser['id']);
                 $result = [
                     'success' => true,
                     'user' => $safeUser,
@@ -2176,8 +2406,17 @@ try {
                 $ssoAuth = new SSOAuth();
                 $oidcUser = $ssoAuth->oidcCallback($code, $state);
                 if (!$oidcUser) throw new Exception('OIDC 인증 실패');
+                // ★ (2026-10-29 11:10, 20차 점검) IP·국가 제한을 계정 연결·자동 생성 '전' 에 확인(LDAP 18차와 같은 순서) — 종전엔 막힌 IP 에서도 계정이 먼저 만들어진 뒤 거부됐음
+                if (($ipDeny = $auth->ssoIpDenied((string)($oidcUser['username'] ?? ''), 'oidc')) !== null) { header('Location: index.php?sso_error=' . urlencode($ipDeny)); exit; }
                 
-                $fsUser = $ssoAuth->mapOrCreateUser($oidcUser, 'oidc');
+                // ★ (2026-10-29 03:51, 17차) 계정 연결 단계의 거부 사유(정지·관리자 자동연결 거부 등)는 그대로 보여 줌(종전엔 모두 'SSO 인증 실패')
+                try { $fsUser = $ssoAuth->mapOrCreateUser($oidcUser, 'oidc'); }
+                catch (Exception $me) { header('Location: index.php?sso_error=' . urlencode($me->getMessage())); exit; }
+                
+                // ★ (2026-10-29 03:51, 17차) IP 제한·2FA (일반 로그인과 같은 기준) — 2FA 계정이면 코드 입력 화면으로
+                $gate = $auth->ssoGate($fsUser, false, 'oidc');
+                if (empty($gate['success'])) { header('Location: index.php?sso_error=' . urlencode($gate['error'] ?? '')); exit; }
+                if (!empty($gate['2fa_required'])) { header('Location: index.php?sso_2fa=1'); exit; }
                 
                 session_regenerate_id(true);
                 $_SESSION['user_id'] = $fsUser['id'];
@@ -2218,8 +2457,16 @@ try {
                 $ssoAuth = new SSOAuth();
                 $samlUser = $ssoAuth->samlCallback($samlResponse);
                 if (!$samlUser) throw new Exception('SAML 인증 실패');
+                // ★ (2026-10-29 11:10, 20차 점검) IP·국가 제한을 계정 연결·자동 생성 '전' 에 확인(OIDC 와 같음)
+                if (($ipDeny = $auth->ssoIpDenied((string)($samlUser['username'] ?? ''), 'saml')) !== null) { header('Location: index.php?sso_error=' . urlencode($ipDeny)); exit; }
                 
-                $fsUser = $ssoAuth->mapOrCreateUser($samlUser, 'saml');
+                try { $fsUser = $ssoAuth->mapOrCreateUser($samlUser, 'saml'); }   // ★ (2026-10-29 03:51, 17차) 연결 단계 거부 사유 표시
+                catch (Exception $me) { header('Location: index.php?sso_error=' . urlencode($me->getMessage())); exit; }
+                
+                // ★ (2026-10-29 03:51, 17차) IP 제한·2FA
+                $gate = $auth->ssoGate($fsUser, false, 'saml');
+                if (empty($gate['success'])) { header('Location: index.php?sso_error=' . urlencode($gate['error'] ?? '')); exit; }
+                if (!empty($gate['2fa_required'])) { header('Location: index.php?sso_2fa=1'); exit; }
                 
                 session_regenerate_id(true);
                 $_SESSION['user_id'] = $fsUser['id'];
@@ -2434,7 +2681,9 @@ try {
             $config = $input['config'] ?? [];
             
             if (in_array($provider, ['kerberos', 'ldap', 'oidc', 'saml'])) {
-                $sso[$provider] = $config;
+                // ★ (2026-10-29 18:21, 22차 점검) 화면이 보낸 항목만 바꾸고 나머지는 유지 — 종전엔 통째로 바꿔, 화면에 입력란이 없는 설정(Kerberos trust_header,
+                //   LDAP·OIDC·SAML 의 default_role·default_quota 등 settings 에 직접 넣은 값)이 SSO 설정을 한 번 저장할 때마다 사라졌음
+                $sso[$provider] = array_merge(is_array($sso[$provider] ?? null) ? $sso[$provider] : [], is_array($config) ? $config : []);
                 $settings['sso'] = $sso;
                 $db->save('settings', $settings);
                 $result = ['success' => true];
@@ -2508,6 +2757,10 @@ try {
                 try {
                     $ssoAuth = new SSOAuth();
                     $kerberosUser = $ssoAuth->kerberosAutoLogin();
+                    // ★ (2026-10-29 03:51, 17차) IP 제한·2FA — 2FA 계정이면 세션을 열지 않고 화면에 코드 입력을 요청(아래 2fa_required)
+                    $kerbGate = $kerberosUser ? $auth->ssoGate($kerberosUser, false, 'kerberos') : null;
+                    if ($kerbGate && !empty($kerbGate['2fa_required'])) { $kerb2fa = true; $kerberosUser = null; }
+                    elseif ($kerbGate && empty($kerbGate['success'])) { $kerberosUser = null; }
                     if ($kerberosUser) {
                         session_regenerate_id(true);
                         $_SESSION['user_id'] = $kerberosUser['id'];
@@ -2530,6 +2783,10 @@ try {
                 autoPurgeDeletedUsers($db);
             } else {
                 $result = ['success' => false, 'error' => __('login_required')];
+                if (!empty($kerb2fa)) $result['2fa_required'] = true;   // ★ (2026-10-29 03:51, 17차) Kerberos 자동 로그인 계정에 2FA 가 켜져 있음
+                // ★ (2026-10-29 21:53, 24차 점검) index.php 의 Kerberos 자동 로그인이 이미 2FA 대기를 걸어 둔 경우도(웹서버 Kerberos 를 index.php 에만 건 구성 — 21차) —
+                //   종전엔 api.php 요청엔 REMOTE_USER 가 없어 위 확인이 안 돼 코드 입력 화면 대신 일반 로그인 화면이 떴음
+                elseif (($kp = $_SESSION['2fa_pending_user'] ?? null) && ($kp['sso_provider'] ?? '') === 'kerberos' && (time() - (int)($kp['started_at'] ?? 0)) <= 600) $result['2fa_required'] = true;
             }
             break;
             
@@ -2662,6 +2919,16 @@ try {
             }
             $user = $auth->getUser();
             $users = $db->load('users');
+            // ★ (2026-10-29 21:51, 24차 점검) 다른 계정이 쓰는 메일은 거부(대소문자 무시) — 종전엔 남의 메일로 바꿀 수 있었고, SSO 계정 연결(아이디 다음 메일)·아이디 찾기가
+            //   메일로 계정을 찾아 엉뚱한 계정에 연결·안내될 수 있었음
+            if ($newEmail !== '') {
+                foreach ($users as $ou) {
+                    if ((int)($ou['id'] ?? 0) !== (int)$user['id'] && strcasecmp(trim((string)($ou['email'] ?? '')), $newEmail) === 0) {
+                        $result = ['success' => false, 'error' => __('err_email_in_use', '다른 계정이 이미 쓰는 메일입니다.')];
+                        break 2;
+                    }
+                }
+            }
             foreach ($users as &$u) {
                 if ($u['id'] === $user['id']) {
                     $u['email'] = $newEmail;
@@ -2759,6 +3026,9 @@ try {
                         }
                         if (isset($input['view_settings'])) {
                             $u['preferences']['view_settings'] = $input['view_settings'];
+                        }
+                        if (isset($input['show_hidden'])) {   // ★ (2026-10-28) '숨긴 항목 표시'(윈도우 탐색기 보기 > 숨긴 항목) — 켜기/끄기만
+                            $u['preferences']['show_hidden'] = filter_var($input['show_hidden'], FILTER_VALIDATE_BOOLEAN);
                         }
                         if ($eqNorm !== null) {
                             $u['preferences']['eq_settings'] = $eqNorm;
@@ -2901,6 +3171,35 @@ try {
                     break;
                 }
             }
+            $sgTargetId = 0;
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 부관리자 권한 상승 방지 — 종전엔 'admin 역할로 바꾸기' 만 막아서
+            //   관리자 계정의 비밀번호·이메일·활성 상태를 바꾸거나, 자기 자신이나 다른 계정에 자기에게 없는 관리 권한을 줄 수 있었음
+            if (!$auth->isAdmin()) {
+                $sgMe = $auth->getUser() ?: [];
+                $sgMyPerms = is_array($sgMe['admin_perms'] ?? null) ? $sgMe['admin_perms'] : [];
+                $sgTarget = null;
+                if (!empty($sgTargetId)) {
+                    foreach (($db->load('users') ?: []) as $sgU) { if ((int)($sgU['id'] ?? 0) === (int)$sgTargetId) { $sgTarget = $sgU; break; } }
+                }
+                $sgDeny = null;
+                if ($sgTarget && ($sgTarget['role'] ?? '') === 'admin') $sgDeny = __('api_err_subadmin_admin_target', '관리자 계정은 부관리자가 바꿀 수 없습니다.');
+                else {
+                    // 바뀌는 것만 봄(편집 창이 지금 값을 그대로 다시 보내도 막히지 않게)
+                    $sgCurRole = $sgTarget['role'] ?? null;
+                    $sgCurPerms = is_array($sgTarget['admin_perms'] ?? null) ? $sgTarget['admin_perms'] : [];
+                    // ★ (2026-10-29 15:35, 21차 재점검) null 도 '보냄'(= 권한 모두 회수, Auth::updateUser 20차와 같은 해석) — 종전엔 isset 이라 null 이 '변경 없음' 으로 보여 자기 권한 변경 거부를 건너뛰었음(재현)
+                    $sgReqPerms = array_key_exists('admin_perms', $input) ? (is_array($input['admin_perms']) ? $input['admin_perms'] : []) : $sgCurPerms;
+                    $sgRoleChanged = isset($input['role']) && $input['role'] !== $sgCurRole;
+                    $sgA = array_values(array_unique($sgReqPerms)); $sgB = array_values(array_unique($sgCurPerms)); sort($sgA); sort($sgB);
+                    $sgPermsChanged = $sgA !== $sgB;
+                    if ($sgTarget && (int)($sgTarget['id'] ?? 0) === (int)($sgMe['id'] ?? -1) && ($sgRoleChanged || $sgPermsChanged)) {
+                        $sgDeny = __('api_err_subadmin_self_role', '자기 계정의 역할·관리 권한은 바꿀 수 없습니다.');
+                    } elseif (array_diff(array_diff($sgReqPerms, $sgCurPerms), $sgMyPerms)) {
+                        $sgDeny = __('api_err_subadmin_perm_exceed', '자기에게 없는 관리 권한은 줄 수 없습니다.');
+                    }
+                }
+                if ($sgDeny) { $result = ['success' => false, 'error' => $sgDeny]; break; }
+            }
             // 용량이 미지정(0)이면 기본 용량 적용
             $settings = $db->load('settings') ?: [];
             if (empty($input['quota']) && !empty($settings['default_quota'])) {
@@ -2940,11 +3239,61 @@ try {
                     break;
                 }
             }
+            $sgTargetId = (int)($input['id'] ?? 0);
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 부관리자 권한 상승 방지 — 종전엔 'admin 역할로 바꾸기' 만 막아서
+            //   관리자 계정의 비밀번호·이메일·활성 상태를 바꾸거나, 자기 자신이나 다른 계정에 자기에게 없는 관리 권한을 줄 수 있었음
+            if (!$auth->isAdmin()) {
+                $sgMe = $auth->getUser() ?: [];
+                $sgMyPerms = is_array($sgMe['admin_perms'] ?? null) ? $sgMe['admin_perms'] : [];
+                $sgTarget = null;
+                if (!empty($sgTargetId)) {
+                    foreach (($db->load('users') ?: []) as $sgU) { if ((int)($sgU['id'] ?? 0) === (int)$sgTargetId) { $sgTarget = $sgU; break; } }
+                }
+                $sgDeny = null;
+                if ($sgTarget && ($sgTarget['role'] ?? '') === 'admin') $sgDeny = __('api_err_subadmin_admin_target', '관리자 계정은 부관리자가 바꿀 수 없습니다.');
+                else {
+                    // 바뀌는 것만 봄(편집 창이 지금 값을 그대로 다시 보내도 막히지 않게)
+                    $sgCurRole = $sgTarget['role'] ?? null;
+                    $sgCurPerms = is_array($sgTarget['admin_perms'] ?? null) ? $sgTarget['admin_perms'] : [];
+                    // ★ (2026-10-29 15:35, 21차 재점검) null 도 '보냄'(= 권한 모두 회수, Auth::updateUser 20차와 같은 해석) — 종전엔 isset 이라 null 이 '변경 없음' 으로 보여 자기 권한 변경 거부를 건너뛰었음(재현)
+                    $sgReqPerms = array_key_exists('admin_perms', $input) ? (is_array($input['admin_perms']) ? $input['admin_perms'] : []) : $sgCurPerms;
+                    $sgRoleChanged = isset($input['role']) && $input['role'] !== $sgCurRole;
+                    $sgA = array_values(array_unique($sgReqPerms)); $sgB = array_values(array_unique($sgCurPerms)); sort($sgA); sort($sgB);
+                    $sgPermsChanged = $sgA !== $sgB;
+                    // ★ (2026-10-28 19:55, 6차 점검) 자기에게 없는 관리 권한을 가진 '다른' 부관리자 계정은 못 바꿈 — 종전엔 사용자 관리 권한만 있는
+                    //   부관리자가 권한이 더 많은 부관리자의 비밀번호를 바꾸고 그 계정으로 로그인해 권한을 넓힐 수 있었음
+                    if ($sgTarget && (int)($sgTarget['id'] ?? 0) !== (int)($sgMe['id'] ?? -1) && ($sgTarget['role'] ?? '') === 'sub_admin'
+                        && array_diff($sgCurPerms, $sgMyPerms)) {
+                        $sgDeny = __('api_err_subadmin_higher_target', '자기보다 관리 권한이 많은 부관리자 계정은 바꿀 수 없습니다.');
+                    } elseif ($sgTarget && (int)($sgTarget['id'] ?? 0) === (int)($sgMe['id'] ?? -1) && ($sgRoleChanged || $sgPermsChanged)) {
+                        $sgDeny = __('api_err_subadmin_self_role', '자기 계정의 역할·관리 권한은 바꿀 수 없습니다.');
+                    } elseif (array_diff(array_diff($sgReqPerms, $sgCurPerms), $sgMyPerms)) {
+                        $sgDeny = __('api_err_subadmin_perm_exceed', '자기에게 없는 관리 권한은 줄 수 없습니다.');
+                    }
+                }
+                if ($sgDeny) { $result = ['success' => false, 'error' => $sgDeny]; break; }
+            }
+            // ★ (2026-10-29 03:51, 17차) SSO 연결 변경은 실제 관리자만 — 이 값이 그 계정으로 SSO 로그인을 허용하므로(부관리자가 보내면 무시)
+            if (!$auth->isAdmin()) unset($input['sso_provider']);
             $result = $auth->updateUser((int)($input['id'] ?? 0), $input);
             break;
             
         case 'user_delete':
             $auth->requireAdminPerm('users');
+            // ★ (2026-10-29 03:11, 16차) 부관리자는 자기에게 없는 관리 권한을 가진 '다른' 부관리자를 지울 수 없음 — user_update 는 6차에서 막았는데
+            //   user_delete 는 'admin' 만 막아, 사용자 관리 권한만 있는 부관리자가 권한이 더 많은 부관리자를 지울 수 있었음
+            if (!$auth->isAdmin()) {
+                $udMe = $auth->getUser() ?: [];
+                $udMyPerms = is_array($udMe['admin_perms'] ?? null) ? $udMe['admin_perms'] : [];
+                $udTarget = null;
+                foreach (($db->load('users') ?: []) as $udU) { if ((int)($udU['id'] ?? 0) === (int)($input['id'] ?? 0)) { $udTarget = $udU; break; } }
+                $udCurPerms = is_array($udTarget['admin_perms'] ?? null) ? $udTarget['admin_perms'] : [];
+                if ($udTarget && (int)($udTarget['id'] ?? 0) !== (int)($udMe['id'] ?? -1)
+                    && ($udTarget['role'] ?? '') === 'sub_admin' && array_diff($udCurPerms, $udMyPerms)) {
+                    $result = ['success' => false, 'error' => __('api_err_subadmin_higher_target', '자기보다 관리 권한이 많은 부관리자 계정은 바꿀 수 없습니다.')];
+                    break;
+                }
+            }
             $result = $auth->deleteUser((int)($input['id'] ?? 0));
             break;
         
@@ -2996,9 +3345,14 @@ try {
             }
             
             // 현재 users에 같은 아이디 있는지 확인
-            $existing = $db->find('users', ['username' => $username]);
+            // ★ (2026-10-29 18:30, 22차 점검) 대소문자 무시(Auth::usernameProblem, 사용자 만들기와 같은 기준)
+            $existing = Auth::usernameProblem($db, (string)$foundUser['username']) === 'exists';
             if ($existing) {
                 $result = ['success' => false, 'error' => __('username_already_exists', '이미 사용 중인 아이디입니다.')];
+                break;
+            }
+            if (Auth::emailInUse($db, (string)($foundUser['email'] ?? ''))) {   // ★ (2026-10-30 01:42, 26차 — 메일 중복 자동 선택: 거부) 그사이 다른 계정이 그 메일을 쓰면 복원 거부(관리자가 메일을 정리한 뒤 복원)
+                $result = ['success' => false, 'error' => __('err_email_in_use', '다른 계정이 이미 쓰는 메일입니다.')];
                 break;
             }
             
@@ -3045,6 +3399,17 @@ try {
                 
                 // 개인폴더 생성 (없으면)
                 $userFolder = USER_FILES_ROOT . '/' . $foundUser['username'];
+                // ★ (2026-10-29 18:30, 22차 점검) 삭제 때 보관 폴더(users/_deleted/아이디_날짜_번호)로 옮겨 둔 개인 폴더가 있으면 제자리로 되돌림 —
+                //   종전엔 빈 새 폴더만 만들고 삭제 기록(보관 폴더 위치)은 지워, 복원한 사용자는 파일이 없고 보관 폴더는 기록 없이 남았음
+                $rdFp = str_replace('\\', '/', (string)($foundUser['folder_path'] ?? ''));
+                if ($rdFp !== '' && strpos($rdFp, '_deleted/') === 0 && strpos($rdFp, '..') === false) {
+                    $rdSrc = USER_FILES_ROOT . '/' . $rdFp;
+                    $rdEmpty = !is_dir($userFolder) || count(array_diff(@scandir($userFolder) ?: [], ['.', '..'])) === 0;
+                    if (is_dir($rdSrc) && $rdEmpty) {
+                        if (is_dir($userFolder)) @rmdir($userFolder);
+                        @rename($rdSrc, $userFolder);
+                    }
+                }
                 if (!is_dir($userFolder)) {
                     @mkdir($userFolder, 0755, true);
                 }
@@ -3120,12 +3485,24 @@ try {
                 if (isset($popup['position']) && !in_array($popup['position'], ['center', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'custom'])) {
                     $popup['position'] = 'center';
                 }
+                // ★ (2026-10-29 09:46, 20차 점검) 색·크기·기간도 형식 검사 — 종전엔 그대로 저장돼 관리자 팝업 목록에서 HTML 로 들어갔음(부관리자 저장 가능)
+                if (isset($popup['bg_color']) && !preg_match('/^#[0-9a-fA-F]{3,8}$/', (string)$popup['bg_color'])) $popup['bg_color'] = '#667eea';
+                foreach (['width', 'height', 'pos_x', 'pos_y'] as $pk) {
+                    if (isset($popup[$pk]) && $popup[$pk] !== '' && $popup[$pk] !== null) $popup[$pk] = is_numeric($popup[$pk]) ? (int)$popup[$pk] : null;
+                }
+                foreach (['start_date', 'end_date'] as $pk) {
+                    if (!empty($popup[$pk]) && !preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$popup[$pk])) $popup[$pk] = '';
+                }
             }
             unset($popup);
             $banner = $input['banner'] ?? [];
             // 배너 content는 plain text (프론트에서 textContent로 렌더링)
             if (isset($banner['content'])) {
                 $banner['content'] = strip_tags($banner['content']);
+            }
+            // ★ (2026-10-29 09:46, 20차 점검) 배너 링크도 팝업과 같은 주소 검사 — 종전엔 javascript: 링크가 저장돼 모든 사용자 화면에서 누르면 실행됐음
+            if (isset($banner['link']) && !preg_match('#^(https?://|/)#i', trim((string)$banner['link']))) {
+                $banner['link'] = '';
             }
             // settings 화이트리스트 검증
             $rawSettings = $input['settings'] ?? [];
@@ -3237,6 +3614,9 @@ try {
         case 'board_save':
             // 게시판 추가/수정 (관리자)
             $auth->requireAdmin();
+            // ★ (2026-10-29 18:21, 22차 점검) 부관리자는 '시스템 설정' 권한이 있을 때만(아이콘 관리와 같음) — 종전엔 관리 권한이 하나도 없는 부관리자도 API 로
+            //   게시판을 만들고·지우고(글·첨부 포함) 권한을 바꿀 수 있었음(화면의 '게시판 관리' 메뉴는 부관리자에게 안 보임)
+            if (!$auth->isAdmin() && !$auth->hasAdminPerm('system_settings')) { http_response_code(403); $result = ['success' => false, 'error' => __('api_err_no_sub_admin_perm', '해당 기능에 대한 권한이 없습니다.')]; break; }
             session_write_close(); // 세션 락 해제
             $boardId = $input['id'] ?? null;
             $boards = $db->load('boards') ?: [];
@@ -3290,6 +3670,9 @@ try {
         case 'board_delete':
             // 게시판 삭제 (관리자)
             $auth->requireAdmin();
+            // ★ (2026-10-29 18:21, 22차 점검) 부관리자는 '시스템 설정' 권한이 있을 때만(아이콘 관리와 같음) — 종전엔 관리 권한이 하나도 없는 부관리자도 API 로
+            //   게시판을 만들고·지우고(글·첨부 포함) 권한을 바꿀 수 있었음(화면의 '게시판 관리' 메뉴는 부관리자에게 안 보임)
+            if (!$auth->isAdmin() && !$auth->hasAdminPerm('system_settings')) { http_response_code(403); $result = ['success' => false, 'error' => __('api_err_no_sub_admin_perm', '해당 기능에 대한 권한이 없습니다.')]; break; }
             $boardId = (int)($input['id'] ?? 0);
             $boards = $db->load('boards') ?: [];
             $boards = array_values(array_filter($boards, fn($b) => ($b['id'] ?? 0) != $boardId));
@@ -3343,10 +3726,18 @@ try {
             }
             
             $allPosts = $db->findAll('board_posts', ['board_id' => $boardId]);
+            // ★ (2026-10-29 10:20, 20차 점검) 읽기 권한(perm_read)이 없으면 목록에서 본문을 빼고 본문·댓글 검색도 막음(제목+본문 검색은 제목만) —
+            //   종전엔 목록 권한만 보고 본문까지 내려가, 글 보기는 막힌 게시판도 목록 응답·검색으로 내용을 볼 수 있었음(재현). 목록 화면은 본문을 쓰지 않음
+            $bpRead = $board['perm_read'] ?? 'all';
+            $bpCanRead = $isAdmin || !($bpRead === 'none' || $bpRead === 'admin');
             
             // 검색 (검색 조건: title_content(기본)/title/content/comment/author)
             if ($search) {
                 $searchType = $input['search_type'] ?? 'title_content';
+                if (!$bpCanRead) {
+                    if ($searchType === 'content' || $searchType === 'comment') $search = "\0";   // 아무것도 안 맞게
+                    elseif ($searchType !== 'title' && $searchType !== 'author') $searchType = 'title';
+                }
                 if ($searchType === 'comment') {
                     // 댓글내용 검색: 같은 게시판의 댓글에서 일치하는 글 id를 모아 그 글만 남긴다.
                     // (삭제된 댓글은 content가 비워지므로 제외)
@@ -3412,6 +3803,7 @@ try {
             }
             
             foreach ($posts as &$p) {
+                if (!$bpCanRead) unset($p['content']);
                 $p['comment_count'] = $commentCounts[$p['id'] ?? 0] ?? 0;
                 // author_id로 최신 표시이름 반영
                 if (!empty($p['author_id']) && isset($userMap[$p['author_id']])) {
@@ -3625,6 +4017,18 @@ try {
                     $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
                 }
             }
+            // ★ (2026-10-29 02:36, 16차) 게시판이 있어야 하고(없는 번호면 쓰기 권한·확장자 검사를 건너뛰었음), 글쓴이 또는 관리자만 그 글에 첨부를 붙임 —
+            //   종전엔 글 번호만으로 남의 글(공지 등)에 첨부를 붙일 수 있었음. '스토리지에서 첨부(board_attach_from_storage)' 와 같은 기준
+            if (!$board) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
+            {
+                $__bpPost = null;
+                foreach (($db->load('board_posts') ?: []) as $__bp) { if (($__bp['id'] ?? 0) == $postId && ($__bp['board_id'] ?? 0) == $boardId) { $__bpPost = $__bp; break; } }
+                if (!$__bpPost || ((($__bpPost['author_id'] ?? null) != ($user['id'] ?? -1)) && !$isAdmin)) {
+                    $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+                }
+            }
             
             $allowedExt = trim($board['allowed_ext'] ?? '');
             $boardAllowedExts = [];
@@ -3642,6 +4046,8 @@ try {
             
             $file = $_FILES['file'];
             $origName = basename($file['name']);
+            // ★ (2026-10-29 23:35, 24차 점검) 서버 실행 이름 공통 검사(끝 점·공백, web.config, .user.ini 포함) — 조각 업로드(board_post_upload_chunk)와 같은 기준(4회차 재검토)
+            if (($__bpuExec = \fsServerExecReason($origName)) !== null) { $result = ['success' => false, 'error' => $__bpuExec]; break; }
             
             // 서버 실행 확장자는 게시판 허용 설정과 무관하게 절대 차단
             $serverExecExts = ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phar', 'phps',
@@ -3741,9 +4147,26 @@ try {
                     $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
                 }
             }
+            $__bpUser = $auth->getUser();
+            // ★ (2026-10-29 02:36, 16차) 게시판이 있어야 하고(없는 번호면 쓰기 권한·확장자 검사를 건너뛰었음), 글쓴이 또는 관리자만 그 글에 첨부를 붙임 —
+            //   종전엔 글 번호만으로 남의 글(공지 등)에 첨부를 붙일 수 있었음. '스토리지에서 첨부(board_attach_from_storage)' 와 같은 기준
+            if (!$board) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
+            {
+                $__bpPost = null;
+                foreach (($db->load('board_posts') ?: []) as $__bp) { if (($__bp['id'] ?? 0) == $postId && ($__bp['board_id'] ?? 0) == $boardId) { $__bpPost = $__bp; break; } }
+                if (!$__bpPost || ((($__bpPost['author_id'] ?? null) != ($__bpUser['id'] ?? -1)) && !$isAdmin)) {
+                    $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+                }
+            }
             
-            // 첫 청크에서 확장자 검증
-            if ($chunkIndex === 0) {
+            // ★ (2026-10-29 09:14, 20차) 확장자 검증을 조각마다 — 종전엔 첫 조각(chunk_index=0)에서만 해서, 첫 요청을 chunk_index=1 로 보내면
+            //   허용 확장자·서버 실행 확장자(.php 등) 검사를 모두 건너뛰고 저장됐음. 이름은 마지막 조각 것이 쓰이므로 모든 조각에서 확인
+            if (($__bpExec = \fsServerExecReason($filename)) !== null) {
+                $result = ['success' => false, 'error' => $__bpExec]; break;
+            }
+            {
                 $allowedExt = trim($board['allowed_ext'] ?? '');
                 if (!empty($allowedExt)) {
                     $exts = array_map('trim', array_map('strtolower', explode(',', $allowedExt)));
@@ -3802,6 +4225,17 @@ try {
                 $result = ['success' => false, 'error' => __('api_err_upload_failed', '업로드에 실패했습니다.')]; break;
             }
             
+            // ★ (2026-10-29 09:14, 20차) 빠진 조각이 있으면 붙이지 않고 실패 — 종전엔 없는 조각을 건너뛰고 일부만 붙여 저장했음
+            $__bpMissing = false;
+            for ($ci = 0; $ci < $totalChunks; $ci++) {
+                if (!is_file($chunkDir . '/chunk_' . str_pad($ci, 5, '0', STR_PAD_LEFT))) { $__bpMissing = true; break; }
+            }
+            if ($__bpMissing) {
+                fclose($fp); @unlink($destPath);
+                foreach ((glob($chunkDir . '/chunk_*') ?: []) as $__cf) @unlink($__cf);
+                @rmdir($chunkDir);
+                $result = ['success' => false, 'error' => __('api_err_upload_failed', '업로드에 실패했습니다.')]; break;
+            }
             for ($ci = 0; $ci < $totalChunks; $ci++) {
                 $cp = $chunkDir . '/chunk_' . str_pad($ci, 5, '0', STR_PAD_LEFT);
                 if (file_exists($cp)) {
@@ -3916,6 +4350,32 @@ try {
             $board = null;
             foreach ($boards as $b) { if (($b['id'] ?? 0) == $boardId) { $board = $b; break; } }
             
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 권한 검사 — 종전엔 하나도 없어 읽기 권한이 없는 스토리지 파일도 게시판 첨부로 복사됐음
+            //   ① 게시판이 있어야 함(없는 번호면 확장자·쓰기 권한 검사가 건너뛰어졌음) ② 게시판 쓰기 권한(첨부 올리기와 같은 기준)
+            //   ③ 기존 글에 붙이면 글쓴이 또는 관리자만(첨부 지우기와 같은 기준) ④ 스토리지 읽기 권한 + 폴더 읽기 권한
+            if (!$board) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
+            if (($board['perm_write'] ?? 'all') === 'admin' && !$isAdmin) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
+            if ($postId) {
+                $baPost = null;
+                foreach (($db->load('board_posts') ?: []) as $bp) { if (($bp['id'] ?? 0) == $postId && ($bp['board_id'] ?? 0) == $boardId) { $baPost = $bp; break; } }
+                if (!$baPost || (($baPost['author_id'] ?? null) != ($user['id'] ?? -1) && !$isAdmin)) {
+                    $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+                }
+            }
+            // ★ (2026-10-29 10:21, 20차 점검) 다운로드 권한도 — 게시판에 올리면 누구나 내려받게 되므로. 종전엔 읽기만 봐서 다운로드가 막힌 파일도 첨부로 복사해 받아갈 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkPermission($storageId, 'can_download')) {
+                $result = ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')]; break;
+            }
+            { $baDir = dirname(str_replace('\\', '/', $srcFilePath)); if ($baDir === '.') $baDir = '';
+              if (!$storage->checkFolderPermission($storageId, $baDir ?: $srcFilePath)) {
+                  $result = ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')]; break; } }
+            
+            // ★ (2026-10-29 23:35, 24차 점검) 서버 실행 이름 공통 검사(끝 점·공백, web.config, .user.ini 포함 — 조각 업로드와 같은 기준, 4회차 재검토)
+            if (($__baExec = \fsServerExecReason(basename(str_replace('\\', '/', (string)$srcFileName)))) !== null) { $result = ['success' => false, 'error' => $__baExec]; break; }
             // 서버 실행 확장자만 절대 차단
             $serverExecExts2 = ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phar', 'phps',
                 'jsp', 'jspx', 'asp', 'aspx', 'cgi', 'htaccess', 'user.ini'];
@@ -4051,6 +4511,25 @@ try {
             if (!$boardId || !$postId || empty($files)) {
                 $result = ['success' => false, 'error' => 'Missing params']; break;
             }
+            $board = null;
+            foreach (($db->load('boards') ?: []) as $__b) { if (($__b['id'] ?? 0) == $boardId) { $board = $__b; break; } }
+            $isAdmin = $auth->isAdmin() || $auth->isAdminOrSubAdmin();
+            if ($board && ($board['perm_write'] ?? 'all') === 'admin' && !$isAdmin) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
+            $__bpUser = $auth->getUser();
+            // ★ (2026-10-29 02:36, 16차) 게시판이 있어야 하고(없는 번호면 쓰기 권한·확장자 검사를 건너뛰었음), 글쓴이 또는 관리자만 그 글에 첨부를 붙임 —
+            //   종전엔 글 번호만으로 남의 글(공지 등)에 첨부를 붙일 수 있었음. '스토리지에서 첨부(board_attach_from_storage)' 와 같은 기준
+            if (!$board) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
+            {
+                $__bpPost = null;
+                foreach (($db->load('board_posts') ?: []) as $__bp) { if (($__bp['id'] ?? 0) == $postId && ($__bp['board_id'] ?? 0) == $boardId) { $__bpPost = $__bp; break; } }
+                if (!$__bpPost || ((($__bpPost['author_id'] ?? null) != ($__bpUser['id'] ?? -1)) && !$isAdmin)) {
+                    $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+                }
+            }
             
             $tempDir = __DIR__ . '/data/board_files/' . $boardId . '/temp_' . session_id();
             $realDir = __DIR__ . '/data/board_files/' . $boardId . '/' . $postId;
@@ -4069,9 +4548,9 @@ try {
                         if (($p['id'] ?? 0) == $postId) {
                             if (!isset($p['attachments'])) $p['attachments'] = [];
                             $p['attachments'][] = [
-                                'name' => $f['name'] ?? $safeName,
+                                'name' => basename((string)($f['name'] ?? $safeName)) ?: $safeName,   // ★ (2026-10-29 02:36, 16차) 표시 이름도 경로 글자 제거
                                 'file' => $safeName,
-                                'size' => $f['size'] ?? filesize($dst),
+                                'size' => filesize($dst),   // ★ (2026-10-29 02:36, 16차) 크기는 실제 파일 기준(종전엔 보낸 값)
                                 'uploaded_at' => date('Y-m-d H:i:s'),
                             ];
                             break;
@@ -4331,6 +4810,26 @@ try {
             $postId = (int)($input['post_id'] ?? 0);
             $boardId = (int)($input['board_id'] ?? 0);
             $parentId = (int)($input['parent_id'] ?? 0);
+            // ★ (2026-10-29 10:18, 20차 점검) 게시판·글 확인 + 읽기 권한 + 댓글 허용 — 종전엔 아무 검사가 없어, 관리자 전용 게시판 글이나 댓글을 막은 게시판에도
+            //   댓글을 달 수 있었고 게시판 번호를 다르게 보내 남의 게시판 글에 달 수도 있었음(재현). 읽기 권한은 글 보기(board_post_get)와 같은 기준
+            {
+                $bcBoard = null; foreach (($db->load('boards') ?: []) as $b) { if ((int)($b['id'] ?? 0) === $boardId) { $bcBoard = $b; break; } }
+                $bcPost = $db->find('board_posts', ['id' => $postId]);
+                if (!$bcBoard || !$bcPost || (int)($bcPost['board_id'] ?? 0) !== $boardId) {
+                    $result = ['success' => false, 'error' => __('api_err_board_not_found', '게시판을 찾을 수 없습니다.')]; break;
+                }
+                $bcAdmin = $auth->isAdmin() || $auth->isAdminOrSubAdmin();
+                $bcRead = $bcBoard['perm_read'] ?? 'all';
+                if ((($bcRead === 'none' || $bcRead === 'admin') && !$bcAdmin) || ($bcBoard['allow_comment'] ?? true) === false) {
+                    $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+                }
+                if ($parentId) {
+                    $bcParent = $db->find('board_comments', ['id' => $parentId]);
+                    if (!$bcParent || (int)($bcParent['post_id'] ?? 0) !== $postId) {
+                        $result = ['success' => false, 'error' => __('api_err_invalid_request', '잘못된 요청입니다.')]; break;
+                    }
+                }
+            }
             // sanitize는 파일 URL 치환 후 실행 (data: URL이 64KB 초과 시 삭제 방지)
             $content = trim($input['content'] ?? '');
             
@@ -4360,6 +4859,7 @@ try {
                 
                 foreach ($_FILES['comment_files']['name'] as $idx => $name) {
                     if ($_FILES['comment_files']['error'][$idx] !== UPLOAD_ERR_OK) continue;
+                    if (\fsServerExecReason((string)$name) !== null) continue;   // ★ (2026-10-29 23:35, 24차 점검) 서버 실행 이름은 건너뜀(조각 업로드와 같은 기준)
                     $ext = strtolower(pathinfo($name, PATHINFO_EXTENSION));
                     // 허용 확장자가 설정되어 있으면 체크, 비어있으면 모두 허용
                     if (!empty($allowedExts) && !in_array($ext, $allowedExts)) continue;
@@ -4433,7 +4933,10 @@ try {
             }
             
             // 남아있는 data-pending-name 속성 정리
-            $content = preg_replace('/\s*data-pending-name="[^"]*"/', '', $content);
+            // ★ (2026-10-30 02:02, 26차 점검) 뒤이어 조각 업로드로 파일이 올 때(has_pending_files)는 표식을 남김 — 업로드가 끝나면(board_comment_upload_chunk) 그 자리를 실제 주소로 바꿈.
+            //   종전엔 여기서 먼저 지워 댓글 에디터에 넣은 그림·동영상이 본문에 연결되지 않았음(빈 그림·base64 그대로 저장, 조각 업로드 쪽 치환은 늘 빗나감)
+            $_cmtPend = !empty($input['has_pending_files']) && empty($_FILES['comment_files']['name'][0]);
+            if (!$_cmtPend) $content = preg_replace('/\s*data-pending-name="[^"]*"/', '', $content);
             
             // 동영상 플레이스홀더 img를 video 태그로 변환
             // data-video-pending: 새 파일 (서버 URL로 변환)
@@ -4463,8 +4966,8 @@ try {
                     );
                 }
             }
-            // 남은 data-video-pending 플레이스홀더 정리
-            $content = preg_replace('/<img[^>]*data-video-pending="[^"]*"[^>]*\/?>/i', '', $content);
+            // 남은 data-video-pending 플레이스홀더 정리(조각 업로드가 따라오면 남김 — 위와 같음)
+            if (!$_cmtPend) $content = preg_replace('/<img[^>]*data-video-pending="[^"]*"[^>]*\/?>/i', '', $content);
             
             // data-video-src 플레이스홀더도 video로 변환 (기존 파일)
             $content = convertVideoSrcPlaceholders($content);
@@ -4599,6 +5102,9 @@ try {
             $cmtOwnerOk = false;
             foreach ($comments as $cc) {
                 if (($cc['id'] ?? 0) == $commentId) {
+                    // ★ (2026-10-29 18:02, 22차 점검) 댓글이 실제로 그 게시판 것일 때만 — 종전엔 board_id 를 확인하지 않아, 확장자 제한이 없는(또는 없는 번호의) 게시판 번호를 보내
+                    //   제한 있는 게시판의 댓글에 막힌 형식을 붙일 수 있었음(파일도 엉뚱한 게시판 폴더에 저장)
+                    if (isset($cc['board_id']) && (int)$cc['board_id'] !== $boardId) break;
                     if ((string)($cc['author_id'] ?? '') === (string)$user['id'] || $isAdmin) $cmtOwnerOk = true;
                     break;
                 }
@@ -4607,8 +5113,11 @@ try {
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
             }
             
-            // 첫 청크에서 확장자 검증
-            if ($chunkIndex === 0) {
+            // ★ (2026-10-29 09:14, 20차) 확장자 검증을 조각마다(위 게시글 첨부와 같은 이유) + 중간 확장자까지(fsServerExecReason)
+            if (($__bcExec = \fsServerExecReason($filename)) !== null) {
+                $result = ['success' => false, 'error' => $__bcExec]; break;
+            }
+            {
                 $serverExecExts = ['php','phtml','php3','php4','php5','php7','phar','phps','jsp','jspx','asp','aspx','cgi','htaccess','user.ini'];
                 $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
                 if (in_array($ext, $serverExecExts)) {
@@ -4617,6 +5126,7 @@ try {
                 $boards = $db->load('boards') ?: [];
                 $board = null;
                 foreach ($boards as $b) { if (($b['id'] ?? 0) == $boardId) { $board = $b; break; } }
+                if (!$board) { $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break; }   // ★ (22차) 없는 게시판 번호 거부
                 $allowedExt = trim($board['allowed_ext'] ?? '');
                 if (!empty($allowedExt)) {
                     $exts = array_map('trim', array_map('strtolower', explode(',', $allowedExt)));
@@ -4651,6 +5161,17 @@ try {
             
             $fp = fopen($destPath, 'wb');
             if (!$fp) { $result = ['success' => false, 'error' => __('api_err_upload_failed', '업로드에 실패했습니다.')]; break; }
+            // ★ (2026-10-29 09:14, 20차) 빠진 조각이 있으면 실패(일부만 붙여 저장하지 않음)
+            $__bcMissing = false;
+            for ($ci = 0; $ci < $totalChunks; $ci++) {
+                if (!is_file($chunkDir . '/chunk_' . str_pad($ci, 5, '0', STR_PAD_LEFT))) { $__bcMissing = true; break; }
+            }
+            if ($__bcMissing) {
+                fclose($fp); @unlink($destPath);
+                foreach ((glob($chunkDir . '/chunk_*') ?: []) as $__cf) @unlink($__cf);
+                @rmdir($chunkDir);
+                $result = ['success' => false, 'error' => __('api_err_upload_failed', '업로드에 실패했습니다.')]; break;
+            }
             for ($ci = 0; $ci < $totalChunks; $ci++) {
                 $cp = $chunkDir . '/chunk_' . str_pad($ci, 5, '0', STR_PAD_LEFT);
                 if (file_exists($cp)) { fwrite($fp, file_get_contents($cp)); @unlink($cp); }
@@ -4686,17 +5207,19 @@ try {
                     // content 내 data URL을 실제 URL로 치환
                     $cmtContent = $c['content'] ?? '';
                     $fileUrlRaw = 'api.php?action=board_comment_download&board_id=' . $boardId . '&comment_id=' . $commentId . '&file=' . urlencode($safeName);
-                    $escapedName = htmlspecialchars($filename, ENT_QUOTES);
                     $cmtContent = preg_replace_callback(
-                        '/<(img|video|source)([^>]*?)data-pending-name="' . preg_quote($escapedName, '/') . '"([^>]*?)>/i',
+                        '/<(img|video|source)([^>]*?)data-pending-name="' . pendingNameRegex($filename) . '"([^>]*?)>/i',   // ★ (2026-10-30 03:03, 26차 재검토) 이름에 ' 가 있어도 찾게
                         function($m) use ($fileUrlRaw) {
                             $attrs = $m[2] . $m[3];
                             $attrs = preg_replace('/src="data:[^"]*"/', 'src="' . $fileUrlRaw . '"', $attrs);
+                            // ★ (2026-10-30 02:02, 26차 점검) 저장 때 sanitizeHtml 이 64KB 넘는 data: 그림 src 를 떼어 표식만 남은 경우 — 실제 주소를 붙임
+                            if (!preg_match('/\ssrc="/i', ' ' . $attrs)) $attrs = ' src="' . $fileUrlRaw . '"' . $attrs;
                             $attrs = preg_replace('/\s*data-pending-name="[^"]*"/', '', $attrs);
                             return '<' . $m[1] . $attrs . '>';
                         },
                         $cmtContent
                     );
+                    $cmtContent = convertPendingVideoPlaceholder($cmtContent, $filename, $fileUrlRaw);   // ★ (2026-10-30 02:02, 26차 점검) 동영상 자리표시도 실제 주소로
                     $c['content'] = sanitizeHtml($cmtContent);
                     break;
                 }
@@ -4717,7 +5240,8 @@ try {
             // 빈 내용 체크 (태그 제거 후, 단 img/video 태그 또는 첨부파일이 있으면 허용)
             $hasMedia = preg_match('/<(img|video)\b/i', $content);
             $hasEditFiles = !empty($_FILES['comment_files']['name'][0]);
-            if (empty(strip_tags($content)) && !$hasMedia && !$hasEditFiles) { $result = ['success' => false, 'error' => __('api_err_content_required', '내용을 입력하세요.')]; break; }
+            $_cmtEditPend = !empty($input['has_pending_files']) && !$hasEditFiles;   // ★ (2026-10-30 02:02, 26차 점검) 조각 업로드가 따라오면 자리표시를 남김(저장과 같음)
+            if (empty(strip_tags($content)) && !$hasMedia && !$hasEditFiles && !$_cmtEditPend) { $result = ['success' => false, 'error' => __('api_err_content_required', '내용을 입력하세요.')]; break; }
             
             $comments = $db->load('board_comments') ?: [];
             $found = false;
@@ -4741,14 +5265,21 @@ try {
                         
                         $existingAtts = $c['attachments'] ?? [];
                         if (!is_array($existingAtts)) $existingAtts = [];
+                        // ★ (2026-10-29 10:22, 20차 점검) 게시판 허용 확장자도 따름(댓글 쓰기와 같은 기준) — 종전엔 수정으로 붙이면 허용 안 된 형식도 올라갔음
+                        $ceAllowed = [];
+                        foreach (($db->load('boards') ?: []) as $ceB) {
+                            if ((int)($ceB['id'] ?? 0) === $boardId) { $ceStr = trim($ceB['allowed_ext'] ?? ''); if ($ceStr !== '') $ceAllowed = array_map('trim', array_map('strtolower', explode(',', $ceStr))); break; }
+                        }
                         
                         foreach ($_FILES['comment_files']['name'] as $fi => $fname) {
                             if ($_FILES['comment_files']['error'][$fi] !== UPLOAD_ERR_OK) continue;
+                            if (\fsServerExecReason((string)$fname) !== null) continue;   // ★ (2026-10-29 23:35, 24차 점검) 서버 실행 이름은 건너뜀
                             $safeName = preg_replace('/[\/\\\\:*?"<>|]/', '_', $fname);
                             $tmpPath = $_FILES['comment_files']['tmp_name'][$fi];
                             
                             // 서버 실행 확장자만 절대 차단
                             $cmtExt = strtolower(pathinfo($safeName, PATHINFO_EXTENSION));
+                            if (!empty($ceAllowed) && !in_array($cmtExt, $ceAllowed)) continue;
                             $cmtServerExecExts = ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phar', 'phps',
                                 'jsp', 'jspx', 'asp', 'aspx', 'cgi', 'htaccess', 'user.ini'];
                             if (in_array($cmtExt, $cmtServerExecExts)) continue;
@@ -4813,7 +5344,7 @@ try {
                     }
                     
                     // 남아있는 data-pending-name 속성 정리
-                    $content = preg_replace('/\s*data-pending-name="[^"]*"/', '', $content);
+                    if (!$_cmtEditPend) $content = preg_replace('/\s*data-pending-name="[^"]*"/', '', $content);
                     
                     // 동영상 플레이스홀더 변환
                     $allAtts = $c['attachments'] ?? [];
@@ -4845,7 +5376,7 @@ try {
                             }
                         }
                     }
-                    $content = preg_replace('/<img[^>]*data-video-pending="[^"]*"[^>]*\/?>/i', '', $content);
+                    if (!$_cmtEditPend) $content = preg_replace('/<img[^>]*data-video-pending="[^"]*"[^>]*\/?>/i', '', $content);
                     // data-video-src 플레이스홀더 변환
                     $content = convertVideoSrcPlaceholders($content);
                     
@@ -5198,6 +5729,8 @@ try {
                 $thumbDir = __DIR__ . '/data/thumbcache/comments/' . $commentId;
                 $thumbPath = $thumbDir . '/' . $fileName;
                 
+                // ★ (2026-10-30 01:55, 26차 점검) 원본보다 오래된 썸네일은 다시 만듦 — 댓글을 지워도 썸네일 캐시가 남고 댓글 번호가 다시 쓰여, 같은 이름 그림이면 지운(남의) 그림 썸네일이 나갔음
+                if (file_exists($thumbPath) && @filemtime($thumbPath) < @filemtime($filePath)) @unlink($thumbPath);
                 if (!file_exists($thumbPath)) {
                     if (!is_dir($thumbDir)) mkdir($thumbDir, 0755, true);
                     $maxW = 800;
@@ -5318,6 +5851,12 @@ try {
             }
             // value는 이름을 소문자+언더스코어로 변환
             $value = 'custom_' . preg_replace('/[^a-z0-9]+/', '_', strtolower($name));
+            // ★ (2026-10-29 21:17, 24차 점검) 영문·숫자가 없는 이름(한글 등)이거나 같은 value 가 이미 있으면 고유 value — 종전엔 '편집자'·'검토자' 가 모두 'custom__' 가 되어
+            //   사용자 편집에서 구분이 안 됐고, 하나를 지우면 다른 역할 사용자까지 일반 사용자로 바뀌었음(재현)
+            $roleValues = array_map(fn($r) => (string)($r['value'] ?? ''), $roles);
+            if (trim(substr($value, 7), '_') === '' || in_array($value, $roleValues, true)) {
+                do { $value = 'custom_r' . bin2hex(random_bytes(4)); } while (in_array($value, $roleValues, true));
+            }
             $id = $db->insert('roles', [
                 'name' => $name,
                 'value' => $value,
@@ -5363,10 +5902,17 @@ try {
         case 'qos_save':
             $auth->requireAdminPerm('users');
             $qosFile = __DIR__ . '/data/qos_settings.json';
-            $qosSettings = [
-                'roles' => $input['roles'] ?? [],
-                'users' => $input['users'] ?? []
-            ];
+            // ★ (2026-10-29 09:46, 20차 점검) 값은 숫자만(사용자별은 빈 값=null 허용) — 종전엔 그대로 저장돼 속도 제한 창의 입력칸 value 로 HTML 이 들어갔음
+            $qosSettings = ['roles' => [], 'users' => []];
+            foreach ((is_array($input['roles'] ?? null) ? $input['roles'] : []) as $qk => $qv) {
+                if (!is_array($qv)) continue;
+                $qosSettings['roles'][(string)$qk] = ['download' => max(0, (int)($qv['download'] ?? 0)), 'upload' => max(0, (int)($qv['upload'] ?? 0))];
+            }
+            foreach ((is_array($input['users'] ?? null) ? $input['users'] : []) as $qk => $qv) {
+                if (!is_array($qv)) continue;
+                $qn = function ($v) { return ($v === null || $v === '' || !is_numeric($v)) ? null : max(0, (int)$v); };
+                $qosSettings['users'][(string)$qk] = ['download' => $qn($qv['download'] ?? null), 'upload' => $qn($qv['upload'] ?? null)];
+            }
             file_put_contents($qosFile, json_encode($qosSettings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
             $result = ['success' => true];
             break;
@@ -5463,7 +6009,8 @@ try {
             $taskId = (int)($input['id'] ?? 0);
             $taskData = [
                 'name' => $input['name'] ?? '',
-                'mode' => $input['mode'] ?? 'one-way',
+                // ★ (2026-10-29 09:46, 20차 점검) 정해진 방식만 — 종전엔 아무 문자열이나 저장돼 동기화 목록에 HTML 로 들어갔음
+                'mode' => in_array($input['mode'] ?? '', ['one-way', 'two-way', 'incremental'], true) ? $input['mode'] : 'one-way',
                 'source_storage_id' => (int)($input['source_storage_id'] ?? 0),
                 'source_path' => $input['source_path'] ?? '',
                 'target_storage_id' => (int)($input['target_storage_id'] ?? 0),
@@ -5536,6 +6083,21 @@ try {
             header('X-Accel-Buffering: no');
             session_write_close();
             
+            // ★ (2026-10-29 04:18, 17차) 같은 작업이 이미 돌고 있으면(화면 실행 중복·예약 실행과 겹침) 거부 — 종전엔 둘이 동시에 같은 대상에 쓰고 지울 수 있었음.
+            //   잠금은 작업별 파일 잠금(sync_cron.php 와 같은 파일), 이 요청이 끝나면 자동으로 풀림
+            $syncLockDir = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data'));
+            $syncLock = @fopen($syncLockDir . '/sync_task_' . (int)$taskId . '.lock', 'c');
+            if (!$syncLock || !flock($syncLock, LOCK_EX | LOCK_NB)) {
+                echo "data: " . json_encode(['type' => 'error', 'data' => __('sync_task_running', '이 동기화 작업이 이미 실행 중입니다. 끝난 뒤 다시 실행하세요.')], JSON_UNESCAPED_UNICODE) . "\n\n";
+                flush();
+                exit;
+            }
+            // 끝날 때 저장은 이 작업의 결과 칸만 최신 목록에 반영 — 종전엔 시작 때 읽은 목록 전체를 다시 저장해, 실행 중에 바뀐 다른 작업 설정·
+            //   새로 만든 작업·지운 작업이 되돌아갔음
+            $syncSaveResult = function (string $status) use ($db, $taskId) {
+                $db->update('sync_tasks', ['id' => $taskId], ['last_run' => date('Y-m-d H:i:s'), 'last_status' => $status]);
+            };
+            
             $sseLog = [];
             $sseStats = ['copied' => 0, 'updated' => 0, 'deleted' => 0, 'skipped' => 0, 'errors' => 0];
             
@@ -5584,19 +6146,42 @@ try {
                 
                 $srcAdapter = StorageAdapterFactory::create($srcStorage);
                 $tgtAdapter = StorageAdapterFactory::create($tgtStorage);
+                // ★ (2026-10-29 02:36, 16차) 연결부터 — 종전엔 connect() 를 안 불러 FTP·SMB 는 목록이 늘 비어 보였고, '고아 삭제' 가 켜져 있으면
+                //   원본이 빈 것으로 보고 대상 파일을 전부 지울 수 있었음
+                if (!$srcAdapter || !$srcAdapter->connect()) {
+                    throw new Exception(__('sync_src_connect_fail', '원본 스토리지에 연결할 수 없습니다.'));
+                }
+                if (!$tgtAdapter || !$tgtAdapter->connect()) {
+                    throw new Exception(__('sync_tgt_connect_fail', '대상 스토리지에 연결할 수 없습니다.'));
+                }
                 
                 // fsLog("Sync Task #$taskId 시작: src={$srcStorageId}({$srcPath}) → tgt={$tgtStorageId}({$tgtPath}), mode=$mode");
                 // fsLog("Sync 어댑터 생성 완료: src=" . get_class($srcAdapter) . ", tgt=" . get_class($tgtAdapter));
                 
                 // 재귀 파일 목록 수집
-                $collectFiles = function($adapter, $basePath, $includeSubdir) use (&$collectFiles) {
+                $syncFailed = [];   // ★ (2026-10-29 19:04, 22차 점검) 목록을 못 읽은 하위 폴더(양쪽) — 그 아래는 이번 동기화에서 비교·복사·삭제하지 않음
+                $collectFiles = function($adapter, $basePath, $includeSubdir, $rootPath = null) use (&$collectFiles, &$syncFailed) {
+                    if ($rootPath === null) $rootPath = $basePath;
                     $files = [];
                     $items = $adapter->list($basePath);
+                    // ★ (2026-10-29 18:52, 22차 점검) 목록을 못 읽은 폴더를 빈 폴더로 보지 않음 — 종전엔 빈 폴더로 보고 계속해, '고아 삭제'가 켜져 있으면 대상의 그 폴더 아래를 지우고
+                    //   양방향이면 대상 쪽으로 덮어쓸 수 있었음(16차의 '원본이 통째로 비면 삭제 건너뜀'은 맨 위만 막았음)
+                    //   (없는 폴더 — 첫 동기화의 대상 등 — 는 원격 어댑터가 실패로 표시하므로 exists 로 다시 보고 빈 목록으로)
+                    if (is_object($adapter) && property_exists($adapter, 'listFailed') && $adapter->listFailed) {
+                        // ★ (2026-10-29 19:04, 22차 점검) 맨 위(작업 경로)를 못 읽으면 전체 중단, 하위 폴더 하나면 그 폴더만 이번에 건너뜀(변경 검토 반영 — 'System Volume Information' 같은 읽기 금지 폴더 때문에 전체가 멈추지 않게)
+                        $sfExists = true;
+                        try { $sfExists = ($basePath === '') || $adapter->exists($basePath); } catch (\Throwable $e) { $sfExists = true; }
+                        if ($sfExists) {
+                            if ($basePath === $rootPath) throw new Exception(__('remote_read_failed', '원격 파일 읽기 실패') . ': ' . ($basePath === '' ? '/' : $basePath));
+                            $syncFailed[] = $rootPath === '' ? $basePath : substr($basePath, strlen($rootPath) + 1);
+                        }
+                        return [];
+                    }
                     foreach ($items as $item) {
                         $relPath = $basePath ? $basePath . '/' . $item['name'] : $item['name'];
                         if ($item['is_dir']) {
                             if ($includeSubdir) {
-                                $files = array_merge($files, $collectFiles($adapter, $relPath, true));
+                                $files = array_merge($files, $collectFiles($adapter, $relPath, true, $rootPath));
                                 $files[] = ['path' => $relPath, 'is_dir' => true, 'modified' => $item['modified'] ?? 0, 'size' => 0];
                             }
                         } else {
@@ -5627,6 +6212,13 @@ try {
                 foreach ($tgtFiles as $f) {
                     $key = $tgtPath ? substr($f['path'], strlen($tgtPath) + 1) : $f['path'];
                     $tgtIndex[$key] = $f;
+                }
+                // ★ (2026-10-29 19:04, 22차 점검) 목록을 못 읽은 하위 폴더 아래는 양쪽 모두 이번에 빼고 진행(그 폴더를 빈 것으로 보고 지우거나 덮어쓰지 않게)
+                foreach (array_unique($syncFailed) as $sfKey) {
+                    foreach ([&$srcIndex, &$tgtIndex] as &$sfIdx) {
+                        foreach (array_keys($sfIdx) as $k) { if ($k === $sfKey || strpos($k, $sfKey . '/') === 0) unset($sfIdx[$k]); }
+                    }
+                    unset($sfIdx);
                 }
                 
                 // 디렉토리 먼저 생성
@@ -5705,7 +6297,7 @@ try {
                                 $copyOk = $srcAdapter->copyFileTo($srcFullPath, $tgtAdapter, $tgtFullPath);
                             } else {
                                 $content = $srcAdapter->read($srcFullPath);
-                                if ($content === false) throw new Exception('Read failed');
+                                if ($content === false || ($content === '' && (int)($sf['size'] ?? 0) > 0)) throw new Exception('Read failed');   // ★ (2026-10-29 09:23, 20차) 원격 read() 는 실패해도 '' 를 돌려줌 — 내용이 비었는데 목록상 크기가 0 보다 크면 읽기 실패로(종전엔 대상 파일을 빈 파일로 덮어썼음)
                                 $copyOk = $tgtAdapter->write($tgtFullPath, $content);
                                 $fileSize = strlen($content);
                                 unset($content);
@@ -5774,7 +6366,7 @@ try {
                                     $copyOk = $tgtAdapter->copyFileTo($tgtFullPath, $srcAdapter, $srcFullPath);
                                 } else {
                                     $content = $tgtAdapter->read($tgtFullPath);
-                                    if ($content === false) throw new Exception('Read failed');
+                                    if ($content === false || ($content === '' && (int)($tf['size'] ?? 0) > 0)) throw new Exception('Read failed');   // ★ (2026-10-29 09:23, 20차) 원격 read() 는 실패해도 '' 를 돌려줌 — 내용이 비었는데 목록상 크기가 0 보다 크면 읽기 실패로(종전엔 대상 파일을 빈 파일로 덮어썼음)
                                     $copyOk = $srcAdapter->write($srcFullPath, $content);
                                     unset($content);
                                 }
@@ -5793,6 +6385,13 @@ try {
                 }
                 
                 // 고아 파일 삭제
+                // ★ (2026-10-29 02:36, 16차) 원본 목록이 비었는데 대상엔 파일이 있으면 삭제하지 않음 — 원본 폴더가 없거나(USB 분리 등)·읽기 실패해도
+                //   목록이 빈 채로 돌아와 대상 전체를 지울 수 있었음. 원본을 정말 비웠다면 대상은 직접 정리
+                if ($deleteOrphan && empty($srcIndex) && !empty($tgtIndex)) {
+                    $sseSend('log', '⚠️ ' . __('sync_orphan_skip_empty', '원본 목록이 비어 있어 고아 삭제를 건너뜀(대상 보호)'));
+                    $sseLog[] = '⚠️ ' . __('sync_orphan_skip_empty', '원본 목록이 비어 있어 고아 삭제를 건너뜀(대상 보호)');
+                    $deleteOrphan = false;
+                }
                 if ($deleteOrphan && ($mode === 'one-way' || $mode === 'incremental')) {
                     foreach ($tgtIndex as $key => $tf) {
                         if (!$tf['is_dir'] && !isset($srcIndex[$key])) {
@@ -5823,9 +6422,7 @@ try {
                     }
                 }
                 
-                $task['last_run'] = date('Y-m-d H:i:s');
-                $task['last_status'] = $sseStats['errors'] > 0 ? 'partial' : 'success';
-                $db->save('sync_tasks', $tasks);
+                $syncSaveResult($sseStats['errors'] > 0 ? 'partial' : 'success');
                 
                 $summary = sprintf("Copied:%d Updated:%d Deleted:%d Skipped:%d Errors:%d",
                     $sseStats['copied'], $sseStats['updated'], $sseStats['deleted'], $sseStats['skipped'], $sseStats['errors']);
@@ -5840,9 +6437,7 @@ try {
                 
             } catch (Exception $e) {
                 fsLog("Sync Task #$taskId 실패: " . $e->getMessage());
-                $task['last_run'] = date('Y-m-d H:i:s');
-                $task['last_status'] = 'error';
-                $db->save('sync_tasks', $tasks);
+                $syncSaveResult('error');
                 
                 $sseSend('error', $e->getMessage());
             }
@@ -5882,7 +6477,9 @@ try {
             // 삭제된 폴더 자동 정리
             $basePath = $storage->getRealPath($storageId);
             $cleaned = 0;
-            if ($basePath) {
+            // ★ (2026-10-29 09:23, 20차) 스토리지 기준 폴더 자체가 열릴 때만 정리 — 종전엔 USB·NAS·SMB 가 잠깐 끊긴 상태에서 이 화면을 열면
+            //   모든 폴더가 '없음' 으로 보여 그 스토리지의 폴더 권한 규칙(읽기·쓰기 금지)이 전부 지워졌음
+            if ($basePath && is_dir($basePath)) {
                 foreach ($perms as $p) {
                     $folderFull = $basePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $p['folder_path'] ?? '');
                     if (!is_dir($folderFull)) {
@@ -5930,7 +6527,7 @@ try {
                     else $fail++;
                 }
                 $result = ['success' => true, 'count' => $success, 'failed' => $fail];
-            } elseif ($folderPath) {
+            } elseif ((string)$folderPath !== '') {   // ★ (2026-10-30 01:47, 26차 점검) 폴더 이름 '0' 도(종전 if ($folderPath) 는 '0' 을 거짓으로 봐 거부)
                 $ok = $storage->setFolderPermission($storageId, $folderPath, $userId, $permData);
                 $result = $ok ? ['success' => true] : ['success' => false, 'error' => 'Save failed'];
             } else {
@@ -5956,10 +6553,10 @@ try {
                 foreach ($items as $item) {
                     $fp = trim($item['folder_path'] ?? '');
                     $uid = (int)($item['user_id'] ?? 0);
-                    if ($fp && $uid && $storage->removeFolderPermission($storageId, $fp, $uid)) $deleted++;
+                    if ($fp !== '' && $uid && $storage->removeFolderPermission($storageId, $fp, $uid)) $deleted++;   // ★ (2026-10-30 01:47, 26차 점검) '0' 폴더도
                 }
                 $result = ['success' => true, 'deleted' => $deleted];
-            } elseif ($folderPath && $userId) {
+            } elseif ((string)$folderPath !== '' && $userId) {   // ★ (2026-10-30 01:47, 26차 점검) '0' 폴더도
                 $ok = $storage->removeFolderPermission($storageId, $folderPath, $userId);
                 $result = $ok ? ['success' => true] : ['success' => false, 'error' => 'Remove failed'];
             } else {
@@ -5990,6 +6587,10 @@ try {
         // 스토리지 용량 정보 조회
         case 'storage_quota_info':
             $auth->requireLogin();
+            // ★ (2026-10-29 18:02, 22차 점검) 읽을 수 있는 스토리지만(위와 같음)
+            if (!$storage->checkPermission((int)($_GET['storage_id'] ?? 0), 'can_read')) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
             $result = $storage->getQuotaInfo((int)($_GET['storage_id'] ?? 0));
             break;
         
@@ -6082,7 +6683,7 @@ try {
                 // 현재 폴더가 vault인지 확인
                 $currentPath = $_GET['path'] ?? '';
                 $realBasePath = $storage->getRealPath($storageId);
-                if ($realBasePath && $currentPath) {
+                if ($realBasePath && (string)$currentPath !== '') {   // ★ (2026-10-30 01:55, 26차 점검) 최상위 '0' 보관함 폴더도
                     $currentFullPath = $realBasePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $currentPath);
                     if (file_exists($currentFullPath . DIRECTORY_SEPARATOR . '.vault.json')) {
                         $result['is_vault_folder'] = true;
@@ -6094,6 +6695,9 @@ try {
                 // 폴더별 권한 필터링
                 $currentPath = $_GET['path'] ?? '';
                 $result['items'] = $storage->filterByFolderPermission($storageId, $currentPath, $result['items']);
+                // ★ (2026-10-28, 펜닐) 숨김 항목(Thumbs.db·desktop.ini 등 시스템 파일, ~$ 오피스 임시, 속성에서 숨긴 항목) —
+                //   '숨김 항목 보기'(show_hidden=1)면 hidden 표시를 달아 남기고, 아니면 뺌 — api/HiddenItems.php
+                $result['items'] = HiddenItems::filterItems($storageId, $currentPath, $result['items'], !empty($_GET['show_hidden']));
                 if ($_filesPerfMeta !== null) { $_filesPerfMeta['pfilt'] = (int)round((microtime(true) - $_phT) * 1000); $_phT = microtime(true); }
                 
                 $sortBy = $_GET['sort'] ?? 'name';
@@ -6110,12 +6714,17 @@ try {
                 //   '내 공유 링크' 모달을 열기 전까지는 유령 배지가 남는 구조였다.
                 //   판정 기준은 share_count(위 case)와 동일하게 맞춘다.
                 $_shNow = time();
+                // ★ (2026-10-29 21:14, 24차 점검) 공유 토큰은 만든 사람·관리자에게만(22차 '자세한 정보'와 같은 기준) — 종전엔 같은 스토리지 목록을 여는 모든 사람에게
+                //   남의 공유 링크 토큰이 나갔음(재현: viewer 가 tester 의 토큰 받음). 화면은 토큰을 쓰지 않고 배지(share_type)만 씀
+                $_shMe = $auth->getUser();
+                $_shMeId = (int)($_shMe['id'] ?? 0);
+                $_shIsAdm = $auth->isAdmin();
                 foreach ($shares as $share) {
                     if (!empty($share['expire_at']) && strtotime($share['expire_at']) < $_shNow) continue;
                     if (!empty($share['max_downloads']) && ($share['download_count'] ?? 0) >= $share['max_downloads']) continue;
                     if (($share['storage_id'] ?? 0) == $storageId && ($share['is_active'] ?? 0)) {
                         $sharedPaths[$share['file_path']] = [
-                            'token' => $share['token'],
+                            'token' => ($_shIsAdm || (int)($share['created_by'] ?? 0) === $_shMeId) ? $share['token'] : null,
                             'share_type' => $share['share_type'] ?? 'download',
                             'expire_at' => $share['expire_at'] ?? null
                         ];
@@ -6126,7 +6735,7 @@ try {
                     $relativePath = ltrim($item['path'] ?? '', '/');
                     if (isset($sharedPaths[$relativePath])) {
                         $item['shared'] = true;
-                        $item['share_token'] = $sharedPaths[$relativePath]['token'];
+                        if ($sharedPaths[$relativePath]['token'] !== null) $item['share_token'] = $sharedPaths[$relativePath]['token'];
                         $item['share_type'] = $sharedPaths[$relativePath]['share_type'];
                         $item['share_expire'] = $sharedPaths[$relativePath]['expire_at'];
                     }
@@ -6141,6 +6750,10 @@ try {
             $auth->requireLogin();
             $storageId = (int)($input['storage_id'] ?? 0);
             $size = (int)($input['size'] ?? 0);
+            // ★ (2026-10-29 18:02, 22차 점검) 읽을 수 있는 스토리지만(20차 storage_quota 와 같은 기준) — 종전엔 남의 홈 스토리지 용량·사용량도 물어볼 수 있었음
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                $result = ['success' => false, 'allowed' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
             $result = $fileManager->checkQuotaPublic($storageId, $size);
             break;
             
@@ -6169,6 +6782,15 @@ try {
             
             // 폴더별 쓰기 권한 체크
             { $ucSid = (int)($_POST['storage_id'] ?? 0); $ucPath = $_POST['path'] ?? '';
+              // ★ (2026-10-28 22:39, 10차 점검) 폴더째 올리면 relativePath 의 폴더 부분이 붙어 그 아래에 저장됨 — 종전엔 path 만 확인해
+              //   쓰기를 막은 하위 폴더 안에도 파일이 만들어졌음(재현). 실제로 저장될 폴더(FileManager::uploadChunk 와 같은 이름 정리)로 확인
+              $ucRel = (string)($_POST['relativePath'] ?? '');
+              // ★ (2026-10-29 21:38, 24차 점검) 원격 스토리지도 이제 하위 폴더를 만들어 저장하므로(uploadChunkRemote) 로컬과 같이 실제 저장 폴더로 확인 — 11차의 '원격은 path 만' 예외 뺌
+              if ($ucRel !== '') {
+                  $ucParts = explode('/', str_replace('\\', '/', $ucRel)); array_pop($ucParts);
+                  $ucParts = array_map(function ($seg) { $seg = trim(preg_replace('/[<>:"\/\\|?*\x00-\x1f]/', '', $seg), '. '); return $seg ?: 'unnamed'; }, $ucParts);
+                  if ($ucParts) $ucPath = trim(trim(str_replace('\\', '/', $ucPath), '/') . '/' . implode('/', $ucParts), '/');
+              }
               if (!$storage->checkFolderPermission($ucSid, $ucPath, 'can_write')) {
                   $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')]; break; }
             }
@@ -6289,7 +6911,8 @@ try {
             // (compress/rename 등 다른 쓰기 작업과 동일. transcode는 읽기 스트리밍이라 can_read였음)
             $cvDir = dirname($path);
             if ($cvDir === '.') $cvDir = '';
-            if (!$storage->checkFolderPermission($storageId, $cvDir ?: $path, 'can_write')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $cvDir ?: $path, 'can_write')) {
                 http_response_code(403);
                 echo json_encode(['error' => 'No permission']);
                 break;
@@ -6438,6 +7061,12 @@ try {
             _sessionDebugLog('STEP:hls_after_swc', 'hls_action=' . ($_GET['hls_action'] ?? 'start'));
             $storageId = (int)($_GET['storage_id'] ?? 0);
             $path = $_GET['path'] ?? '';
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서(폴더 규칙이 없으면 늘 통과) 읽기 권한이 없는 스토리지(다른 사용자의 '내 파일' 등)도 열렸음(목록·다운로드·썸네일은 이미 검사함) — 정리(stop)·조각 요청처럼 스토리지 번호 없이 세션으로만 오는 요청은 그대로
+            if ($storageId > 0 && !$storage->checkPermission($storageId, 'can_read')) {
+                http_response_code(403);
+                echo json_encode(['error' => 'No permission']);
+                break;
+            }
             // 폴더별 권한 체크
             $hlsDir = dirname($path);
             if ($hlsDir === '.') $hlsDir = '';
@@ -6465,6 +7094,12 @@ try {
             session_write_close();
             $storageId = (int)($_GET['storage_id'] ?? 0);
             $path = $_GET['path'] ?? '';
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서(폴더 규칙이 없으면 늘 통과) 읽기 권한이 없는 스토리지(다른 사용자의 '내 파일' 등)도 열렸음(목록·다운로드·썸네일은 이미 검사함)
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                http_response_code(403);
+                echo json_encode(['error' => 'No permission']);
+                break;
+            }
             $dsDir = dirname($path);
             if ($dsDir === '.') $dsDir = '';
             if (!$storage->checkFolderPermission($storageId, $dsDir ?: $path)) {
@@ -6476,7 +7111,7 @@ try {
             break;
 
         case 'transcode_log':
-            $auth->requireLogin();
+            $auth->requireAdmin();   // ★ (2026-10-29 03:19, 16차) 이 로그엔 다른 사용자 파일의 절대 경로가 섞일 수 있어 관리자만(종전엔 로그인만)
             session_write_close(); // 세션 락 해제
             $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
             $logFile = $dataDir . '/ffmpeg_pipe_stderr.log';
@@ -6516,9 +7151,12 @@ try {
         //    diag_log_clear=1 GET 파라미터로 로그 비우기 가능
         case 'hls_diag_log':
             $auth->requireLogin();
+            // ★ (2026-10-29 03:19, 16차) 읽기·비우기(GET)는 관리자만 — 다른 사용자 파일 경로가 섞일 수 있음. 재생 중 기록 추가(POST)는 로그인 사용자 그대로
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') $auth->requireAdmin();
             $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
             $logFile = $dataDir . '/hls_diag.log';
-            if (!empty($_GET['clear']) && $_GET['clear'] === '1') {
+            // ★ (2026-10-29 14:33, 21차 점검) 비우기는 관리자 GET 에서만 — 종전엔 POST 에 ?clear=1 을 붙이면 관리자 확인(POST 는 건너뜀) 없이 일반 사용자도 비울 수 있었음(재현)
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST' && !empty($_GET['clear']) && $_GET['clear'] === '1') {
                 @file_put_contents($logFile, '');
                 $result = ['success' => true, 'cleared' => true]; break;
             }
@@ -6575,9 +7213,11 @@ try {
         //   POST: event + data 기록
         case 'cover_diag_log':
             $auth->requireLogin();
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST') $auth->requireAdmin();   // ★ (2026-10-29 03:19, 16차) 읽기·비우기는 관리자만(hls_diag_log 와 같음)
             $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
             $logFile = $dataDir . '/cover_diag.log';
-            if (!empty($_GET['clear']) && $_GET['clear'] === '1') {
+            // ★ (2026-10-29 14:33, 21차 점검) 비우기는 관리자 GET 에서만 — 종전엔 POST 에 ?clear=1 을 붙이면 관리자 확인(POST 는 건너뜀) 없이 일반 사용자도 비울 수 있었음(재현)
+            if ($_SERVER['REQUEST_METHOD'] !== 'POST' && !empty($_GET['clear']) && $_GET['clear'] === '1') {
                 @file_put_contents($logFile, '');
                 $result = ['success' => true, 'cleared' => true]; break;
             }
@@ -6658,6 +7298,7 @@ try {
             $vfPath = (string)($_GET['path'] ?? '');
             $vfDir = dirname($vfPath);
             if ($vfDir === '.') $vfDir = '';
+            if (!$storage->checkPermission((int)($_GET['storage_id'] ?? 0), 'can_read')) { header('X-Frame-Error: perm'); http_response_code(403); exit; }   // ★ (2026-10-28 17:23, 소스 점검 2단계) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서(폴더 규칙이 없으면 늘 통과) 읽기 권한이 없는 스토리지(다른 사용자의 '내 파일' 등)도 열렸음(목록·다운로드·썸네일은 이미 검사함)
             if (!$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $vfDir ?: $vfPath)) { header('X-Frame-Error: perm'); http_response_code(403); exit; }
             $fileManager->videoFrame((int)($_GET['storage_id'] ?? 0), $vfPath, (float)($_GET['t'] ?? 0), !empty($_GET['a']));   // a=1: 짧은 영상 정확 탐색(화면이 정함)
             break;
@@ -6676,7 +7317,9 @@ try {
             $vfsPath = (string)($_GET['path'] ?? '');
             $vfsDir = dirname($vfsPath);
             if ($vfsDir === '.') $vfsDir = '';
-            if (!$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $vfsDir ?: $vfsPath)) {
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서(폴더 규칙이 없으면 늘 통과) 읽기 권한이 없는 스토리지(다른 사용자의 '내 파일' 등)도 열렸음(목록·다운로드·썸네일은 이미 검사함)
+            if (!$storage->checkPermission((int)($_GET['storage_id'] ?? 0), 'can_read')
+                || !$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $vfsDir ?: $vfsPath)) {
                 http_response_code(403); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['error' => 'perm']); exit;
             }
             $fileManager->videoFrames((int)($_GET['storage_id'] ?? 0), $vfsPath, (string)($_GET['ts'] ?? ''), !empty($_GET['a']));
@@ -6696,7 +7339,9 @@ try {
             $vkPath = (string)($_GET['path'] ?? '');
             $vkDir = dirname($vkPath);
             if ($vkDir === '.') $vkDir = '';
-            if (!$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $vkDir ?: $vkPath)) {
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서(폴더 규칙이 없으면 늘 통과) 읽기 권한이 없는 스토리지(다른 사용자의 '내 파일' 등)도 열렸음(목록·다운로드·썸네일은 이미 검사함)
+            if (!$storage->checkPermission((int)($_GET['storage_id'] ?? 0), 'can_read')
+                || !$storage->checkFolderPermission((int)($_GET['storage_id'] ?? 0), $vkDir ?: $vkPath)) {
                 http_response_code(403); header('Content-Type: application/json; charset=utf-8'); echo json_encode(['ok' => false, 'error' => 'perm']); exit;
             }
             $fileManager->videoKeyTimes((int)($_GET['storage_id'] ?? 0), $vkPath);
@@ -6827,7 +7472,8 @@ try {
                 $fileIndex = FileIndex::getInstance();
                 if ($fileIndex->isAvailable()) {
                         $storageId = (int)($input['storage_id'] ?? 0);
-                        $filepath = trim(($input['path'] ?? '') . '/' . ($input['name'] ?? ''), '/');
+                        // ★ (2026-10-29 22:39, 24차 점검) 서버가 정리한 실제 이름($result['name'])으로 — 종전엔 입력 이름('보고서.')으로 넣어 실제 폴더('보고서')와 다른 유령 행이 생겼음(2회차 재검토)
+                        $filepath = trim(($input['path'] ?? '') . '/' . ($result['name'] ?? ($input['name'] ?? '')), '/');
                         $fileIndex->addFile($storageId, $filepath, [
                             'name' => $input['name'] ?? '',
                             'size' => 0,
@@ -6849,7 +7495,8 @@ try {
             $template = $input['template'] ?? '';
             
             // 폴더별 쓰기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $relativePath, 'can_write')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $relativePath, 'can_write')) {
                 $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')]; break;
             }
             
@@ -6862,6 +7509,10 @@ try {
             // 파일명 보안 검사
             if (empty($fileName) || preg_match('/[\\\\\\/:\*\?"<>\|]/', $fileName) || strpos($fileName, '..') !== false || $fileName[0] === '.') {
                 $result = ['success' => false, 'error' => __('invalid_filename', '파일 이름이 잘못되었습니다.')]; break;
+            }
+            // ★ (2026-10-29 23:24, 24차 점검) 서버에서 실행될 수 있는 이름('x.php.hwp' 등) 거부 — 업로드·이름 바꾸기·텍스트 저장·rhwp 다른 이름 저장과 같은 기준(3회차 재검토: 이 경로만 빠졌음)
+            if ($__execReason = fsServerExecReason($fileName . '.' . $template)) {
+                $result = ['success' => false, 'error' => $__execReason]; break;
             }
             
             // 확장자 일치 검사
@@ -6969,6 +7620,8 @@ try {
             }
             
             // 활동 로그 + 인덱스 갱신
+            // ★ (2026-10-29 18:02, 22차 점검) 만든 파일 크기만큼 사용량 반영(위에서 용량 확인은 하는데 반영이 빠져 있었음)
+            if (($result['success'] ?? false) && !empty($_templateSize)) $storage->updateUsedSize($storageId, (int)$_templateSize);
             if ($result['success'] ?? false) {
                 $storageInfo2 = $storage->getStorageById($storageId);
                 $activityLog->log(ActivityLog::TYPE_UPLOAD ?? 'upload', [
@@ -6998,23 +7651,31 @@ try {
             $path = $input['path'] ?? '';
             
             // 빈 경로 삭제 차단 (스토리지 루트 삭제 방지)
-            if (empty($path) || $path === '/' || $path === '\\') {
+            if ((string)$path === '' || $path === '/' || $path === '\\') {   // ★ (2026-10-30 01:55, 26차 점검) 이름이 '0' 인 최상위 항목은 지울 수 있게(종전 empty() 는 '0' 을 빈 값으로 봐 거부)
                 $result = ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
                 break;
             }
             
             // 폴더별 삭제 권한 체크
             { $delDir = dirname($path); if ($delDir === '.') $delDir = '';
-              if (!$storage->checkFolderPermission($storageId, $delDir ?: $path, 'can_delete')) {
+              // ★ (2026-10-28 21:53, 9차 점검, 펜닐 결정 '작업 자체를 거부') 항목 자신 + 그 아래 보호 폴더까지(checkFolderTreePermission) — 종전엔 상위 폴더만 봐서 보호 폴더 자체·그걸 품은 폴더를 지우고·옮기고·복사·공유할 수 있었음(재현)
+              if (!$storage->checkFolderPermission($storageId, $delDir ?: $path, 'can_delete') || !$storage->checkFolderTreePermission($storageId, $path, 'can_delete')) {
                   $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break; }
             }
             
             $storageInfo = $storage->getStorageById($storageId);
             
             // 삭제 전에 폴더인지 확인
-            $realPath = $storage->getRealPath($storageId);
-            $fullPath = $realPath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
-            $wasDir = is_dir($fullPath);
+            // ★ (2026-10-29 18:02, 22차 점검) 원격 스토리지는 어댑터로 판정 — 종전엔 늘 서버 로컬 경로로 봐서 원격 폴더를 파일로 여겨(인덱스의 하위 항목·폴더 규칙이 남음),
+            //   반대로 원격 경로가 우연히 서버의 폴더 이름과 같으면 폴더로 봤음
+            if ($fileManager->isRemoteStorage($storageId)) {
+                $wasDir = false;
+                try { $wdA = $fileManager->getAdapter($storageId); $wasDir = $wdA ? (bool)$wdA->isDir($path) : false; } catch (\Throwable $e) {}
+            } else {
+                $realPath = $storage->getRealPath($storageId);
+                $fullPath = $realPath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
+                $wasDir = is_dir($fullPath);
+            }
             
             session_write_close(); // 세션 락 해제
             $permanent = !empty($input['permanent']);
@@ -7029,7 +7690,9 @@ try {
                 ]);
                 
                 // 삭제된 폴더의 폴더별 권한 레코드 정리
-                if ($wasDir) {
+                // ★ (2026-10-30 01:55, 26차 점검) 영구 삭제일 때만 — 휴지통으로 보낸 것은 복원하면 같은 자리로 돌아오므로 규칙을 남김(종전엔 휴지통 삭제에도 모든 사용자의 규칙을 지워,
+                //   복원한 폴더가 보호 없이 돌아왔음). 화면의 삭제(작업 큐)도 규칙을 지우지 않음
+                if ($wasDir && ($permanent || !empty($result['permanent']))) {   // ★ (2026-10-30 03:03, 26차 재검토) 보관함 폴더는 휴지통 없이 영구 삭제되므로 규칙도 정리
                     $folderPerms = $storage->getAllFolderPermissions($storageId);
                     $cleanPath = trim(str_replace('\\', '/', $path), '/');
                     $changed = false;
@@ -7112,10 +7775,40 @@ try {
                 $result = ['success' => false, 'error' => __('file_edit_admin_only', '이 파일 형식은 관리자만 편집할 수 있습니다.')];
                 break;
             }
-            
+            // ★ (2026-10-28 19:55, 6차 점검) '.user.ini' 는 확장자가 'ini'(편집 허용)라 위 검사를 지나 일반 사용자가 만들 수 있었음 →
+            //   서버 설정 파일 이름(.htaccess/.htpasswd/.user.ini)은 관리자만(이미 있는 'a.php.txt' 같은 텍스트 편집은 종전대로)
+            if (!$auth->isAdminOrSubAdmin() && in_array(rtrim(strtolower(basename(str_replace('\\', '/', explode(':', $path, 2)[0]))), '. '), ['.htaccess', '.htpasswd', '.user.ini'], true)) {
+                $result = ['success' => false, 'error' => __('file_edit_admin_only', '이 파일 형식은 관리자만 편집할 수 있습니다.')];
+                break;
+            }
+            // ★ (2026-10-29 03:19, 16차) 업로드·이름바꾸기와 같은 서버 실행 이름 검사 — 종전엔 없어 'x.php.txt'·'x.phtml.html' 처럼 중간에 실행 확장자를
+            //   넣은 이름을 일반 사용자가 만들 수 있었음(업로드는 거부함). 관리자는 종전처럼 허용
+            if (!$auth->isAdminOrSubAdmin() && ($fts_r = fsServerExecReason(basename(str_replace('\\', '/', $path)))) !== null) {
+                $result = ['success' => false, 'error' => $fts_r];
+                break;
+            }
+            // ★ (2026-10-29 03:19, 16차) 잠긴 파일은 저장으로도 덮어쓸 수 없음 — 종전엔 삭제·이동·이름바꾸기만 막고 텍스트 저장은 그대로 덮어썼음
+            if ($db->find('locked_files', ['storage_id' => $storageId, 'path' => $path])) {
+                $result = ['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')];
+                break;
+            }
+            // 폴더별 쓰기 권한
+            { $ftsDir = dirname(str_replace('\\', '/', $path)); if ($ftsDir === '.') $ftsDir = '';
+              if (!$storage->checkFolderPermission($storageId, $ftsDir ?: $path, 'can_write')) {
+                  $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')]; break; }
+            }
+
+            // ★ (2026-10-29 18:02, 22차 점검) 늘어나는 만큼 용량 확인 + 저장 뒤 사용량 반영 — 종전엔 둘 다 없어 텍스트 저장으로 용량 한도를 넘길 수 있었고 사용량도 안 맞았음
+            $ftsNew = strlen((string)$content);
             if ($fileManager->isRemoteStorage($storageId)) {
                 $adapter = $fileManager->getAdapter($storageId);
+                $ftsOld = 0;
+                try { if ($adapter && $adapter->exists($path) && !$adapter->isDir($path) && method_exists($adapter, 'getSize')) $ftsOld = max(0, (int)$adapter->getSize($path)); } catch (\Throwable $e) {}
+                if ($ftsNew > $ftsOld && empty(($ftsQ = $fileManager->checkQuotaPublic($storageId, $ftsNew - $ftsOld))['allowed'])) {
+                    $result = ['success' => false, 'error' => $ftsQ['error'] ?? __('err_quota_exceeded', '용량이 부족합니다')]; break;
+                }
                 if ($adapter && $adapter->write($path, $content)) {
+                    if ($ftsNew !== $ftsOld) $storage->updateUsedSize($storageId, $ftsNew - $ftsOld);
                     $result = ['success' => true, 'message' => __('file_saved', '파일이 저장되었습니다.')];
                 } else {
                     $result = ['success' => false, 'error' => __('file_save_failed', '파일 저장에 실패했습니다.')];
@@ -7129,11 +7822,18 @@ try {
                 $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path);
                 $dirPath = realpath(dirname($fullPath));
                 $realBase = realpath($basePath);
-                if (!$dirPath || !$realBase || strpos($dirPath, $realBase) !== 0) {
+                // ★ (2026-10-29 03:19, 16차) 구분자 없는 strpos 는 '/base' 와 '/base2' 를 같다고 볼 수 있어 isSubPath 로(다른 곳과 같은 기준)
+                if (!$dirPath || !$realBase || !(isSubPath($dirPath, $realBase) || $dirPath === $realBase)) {
                     $result = ['success' => false, 'error' => __('api_err_path_escape')];
                     break;
                 }
+                clearstatcache(true, $fullPath);
+                $ftsOld = is_file($fullPath) ? (int)filesize($fullPath) : 0;
+                if ($ftsNew > $ftsOld && empty(($ftsQ = $fileManager->checkQuotaPublic($storageId, $ftsNew - $ftsOld))['allowed'])) {
+                    $result = ['success' => false, 'error' => $ftsQ['error'] ?? __('err_quota_exceeded', '용량이 부족합니다')]; break;
+                }
                 if (file_put_contents($fullPath, $content) !== false) {
+                    if ($ftsNew !== $ftsOld) $storage->updateUsedSize($storageId, $ftsNew - $ftsOld);
                     $result = ['success' => true, 'message' => __('file_saved', '파일이 저장되었습니다.')];
                 } else {
                     $result = ['success' => false, 'error' => __('file_save_failed', '파일 저장에 실패했습니다.')];
@@ -7148,7 +7848,9 @@ try {
             $newName = $input['new_name'] ?? '';
             // 폴더별 쓰기 권한 체크
             { $rnDir = dirname($oldPath); if ($rnDir === '.') $rnDir = '';
-              if (!$storage->checkFolderPermission($storageId, $rnDir ?: $oldPath, 'can_write')) {
+              // ★ (2026-10-28 21:53, 9차 점검, 펜닐 결정 '작업 자체를 거부') 항목 자신 + 그 아래 보호 폴더까지(checkFolderTreePermission) — 종전엔 상위 폴더만 봐서 보호 폴더 자체·그걸 품은 폴더를 지우고·옮기고·복사·공유할 수 있었음(재현)
+              //   이름 바꾸기도 — 폴더 이름이 바뀌면 안의 보호 폴더 경로가 달라져 규칙에서 벗어나므로
+              if (!$storage->checkFolderPermission($storageId, $rnDir ?: $oldPath, 'can_write') || !$storage->checkFolderTreePermission($storageId, $oldPath, 'can_write')) {
                   $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break; }
             }
             
@@ -7168,12 +7870,47 @@ try {
                 $fileIndex = FileIndex::getInstance();
                 if ($fileIndex->isAvailable()) {
                         $parentPath = dirname($oldPath);
-                        $newPath = ($parentPath === '.' ? '' : $parentPath . '/') . $newName;
+                        $newPath = ($parentPath === '.' ? '' : $parentPath . '/') . ($result['name'] ?? $newName);   // ★ (2026-10-29 22:39, 24차 점검) 실제 이름(아래 숨김 표시와 같게)
                         $fileIndex->moveFile($storageId, $oldPath, $newPath);
                 }
+                // ★ (2026-10-28) 숨김 표시도 새 이름으로(서버가 정리한 실제 이름 기준)
+                $_hidParent = dirname(str_replace('\\', '/', $oldPath));
+                HiddenItems::movePath($storageId, $oldPath, $storageId, (($_hidParent === '.' || $_hidParent === '') ? '' : $_hidParent . '/') . ($result['name'] ?? $newName), true);   // ★ 새 이름에 남은 옛 표시(밖에서 지운 항목)는 지움
+                try { $storage->moveFolderPermissions($storageId, $oldPath, $storageId, (($_hidParent === '.' || $_hidParent === '') ? '' : $_hidParent . '/') . ($result['name'] ?? $newName)); } catch (\Throwable $e) {}   // ★ (2026-10-30 01:52, 26차 점검) 폴더 권한 규칙도 새 이름으로
             }
             break;
             
+        // ★ (2026-10-28, 펜닐) 파일 속성 '숨김' 켜기/끄기 — 웹하드 자체 표시(실제 파일 속성은 안 바꿈), 그 스토리지를 보는 모든 사용자에게 적용
+        //   (윈도우 숨김 속성처럼 파일에 붙은 표시) → 쓰기 권한 필요. 시스템 파일(Thumbs.db 등)·~$ 임시 파일은 이름으로 숨겨져 해제 대상 아님
+        case 'set_hidden':
+            $auth->requireLogin();
+            $storageId = (int)($input['storage_id'] ?? 0);
+            $paths = $input['paths'] ?? (isset($input['path']) ? [$input['path']] : []);
+            $hiddenOn = filter_var($input['hidden'] ?? false, FILTER_VALIDATE_BOOLEAN);
+            if (!is_array($paths) || !$paths || count($paths) > 1000) {
+                $result = ['success' => false, 'error' => __('api_err_invalid_param', '잘못된 요청입니다.')]; break;
+            }
+            if (!$storage->checkPermission($storageId, 'can_write')) {
+                $result = ['success' => false, 'error' => __('api_err_no_write_perm', '쓰기 권한이 없습니다.')]; break;
+            }
+            $okPaths = []; $denied = 0; $_shMissing = false;
+            // ★ (2026-10-28) 숨길 때 로컬 스토리지는 실제로 있는 항목만(없는 경로를 미리 숨겨 두지 못하게) — 해제는 옛 표시 정리도 되게 그대로, 원격은 확인 비용이 커서 그대로
+            $_shBase = (!$hiddenOn || $fileManager->isRemoteStorage($storageId)) ? null : $storage->getRealPath($storageId);
+            foreach ($paths as $p) {
+                if (!is_string($p) && !is_int($p)) { $denied++; continue; }   // 배열 등이 오면 경고 없이 건너뜀
+                $p = HiddenItems::norm((string)$p);
+                if ($p === '') { $denied++; continue; }
+                if ($_shBase !== null && !file_exists($_shBase . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $p))) { $denied++; $_shMissing = true; continue; }
+                $pd = dirname($p); if ($pd === '.') $pd = '';
+                if (!$storage->checkFolderPermission($storageId, $pd ?: $p, 'can_write')) { $denied++; continue; }
+                $okPaths[] = $p;
+            }
+            if (!$okPaths) { $result = ['success' => false, 'error' => $_shMissing ? __('file_not_found', '파일을 찾을 수 없습니다.') : __('no_permission_dot', '권한이 없습니다.')]; break; }
+            $saved = HiddenItems::set($storageId, $okPaths, $hiddenOn);
+            $result = $saved ? ['success' => true, 'count' => count($okPaths), 'denied' => $denied, 'hidden' => $hiddenOn]
+                             : ['success' => false, 'error' => __('nt_hidden_save_failed', '숨김 설정을 저장하지 못했습니다.')];
+            break;
+
         case 'move':
             $auth->requireLogin();
             $storageId = (int)($input['storage_id'] ?? 0);
@@ -7182,17 +7919,29 @@ try {
             $dest = $input['dest'] ?? '';
             
             // 폴더별 권한 체크 (소스: 읽기, 대상: 쓰기)
+            // ★ (2026-10-28 20:42, 7차 점검, 펜닐 결정) 이동은 원본 폴더 쓰기도 필요 — 종전엔 읽기만 봐서 쓰기·삭제를 막은 폴더의 파일을 이동으로 빼낼 수 있었음
             $srcDir = dirname($source); if ($srcDir === '.') $srcDir = '';
             if (!$storage->checkFolderPermission($storageId, $srcDir ?: $source, 'can_read')
-                || !$storage->checkFolderPermission($destStorageId, $dest, 'can_write')) {
+                || !$storage->checkFolderPermission($storageId, $srcDir ?: $source, 'can_write')
+                || !$storage->checkFolderPermission($storageId, $srcDir ?: $source, 'can_delete')   // ★ (2026-10-28 21:19, 8차 점검, 펜닐 결정) 이동 = 원본에서 없어짐 → 삭제 권한도(삭제와 같은 기준)
+                || !$storage->checkFolderPermission($destStorageId, $dest, 'can_write')
+                // ★ (2026-10-28 21:53, 9차 점검, 펜닐 결정 '작업 자체를 거부') 항목 자신 + 그 아래 보호 폴더까지(checkFolderTreePermission) — 종전엔 상위 폴더만 봐서 보호 폴더 자체·그걸 품은 폴더를 지우고·옮기고·복사·공유할 수 있었음(재현)
+                || !$storage->checkFolderTreePermission($storageId, $source, 'can_read')
+                || !$storage->checkFolderTreePermission($storageId, $source, 'can_write')
+                || !$storage->checkFolderTreePermission($storageId, $source, 'can_delete')) {
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
             }
             
             session_write_close(); // 세션 락 해제 (진행률 폴링 블로킹 방지)
+            // ★ (2026-10-29 23:40, 24차 점검) 원본이 로컬 폴더인지 미리 봐 둠(원격 대상은 옮긴 뒤 로컬로 확인할 수 없어 인덱스에 '파일'로 들어갔음 — 5회차 재검토)
+            $_mvSrcBase = $storage->getRealPath($storageId);
+            $_mvSrcWasDir = $_mvSrcBase && is_dir(rtrim($_mvSrcBase, '/\\') . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, trim((string)$source, '/\\')));
             $result = $fileManager->move($storageId, $source, $destStorageId, $dest, $input['duplicate_action'] ?? 'overwrite');
             
-            if ($result['success'] ?? false) {
+            // ★ (2026-10-28, 펜닐 승인) 같은 이름이 있어 '건너뛰기'면 아무것도 안 옮겼으니 활동 기록·인덱스 갱신도 안 함
+            //   (종전엔 다른 스토리지로 건너뛰면 원본이 그대로인데 인덱스에서 빠져 검색에 안 나왔음)
+            if (($result['success'] ?? false) && empty($result['skipped'])) {
                 $storageInfo = $storage->getStorageById($storageId);
                 $destStorageInfo = $storage->getStorageById($destStorageId);
                 $activityLog->log(ActivityLog::TYPE_MOVE, [
@@ -7206,19 +7955,24 @@ try {
                 // 인덱스 갱신
                 $fileIndex = FileIndex::getInstance();
                 if ($fileIndex->isAvailable()) {
-                        $newPath = trim($dest . '/' . basename($source), '/');
+                        // ★ (2026-10-28) 같은 이름이 있어 '이름 변경'으로 옮겨졌으면 실제 놓인 이름(move() 의 name) — 종전엔 원래 이름으로 인덱스에 넣어 검색 결과가 엉뚱한 파일을 가리켰음
+                        $newPath = trim($dest . '/' . ($result['name'] ?? ($result['filename'] ?? basename($source))), '/');   // 원격이 끼는 이동은 filename
                         // 다른 스토리지로 이동 시 인덱스 처리
                         if ($storageId !== $destStorageId) {
-                            $fileIndex->removeFile($storageId, $source);
+                            $fileIndex->removeFolder($storageId, trim(str_replace('\\', '/', $source), '/'));   // ★ (2026-10-29 22:06, 24차 점검) 폴더면 하위 항목까지(종전 removeFile 은 폴더 행 하나만 지워 하위가 유령으로 남았음)
                             // 파일 정보 수집
                             $destBasePath = $storage->getRealPath($destStorageId);
                             $fullNewPath = $destBasePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $newPath);
+                            // ★ (2026-10-28) 원격 스토리지는 로컬 경로가 없어(빈 문자열) '/폴더/이름' 같은 서버 루트 경로를 보게 됨 → 로컬 경로가 있고 실제로 있을 때만 읽고, 아니면 종전과 같은 기본값(0·지금)
+                            $_mvExists = $destBasePath && file_exists($fullNewPath);
                             $fileInfo = [
-                                'is_dir' => is_dir($fullNewPath) ? 1 : 0,
-                                'size' => is_file($fullNewPath) ? filesize($fullNewPath) : 0,
-                                'modified' => date('Y-m-d H:i:s', filemtime($fullNewPath) ?: time())
+                                'is_dir' => (($_mvExists && is_dir($fullNewPath)) || (!$destBasePath && $_mvSrcWasDir)) ? 1 : 0,   // ★ (2026-10-29 23:40, 24차 점검) 원격 대상이면 원본 종류로
+                                'size' => ($_mvExists && is_file($fullNewPath)) ? filesize($fullNewPath) : 0,
+                                'modified' => date('Y-m-d H:i:s', ($_mvExists ? filemtime($fullNewPath) : 0) ?: time())
                             ];
-                            $fileIndex->addFile($destStorageId, $newPath, $fileInfo);
+                            if ($fileInfo['is_dir'] && $destBasePath) $fileIndex->indexFolder($destStorageId, $destBasePath, $newPath);
+                            elseif ($fileInfo['is_dir']) $fileIndex->addFile($destStorageId, $newPath, $fileInfo);   // ★ (2026-10-29 23:40, 24차 점검) 원격 대상 폴더는 폴더 행만(하위는 다음 동기화)   // ★ (2026-10-29 22:06, 24차 점검) 폴더는 하위까지 색인(복사·작업 큐와 같게) — 종전 addFile 은 폴더 행만 넣어 하위가 검색에 안 나왔음
+                            else $fileIndex->addFile($destStorageId, $newPath, $fileInfo);
                         } else {
                             $fileIndex->moveFile($storageId, $source, $newPath);
                         }
@@ -7254,6 +8008,9 @@ try {
                 $archiveSize = @filesize($archiveFullPath) ?: 0;
             } else {
             // 일반 모드
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 읽기 권한 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지 압축 목록이 보였음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break; }
             { $zlDir = dirname($path); if ($zlDir === '.') $zlDir = '';
               if (!$storage->checkFolderPermission($storageId, $zlDir ?: $path)) {
                   $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break; }
@@ -7284,11 +8041,13 @@ try {
                 }
             }
             // 경로 트래버설 방지
-            $normalBase = str_replace('\\', '/', realpath($basePath) ?: $basePath);
-            $normalArchive = str_replace('\\', '/', $archiveRealPath);
-            if (strpos($normalArchive, $normalBase) !== 0) {
+            // ★ (2026-10-29 09:14, 20차) 앞부분 문자열 비교(strpos)는 'users/kim' 과 'users/kim2' 를 구분하지 못했음 → 들어 있는 폴더의 실제 경로를 isSubPath 로
+            $alRealBase = realpath($basePath);
+            $alRealDir = realpath(dirname($archiveRealPath));
+            if (!$alRealBase || !$alRealDir || !\isSubPath($alRealDir, $alRealBase)) {
                 $result = ['success' => false, 'error' => 'Invalid path']; break;
             }
+            $archiveRealPath = $alRealDir . DIRECTORY_SEPARATOR . basename($archiveRealPath);
             // 디렉토리가 아닌지 확인 (파일인지)
             if (is_dir($archiveRealPath)) {
                 $result = ['success' => false, 'error' => 'Not a file']; break;
@@ -7795,6 +8554,8 @@ try {
             } else {
                 // 일반 모드
                 if (!$storageId) { http_response_code(400); exit; }
+                // ★ (2026-10-28 19:55, 6차 점검) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서 남의 홈 스토리지 압축 안 이미지가 열렸음(재현)
+                if (!$storage->checkPermission($storageId, 'can_read')) { http_response_code(403); exit; }
                 
                 // 폴더별 읽기 권한 체크
                 { $apDir = dirname($path); if ($apDir === '.') $apDir = '';
@@ -7817,6 +8578,12 @@ try {
                     }
                 }
                 if (!$archiveReal) { http_response_code(404); exit; }
+                // ★ (2026-10-29 09:14, 20차) 스토리지 안의 파일인지 — 종전엔 실제 경로가 스토리지 기준 폴더 밖이어도 검사하지 않았음.
+                //   (이 action 은 path 를 주소에서 읽는데, 앞단의 '..' 차단은 POST 요청이면 주소 값을 보지 않음) 들어 있는 폴더의 실제 경로로 확인
+                $apRealBase = realpath($basePath);
+                $apRealDir = realpath(dirname($archiveReal));
+                if (!$apRealBase || !$apRealDir || !\isSubPath($apRealDir, $apRealBase)) { http_response_code(403); exit; }
+                $archiveReal = $apRealDir . DIRECTORY_SEPARATOR . basename($archiveReal);
             }
             
             // 이미지 확장자 체크
@@ -8142,8 +8909,20 @@ try {
             $auth->requireLogin();
             $storageId = (int)($input['storage_id'] ?? 0);
             $path = $input['path'] ?? '';
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서(폴더 규칙이 없으면 늘 통과) 읽기 권한이 없는 스토리지(다른 사용자의 '내 파일' 등)도 열렸음(목록·다운로드·썸네일은 이미 검사함)
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                $result = ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')];
+                break;
+            }
             
+            // ★ (2026-10-29 23:24, 24차 점검) 폴더 권한도(archive_list·archive_preview 와 같게), 기준 경로가 비면(원격) 판정하지 않음(realpath('') = 앱 폴더)
+            $acpDir = dirname(str_replace('\\', '/', (string)$path)); if ($acpDir === '.' || $acpDir === '/') $acpDir = '';
+            if (!$storage->checkFolderPermission($storageId, $acpDir, 'can_read')) {
+                $result = ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')];
+                break;
+            }
             $basePath = $storage->getRealPath($storageId);
+            if (!$basePath) { $result = ['success' => true, 'encrypted' => false]; break; }
             $fullPath = rtrim($basePath, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . ltrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $path), DIRECTORY_SEPARATOR);
             $realBase = realpath($basePath);
             $realTarget = realpath($fullPath);
@@ -8195,6 +8974,13 @@ try {
                   $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')]; break; }
             }
             
+            // ★ (2026-10-28 22:39, 10차 점검) 풀 곳(dest)을 따로 주면 그 폴더의 쓰기 권한도 — 종전엔 압축 파일이 있는 폴더만 봐서 쓰기를 막은 폴더 안으로 풀렸음(재현)
+            $exDest = trim(str_replace('\\', '/', (string)($input['dest'] ?? '')), '/');
+            //   ★ (2026-10-28 23:26, 11차 점검) 그 폴더가 이미 있으면 옆에 '폴더 (2)' 를 새로 만들어 풀므로(또는 없으면 상위에 새로 만듦) 상위 폴더 쓰기도 — 종전엔 dest 만 봐서 쓰기 금지 폴더 안에 새 폴더가 생겼음(재현)
+            $exDestParent = dirname($exDest); if ($exDestParent === '.') $exDestParent = '';
+            if ($exDest !== '' && (!$storage->checkFolderPermission($storageId, $exDest, 'can_write') || !$storage->checkFolderPermission($storageId, $exDestParent, 'can_write'))) {
+                $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')]; break;
+            }
             $extractMode = ($input['mode'] ?? 'folder') === 'here' ? 'here' : 'folder';
             $result = $fileManager->extractZip($storageId, $path, $input['dest'] ?? '', null, $input['password'] ?? '', $extractMode);
             
@@ -8212,7 +8998,9 @@ try {
                 $fileIndex = FileIndex::getInstance();
                 if ($fileIndex->isAvailable() && !empty($result['extracted_to'])) {
                     $basePath = $storage->getRealPath($storageId);
-                    $fileIndex->indexFolder($storageId, $basePath, $result['extracted_to']);
+                    // ★ (2026-10-29 21:48, 24차 점검) 실제 풀린 폴더(path, 스토리지 기준)로 — 종전 extracted_to 는 화면용 이름이라 하위 폴더·'여기에 풀기'에서 인덱스가 안 갱신됐음
+                    $ixRel = (string)($result['path'] ?? $result['extracted_to']);
+                    if ($ixRel !== '') $fileIndex->indexFolder($storageId, $basePath, $ixRel);   // 스토리지 맨 위 '여기에 풀기'는 전체 재색인이 무거워 종전대로 건너뜀
                 }
             }
             break;
@@ -8283,7 +9071,9 @@ try {
                 $fileIndex = FileIndex::getInstance();
                 if ($fileIndex->isAvailable() && !empty($result['extracted_to'])) {
                     $basePath = $storage->getRealPath($storageId);
-                    $fileIndex->indexFolder($storageId, $basePath, $result['extracted_to']);
+                    // ★ (2026-10-29 21:48, 24차 점검) 실제 풀린 폴더(path, 스토리지 기준)로 — 종전 extracted_to 는 화면용 이름이라 하위 폴더·'여기에 풀기'에서 인덱스가 안 갱신됐음
+                    $ixRel = (string)($result['path'] ?? $result['extracted_to']);
+                    if ($ixRel !== '') $fileIndex->indexFolder($storageId, $basePath, $ixRel);   // 스토리지 맨 위 '여기에 풀기'는 전체 재색인이 무거워 종전대로 건너뜀
                 }
             }
             exit;
@@ -8297,6 +9087,10 @@ try {
             $zipPassword = $input['password'] ?? '';
             $splitSizeMB = (int)($input['split_size'] ?? 0);
             
+            // ★ (2026-10-28 21:19, 8차 점검) 형식 확인(배열·문자열 항목) — 종전엔 형식이 이상하면 형식 오류로 서버 오류 문구가 나갔음
+            if (!is_array($paths) || (!empty($paths) && !is_string($paths[0] ?? null))) {
+                $result = ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')]; break;
+            }
             // 폴더별 읽기 권한 체크 (첫 번째 파일의 디렉토리 기준)
             if (!empty($paths)) {
                 $cmpDir = dirname($paths[0]); if ($cmpDir === '.') $cmpDir = '';
@@ -8357,6 +9151,10 @@ try {
             $storageId = (int)($_GET['storage_id'] ?? 0);
             $paths = isset($_GET['paths']) ? json_decode($_GET['paths'], true) : [];
             $zipName = $_GET['zip_name'] ?? '';
+            // ★ (2026-10-28 21:19, 8차 점검) 형식 확인(배열·문자열 항목)
+            if (!is_array($paths) || (!empty($paths) && !is_string($paths[0] ?? null))) {
+                echo "data: " . json_encode(['type' => 'error', 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')]) . "\n\n"; flush(); exit;
+            }
             
             // 폴더별 읽기 권한 체크
             if (!empty($paths)) {
@@ -8412,10 +9210,13 @@ try {
                 if (!empty($result['zip_name'])) {
                     $fileIndex = FileIndex::getInstance();
                     if ($fileIndex->isAvailable()) {
-                        $zipPath = $result['zip_name'];
+                        // ★ (2026-10-29 11:03, 20차 점검) zip 은 첫 항목이 든 폴더에 만들어짐(createZip) — 종전엔 이름만 써서 맨 위 경로·크기 0 으로 인덱스에 들어갔음(재현).
+                        //   실제로 있는 파일만 넣음(분할 압축은 이름이 달라 건너뜀)
+                        $_czDir = dirname(str_replace('\\', '/', (string)($paths[0] ?? ''))); if ($_czDir === '.' || $_czDir === '/') $_czDir = '';
+                        $zipPath = ($_czDir !== '' ? $_czDir . '/' : '') . $result['zip_name'];
                         $basePath = $storage->getRealPath($storageId);
                         $fullZipPath = $basePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $zipPath);
-                        $fileIndex->addFile($storageId, $zipPath, [
+                        if (is_file($fullZipPath)) $fileIndex->addFile($storageId, $zipPath, [
                             'name' => $result['zip_name'],
                             'size' => file_exists($fullZipPath) ? filesize($fullZipPath) : 0,
                             'modified' => time(),
@@ -8448,9 +9249,12 @@ try {
             $zipPassword = $_GET['password'] ?? '';
             
             // 폴더별 읽기 권한 체크
-            if (!empty($paths)) {
+            // ★ (2026-10-28 21:19, 8차 점검) 형식이 이상하면(배열 아님·첫 항목이 문자열 아님) 여기선 건너뛰고 아래 항목별 검사에서 거부 —
+            //   종전엔 $paths[0] 을 그대로 써 형식 오류(TypeError)가 나며 서버 경로가 담긴 오류 문구가 나갔음(재현)
+            if (!empty($paths) && is_array($paths) && is_string($paths[0] ?? null)) {
                 $mdDir = dirname($paths[0]); if ($mdDir === '.') $mdDir = '';
-                if (!$storage->checkFolderPermission($storageId, $mdDir ?: $paths[0], 'can_read')) {
+                // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+                if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, $mdDir ?: $paths[0], 'can_read')) {
                     echo "data: " . json_encode(['type' => 'error', 'error' => __('no_permission_dot', '권한이 없습니다.')]) . "\n\n"; flush(); exit;
                 }
             }
@@ -8466,6 +9270,32 @@ try {
             
             $basePath = $storage->getRealPath($storageId);
             
+            // ★ (2026-10-28 20:42, 7차 점검) 항목마다 ① 스토리지 안인지(실제 경로) ② 폴더 권한 ③ 내려받기 권한 — 종전엔 첫 항목의 폴더 권한만 보고
+            //   경로를 그대로 이어 붙여, JSON 의 \u002e 표기로 '..' 필터를 피하면 data/users.json 같은 스토리지 밖 파일까지 ZIP 으로 받을 수 있었음(재현)
+            $mdRealBase = $basePath ? realpath($basePath) : false;
+            if (!is_array($paths) || $mdRealBase === false || !$storage->checkPermission($storageId, 'can_download')) {
+                echo "data: " . json_encode(['type' => 'error', 'error' => __('no_permission_dot', '권한이 없습니다.')]) . "\n\n"; flush(); exit;
+            }
+            $mdSafe = [];
+            foreach ($paths as $mdRp) {
+                if (!is_string($mdRp)) continue;
+                $mdN = trim(str_replace('\\', '/', $mdRp), '/');
+                if (!fsZipPathInside($basePath, $mdRealBase, $mdN)) {
+                    echo "data: " . json_encode(['type' => 'error', 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')]) . "\n\n"; flush(); exit;
+                }
+                $mdD = dirname($mdN); if ($mdD === '.') $mdD = '';
+                // ★ (2026-10-28 21:19, 8차 점검) 항목 자신도 확인 — 막힌 폴더를 둘째 항목으로 고르면 상위 폴더 권한만 보고 통과했음(안의 파일은 빠졌지만 빈 폴더가 들어감)
+                if (!$storage->checkFolderPermission($storageId, $mdD ?: $mdN, 'can_read') || ($mdN !== '' && !$storage->checkFolderPermission($storageId, $mdN, 'can_read'))) {
+                    echo "data: " . json_encode(['type' => 'error', 'error' => __('no_permission_dot', '권한이 없습니다.')]) . "\n\n"; flush(); exit;
+                }
+                $mdSafe[] = $mdN;
+            }
+            $paths = $mdSafe;
+            if (empty($paths)) {
+                echo "data: " . json_encode(['type' => 'error', 'error' => __('api_err_no_download_items', '다운로드할 항목이 없습니다.')]) . "\n\n"; flush(); exit;
+            }
+            $mdHasRules = !empty($storage->getFolderPermissions($storageId));
+            
             // ZIP 파일명 결정
             if (empty($zipName)) {
                 if (count($paths) === 1) {
@@ -8476,6 +9306,12 @@ try {
             }
             
             $tempId = uniqid('multi_download_');
+            // ★ (2026-10-29 11:04, 20차 점검) 하루 지난 묶음 받기 임시 zip 정리 — 받기를 취소하거나 중간에 끊기면 지울 곳이 없어 시스템 임시 폴더에 계속 쌓였음
+            foreach (['multi_download_', 'folder_download_'] as $_tzPre) {
+                foreach ((glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . $_tzPre . '*.zip') ?: []) as $_tzOld) {
+                    if ((int)@filemtime($_tzOld) < time() - 86400) @unlink($_tzOld);
+                }
+            }
             $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . $tempId . '.zip';
             
             // 파일 목록 수집
@@ -8493,9 +9329,11 @@ try {
                     );
                     
                     foreach ($iterator as $file) {
+                        // ★ (2026-10-28 20:42, 7차 점검) 폴더 안에서 폴더 권한으로 막힌 하위 항목은 뺌(종전엔 통째로 들어갔음, 재현)
+                        if ($mdHasRules && !fsZipEntryAllowed($storage, $storageId, $relativePath . '/' . str_replace('\\', '/', $iterator->getSubPathname()), $file->isDir())) continue;
                         $fileList[] = [
                             'full' => $file->getPathname(),
-                            'relative' => $folderName . DIRECTORY_SEPARATOR . $iterator->getSubPathname(),
+                            'relative' => str_replace('\\', '/', $folderName . '/' . $iterator->getSubPathname()),   // ★ (2026-10-30 02:05, 26차 점검) ZIP 항목 이름은 '/' 로(규격) — Windows 에선 '\\' 가 들어가 macOS·리눅스·아이폰에서 '폴더\\파일' 이름의 파일 하나로 풀렸음
                             'isDir' => $file->isDir()
                         ];
                     }
@@ -8583,6 +9421,10 @@ try {
                             $zip->addFile($item['full'], $item['relative']);
                             $zip->setCompressionName($item['relative'], ZipArchive::CM_STORE);
                         }
+                        // ★ (2026-10-29 09:53, 20차 점검) 암호화 적용 — 종전엔 setPassword 만 해서 암호를 넣어도 zip 이 암호 없이 만들어졌음(재현). 폴더 받기 스트림과 같은 방식
+                        if (!empty($zipPassword)) {
+                            $zip->setEncryptionName($item['relative'], ZipArchive::EM_AES_256);
+                        }
                     }
                     
                     // 진행률 업데이트
@@ -8664,12 +9506,20 @@ try {
             $zipPassword = $_GET['password'] ?? '';
             
             // 폴더별 읽기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $folderPath, 'can_read')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, $folderPath, 'can_read')) {
                 echo "data: " . json_encode(['type' => 'error', 'error' => __('no_permission_dot', '권한이 없습니다.')]) . "\n\n"; flush(); exit;
             }
             
             // 폴더 정보 확인
             $basePath = $storage->getRealPath($storageId);
+            // ★ (2026-10-28 20:42, 7차 점검) 스토리지 안인지(실제 경로)·내려받기 권한 확인 — 종전엔 경로를 그대로 이어 붙였음(여러 항목 ZIP 과 같은 기준)
+            $fdRealBase = $basePath ? realpath($basePath) : false;
+            $folderPath = trim(str_replace('\\', '/', (string)$folderPath), '/');
+            if ($fdRealBase === false || !$storage->checkPermission($storageId, 'can_download') || !fsZipPathInside($basePath, $fdRealBase, $folderPath)) {
+                echo "data: " . json_encode(['type' => 'error', 'error' => __('no_permission_dot', '권한이 없습니다.')]) . "\n\n"; flush(); exit;
+            }
+            $fdHasRules = !empty($storage->getFolderPermissions($storageId));
             $fullPath = $basePath . DIRECTORY_SEPARATOR . ltrim($folderPath, '/\\');
             
             if (!is_dir($fullPath)) {
@@ -8684,6 +9534,12 @@ try {
             $folderName = basename($fullPath);
             $zipName = !empty($_GET['zip_name']) ? basename($_GET['zip_name']) : $folderName . '.zip';
             $tempId = uniqid('folder_download_');
+            // ★ (2026-10-29 11:04, 20차 점검) 하루 지난 묶음 받기 임시 zip 정리 — 받기를 취소하거나 중간에 끊기면 지울 곳이 없어 시스템 임시 폴더에 계속 쌓였음
+            foreach (['multi_download_', 'folder_download_'] as $_tzPre) {
+                foreach ((glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . $_tzPre . '*.zip') ?: []) as $_tzOld) {
+                    if ((int)@filemtime($_tzOld) < time() - 86400) @unlink($_tzOld);
+                }
+            }
             $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . $tempId . '.zip';
             
             // 파일 목록 수집
@@ -8694,7 +9550,9 @@ try {
             );
             
             foreach ($iterator as $file) {
-                $relativePath = $folderName . DIRECTORY_SEPARATOR . $iterator->getSubPathname();
+                // ★ (2026-10-28 20:42, 7차 점검) 폴더 권한으로 막힌 하위 항목은 뺌(종전엔 통째로 들어갔음, 재현)
+                if ($fdHasRules && !fsZipEntryAllowed($storage, $storageId, ($folderPath !== '' ? $folderPath . '/' : '') . str_replace('\\', '/', $iterator->getSubPathname()), $file->isDir())) continue;
+                $relativePath = str_replace('\\', '/', $folderName . '/' . $iterator->getSubPathname());   // ★ (2026-10-30 02:05, 26차 점검) ZIP 항목 이름은 '/' 로(규격) — Windows 에선 '\\' 가 들어가 macOS·리눅스·아이폰에서 '폴더\\파일' 이름의 파일 하나로 풀렸음
                 $fileList[] = [
                     'full' => $file->getPathname(),
                     'relative' => $relativePath,
@@ -8890,15 +9748,20 @@ try {
             
             // 폴더별 권한 체크 (소스: 읽기, 대상: 쓰기)
             { $cpSrcDir = dirname($source); if ($cpSrcDir === '.') $cpSrcDir = '';
+              // ★ (2026-10-28 21:53, 9차 점검, 펜닐 결정 '작업 자체를 거부') 항목 자신 + 그 아래 보호 폴더까지(checkFolderTreePermission) — 종전엔 상위 폴더만 봐서 보호 폴더 자체·그걸 품은 폴더를 지우고·옮기고·복사·공유할 수 있었음(재현)
               if (!$storage->checkFolderPermission($storageId, $cpSrcDir ?: $source, 'can_read')
+                  || !$storage->checkFolderTreePermission($storageId, $source, 'can_read')
                   || !$storage->checkFolderPermission($destStorageId, $dest, 'can_write')) {
                   $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break; }
             }
             
             session_write_close(); // 세션 락 해제 (진행률 폴링 블로킹 방지)
+            $_cpSrcBase = $storage->getRealPath($storageId);   // ★ (2026-10-29 23:40, 24차 점검) 원본이 로컬 폴더인지(위 move 와 같음)
+            $_cpSrcWasDir = $_cpSrcBase && is_dir(rtrim($_cpSrcBase, '/\\') . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, trim((string)$source, '/\\')));
             $result = $fileManager->copy($storageId, $source, $destStorageId, $dest, $input['duplicate_action'] ?? 'overwrite');
             
-            if ($result['success'] ?? false) {
+            // ★ (2026-10-28, 펜닐 승인) 건너뜀이면 활동 기록·인덱스 갱신 안 함(move 와 같음)
+            if (($result['success'] ?? false) && empty($result['skipped'])) {
                 $storageInfo = $storage->getStorageById($storageId);
                 $destStorageInfo = $storage->getStorageById($destStorageId);
                 $activityLog->log(ActivityLog::TYPE_COPY, [
@@ -8913,17 +9776,21 @@ try {
                 $fileIndex = FileIndex::getInstance();
                 if ($fileIndex->isAvailable()) {
                         $destBasePath = $storage->getRealPath($destStorageId);
-                        $newPath = trim($dest . '/' . basename($source), '/');
+                        // ★ (2026-10-28) 실제로 놓인 이름(copy() 의 name — '이름 변경'이면 x (2).txt), 원격이 끼면 filename
+                        $_cpName = (string)($result['name'] ?? ($result['filename'] ?? basename($source)));
+                        $newPath = trim($dest . '/' . $_cpName, '/');
                         $fullPath = $destBasePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $newPath);
-                        if (is_dir($fullPath)) {
+                        if ($destBasePath && is_dir($fullPath)) {
                             // 폴더 복사: 하위 전체 인덱싱
                             $fileIndex->indexFolder($destStorageId, $destBasePath, $newPath);
                         } else {
+                            // ★ (2026-10-28) 원격 스토리지는 로컬 경로가 없어(빈 문자열) 서버 루트 경로(예 /tmp)를 보게 됨 — 폴더면 그 로컬 폴더를 원격 스토리지 인덱스에 넣을 수 있었음 → 로컬 경로가 있을 때만 읽고, 아니면 종전과 같은 기본값(0·지금)
+                            $_cpExists = $destBasePath && is_file($fullPath);
                             $fileIndex->addFile($destStorageId, $newPath, [
-                                'name' => basename($source),
-                                'size' => filesize($fullPath) ?: 0,
-                                'modified' => filemtime($fullPath) ?: time(),
-                                'is_dir' => false
+                                'name' => $_cpName,
+                                'size' => $_cpExists ? (filesize($fullPath) ?: 0) : 0,
+                                'modified' => $_cpExists ? (filemtime($fullPath) ?: time()) : time(),
+                                'is_dir' => (!$destBasePath && $_cpSrcWasDir) ? 1 : 0   // ★ (2026-10-29 23:40, 24차 점검) 원격 대상이면 원본 종류로(종전엔 폴더도 '파일'로)
                             ]);
                         }
                 }
@@ -8968,10 +9835,16 @@ try {
             $totalFiles = 0;
             $totalSize = 0;
             $itemDetails = [];
-            $basePath = $storage->getRealPath($storageId);
-            if ($basePath && is_array($paths)) {
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 읽기 권한 + 스토리지 안 경로만(realpath) — 종전엔 둘 다 없어 스토리지 밖 폴더까지 셀 수 있었음
+            $basePath = $storage->checkPermission($storageId, 'can_read') ? $storage->getRealPath($storageId) : '';
+            $realCountBase = $basePath ? realpath($basePath) : false;
+            if ($basePath && $realCountBase && is_array($paths)) {
                 foreach ($paths as $p) {
+                    if (!is_string($p)) continue;
+                    if (!$storage->checkFolderPermission($storageId, $p, 'can_read')) continue;   // ★ (2026-10-29 18:02, 22차 점검) 읽기 막힌 폴더는 개수·크기도 안 셈(종전엔 폴더 규칙을 안 봤음)
                     $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $p);
+                    $realCountPath = realpath($fullPath);
+                    if ($realCountPath === false || !\isSubPath($realCountPath, $realCountBase)) continue;
                     if (is_dir($fullPath)) {
                         $fc = $fileManager->countAllFiles($fullPath);
                         $sz = $fileManager->getDirectorySize($fullPath);
@@ -8997,12 +9870,21 @@ try {
                 $_GET['query'] ?? '',
                 $_GET['path'] ?? ''
             );
+            // ★ (2026-10-28, 펜닐 승인) 옛 검색 API(지금 화면에선 안 씀) — 폴더 권한·숨김 필터가 없어 직접 부르면 읽기 금지 폴더 안 파일·숨긴 항목이 보였음
+            //   → search_advanced 와 같은 기준으로 걸러냄(show_hidden=1 이면 숨김은 hidden 표시만)
+            if (!empty($result['success']) && isset($result['results']) && is_array($result['results'])) {
+                $result['results'] = _fsFilterSearchResults($storage, $result['results'], (int)($_GET['storage_id'] ?? 0), !empty($_GET['show_hidden']));
+            }
             break;
         
         case 'search_all':
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제
             $result = $fileManager->searchAll($_GET['query'] ?? '');
+            // ★ (2026-10-28) 위 search 와 같은 이유로 폴더 권한·숨김 필터
+            if (!empty($result['success']) && isset($result['results']) && is_array($result['results'])) {
+                $result['results'] = _fsFilterSearchResults($storage, $result['results'], 0, !empty($_GET['show_hidden']));
+            }
             break;
         
         // ===== 검색 인덱스 =====
@@ -9498,6 +10380,15 @@ try {
                 (int)($_GET['storage_id'] ?? 0),
                 $_GET['path'] ?? ''
             );
+            // ★ (2026-10-28, 펜닐) 속성 창 '숨김' 체크 — 지금 숨김인지, 시스템 파일(이름으로 항상 숨김)인지, 바꿀 수 있는지(쓰기 권한)
+            if (($result['success'] ?? false) && isset($result['info']) && is_array($result['info'])) {
+                $_diSid = (int)($_GET['storage_id'] ?? 0);
+                $_diName = basename(str_replace('\\', '/', $_diPath));
+                $result['info']['hidden_system'] = HiddenItems::isSystemName($_diName);
+                $result['info']['hidden'] = $result['info']['hidden_system'] || HiddenItems::isUserHidden($_diSid, $_diPath);
+                $result['info']['can_hide'] = !$result['info']['hidden_system'] && $storage->checkPermission($_diSid, 'can_write')
+                    && $storage->checkFolderPermission($_diSid, $_diDir ?: $_diPath, 'can_write');
+            }
             break;
         
         // ===== 드래그앤드롭 =====
@@ -9509,19 +10400,63 @@ try {
             if (!$storage->checkFolderPermission($ddSid, $ddDest, 'can_write')) {
                 $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')]; break;
             }
+            // ★ (2026-10-28 20:42, 7차 점검) 원본 폴더 권한 — 종전엔 원본 쪽 폴더 권한을 전혀 안 봐서 읽기를 막은 폴더도 끌어다 복사·이동됐음.
+            //   복사는 원본 읽기, 이동은 원본 읽기+쓰기+삭제(직접 이동과 같은 기준, 펜닐 결정 — 8차에 삭제 추가)
+            {
+                $ddMove = ($input['action'] ?? 'move') !== 'copy';
+                $ddDeny = false;
+                foreach ((is_array($input['sources'] ?? null) ? $input['sources'] : []) as $ddSrc) {
+                    $ddP = is_array($ddSrc) ? (string)($ddSrc['path'] ?? '') : (string)$ddSrc;
+                    $ddD = dirname(str_replace('\\', '/', $ddP)); if ($ddD === '.') $ddD = '';
+                    if (!$storage->checkFolderPermission($ddSid, $ddD ?: $ddP, 'can_read') || ($ddMove && (!$storage->checkFolderPermission($ddSid, $ddD ?: $ddP, 'can_write') || !$storage->checkFolderPermission($ddSid, $ddD ?: $ddP, 'can_delete')))) { $ddDeny = true; break; }
+                    // ★ (2026-10-28 21:53, 9차 점검, 펜닐 결정 '작업 자체를 거부') 항목 자신 + 그 아래 보호 폴더까지(checkFolderTreePermission) — 종전엔 상위 폴더만 봐서 보호 폴더 자체·그걸 품은 폴더를 지우고·옮기고·복사·공유할 수 있었음(재현)
+                    if (!$storage->checkFolderTreePermission($ddSid, $ddP, 'can_read') || ($ddMove && (!$storage->checkFolderTreePermission($ddSid, $ddP, 'can_write') || !$storage->checkFolderTreePermission($ddSid, $ddP, 'can_delete')))) { $ddDeny = true; break; }
+                }
+                if ($ddDeny) { $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break; }
+            }
             $result = $fileManager->dragDrop(
                 (int)($input['storage_id'] ?? 0),
                 $input['sources'] ?? [],
                 $input['dest'] ?? '',
                 $input['action'] ?? 'move'
             );
+            // ★ (2026-10-29 09:23, 20차) 검색 인덱스 갱신 — 종전엔 끌어서 옮기거나 복사해도 인덱스를 고치지 않아, 인덱스로 목록을 그리는
+            //   스토리지(원격·대용량)에서 옛 자리에 유령 항목이 남고 새 자리엔 안 보였으며 검색도 옛 경로를 가리켰음(일반 move·copy 와 같게)
+            if (!empty($result['results']) && is_array($result['results'])) {
+                $ddIdx = FileIndex::getInstance();
+                if ($ddIdx->isAvailable()) {
+                    $ddBase = $storage->getRealPath($ddSid);
+                    foreach ($result['results'] as $ddR) {
+                        $ddFrom = trim((string)($ddR['source'] ?? ''), '/');
+                        $ddTo = trim((string)($ddR['dest'] ?? ''), '/');
+                        if ($ddFrom === '' || $ddTo === '') continue;
+                        try {
+                            if ($ddMove) {
+                                $ddIdx->moveFile($ddSid, $ddFrom, $ddTo);
+                            } else {
+                                $ddFull = $ddBase ? $ddBase . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $ddTo) : '';
+                                if ($ddFull !== '' && is_dir($ddFull)) {
+                                    $ddIdx->indexFolder($ddSid, $ddBase, $ddTo);
+                                } else {
+                                    $ddIdx->addFile($ddSid, $ddTo, [
+                                        'name' => basename($ddTo),
+                                        'size' => ($ddFull !== '' && is_file($ddFull)) ? (filesize($ddFull) ?: 0) : 0,
+                                        'modified' => ($ddFull !== '' && is_file($ddFull)) ? (filemtime($ddFull) ?: time()) : time(),
+                                        'is_dir' => false
+                                    ]);
+                                }
+                            }
+                        } catch (\Throwable $ddE) {}
+                    }
+                }
+            }
             break;
         
         // ===== 공유 =====
         case 'shares':
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제
-            $result = ['success' => true, 'shares' => $shareManager->getShares()];
+            $result = ['success' => true, 'shares' => $shareManager->getShares(!empty($_GET['mine']))];   // ★ (2026-10-29 14:22, 21차 점검) mine=1 → 본인 것만('내 공유 링크')
             break;
         
         case 'share_clear_upload_notify':
@@ -9577,10 +10512,27 @@ try {
             $path = $input['path'] ?? '';
             // 폴더별 읽기 권한 체크
             { $shDir = dirname($path); if ($shDir === '.') $shDir = '';
-              if (!$storage->checkFolderPermission($storageId, $shDir ?: $path, 'can_read')) {
+              // ★ (2026-10-28 21:53, 9차 점검, 펜닐 결정 '작업 자체를 거부') 항목 자신 + 그 아래 보호 폴더까지(checkFolderTreePermission) — 종전엔 상위 폴더만 봐서 보호 폴더 자체·그걸 품은 폴더를 지우고·옮기고·복사·공유할 수 있었음(재현)
+              if (!$storage->checkFolderPermission($storageId, $shDir ?: $path, 'can_read') || !$storage->checkFolderTreePermission($storageId, $path, 'can_read')) {
                   $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break; }
+              // ★ (2026-10-29 03:11, 16차, 펜닐 결정 '공유자 권한까지만') 파일받기(filedrop)는 누구나 그 폴더에 올리게 되므로 공유자에게 쓰기 권한이 있어야 함 —
+              //   종전엔 읽기·공유 권한만으로 파일받기 링크를 만들어, 자기에게 없는 쓰기 권한을 익명 사용자에게 줄 수 있었음
+              // ★ (2026-10-29 10:08, 20차 점검) 쓰기·삭제는 공유하는 경로 자신의 규칙으로(그 안에 올리게 되므로) — 종전엔 상위 폴더만 봐서, 자기에게 쓰기 금지인 폴더도 파일받기·쓰기 공유로 넘길 수 있었음(재현)
+              if (($input['share_type'] ?? 'download') === 'filedrop'
+                  && (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $path, 'can_write'))) {
+                  $result = ['success' => false, 'error' => __('api_err_share_perm_exceed', '자기에게 없는 권한은 공유로 줄 수 없습니다.')]; break;
+              }
+              // ★ (2026-10-29 18:00, 22차 점검) 공유 형식은 정해진 값만(종전엔 아무 값이나 저장) + 받기·스트리밍 링크는 누구나 내려받게 되므로
+              //   공유자에게 내려받기 권한이 있어야 함(16차 펜닐 결정 '공유자 권한까지만'과 같은 기준) — 종전엔 내려받기 금지 사용자가 링크를 만들어 스스로 받을 수 있었음
+              $shType = (string)($input['share_type'] ?? 'download');
+              if (!in_array($shType, ['download', 'stream', 'filedrop'], true)) {
+                  $result = ['success' => false, 'error' => 'Invalid share type']; break;
+              }
+              if ($shType !== 'filedrop' && !$storage->checkPermission($storageId, 'can_download')) {
+                  $result = ['success' => false, 'error' => __('api_err_share_perm_exceed', '자기에게 없는 권한은 공유로 줄 수 없습니다.')]; break;
+              }
             }
-            
+
             $result = $shareManager->createShare($storageId, $path, $input);
             
             if ($result['success'] ?? false) {
@@ -9617,6 +10569,24 @@ try {
             if (!$canUpdate) {
                 $result = ['success' => false, 'error' => __('no_permission', '권한이 없습니다')];
                 break;
+            }
+            // ★ (2026-10-29 03:11, 16차, 펜닐 결정 '공유자 권한까지만') 파일받기로 바꿀 때도 그 공유 폴더에 공유자의 쓰기 권한이 있어야 함(만들 때와 같은 기준)
+            if ($newType === 'filedrop' && !$auth->isAdmin()) {
+                $stuSid = 0; $stuPath = '';
+                foreach ($shares as $s) { if (($s['id'] ?? 0) == $shareId) { $stuSid = (int)($s['storage_id'] ?? 0); $stuPath = (string)($s['file_path'] ?? ''); break; } }
+                $stuDir = dirname(str_replace('\\', '/', $stuPath)); if ($stuDir === '.') $stuDir = '';
+                // ★ (2026-10-29 10:08, 20차 점검) 쓰기·삭제는 공유하는 경로 자신의 규칙으로(그 안에 올리게 되므로) — 종전엔 상위 폴더만 봐서, 자기에게 쓰기 금지인 폴더도 파일받기·쓰기 공유로 넘길 수 있었음(재현)
+                if (!$storage->checkPermission($stuSid, 'can_write') || !$storage->checkFolderPermission($stuSid, $stuPath, 'can_write')) {
+                    $result = ['success' => false, 'error' => __('api_err_share_perm_exceed', '자기에게 없는 권한은 공유로 줄 수 없습니다.')]; break;
+                }
+            }
+            // ★ (2026-10-29 18:00, 22차 점검) 받기·스트리밍으로 바꿀 때도 공유자의 내려받기 권한(만들 때와 같은 기준)
+            if ($newType !== 'filedrop' && !$auth->isAdmin()) {
+                $stuSid2 = 0;
+                foreach ($shares as $s) { if (($s['id'] ?? 0) == $shareId) { $stuSid2 = (int)($s['storage_id'] ?? 0); break; } }
+                if (!$storage->checkPermission($stuSid2, 'can_download')) {
+                    $result = ['success' => false, 'error' => __('api_err_share_perm_exceed', '자기에게 없는 권한은 공유로 줄 수 없습니다.')]; break;
+                }
             }
             $updated = $db->update('shares', ['id' => $shareId], ['share_type' => $newType]);
             $result = $updated ? ['success' => true] : ['success' => false, 'error' => 'Share not found'];
@@ -9660,10 +10630,11 @@ try {
             
             // 공유 접근 로그
             if ($result['success'] ?? false) {
+                $saRec = $db->find('shares', ['token' => $token]) ?: [];   // ★ (2026-10-29 21:56, 24차 점검) accessShare 응답엔 저장소·경로가 없어 기록에서 빈 값이었음 → 공유 기록에서
                 $activityLog->log(ActivityLog::TYPE_SHARE_ACCESS, [
-                    'storage_id' => $result['share']['storage_id'] ?? 0,
-                    'path' => $result['share']['file_path'] ?? '',
-                    'filename' => $result['share']['file_name'] ?? basename($result['share']['file_path'] ?? ''),
+                    'storage_id' => (int)($saRec['storage_id'] ?? 0),
+                    'path' => (string)($saRec['file_path'] ?? ''),
+                    'filename' => basename(str_replace('\\', '/', (string)($saRec['file_path'] ?? ''))),
                     'details' => 'Token: ' . $token
                 ]);
             }
@@ -9680,6 +10651,26 @@ try {
         // ===== 내부 사용자 간 공유 =====
         case 'internal_share_create':
             $auth->requireLogin();
+            // ★ (2026-10-28 21:53, 9차 점검) 폴더 권한 확인 — 종전엔 내부 공유 만들기에 폴더 권한 검사가 아예 없어 막힌 폴더도 다른 사용자에게 공유됐음
+            {
+                $isSid = (int)($input['storage_id'] ?? 0); $isPath = (string)($input['path'] ?? '');
+                $isDir0 = dirname(str_replace('\\', '/', $isPath)); if ($isDir0 === '.') $isDir0 = '';
+                if (!$storage->checkFolderPermission($isSid, $isDir0 ?: $isPath, 'can_read') || !$storage->checkFolderTreePermission($isSid, $isPath, 'can_read')) {
+                    $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+                }
+                // ★ (2026-10-29 03:11, 16차, 펜닐 결정 '공유자 권한까지만') 넘겨줄 권한을 공유자 자신이 가진 만큼만 — 종전엔 can_share 만 있으면
+                //   write(올리기)·full(지우기·이름바꾸기) 공유를 만들 수 있어, 자기에게 없는 쓰기·삭제 권한을 남에게 줄 수 있었음.
+                //   write → 공유자의 스토리지·폴더 쓰기 필요, full → 쓰기+삭제 필요(받는 쪽 동작과 같은 기준)
+                $isPerm = $input['permission'] ?? 'read';
+                if ($isPerm === 'write' || $isPerm === 'full') {
+                    // ★ (2026-10-29 10:08, 20차 점검) 쓰기·삭제는 공유하는 경로 자신의 규칙으로(그 안에 올리게 되므로) — 종전엔 상위 폴더만 봐서, 자기에게 쓰기 금지인 폴더도 파일받기·쓰기 공유로 넘길 수 있었음(재현)
+                    $okW = $storage->checkPermission($isSid, 'can_write') && $storage->checkFolderPermission($isSid, $isPath, 'can_write');
+                    $okD = $storage->checkPermission($isSid, 'can_delete') && $storage->checkFolderPermission($isSid, $isPath, 'can_delete');
+                    if (!$okW || ($isPerm === 'full' && !$okD)) {
+                        $result = ['success' => false, 'error' => __('api_err_share_perm_exceed', '자기에게 없는 권한은 공유로 줄 수 없습니다.')]; break;
+                    }
+                }
+            }
             $result = $shareManager->createInternalShare(
                 (int)($input['storage_id'] ?? 0),
                 $input['path'] ?? '',
@@ -9722,6 +10713,21 @@ try {
         
         case 'internal_share_update':
             $auth->requireLogin();
+            // ★ (2026-10-29 03:11, 16차, 펜닐 결정 '공유자 권한까지만') 권한을 올릴 때도 공유자 자신이 가진 만큼만(만들 때와 같은 기준)
+            {
+                $iuPerm = $input['permission'] ?? 'read';
+                $iuShare = $db->find('internal_shares', ['id' => (int)($input['id'] ?? 0)]);
+                if ($iuShare && (int)($iuShare['shared_by'] ?? 0) === (int)$auth->getUserId() && ($iuPerm === 'write' || $iuPerm === 'full')) {
+                    $iuSid = (int)($iuShare['storage_id'] ?? 0); $iuPath = (string)($iuShare['file_path'] ?? '');
+                    $iuDir = dirname(str_replace('\\', '/', $iuPath)); if ($iuDir === '.') $iuDir = '';
+                    // ★ (2026-10-29 10:08, 20차 점검) 쓰기·삭제는 공유하는 경로 자신의 규칙으로(그 안에 올리게 되므로) — 종전엔 상위 폴더만 봐서, 자기에게 쓰기 금지인 폴더도 파일받기·쓰기 공유로 넘길 수 있었음(재현)
+                    $iuW = $storage->checkPermission($iuSid, 'can_write') && $storage->checkFolderPermission($iuSid, $iuPath, 'can_write');
+                    $iuD = $storage->checkPermission($iuSid, 'can_delete') && $storage->checkFolderPermission($iuSid, $iuPath, 'can_delete');
+                    if (!$iuW || ($iuPerm === 'full' && !$iuD)) {
+                        $result = ['success' => false, 'error' => __('api_err_share_perm_exceed', '자기에게 없는 권한은 공유로 줄 수 없습니다.')]; break;
+                    }
+                }
+            }
             $result = $shareManager->updateInternalShare(
                 (int)($input['id'] ?? 0),
                 $input['permission'] ?? 'read'
@@ -9882,8 +10888,9 @@ try {
                 'date_to' => $input['date_to'] ?? null,
                 'search' => $input['search'] ?? null
             ];
-            $page = (int)($input['page'] ?? 1);
-            $limit = (int)($input['limit'] ?? 50);
+            // ★ (2026-10-29 21:21, 24차 점검) 쪽·개수 하한(limit=0 이면 0 나누기 500, 음수 쪽이면 엉뚱한 끝부분) — 화면은 늘 50
+            $page = max(1, (int)($input['page'] ?? 1));
+            $limit = min(500, max(1, (int)($input['limit'] ?? 50)));
             $result = $activityLog->getLogs($filters, $page, $limit);
             break;
             
@@ -9905,7 +10912,9 @@ try {
         // ===== 설정 백업 =====
         case 'config_backup':
             try {
-            $auth->requireAdminPerm('system_settings');
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 실제 관리자만 — 백업엔 사용자 비밀번호 해시·2단계 인증 비밀값·OnlyOffice/SMTP 비밀값이 들어 있어
+            //   '시스템 설정' 권한만 있는 부관리자가 받을 수 있었음(설정 저장 settings_update 도 실제 관리자만임)
+            $auth->requireRealAdmin();
             
             session_write_close(); // 세션 락 해제
             $dataPath = DATA_PATH;
@@ -10016,7 +11025,8 @@ try {
         
         // ===== 설정 복원 =====
         case 'config_restore':
-            $auth->requireAdminPerm('system_settings');
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 실제 관리자만 — 복원은 다른 계정의 역할·비밀번호까지 바꿀 수 있음
+            $auth->requireRealAdmin();
             
             session_write_close(); // 세션 락 해제
             if (empty($_FILES['backup_file'])) {
@@ -10113,8 +11123,12 @@ try {
             
             // 세션 통계
             $sessions = $db->load('sessions');
-            $activeSessions = count(array_filter($sessions, function($s) {
-                return ($s['expires_at'] ?? 0) > time();
+            // ★ (2026-10-29 21:18, 24차 점검) 세션 기록엔 expires_at 이 없어 늘 0 이었음 → 마지막 활동이 세션 유지 시간(0=제한 없음이면 하루) 안인 것
+            $_siTo = (int)(($db->load('settings') ?: [])['session_timeout'] ?? 60);
+            $_siWin = $_siTo > 0 ? $_siTo * 60 : 86400;
+            $activeSessions = count(array_filter($sessions, function($s) use ($_siWin) {
+                $la = strtotime((string)($s['last_activity'] ?? ''));
+                return $la !== false && $la > time() - $_siWin;
             }));
             
             // 스토리지 통계
@@ -10124,7 +11138,8 @@ try {
             // 공유 통계
             $shares = $db->load('shares');
             $totalShares = count(array_filter($shares, function($s) {
-                return empty($s['expires_at']) || strtotime($s['expires_at']) > time();
+                // ★ (2026-10-29 21:18, 24차 점검) 공유의 만료 키는 expire_at — 종전 expires_at 은 없는 키라 만료된 공유까지 셌음
+                return empty($s['expire_at']) || strtotime($s['expire_at']) > time();
             }));
             
             // PHP 확장 모듈 체크
@@ -10851,6 +11866,9 @@ try {
                 $settings['onlyoffice']['has_secret'] = !empty($settings['onlyoffice']['secret']);
                 unset($settings['onlyoffice']['secret']);
             }
+            // ★ (2026-10-29 02:36, 16차) SSO 설정(LDAP bind_password·OIDC client_secret·SAML 인증서 등)은 빼고 보냄 — 종전엔 로그인한 누구나
+            //   'settings' 로 그대로 읽을 수 있었음(재현). 화면의 SSO 설정은 관리자 전용 sso_settings_get 을 쓰고, 로그인 화면은 sso_config(공개 값만)를 씀
+            unset($settings['sso']);
             $result = ['success' => true, 'settings' => $settings];
             break;
         
@@ -10964,13 +11982,19 @@ try {
                 // 서버 버전 정보(version/pdf_editable) 보존:
                 // 서버 URL이 그대로면 이전에 감지한 버전을 유지하고, 바뀌었으면 초기화(재확인 유도)
                 $prevServer = trim($settings['onlyoffice']['server'] ?? '');
-                if ($prevServer !== '' && $prevServer === $onlyofficeSettings['server']) {
+                // ★ (2026-10-29 21:52, 24차 점검) '버전 확인'을 지금 입력한 주소로 했으면(version_server) 그 결과도 이어받음 — 종전엔 처음 설정·주소 변경 때
+                //   저장 전에 확인한 버전·PDF 편집 가능이 저장하는 순간 지워졌음(화면엔 '활성화되었습니다'가 떴는데 실제로는 꺼짐)
+                $verServer = rtrim(trim((string)($settings['onlyoffice']['version_server'] ?? '')), '/');
+                $keepVer = ($prevServer !== '' && $prevServer === $onlyofficeSettings['server'])
+                    || ($verServer !== '' && $verServer === rtrim($onlyofficeSettings['server'], '/'));
+                if ($keepVer) {
                     if (isset($settings['onlyoffice']['version'])) {
                         $onlyofficeSettings['version'] = $settings['onlyoffice']['version'];
                     }
                     if (isset($settings['onlyoffice']['pdf_editable'])) {
                         $onlyofficeSettings['pdf_editable'] = $settings['onlyoffice']['pdf_editable'];
                     }
+                    if ($verServer !== '') $onlyofficeSettings['version_server'] = $verServer;
                 }
                 
                 $settings['onlyoffice'] = $onlyofficeSettings;
@@ -11150,7 +12174,8 @@ try {
                 break;
             }
             $serverUrl = rtrim($serverUrl, '/');
-            $secret = $ooSaved['secret'] ?? '';
+            // ★ (2026-10-30 01:55, 26차 점검) 화면에 입력한 시크릿이 있으면 그것으로(저장 전 확인) — 종전엔 저장된 시크릿만 써서 처음 설정·시크릿 변경 직후 확인이 늘 '시크릿 불일치'
+            $secret = trim((string)($input['secret'] ?? '')) !== '' ? trim((string)$input['secret']) : ($ooSaved['secret'] ?? '');
             
             $commandUrl = $serverUrl . '/coauthoring/CommandService.ashx';
             
@@ -11231,6 +12256,7 @@ try {
             }
             $settings['onlyoffice']['version'] = $verStr;
             $settings['onlyoffice']['pdf_editable'] = $pdfEditable;
+            $settings['onlyoffice']['version_server'] = $serverUrl;   // ★ (2026-10-29 21:52, 24차 점검) 어느 주소로 확인했는지 — 저장 전에 확인해도 settings_update 가 이어받게
             $db->save('settings', $settings);
             
             $result = [
@@ -11252,20 +12278,33 @@ try {
             }
             // ffmpeg 확인
             $ffmpegPath = trim($settings['ffmpeg_path'] ?? '');
+            // ★ (2026-10-29 03:19, 16차) ffmpeg 유무를 하루 캐시 — 이 액션은 로그인 화면에서 로그인 없이 호출되는데(공용 제한에서도 빠짐),
+            //   종전엔 요청마다 ffmpeg 후보 경로마다 exec 를 돌려(로그인 안 한 사람도) 서버에 프로세스를 만들 수 있었음. PDF 판정과 같은 방식
             $ffmpegFound = false;
-            $ffmpegPaths = $ffmpegPath ? [$ffmpegPath] : [];
-            if (PHP_OS_FAMILY === 'Windows') {
-                array_push($ffmpegPaths, 'ffmpeg', 'C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe');
+            $ffCapFile = __DIR__ . '/data/thumbcache/.ffmpeg_capable';
+            $ffCapFail = __DIR__ . '/data/thumbcache/.ffmpeg_incapable';
+            if (is_file($ffCapFile) && (time() - filemtime($ffCapFile)) < 86400) {
+                $ffmpegFound = true;
+            } elseif (is_file($ffCapFail) && (time() - filemtime($ffCapFail)) < 86400) {
+                $ffmpegFound = false;
             } else {
-                // ★ (2026-08-24) 버전이 붙은 패키지 경로(예: /var/packages/ffmpeg7/target/bin/ffmpeg)를
-                //   PATH 보다 **먼저** 시도한다 — 자세한 배경은 findVersionedMediaBins() 주석 참조.
-                $ffmpegPaths = array_merge($ffmpegPaths, findVersionedMediaBins('ffmpeg'));
-                array_push($ffmpegPaths, 'ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/local/ffmpeg/bin/ffmpeg', '/volume1/@appstore/ffmpeg/bin/ffmpeg', '/volume1/@appstore/MediaServer/bin/ffmpeg', '/var/packages/ffmpeg/target/bin/ffmpeg', '/var/packages/MediaServer/target/bin/ffmpeg');
-            }
-            foreach ($ffmpegPaths as $fp) {
-                $out = [];
-                @exec(escapeshellarg($fp) . ' -version 2>&1', $out, $ret);
-                if ($ret === 0) { $ffmpegFound = true; break; }
+                $ffmpegPaths = $ffmpegPath ? [$ffmpegPath] : [];
+                if (PHP_OS_FAMILY === 'Windows') {
+                    array_push($ffmpegPaths, 'ffmpeg', 'C:\\ffmpeg\\bin\\ffmpeg.exe', 'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe');
+                } else {
+                    // ★ (2026-08-24) 버전이 붙은 패키지 경로(예: /var/packages/ffmpeg7/target/bin/ffmpeg)를
+                    //   PATH 보다 **먼저** 시도한다 — 자세한 배경은 findVersionedMediaBins() 주석 참조.
+                    $ffmpegPaths = array_merge($ffmpegPaths, findVersionedMediaBins('ffmpeg'));
+                    array_push($ffmpegPaths, 'ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg', '/usr/local/ffmpeg/bin/ffmpeg', '/volume1/@appstore/ffmpeg/bin/ffmpeg', '/volume1/@appstore/MediaServer/bin/ffmpeg', '/var/packages/ffmpeg/target/bin/ffmpeg', '/var/packages/MediaServer/target/bin/ffmpeg');
+                }
+                foreach ($ffmpegPaths as $fp) {
+                    $out = [];
+                    @exec(escapeshellarg($fp) . ' -version 2>&1', $out, $ret);
+                    if ($ret === 0) { $ffmpegFound = true; break; }
+                }
+                @mkdir(__DIR__ . '/data/thumbcache', 0755, true);
+                if ($ffmpegFound) { @file_put_contents($ffCapFile, '1'); @unlink($ffCapFail); }
+                else { @file_put_contents($ffCapFail, '0'); @unlink($ffCapFile); }
             }
             if ($ffmpegFound) {
                 array_push($thumbFormats, 'mp4','webm','mkv','avi','mov','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp');
@@ -11313,23 +12352,36 @@ try {
             
             // Imagick으로 PDF 안 되면 CLI 도구 체크 (pdftoppm, mutool, gs)
             if (!in_array('pdf', $thumbFormats)) {
-                $pdfTools = [];
-                if (PHP_OS_FAMILY === 'Windows') {
-                    $pdfTools = ['pdftoppm', 'mutool', 'gswin64c', 'gswin32c'];
-                } else {
-                    $pdfTools = ['pdftoppm', 'mutool', 'gs'];
-                }
-                foreach ($pdfTools as $tool) {
-                    $out = [];
-                    @exec(escapeshellarg($tool) . ' --version 2>&1', $out, $ret);
-                    // pdftoppm은 --version이 없으면 -v 시도
-                    if ($ret !== 0 && $tool === 'pdftoppm') {
-                        @exec(escapeshellarg($tool) . ' -v 2>&1', $out, $ret);
+                // ★ (2026-10-29 21:20, 24차 점검) ① 결과를 하루 캐시(위 ffmpeg 16차와 같음) — 종전엔 로그인 없이 부르는 이 액션이 요청마다 도구 확인 exec 를 최대 5번 돌렸음
+                //   ② 설정의 'PDF 도구 경로'와 Windows Ghostscript 기본 설치 경로도 확인(썸네일 생성 generatePdfThumbnail 과 같은 후보) — 종전엔 PATH 의 이름만 봐서
+                //      경로를 지정하거나 기본 경로에 설치하면 'PDF 도구 테스트'는 성공인데 목록의 PDF 썸네일은 끝내 안 나왔음. 경로 설정을 바꾸면 캐시를 지움(site_settings_update)
+                $pdfCliCap = __DIR__ . '/data/thumbcache/.pdfcli_capable';
+                $pdfCliFail = __DIR__ . '/data/thumbcache/.pdfcli_incapable';
+                if (is_file($pdfCliCap) && (time() - filemtime($pdfCliCap)) < 86400) {
+                    $thumbFormats[] = 'pdf';
+                } elseif (!(is_file($pdfCliFail) && (time() - filemtime($pdfCliFail)) < 86400)) {
+                    $pdfTools = [];
+                    $pdfCfgPath = trim((string)($settings['pdf_tool_path'] ?? ''));
+                    if ($pdfCfgPath !== '') $pdfTools[] = $pdfCfgPath;
+                    if (PHP_OS_FAMILY === 'Windows') {
+                        array_push($pdfTools, 'pdftoppm', 'mutool', 'gswin64c', 'gswin32c');
+                        foreach ((glob('C:\\Program Files\\gs\\gs*\\bin\\gswin64c.exe') ?: []) as $gsExe) $pdfTools[] = $gsExe;
+                    } else {
+                        array_push($pdfTools, 'pdftoppm', 'mutool', 'gs');
                     }
-                    if ($ret === 0) {
-                        $thumbFormats[] = 'pdf';
-                        break;
+                    $pdfCliOk = false;
+                    foreach ($pdfTools as $tool) {
+                        $out = [];
+                        @exec(escapeshellarg($tool) . ' --version 2>&1', $out, $ret);
+                        // pdftoppm은 --version이 없으면 -v 시도
+                        if ($ret !== 0 && preg_match('/pdftoppm(\.exe)?$/i', $tool)) {
+                            @exec(escapeshellarg($tool) . ' -v 2>&1', $out, $ret);
+                        }
+                        if ($ret === 0) { $pdfCliOk = true; break; }
                     }
+                    @mkdir(__DIR__ . '/data/thumbcache', 0755, true);
+                    if ($pdfCliOk) { $thumbFormats[] = 'pdf'; @file_put_contents($pdfCliCap, '1'); @unlink($pdfCliFail); }
+                    else { @file_put_contents($pdfCliFail, '0'); @unlink($pdfCliCap); }
                 }
             }
             
@@ -11405,6 +12457,11 @@ try {
                 $siteSettings['thumbnail_size'] = max(50, min(400, (int)$input['thumbnail_size']));
             }
             if (array_key_exists('ffmpeg_path', $input)) {
+                // ★ (2026-10-29 18:30, 22차 점검) 경로가 바뀌면 ffmpeg 유무 하루 캐시를 지움 — 종전엔 남아서 경로를 지정해도 최대 24시간 동안 동영상 썸네일이 안 켜졌음
+                if (trim((string)$input['ffmpeg_path']) !== trim((string)($siteSettings['ffmpeg_path'] ?? ''))) {
+                    @unlink(__DIR__ . '/data/thumbcache/.ffmpeg_capable');
+                    @unlink(__DIR__ . '/data/thumbcache/.ffmpeg_incapable');
+                }
                 $siteSettings['ffmpeg_path'] = trim($input['ffmpeg_path']);
             }
             if (array_key_exists('ffprobe_path', $input)) {
@@ -11429,6 +12486,11 @@ try {
             }
             if (array_key_exists('pdf_tool_path', $input)) {
                 $siteSettings['pdf_tool_path'] = trim($input['pdf_tool_path']);
+            }
+            // ★ (2026-10-29 21:20, 24차 점검) PDF 도구 설정이 바뀌면 썸네일 지원 판정 캐시를 지움(site_settings_get 이 다시 확인)
+            if (array_key_exists('pdf_tool', $input) || array_key_exists('pdf_tool_path', $input)) {
+                @unlink(__DIR__ . '/data/thumbcache/.pdfcli_capable');
+                @unlink(__DIR__ . '/data/thumbcache/.pdfcli_incapable');
             }
             
             saveSiteSettings($siteSettings);
@@ -12221,7 +13283,9 @@ try {
             }
             
             // 새 파일명 생성
-            $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+            // ★ (2026-10-29 18:30, 22차 점검) 확장자는 허용한 형식에서 정함(소문자) — 종전엔 올린 파일 이름의 확장자를 그대로 써서, 'IMG.JPG' 는 data/.htaccess 의
+            //   소문자 허용 규칙에 걸려 그림이 안 나왔고(Apache), 형식과 다른 확장자(.svg·.php 등)로도 저장될 수 있었음
+            $ext = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp'][$file['type']] ?? 'png';
             $newFilename = $type . '_' . time() . '.' . $ext;
             $newPath = $uploadDir . $newFilename;
             
@@ -12395,6 +13459,11 @@ try {
         
         // ===== 비밀번호 찾기 (이메일) =====
         case 'find_username':
+            // ★ (2026-10-29 21:16, 24차 점검) '비밀번호 찾기' 기능이 켜진 때만(같은 화면 묶음 — 22차 password_reset_request 와 같은 기준) — 종전엔 꺼져 있어도 API 로 아이디 안내 메일을 계속 보내게 할 수 있었음
+            if (empty(($db->load('settings') ?: [])['password_reset_enabled'])) {
+                $result = ['success' => false, 'error' => __('api_err_feature_disabled', '사용할 수 없는 기능입니다.')];
+                break;
+            }
             $email = trim($input['email'] ?? '');
             
             if (empty($email)) {
@@ -12406,6 +13475,12 @@ try {
             break;
         
         case 'password_reset_request':
+            // ★ (2026-10-29 18:30, 22차 점검) 관리자가 '비밀번호 찾기'를 켜 둔 때만(기본 꺼짐) — 종전엔 화면에서만 숨기고 API 는 늘 받아, 아이디·메일을 아는 사람이
+            //   기능이 꺼져 있어도 남의 비밀번호를 임시 비밀번호로 바꾸고 로그인 유지를 끊을 수 있었음
+            if (empty(($db->load('settings') ?: [])['password_reset_enabled'])) {
+                $result = ['success' => false, 'error' => __('api_err_feature_disabled', '사용할 수 없는 기능입니다.')];
+                break;
+            }
             $username = trim($input['username'] ?? '');
             $email = trim($input['email'] ?? '');
             
@@ -12467,9 +13542,14 @@ try {
             }
             
             // 중복 체크
-            $existing = $db->find('users', ['username' => $username]);
-            if ($existing) {
+            // ★ (2026-10-29 17:46, 22차 점검) 대소문자 무시 + 예약어('_deleted' 등) — 종전엔 정확히 같은 글자만 막아 'Tester' 가 'tester' 와 같은 홈 폴더(Windows)를 쓰게 됐음
+            $unProblem = Auth::usernameProblem($db, $username);
+            if ($unProblem === 'exists') {
                 $result = ['success' => false, 'error' => __('username_exists')];
+                break;
+            }
+            if ($unProblem === 'reserved') {
+                $result = ['success' => false, 'error' => __('api_err_username_chars', '아이디는 영문, 숫자, 밑줄만 사용 가능합니다.')];
                 break;
             }
             
@@ -12480,6 +13560,10 @@ try {
                     $result = ['success' => false, 'error' => __('username_was_withdrawn', '탈퇴 또는 삭제된 아이디입니다. 다른 아이디를 사용해주세요.')];
                     break 2;
                 }
+            }
+            if (Auth::emailInUse($db, $email)) {   // ★ (2026-10-30 01:42, 26차 — 24차 결정 필요 '메일 중복' 자동 선택: 거부)
+                $result = ['success' => false, 'error' => __('err_email_in_use', '다른 계정이 이미 쓰는 메일입니다.')];
+                break;
             }
             
             // 첫 번째 사용자는 관리자로, 이후는 설정에 따라
@@ -12546,6 +13630,10 @@ try {
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제
             $storageId = (int)($_GET['storage_id'] ?? 0);
+            // ★ (2026-10-29 10:45, 20차 점검) 읽을 수 있는 스토리지만(홈은 주인만) — 종전엔 누구나 남의 홈까지 사용량을 보고 폴더 전체를 훑게 할 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
             
             // 스토리지 정보 먼저 가져오기
             $storageInfo = $storage->getStorageById($storageId);
@@ -12670,6 +13758,10 @@ try {
             session_write_close();
             @set_time_limit(30);
             $storageId = (int)($_GET['storage_id'] ?? 0);
+            // ★ (2026-10-29 10:45, 20차 점검) 읽을 수 있는 스토리지만 다시 계산(남의 스토리지 전체 훑기 막음). 화면이 조용히 넘어가게 종전 '안 함' 응답과 같은 모양
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                $result = ['success' => true, 'recalculated' => false]; break;
+            }
             
             try {
                 $recalcStorageInfo = $storage->getStorageById($storageId);
@@ -12779,16 +13871,22 @@ try {
                 if ($fileIndex->isAvailable()) {
                         $restoredStorageId = (int)($item['storage_id'] ?? 0);
                         $restoredPath = $item['original_path'] ?? '';
+                        // ★ (2026-10-29 23:42, 24차 점검) 원격 복원은 같은 이름이 있으면 'X (1)' 로 올라가므로 실제 이름으로 경로를 다시 만듦(종전엔 원래 항목을 크기 0으로 덮음)
+                        if (!empty($result['remote']) && !empty($result['restored_path'])) {
+                            $_rsDir = dirname(str_replace('\\', '/', $restoredPath));
+                            $restoredPath = (($_rsDir === '.' || $_rsDir === '/' || $_rsDir === '') ? '' : $_rsDir . '/') . $result['restored_path'];
+                        }
                         $basePath = $storage->getRealPath($restoredStorageId);
                         $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $restoredPath);
-                        if (is_dir($fullPath)) {
+                        // ★ (2026-10-28) 원격 스토리지로 복원하면 로컬 경로가 빈 문자열이라 서버 루트 경로(예 /mnt)를 보게 됨 → 로컬 경로가 있을 때만 폴더 인덱싱·크기 읽기(아니면 종전 기본값)
+                        if ($basePath && is_dir($fullPath)) {
                             $fileIndex->indexFolder($restoredStorageId, $basePath, $restoredPath);
                         } else {
                             $fileIndex->addFile($restoredStorageId, $restoredPath, [
-                                'name' => $item['name'] ?? basename($restoredPath),
-                                'size' => file_exists($fullPath) ? filesize($fullPath) : 0,
+                                'name' => !empty($result['remote']) ? basename($restoredPath) : ($item['name'] ?? basename($restoredPath)),
+                                'size' => ($basePath && is_file($fullPath)) ? filesize($fullPath) : ((!$basePath && empty($item['is_dir'])) ? max(0, (int)($item['size'] ?? 0)) : 0),   // ★ (2026-10-30 01:50, 26차 점검) 원격 파일은 휴지통 기록 크기(작업 큐 복원과 같게 — 종전 0)
                                 'modified' => time(),
-                                'is_dir' => false
+                                'is_dir' => (!$basePath && !empty($item['is_dir'])) ? 1 : 0   // ★ (2026-10-29 23:42, 24차 점검) 원격 복원은 휴지통 기록의 폴더 여부로
                             ]);
                         }
                 }
@@ -13014,7 +14112,9 @@ try {
             
         // ===== 랜섬웨어 방지 (관리자) =====
         case 'get_upload_settings':
-            $auth->requireRealAdmin();
+            // ★ (2026-10-29 11:21, 20차 점검) 일반 사용자에겐 업로드 전 미리 검사에 필요한 값(모드·확장자 목록·최대 크기)만 — 종전엔 관리자 전용이라
+            //   일반 사용자는 화면의 미리 검사가 늘 건너뛰어져 큰 파일을 다 올린 뒤에야 서버에서 거부됐음. 판단 기준은 서버가 어차피 적용하는 값
+            $auth->requireLogin();
             $settings = $db->load('upload_settings');
             if (empty($settings)) {
                 $settings = [
@@ -13024,6 +14124,9 @@ try {
                     'mime_check' => true,
                     'max_filesize' => 0
                 ];
+            }
+            if (!$auth->isAdmin()) {
+                $settings = array_intersect_key($settings, array_flip(['mode', 'allowed_extensions', 'blocked_extensions', 'max_filesize']));
             }
             $result = ['success' => true, 'settings' => $settings];
             break;
@@ -13142,6 +14245,10 @@ try {
             $auth->requireLogin();
             $storageId = (int)($input['storage_id'] ?? 0);
             $path = $input['path'] ?? '';
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서(폴더 규칙이 없으면 늘 통과) 읽기 권한이 없는 스토리지(다른 사용자의 '내 파일' 등)도 열렸음(목록·다운로드·썸네일은 이미 검사함)
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                $result = ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')]; break;
+            }
             // 폴더별 읽기 권한 체크
             { $fvDir = dirname($path); if ($fvDir === '.') $fvDir = '';
               if (!$storage->checkFolderPermission($storageId, $fvDir ?: $path)) {
@@ -13159,7 +14266,8 @@ try {
             $versionId = $input['version_id'] ?? '';
             // 폴더별 쓰기 권한 체크
             { $vrDir = dirname($path); if ($vrDir === '.') $vrDir = '';
-              if (!$storage->checkFolderPermission($storageId, $vrDir ?: $path, 'can_write')) {
+              // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+              if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $vrDir ?: $path, 'can_write')) {
                   $result = ['success' => false, 'error' => 'No permission']; break; }
             }
             
@@ -13194,6 +14302,14 @@ try {
             $storageId = (int)($_GET['storage_id'] ?? 0);
             $path = $_GET['path'] ?? '';
             $versionId = $_GET['version_id'] ?? '';
+            
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 스토리지 읽기 권한 — 종전엔 폴더 권한만 봐서(폴더 규칙이 없으면 늘 통과) 읽기 권한이 없는 스토리지(다른 사용자의 '내 파일' 등)도 열렸음(목록·다운로드·썸네일은 이미 검사함) — 종전엔 권한 검사가 아예 없었음
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                http_response_code(403);
+                die('No permission');
+            }
+            { $fvdDir = dirname($path); if ($fvdDir === '.') $fvdDir = '';
+              if (!$storage->checkFolderPermission($storageId, $fvdDir ?: $path)) { http_response_code(403); die('No permission'); } }
             
             if (empty($versionId)) {
                 http_response_code(400);
@@ -13295,7 +14411,11 @@ try {
                 'max_attempts' => max(0, (int)($input['max_attempts'] ?? 5)),
                 'attempt_reset_minutes' => max(1, (int)($input['attempt_reset_minutes'] ?? 30)),
                 'lockout_minutes' => max(0, (int)($input['lockout_minutes'] ?? 15)),
-                'lockout_permanent' => !empty($input['lockout_permanent'])
+                'lockout_permanent' => !empty($input['lockout_permanent']),
+                // ★ (2026-10-29 21:09, 24차 점검) GeoIP 설정도 저장 — 화면이 보내고 Auth(국가 조회·알 수 없는 국가 차단)가 읽는데 여기서 빠져 버려졌음(재현: 저장 뒤 다시 열면 'API'·끔)
+                'geoip_source' => in_array(($input['geoip_source'] ?? 'api'), ['api', 'mmdb', 'dat', 'csv'], true) ? $input['geoip_source'] : 'api',
+                'geoip_file_path' => is_string($input['geoip_file_path'] ?? null) ? trim($input['geoip_file_path']) : '',
+                'block_unknown' => !empty($input['block_unknown'])
             ];
             
             $db->save('security_settings', $settings);
@@ -13311,6 +14431,13 @@ try {
         case 'security_block_logs':
             $auth->requireRealAdmin();
             $logs = $db->load('security_block_logs');
+            // ★ (2026-10-29 10:43, 20차 점검) ID = 전체 목록의 위치(거르기 전에 매김) — 종전엔 날짜로 거른 뒤 매겨, 선택 삭제(전체 목록 위치로 지움)가 엉뚱한 기록을 지웠음(재현)
+            $logs = is_array($logs) ? array_values($logs) : [];
+            foreach ($logs as $i => &$log) {
+                // ★ (2026-10-29 20:14, 23차 점검) 고유 번호(lid)가 있으면 그것을 ID 로 — 위치는 앞부분이 잘리면 밀림. lid 없는 옛 기록만 위치
+                if (is_array($log)) $log['id'] = (isset($log['lid']) && is_string($log['lid']) && $log['lid'] !== '') ? $log['lid'] : $i;
+            }
+            unset($log);
             
             // 날짜 필터
             $dateFrom = $input['date_from'] ?? '';
@@ -13324,12 +14451,7 @@ try {
                 $logs = array_filter($logs, fn($l) => ($l['created_at'] ?? '') <= $dateTo);
             }
             
-            // ID 추가 (인덱스 기반)
             $logs = array_values($logs);
-            foreach ($logs as $i => &$log) {
-                $log['id'] = $i;
-            }
-            unset($log);
             
             // 최신순 정렬
             usort($logs, function($a, $b) {
@@ -13369,11 +14491,20 @@ try {
                 $result = ['success' => false, 'error' => __('api_err_specify_delete_ids', '삭제할 ID를 지정하세요.')];
                 break;
             }
-            $logs = $db->load('security_block_logs');
-            $logs = array_values(array_filter($logs, function($l, $i) use ($ids) {
-                return !in_array($i, $ids);
-            }, ARRAY_FILTER_USE_BOTH));
-            $db->save('security_block_logs', $logs);
+            // ★ (2026-10-29 20:14, 23차 점검) 고유 번호(lid) 기록은 번호로, lid 없는 옛 기록만 위치로 지움 + 잠금 안에서 읽고 씀
+            $sbIdSet = []; $sbLidSet = [];
+            foreach ($ids as $sbId) {
+                // 고유 번호(16진수 12자, 숫자로만 나올 수도 있음)를 먼저 — 위치는 12자리가 될 수 없음
+                if (is_string($sbId) && preg_match('/^[a-f0-9]{12}$/', $sbId)) $sbLidSet[$sbId] = true;
+                elseif (is_int($sbId) || (is_string($sbId) && ctype_digit($sbId))) $sbIdSet[(int)$sbId] = true;
+            }
+            $db->atomicUpdate('security_block_logs', function($logs) use ($sbIdSet, $sbLidSet) {
+                $logs = is_array($logs) ? array_values($logs) : [];
+                return array_values(array_filter($logs, function($l, $i) use ($sbIdSet, $sbLidSet) {
+                    $lid = (is_array($l) && isset($l['lid']) && is_string($l['lid']) && $l['lid'] !== '') ? $l['lid'] : null;
+                    return $lid !== null ? !isset($sbLidSet[$lid]) : !isset($sbIdSet[$i]);
+                }, ARRAY_FILTER_USE_BOTH));
+            });
             $result = ['success' => true, 'message' => __f('n_logs_deleted_be', ['count' => count($ids)])];
             break;
         
@@ -13496,6 +14627,7 @@ try {
             }
             
             // 암호화 키 재생성 요청
+            $rkNew = [];
             if (!empty($input['regenerate_key'])) {
                 // 기존 2FA 사용자가 있는지 확인
                 $users = $db->load('users');
@@ -13515,12 +14647,53 @@ try {
                     break;
                 }
                 
-                $totpSettings['encryption_key'] = bin2hex(random_bytes(32));
+                // ★ (2026-10-29 21:58, 24차 점검) 같은 키로 암호화된 원격 스토리지 접속 정보(storages.config)를 새 키로 다시 암호화 — 종전엔 키만 바꿔
+                //   다음 요청부터 모든 FTP·SFTP·SMB·S3·WebDAV 스토리지가 빈 설정으로 연결에 실패했음(재현). 하나라도 풀지 못하면 키를 바꾸지 않음
+                $newTotpKey = bin2hex(random_bytes(32));
+                $rkErr = null;
+                $rkNew = [];   // 스토리지 id => 새 키로 암호화한 config (먼저 전부 만들어 보고, 키 파일을 저장한 뒤에 씀)
+                foreach (($db->load('storages') ?: []) as $st) {
+                    $cfg = (string)($st['config'] ?? '');
+                    // ★ (2026-10-29 22:30, 24차 점검) 'ENC:' 형식만 키에 묶여 있음(레거시 base64 는 키와 무관 → 그대로 둠). 풀기 '실패'와 '빈 설정'을 구분 —
+                    //   로컬 스토리지는 관리 화면에서 한 번 수정하면 빈 설정([])이 ENC 로 저장되는데, 이를 '못 풂'으로 보아 키 재생성이 늘 막혔음(재검토에서 발견·재현)
+                    if (strpos($cfg, 'ENC:') !== 0) continue;
+                    $rkRaw = base64_decode(substr($cfg, 4));
+                    $rkJson = (strlen((string)$rkRaw) >= 28)
+                        ? openssl_decrypt(substr($rkRaw, 28), 'aes-256-gcm', hash('sha256', defined('TOTP_ENCRYPTION_KEY') ? TOTP_ENCRYPTION_KEY : 'default-storage-key-change-me!!', true), OPENSSL_RAW_DATA, substr($rkRaw, 0, 12), substr($rkRaw, 12, 16))
+                        : false;
+                    if ($rkJson === false) { $rkErr = (string)($st['name'] ?? ('#' . ($st['id'] ?? ''))); break; }   // 못 풀면 하나도 안 바꿈
+                    $k = hash('sha256', $newTotpKey, true);
+                    $iv = random_bytes(12);
+                    $enc = openssl_encrypt($rkJson, 'aes-256-gcm', $k, OPENSSL_RAW_DATA, $iv, $tag, '', 16);
+                    if ($enc === false) { $rkErr = (string)($st['name'] ?? ''); break; }
+                    $rkNew[(string)($st['id'] ?? '')] = 'ENC:' . base64_encode($iv . $tag . $enc);
+                }
+                if ($rkErr !== null) {
+                    $result = ['success' => false, 'error' => __('totp_rekey_storage_fail', '스토리지 접속 정보를 풀 수 없어 키를 바꾸지 않았습니다') . ': ' . $rkErr];
+                    break;
+                }
+                $totpSettings['encryption_key'] = $newTotpKey;
                 $totpSettings['generated_at'] = date('Y-m-d H:i:s');
             }
             
             // 저장
+            if (!empty($rkNew)) $rkOldTotpJson = file_exists($totpFile) ? (string)@file_get_contents($totpFile) : '';   // ★ (2026-10-29 22:30, 24차 점검) 되돌리기용
             if (file_put_contents($totpFile, json_encode($totpSettings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX)) {
+                // ★ (2026-10-29 21:58, 24차 점검) 키 파일을 저장한 뒤에 스토리지 접속 정보를 새 키 것으로 바꿈
+                $rkSaved = true;
+                if (!empty($rkNew)) {
+                    $rkSaved = $db->atomicUpdate('storages', function ($rows) use ($rkNew) {
+                        $rows = is_array($rows) ? $rows : [];
+                        foreach ($rows as $i => $st) { $sid = (string)($st['id'] ?? ''); if (isset($rkNew[$sid])) $rows[$i]['config'] = $rkNew[$sid]; }
+                        return $rows;
+                    });
+                }
+                if (!$rkSaved && isset($rkOldTotpJson)) {
+                    // ★ (2026-10-29 22:30, 24차 점검) 스토리지 쪽 저장(락)에 실패하면 키 파일을 이전 내용으로 되돌림 — 새 키만 살아 접속 정보를 못 푸는 일 방지
+                    if ($rkOldTotpJson === '') @unlink($totpFile); else @file_put_contents($totpFile, $rkOldTotpJson, LOCK_EX);
+                    $result = ['success' => false, 'error' => __('settings_file_save_fail')];
+                    break;
+                }
                 $result = ['success' => true, 'message' => __('totp_settings_saved')];
             } else {
                 $result = ['success' => false, 'error' => __('settings_file_save_fail')];
@@ -13552,7 +14725,7 @@ try {
             ]);
             
             if ($existing) {
-                $result = ['success' => false, 'error' => __('api_err_already_favorite', '이미 즐겨찾기에 추가되어 있습니다.')];
+                $result = ['success' => false, 'error' => __('api_err_already_favorite', '이미 즐겨찾기에 추가되어 있습니다.'), 'code' => 'already_favorite'];   // ★ (2026-10-29 21:18, 24차) 화면이 글자 대신 code 로 판단
             } else {
                 $db->insert('favorites', [
                     'user_id' => $userId,
@@ -13820,7 +14993,8 @@ try {
             $path = $input['path'] ?? '';
             // 폴더별 쓰기 권한 체크
             { $_flDir = dirname($path); if ($_flDir === '.') $_flDir = '';
-              if (!$storage->checkFolderPermission($storageId, $_flDir ?: $path, 'can_write')) {
+              // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+              if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $_flDir ?: $path, 'can_write')) {
                   $result = ['success' => false, 'error' => 'No permission']; break; }
             }
             
@@ -13850,7 +15024,8 @@ try {
             $path = $input['path'] ?? '';
             // 폴더별 쓰기 권한 체크
             { $_fuDir = dirname($path); if ($_fuDir === '.') $_fuDir = '';
-              if (!$storage->checkFolderPermission($storageId, $_fuDir ?: $path, 'can_write')) {
+              // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+              if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $_fuDir ?: $path, 'can_write')) {
                   $result = ['success' => false, 'error' => 'No permission']; break; }
             }
             
@@ -13874,7 +15049,11 @@ try {
             $auth->requireLogin();
             session_write_close(); // 세션 락 해제
             $storageId = (int)($input['storage_id'] ?? 0);
-            
+            // ★ (2026-10-29 03:19, 16차) 그 스토리지 읽기 권한이 있어야 함 — 종전엔 없어, 아무 스토리지의 잠금 목록(사용자·경로)을 볼 수 있었음(file_lock/unlock 은 이미 확인)
+            if (!$storage->checkPermission($storageId, 'can_read')) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
+            }
+
             $lockedFiles = $db->findAll('locked_files', ['storage_id' => $storageId]);
             // path만 배열로 반환 (빠른 조회용)
             $lockedPaths = array_column($lockedFiles, 'path');
@@ -13922,10 +15101,16 @@ try {
             $searchPath = $filters['path'] ?? ''; // 특정 폴더 내 검색
             
             // 스토리지 접근 권한 확인
+            // ★ (2026-10-28, 펜닐 승인) getStorage() 는 없는 스토리지도 ['success'=>false,…] 배열(참)을 돌려주고 권한도 안 봐서,
+            //   storage_id 만 바꾸면 다른 사용자의 '내 파일'(home)까지 검색됐음 → 없으면 오류, 읽기 권한(checkPermission, 목록 열기와 같은 기준) 없으면 거부
             if ($storageId > 0) {
                 $storageInfo = $storage->getStorage($storageId);
-                if (!$storageInfo) {
-                    $result = ['success' => false, 'error' => __('storage_not_found')];
+                if (!$storageInfo || (isset($storageInfo['success']) && $storageInfo['success'] === false)) {
+                    $result = ['success' => false, 'error' => __('api_err_storage_not_found', '스토리지를 찾을 수 없습니다.')];
+                    break;
+                }
+                if (!$storage->checkPermission($storageId, 'can_read')) {
+                    $result = ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')];
                     break;
                 }
             }
@@ -13993,7 +15178,8 @@ try {
                     if (is_array($storageList)) {
                         foreach ($storageList as $st) {
                             $sid = (int)($st['id'] ?? 0);
-                            if ($sid > 0) {
+                            // ★ (2026-10-28) 보이기만 하고 읽기 권한이 없는(can_read=0) 스토리지는 빼기 — search_all 과 같은 기준
+                            if ($sid > 0 && !empty($st['can_read'])) {
                                 $storageNames[$sid] = $st['name'] ?? '';
                                 $allowedStorageIds[] = $sid;
                             }
@@ -14013,6 +15199,11 @@ try {
                 }
             }
             
+            // ★ (2026-10-28, 펜닐 승인) 결과 경로 — 인덱스 검색(FileIndex::search)은 'path', 실시간 검색은 'filepath'(+'path') 로 줌.
+            //   아래 필터·정렬이 'filepath' 만 읽어서 인덱스 결과에선 빈 문자열이 됐음
+            //   → 유형·경로 필터 결과 0개, 폴더 권한 필터가 아무것도 못 거름(읽기 금지 폴더 안 파일이 검색에 보임), 이름·유형 정렬 안 됨
+            $_srPath = function ($item) { return (string)($item['filepath'] ?? ($item['path'] ?? '')); };
+            
             // 필터 적용
             if (!empty($fileType) && $fileType !== 'all') {
                 $typeExtensions = [
@@ -14025,8 +15216,8 @@ try {
                 
                 if (isset($typeExtensions[$fileType])) {
                     $allowedExts = $typeExtensions[$fileType];
-                    $searchResults = array_filter($searchResults, function($item) use ($allowedExts) {
-                        $ext = strtolower(pathinfo($item['filepath'] ?? '', PATHINFO_EXTENSION));
+                    $searchResults = array_filter($searchResults, function($item) use ($allowedExts, $_srPath) {
+                        $ext = strtolower(pathinfo($_srPath($item), PATHINFO_EXTENSION));
                         return in_array($ext, $allowedExts);
                     });
                 }
@@ -14060,26 +15251,40 @@ try {
             
             // 경로 필터
             if (!empty($searchPath)) {
-                $searchResults = array_filter($searchResults, function($item) use ($searchPath) {
-                    return strpos($item['filepath'] ?? '', $searchPath) === 0;
+                $searchResults = array_filter($searchResults, function($item) use ($searchPath, $_srPath) {
+                    return strpos($_srPath($item), $searchPath) === 0;
                 });
             }
             
             // 폴더별 권한 필터링 (검색 결과에서 접근 불가 폴더 제외 - 관리자 포함)
-            $searchResults = array_filter($searchResults, function($item) use ($storage) {
+            $searchResults = array_filter($searchResults, function($item) use ($storage, $_srPath) {
                 $sid = (int)($item['storage_id'] ?? 0);
-                $filepath = $item['filepath'] ?? '';
+                $filepath = $_srPath($item);
                 $dirPath = dirname($filepath);
                 if ($dirPath === '.' || $dirPath === '') return true;
                 return $storage->checkFolderPermission($sid, $dirPath);
             });
+            // ★ (2026-10-28, 펜닐) 숨김 항목 — 자기 자신이나 상위 폴더가 숨김(시스템 이름·~$·속성 숨김)이면 빼고,
+            //   '숨김 항목 보기'(show_hidden)면 hidden 표시를 달아 남김 — 페이지 나누기 전에 걸러 개수도 맞음
+            $_hidShow = !empty($input['show_hidden']); $_hidMaps = [];
+            $_hidOut = [];
+            foreach ($searchResults as $item) {
+                $sid = (int)($item['storage_id'] ?? 0);
+                if (!isset($_hidMaps[$sid])) $_hidMaps[$sid] = HiddenItems::mapFor($sid);
+                if (HiddenItems::isHiddenPath($sid, $_srPath($item), $_hidMaps[$sid])) {
+                    if (!$_hidShow) continue;
+                    $item['hidden'] = true;
+                }
+                $_hidOut[] = $item;
+            }
+            $searchResults = $_hidOut;
             $searchResults = array_values($searchResults);
             
             // 정렬 적용
             $sortBy = $input['sort_by'] ?? 'name';
             $sortOrder = $input['sort_order'] ?? 'asc';
             
-            usort($searchResults, function($a, $b) use ($sortBy, $sortOrder) {
+            usort($searchResults, function($a, $b) use ($sortBy, $sortOrder, $_srPath) {
                 // 폴더 우선
                 $aIsDir = $a['is_dir'] ?? 0;
                 $bIsDir = $b['is_dir'] ?? 0;
@@ -14096,14 +15301,14 @@ try {
                         $cmp = strtotime($a['modified'] ?? '0') - strtotime($b['modified'] ?? '0');
                         break;
                     case 'type':
-                        $extA = strtolower(pathinfo($a['filepath'] ?? '', PATHINFO_EXTENSION));
-                        $extB = strtolower(pathinfo($b['filepath'] ?? '', PATHINFO_EXTENSION));
+                        $extA = strtolower(pathinfo($_srPath($a), PATHINFO_EXTENSION));
+                        $extB = strtolower(pathinfo($_srPath($b), PATHINFO_EXTENSION));
                         $cmp = strcmp($extA, $extB);
                         break;
                     case 'name':
                     default:
-                        $nameA = basename($a['filepath'] ?? '');
-                        $nameB = basename($b['filepath'] ?? '');
+                        $nameA = basename($_srPath($a));
+                        $nameB = basename($_srPath($b));
                         $cmp = strcasecmp($nameA, $nameB);
                         break;
                 }
@@ -14202,10 +15407,15 @@ try {
                     $r['storage_id'] = $storageId;
                     $r['storage_name'] = $storageInfo['name'] ?? '';
                 }
+                unset($r);
+                // ★ (2026-10-29 02:36, 16차) 폴더 규칙·숨김을 다른 검색(search·search_all)과 같이 걸러냄 — 종전엔 스토리지 읽기만 봐서
+                //   읽기 금지 폴더 안 파일 이름까지 보였음
+                $results = _fsFilterSearchResults($storage, $results, $storageId, !empty($_GET['show_hidden']));
                 
                 $result = ['success' => true, 'results' => $results, 'total' => count($results), 'realtime' => true];
             } catch (Throwable $e) {
-                $result = ['success' => false, 'error' => $e->getMessage()];
+                // ★ (2026-10-29 02:36, 16차) 오류 문구에 서버 절대 경로가 섞이지 않게
+                $result = ['success' => false, 'error' => str_ireplace([__DIR__, str_replace('\\', '/', __DIR__)], '', $e->getMessage())];
             }
             break;
         
@@ -14259,6 +15469,21 @@ try {
                 $env['existing_shares'] = $shares;
             }
             
+            // ★ (2026-10-29 11:27, 20차 점검) 화면이 쓰는 Docker 여부·패키지 관리자 채움(다른 환경 감지와 같은 방식) — 종전엔 늘 false·빈 값이라
+            //   Docker 안내가 안 나오고 설치 명령도 늘 'Install samba package' 로만 보였음
+            if ($os === 'Linux') {
+                $env['is_docker'] = file_exists('/.dockerenv') || (is_readable('/proc/1/cgroup') && strpos((string)@file_get_contents('/proc/1/cgroup'), 'docker') !== false);
+                if ($canExec) {
+                    foreach (['apt' => 'apt-get', 'yum' => 'yum', 'apk' => 'apk'] as $pmKey => $pmBin) {
+                        $pmOut = []; $pmRc = 1;
+                        set_error_handler(function() {}, E_ALL);
+                        exec('which ' . $pmBin . ' 2>/dev/null', $pmOut, $pmRc);
+                        restore_error_handler();
+                        if ($pmRc === 0) { $env['pkg_manager'] = $pmKey; break; }
+                    }
+                }
+            }
+            
             // Linux: Samba
             if ($canExec && $os === 'Linux') {
                 $smbdOut = [];
@@ -14304,7 +15529,7 @@ try {
                         $name = @mb_convert_encoding($name, 'UTF-8', 'CP949');
                     }
                     $storageList[] = [
-                        'id' => (string)$sid,
+                        'id' => (string)($s['id'] ?? $sid),   // ★ (2026-10-29 10:11, 20차 점검) 실제 스토리지 번호 — 종전엔 배열 순번이라 공유 만들기(network_share_create)가 엉뚱한 스토리지를 찾았음(재현)
                         'name' => $name,
                         'path' => $path,
                         'exists' => !empty($path) && @is_dir($path),
@@ -14560,6 +15785,15 @@ try {
             $users = $db->load('users');
             $synced = [];
             $errors = [];
+            $kept = [];   // ★ (2026-10-29 20:04, 23차 점검, 펜닐 결정 '새 사용자만 기본값') 이미 Samba 계정이 있어 비밀번호를 그대로 둔 사용자
+            // ★ (2026-10-29 20:04, 23차 점검, 펜닐 결정 '새 사용자만 기본값') 비밀번호를 따로 주지 않으면 이미 Samba 계정이 있는 사용자의 비밀번호는 바꾸지 않음(없는 사용자만 '아이디1234' 로 만듦) —
+            //   종전엔 동기화할 때마다 전원 비밀번호를 '아이디1234' 로 덮어써, 사용자가 smbpasswd 로 바꾼 비밀번호가 돌아갔음.
+            //   있는지 확인은 pdbedit(smbpasswd 와 같은 Samba 패키지). 없으면 기존 비밀번호 보호를 위해 기본값 설정을 건너뜀
+            $pdbOut = [];
+            set_error_handler(function() {}, E_ALL);
+            @exec('which pdbedit 2>/dev/null', $pdbOut, $pdbRc);
+            restore_error_handler();
+            $hasPdbedit = ($pdbRc === 0);
             
             foreach ($users as $user) {
                 if (($user['status'] ?? '') !== 'active') continue;
@@ -14590,8 +15824,27 @@ try {
                     }
                 }
                 
+                // ★ (2026-10-29 20:04, 23차 점검, 펜닐 결정 '새 사용자만 기본값') 비밀번호를 주지 않았으면 이미 있는 Samba 계정은 건너뜀(활성화만)
+                if (!$targetPassword) {
+                    if (!$hasPdbedit) {
+                        $errors[] = "{$username}: pdbedit not found — skipped to keep existing password";
+                        continue;
+                    }
+                    $pdbChk = [];
+                    set_error_handler(function() {}, E_ALL);
+                    @exec('pdbedit -L -u ' . escapeshellarg($username) . ' 2>/dev/null', $pdbChk, $pdbChkRc);
+                    restore_error_handler();
+                    if ($pdbChkRc === 0) {
+                        set_error_handler(function() {}, E_ALL);
+                        @exec('smbpasswd -e ' . escapeshellarg($username) . ' 2>&1', $enOut0, $enRc0);
+                        restore_error_handler();
+                        $kept[] = $username;
+                        continue;
+                    }
+                }
+                
                 // Samba 비밀번호 설정
-                $pass = $targetPassword ?: ($user['username'] . '1234'); // 기본 비밀번호
+                $pass = $targetPassword ?: ($user['username'] . '1234'); // 기본 비밀번호(새 Samba 계정만)
                 $smbCmd = 'printf ' . escapeshellarg($pass . "\n" . $pass . "\n") . ' | smbpasswd -a -s ' . escapeshellarg($username) . ' 2>&1';
                 $smbSetOut = [];
                 set_error_handler(function() {}, E_ALL);
@@ -14612,8 +15865,9 @@ try {
             $result = [
                 'success' => true,
                 'synced' => $synced,
+                'kept' => $kept,
                 'errors' => $errors,
-                'message' => count($synced) . ' users synced' . (count($errors) ? ', ' . count($errors) . ' errors' : '')
+                'message' => count($synced) . ' users synced' . (count($kept) ? ', ' . count($kept) . ' kept' : '') . (count($errors) ? ', ' . count($errors) . ' errors' : '')
             ];
             break;
             
@@ -14628,6 +15882,56 @@ try {
             if (!in_array($jobType, ['copy', 'move', 'delete', 'restore', 'trash_empty', 'trash_delete'])) {
                 $result = ['success' => false, 'error' => 'Invalid job type'];
                 break;
+            }
+            
+            // ★ (2026-10-28 17:23, 소스 점검 2단계) 작업 큐 권한 검사 — 종전엔 하나도 없어, 폴더별 권한으로 막힌 폴더나
+            //   다른 사용자의 휴지통 항목을 작업 큐(copy/move/delete/restore/trash_*)로 우회할 수 있었음. 직접 액션(move·delete·trash_delete)과 같은 기준으로 검사.
+            {
+                $jqItems = is_array($jobParams['items'] ?? null) ? $jobParams['items'] : [];
+                $jqSrc = (int)($jobParams['source_storage_id'] ?? 0);
+                $jqDstId = (int)($jobParams['dest_storage_id'] ?? $jqSrc);
+                $jqDstPath = $jobParams['dest_path'] ?? '';
+                $jqDeny = null;
+                $jqDir = function($path) { $d = dirname(str_replace('\\', '/', (string)$path)); return $d === '.' ? '' : $d; };
+                // 폴더 권한 + 스토리지 권한 둘 다(checkFolderPermission 은 폴더 규칙이 없으면 통과하므로, 스토리지 접근 권한은 checkPermission 으로 — FileManager 가 실행 때 보는 것과 같은 기준)
+                if (in_array($jobType, ['copy', 'move'])) {
+                    if (!$storage->checkPermission($jqDstId, 'can_write') || !$storage->checkFolderPermission($jqDstId, $jqDstPath, 'can_write')) $jqDeny = __('no_permission_dot', '권한이 없습니다.');
+                    if (!$jqDeny && !$storage->checkPermission($jqSrc, 'can_read')) $jqDeny = __('no_permission_dot', '권한이 없습니다.');
+                    // ★ (2026-10-28 19:55, 6차 점검) 이동은 직접 이동(api move → FileManager::moveInner)과 같은 기준 — 원본 스토리지 can_write·폴더 can_read.
+                    //   종전(2단계 추가분)엔 can_delete 를 요구해 쓰기만 있는 사용자의 큐 이동이 직접 이동과 달리 막혔음(회귀)
+                    if (!$jqDeny && $jobType === 'move' && !$storage->checkPermission($jqSrc, 'can_write')) $jqDeny = __('no_permission_dot', '권한이 없습니다.');
+                    foreach ($jqItems as $it) {
+                        if ($jqDeny) break;
+                        $ip = $it['path'] ?? '';
+                        if (!$storage->checkFolderPermission($jqSrc, $jqDir($ip) ?: $ip, 'can_read')) $jqDeny = __('no_permission_dot', '권한이 없습니다.');
+                        // ★ (2026-10-28 20:42, 7차 점검, 펜닐 결정) 이동은 원본 폴더 쓰기도 필요(직접 이동과 같은 기준)
+                        if (!$jqDeny && $jobType === 'move' && !$storage->checkFolderPermission($jqSrc, $jqDir($ip) ?: $ip, 'can_write')) $jqDeny = __('no_permission_dot', '권한이 없습니다.');
+                        if (!$jqDeny && $jobType === 'move' && !$storage->checkFolderPermission($jqSrc, $jqDir($ip) ?: $ip, 'can_delete')) $jqDeny = __('no_permission_dot', '권한이 없습니다.');   // ★ (2026-10-28 21:19, 8차 점검, 펜닐 결정)
+                        // ★ (2026-10-28 21:53, 9차 점검, 펜닐 결정 '작업 자체를 거부') 항목 자신 + 그 아래 보호 폴더까지(checkFolderTreePermission) — 종전엔 상위 폴더만 봐서 보호 폴더 자체·그걸 품은 폴더를 지우고·옮기고·복사·공유할 수 있었음(재현)
+                        if (!$jqDeny && (!$storage->checkFolderTreePermission($jqSrc, $ip, 'can_read') || ($jobType === 'move' && (!$storage->checkFolderTreePermission($jqSrc, $ip, 'can_write') || !$storage->checkFolderTreePermission($jqSrc, $ip, 'can_delete'))))) $jqDeny = __('no_permission_dot', '권한이 없습니다.');
+                    }
+                } elseif ($jobType === 'delete') {
+                    foreach ($jqItems as $it) {
+                        if ($jqDeny) break;
+                        $ip = $it['path'] ?? '';
+                        $isid = (int)($it['storage_id'] ?? $jobParams['storage_id'] ?? $jqSrc);
+                        if (!$storage->checkPermission($isid, 'can_delete') || !$storage->checkFolderPermission($isid, $jqDir($ip) ?: $ip, 'can_delete')
+                            || !$storage->checkFolderTreePermission($isid, $ip, 'can_delete')) $jqDeny = __('no_permission_dot', '권한이 없습니다.');   // ★ (2026-10-28 21:53, 9차 점검) 안의 보호 폴더까지
+                    }
+                } elseif (in_array($jobType, ['restore', 'trash_delete', 'trash_empty'])) {
+                    // 휴지통 항목은 본인 것 또는 관리자만(직접 trash_delete 와 같은 기준) — trash_empty 는 전체이므로 본인 것만 처리됨을 보장하기 위해 관리자 아니면 각 항목 소유자 검사
+                    $jqAdmin = ($user['role'] ?? '') === 'admin';
+                    if (!$jqAdmin) {
+                        $jqTrash = $db->load('trash') ?: [];
+                        $jqOwn = [];
+                        foreach ($jqTrash as $t) { if (($t['deleted_by'] ?? 0) === ($user['id'] ?? -1)) $jqOwn[(string)($t['id'] ?? '')] = true; }
+                        // restore·trash_delete·trash_empty 모두 items[].id 단위로 처리되므로, 각 항목이 본인 휴지통 것인지 확인
+                        foreach ($jqItems as $it) {
+                            if (empty($jqOwn[(string)($it['id'] ?? '')])) { $jqDeny = __('no_permission_dot', '권한이 없습니다.'); break; }
+                        }
+                    }
+                }
+                if ($jqDeny) { $result = ['success' => false, 'error' => $jqDeny]; break; }
             }
             
             $jobManager = JobManager::getInstance();
@@ -14671,8 +15975,10 @@ try {
                 }
             }
             $appSettings = $db->load('settings');
-            $maxRunning = (int)($appSettings['max_running_jobs'] ?? 2);
-            if ($runningCount >= $maxRunning) {
+            // ★ (2026-10-29 20:07, 23차 점검, 펜닐 결정 '설정값을 실행 제한에도 적용') 동시 실행 수 = 설정 화면의 '사용자당 최대 동시 작업 수'(0 = 제한 없음) —
+            //   종전엔 화면에 없는 max_running_jobs(기본 2)로 따로 묶여, 설정을 5로 해도 2개만 돌고 나머지는 대기했음
+            $maxRunning = (int)($appSettings['max_concurrent_jobs'] ?? 5);
+            if ($maxRunning > 0 && $runningCount >= $maxRunning) {
                 // 대기 상태로 두고 응답 (폴링에서 재시도)
                 $result = ['success' => true, 'queued' => true];
                 break;
@@ -14751,7 +16057,8 @@ try {
             $passwordValidator = $input['password_validator'] ?? '';
             
             // 스토리지 쓰기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $path, 'can_write')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $path, 'can_write')) {
                 $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
                 break;
             }
@@ -14813,7 +16120,8 @@ try {
             $path = $_GET['path'] ?? '';
             
             // 폴더 읽기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $path, 'can_read')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, $path, 'can_read')) {
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
             }
@@ -14853,7 +16161,8 @@ try {
             $storageId = (int)($input['storage_id'] ?? 0);
             
             // 스토리지 쓰기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $input['path'] ?? '', 'can_write')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $input['path'] ?? '', 'can_write')) {
                 $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
                 break;
             }
@@ -14884,6 +16193,13 @@ try {
                 $result = ['success' => true, 'message' => 'Already a vault'];
                 break;
             }
+            // ★ (2026-10-29 17:58, 22차 점검) 이 동작은 '보관함 안에 만든 하위 폴더'를 같은 비밀번호의 보관함으로 표시하는 용도(화면은 상위가 보관함일 때만 부름) —
+            //   상위 폴더가 보관함일 때만 허용. 종전엔 아무 폴더(스토리지 루트 포함)나 보관함으로 바꿀 수 있었음
+            $viParent = dirname($fullPath);
+            if (trim(str_replace('\\', '/', (string)$path), '/. ') === '' || !file_exists($viParent . DIRECTORY_SEPARATOR . '.vault.json')) {
+                $result = ['success' => false, 'error' => __('vault_err_not_vault', '보관함 폴더가 아닙니다.')];
+                break;
+            }
             
             $vaultConfig = [
                 'version' => 1,
@@ -14905,7 +16221,8 @@ try {
             // 스토리지 권한 체크
             { $__sid = (int)($input['storage_id'] ?? $_POST['storage_id'] ?? $_GET['storage_id'] ?? 0);
               $__path = $input['path'] ?? $_POST['path'] ?? $_GET['path'] ?? '';
-              if (!$storage->checkFolderPermission($__sid, $__path, 'can_write')) {
+              // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+              if (!$storage->checkPermission($__sid, 'can_write') || !$storage->checkFolderPermission($__sid, $__path, 'can_write')) {
                   $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
                   break;
               }
@@ -15028,7 +16345,8 @@ try {
             $path = $_GET['path'] ?? '';
             
             // 폴더 읽기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $path, 'can_read')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, $path, 'can_read')) {
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
             }
@@ -15189,7 +16507,8 @@ try {
             $chunkIndex = $_GET['chunk_index'] ?? null;
             
             // 폴더 읽기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $path, 'can_read')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, $path, 'can_read')) {
                 http_response_code(403);
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
@@ -15289,7 +16608,8 @@ try {
             $storageId = (int)($input['storage_id'] ?? 0);
             
             // 스토리지 쓰기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $input['path'] ?? '', 'can_write')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $input['path'] ?? '', 'can_write')) {
                 $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
                 break;
             }
@@ -15299,6 +16619,12 @@ try {
             
             if (empty($uuid) || empty($encMeta)) {
                 $result = ['success' => false, 'error' => __('api_err_missing_params', '필수 매개변수가 누락되었습니다.')];
+                break;
+            }
+            // ★ (2026-10-29 09:14, 20차) uuid 형식 확인(vault_upload·vault_delete 등과 같은 기준) — 종전엔 그대로 경로에 붙여
+            //   '../' 로 이 보관함 밖의 *.meta.enc 파일을 덮어쓸 수 있었음
+            if (!is_string($uuid) || !preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $uuid)) {
+                $result = ['success' => false, 'error' => __('api_err_invalid_request', '잘못된 요청입니다.')];
                 break;
             }
             
@@ -15329,8 +16655,11 @@ try {
             // 스토리지 권한 체크
             { $__sid = (int)($input['storage_id'] ?? $_POST['storage_id'] ?? $_GET['storage_id'] ?? 0);
               $__path = $input['path'] ?? $_POST['path'] ?? $_GET['path'] ?? '';
-              if (!$storage->checkFolderPermission($__sid, $__path, 'can_write')) {
-                  $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
+              // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+              // ★ (2026-10-29 02:36, 16차) 휴지통 없이 바로 지우므로 삭제 권한도(11차 vault_convert_delete_original 과 같은 기준) — 종전엔 쓰기만 봤음
+              if (!$storage->checkPermission($__sid, 'can_write') || !$storage->checkFolderPermission($__sid, $__path, 'can_write')
+                  || !$storage->checkPermission($__sid, 'can_delete') || !$storage->checkFolderPermission($__sid, $__path, 'can_delete')) {
+                  $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                   break;
               }
             }
@@ -15404,8 +16733,17 @@ try {
             $storageId = (int)($input['storage_id'] ?? 0);
             
             // 스토리지 쓰기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $input['path'] ?? '', 'can_write')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $input['path'] ?? '', 'can_write')) {
                 $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
+                break;
+            }
+            // ★ (2026-10-29 18:30, 22차 점검) 안의 하위 폴더 규칙까지(9차 '작업 자체를 거부'와 같은 기준) — 변환은 하위 폴더마다 보관함 표시를 쓰고 파일을 암호화한 뒤 원본을 지우는데,
+            //   종전엔 맨 위 폴더만 봐서 쓰기·삭제가 막힌 하위 폴더도 바뀌었음
+            if (!$storage->checkFolderTreePermission($storageId, (string)($input['path'] ?? ''), 'can_read')
+                || !$storage->checkFolderTreePermission($storageId, (string)($input['path'] ?? ''), 'can_write')
+                || !$storage->checkFolderTreePermission($storageId, (string)($input['path'] ?? ''), 'can_delete')) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
             }
             $path = $input['path'] ?? '';
@@ -15519,7 +16857,8 @@ try {
             }
             
             // 폴더별 읽기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, dirname($path), 'can_read')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, dirname($path), 'can_read')) {
                 http_response_code(403);
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
@@ -15568,10 +16907,11 @@ try {
             $path = $input['path'] ?? ''; // 원본 파일 상대 경로
             
             // 스토리지 쓰기 권한 체크
-            if (!$storage->checkPermission($storageId, 'can_write')) {
+            // ★ (2026-10-28 23:26, 11차 점검) 원본을 휴지통 없이 바로 지우므로 삭제 권한도(H264 변환의 원본 지우기와 같은 기준) — 종전엔 쓰기 권한만 봤음
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkPermission($storageId, 'can_delete')) {
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
             }
-            if (!$storage->checkFolderPermission($storageId, dirname($path), 'can_write')) {
+            if (!$storage->checkFolderPermission($storageId, dirname($path), 'can_write') || !$storage->checkFolderPermission($storageId, dirname($path), 'can_delete')) {
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')]; break;
             }
             
@@ -15593,9 +16933,23 @@ try {
                 $result = ['success' => true]; // 이미 없으면 성공 처리
                 break;
             }
+            // ★ (2026-10-29 17:58, 22차 점검) 보관함으로 바꾸는 중인 폴더(.vault.json 있음) 안의 파일만, 잠긴 파일은 제외 — 종전엔 이 검사가 없어
+            //   쓰기·삭제 권한만 있으면 아무 파일이나 휴지통·대량 삭제 감지 없이 바로 지울 수 있었고, 잠긴 파일도 지워졌음
+            if (!file_exists(dirname($fullPath) . DIRECTORY_SEPARATOR . '.vault.json')) {
+                $result = ['success' => false, 'error' => __('vault_err_not_vault', '보관함 폴더가 아닙니다.')];
+                break;
+            }
+            if ($db->find('locked_files', ['storage_id' => $storageId, 'path' => $relative])) {
+                $result = ['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')];
+                break;
+            }
             
             $fileSize = filesize($fullPath);
             if (@unlink($fullPath)) {
+                // ★ (2026-10-29 11:07, 20차 점검) 사용량에서 뺌 — 변환은 암호화 파일을 올릴 때(vault_upload) 더하는데 원본을 지울 땐 빼지 않아 변환한 만큼 두 번 잡혔음(재현)
+                if ($fileSize > 0) $storage->updateUsedSize($storageId, -(int)$fileSize);
+                // ★ (2026-10-29 17:58, 22차 점검) 검색 인덱스에서도 뺌(종전엔 지운 원본이 검색에 남았음)
+                try { $vdIdx = FileIndex::getInstance(); if ($vdIdx->isAvailable()) $vdIdx->removeFile($storageId, $relative); } catch (\Throwable $e) {}
                 $result = ['success' => true, 'deleted_size' => $fileSize];
             } else {
                 $result = ['success' => false, 'error' => __('err_delete_failed', '삭제에 실패했습니다.')];
@@ -15609,7 +16963,9 @@ try {
             // 스토리지 쓰기 권한 체크
             { $__sid = (int)($input['storage_id'] ?? $_POST['storage_id'] ?? 0);
               $__path = $input['path'] ?? $_POST['path'] ?? '';
-              if (!$storage->checkFolderPermission($__sid, $__path, 'can_write')) {
+              // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+              if (!$storage->checkPermission($__sid, 'can_write') || !$storage->checkFolderPermission($__sid, $__path, 'can_write')
+                  || !$storage->checkPermission($__sid, 'can_delete') || !$storage->checkFolderPermission($__sid, $__path, 'can_delete')) {   // ★ (2026-10-29 22:39, 24차 점검) 삭제 권한도(위 _chunk 와 같게, 화면은 쓰지 않는 판)
                   $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
                   break;
               }
@@ -15632,6 +16988,12 @@ try {
             // 파일명 검증
             if (preg_match('/[\/\\\\:*?"<>|]/', $originalName) || strpos($originalName, '..') !== false) {
                 $result = ['success' => false, 'error' => __('vault_err_invalid_name')];
+                break;
+            }
+            // ★ (2026-10-29 02:36, 16차) 서버에서 실행될 수 있는 이름(.php·.htaccess·.user.ini·중간 확장자) 거부 — 업로드·이름 바꾸기와 같은 기준(fsServerExecReason).
+            //   종전엔 금지 문자만 봐서 복호화 저장으로 .htaccess·.php 를 만들 수 있었음(내용은 클라이언트가 보내므로 검증 불가)
+            if ($__execReason = fsServerExecReason($originalName)) {
+                $result = ['success' => false, 'error' => $__execReason];
                 break;
             }
             
@@ -15691,8 +17053,15 @@ try {
             $totalChunks = (int)($_POST['total_chunks'] ?? 1);
             
             // 스토리지 쓰기 권한 체크
-            if (!$storage->checkPermission($storageId, 'can_write')) {
+            // ★ (2026-10-29 02:36, 16차) 폴더 규칙도 확인(같은 일을 하는 vault_decrypt_save 와 같음) — 종전엔 스토리지 쓰기만 봤음
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $path, 'can_write')) {
                 $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
+                break;
+            }
+            // ★ (2026-10-29 22:39, 24차 점검) 원본 암호 파일(.enc·.meta.enc·조각)을 휴지통 없이 지우므로 삭제 권한도(vault_delete 16차·vault_convert_delete_original 11차와 같은 기준) —
+            //   종전엔 쓰기 권한만 있는 사용자가 아무 내용으로 보내 남의 보관함 파일을 복원할 수 없게 지울 수 있었음(2회차 재검토)
+            if (!$storage->checkPermission($storageId, 'can_delete') || !$storage->checkFolderPermission($storageId, $path, 'can_delete')) {
+                $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
             }
             
@@ -15706,6 +17075,10 @@ try {
             }
             if (preg_match('/[\\/\\\\:*?"<>|]/', $originalName) || strpos($originalName, '..') !== false) {
                 $result = ['success' => false, 'error' => __('vault_err_invalid_name')];
+                break;
+            }
+            if ($__execReason = fsServerExecReason($originalName)) {   // ★ (2026-10-29 02:36, 16차) 실행될 수 있는 이름 거부(vault_decrypt_save 와 같음)
+                $result = ['success' => false, 'error' => $__execReason];
                 break;
             }
             
@@ -15736,8 +17109,14 @@ try {
                 break;
             }
             $chunkData = file_get_contents($_FILES['chunk']['tmp_name']);
-            fwrite($fp, $chunkData);
+            // ★ (2026-10-29 09:14, 20차) 쓰기 결과 확인 — 종전엔 확인하지 않아 디스크가 차서 잘려도 마지막에 원본(.enc)을 지우고 성공으로 답했음
+            $vdWritten = ($chunkData === false) ? false : fwrite($fp, $chunkData);
             fclose($fp);
+            if ($chunkData === false || $vdWritten !== strlen($chunkData)) {
+                @unlink($tmpFile);
+                $result = ['success' => false, 'error' => __('local_write_failed', '로컬 파일 저장 실패')];
+                break;
+            }
             
             // 마지막 청크: 임시 파일을 최종 파일명으로 이동 + 원본 .enc 삭제
             if ($chunkIndex >= $totalChunks - 1) {
@@ -15750,7 +17129,12 @@ try {
                     while (file_exists($vaultDir . DIRECTORY_SEPARATOR . $base . " ($i)" . $ext)) $i++;
                     $destPath = $vaultDir . DIRECTORY_SEPARATOR . $base . " ($i)" . $ext;
                 }
-                rename($tmpFile, $destPath);
+                // ★ (2026-10-29 09:14, 20차) 이름 바꾸기에 실패하면 원본(.enc)을 지우지 않고 실패로(종전엔 결과를 안 보고 원본을 지웠음)
+                if (!@rename($tmpFile, $destPath)) {
+                    @unlink($tmpFile);
+                    $result = ['success' => false, 'error' => __('local_write_failed', '로컬 파일 저장 실패')];
+                    break;
+                }
                 
                 // .enc 및 .meta.enc + .chunks 삭제
                 $encFile = $vaultDir . DIRECTORY_SEPARATOR . $uuid . '.enc';
@@ -15778,7 +17162,8 @@ try {
             $storageId = (int)($input['storage_id'] ?? 0);
             $path = $input['path'] ?? '';
             // 스토리지 쓰기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $path, 'can_write')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $path, 'can_write')) {
                 $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
                 break;
             }
@@ -15805,6 +17190,17 @@ try {
             foreach ($iter as $f) {
                 if (!$f->isDot() && preg_match('/\.enc$/', $f->getFilename())) {
                     $remainingEnc++;
+                }
+            }
+            // ★ (2026-10-29 10:31, 20차 점검) 하위까지 지우는 경우(recursive)는 하위 폴더의 남은 암호화 파일도 확인 — 종전엔 맨 위만 봐서, 하위 보관함에서
+            //   해제에 실패한 파일이 남아도 그 보관함 정보(.vault.json: 파일 이름·조각 정보)를 지워 남은 파일을 풀 수 없게 됐음(재현). 조각 폴더(*.chunks) 안은 맨 위와 같이 세지 않음
+            if ($remainingEnc === 0 && !empty($input['recursive'])) {
+                $rcIt = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($vaultDir, RecursiveDirectoryIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
+                foreach ($rcIt as $rcF) {
+                    // ★ (2026-10-29 15:35, 21차 재점검) 보관함 정보(.vault.json)가 있는 하위 보관함 바로 안의 것만 셈 — 20차엔 보관함 안의 일반 폴더에 든
+                    //   '.enc' 이름의 보통 파일도 세어(화면이 풀 수 없는 파일) 전체 해제가 계속 거부됐음(재현)
+                    if ($rcF->isFile() && preg_match('/\.enc$/', $rcF->getFilename()) && !preg_match('/\.chunks$/', basename($rcF->getPath()))
+                        && is_file($rcF->getPath() . DIRECTORY_SEPARATOR . '.vault.json')) $remainingEnc++;
                 }
             }
             
@@ -15863,8 +17259,14 @@ try {
             }
             
             // 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $srcPath, 'can_read') ||
-                !$storage->checkFolderPermission($storageId, $destPath, 'can_write')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, $srcPath, 'can_read') ||
+                !$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $destPath, 'can_write')) {
+                $result = ['success' => false, 'error' => __('no_permission_dot')];
+                break;
+            }
+            // ★ (2026-10-29 02:36, 16차) 잘라내기(cut)는 원본을 지우므로 원본 폴더의 쓰기·삭제 권한도(일반 이동 move 와 같은 기준) — 종전엔 읽기만 봤음
+            if ($copyMode === 'cut' && (!$storage->checkPermission($storageId, 'can_delete') || !$storage->checkFolderPermission($storageId, $srcPath, 'can_write') || !$storage->checkFolderPermission($storageId, $srcPath, 'can_delete'))) {
                 $result = ['success' => false, 'error' => __('no_permission_dot')];
                 break;
             }
@@ -15886,46 +17288,92 @@ try {
                 break;
             }
             
+            // ★ (2026-10-29 21:45, 24차 점검) 복사(copy)는 늘어나는 만큼 용량 확인(보관함 업로드 vault_upload·일반 복사와 같게) — 종전엔 사용량만 더하고 확인은 없어 한도를 넘겨 계속 복사됐음
+            if ($copyMode !== 'cut') {
+                $vqSz = function ($p) { if (is_file($p)) return (int)@filesize($p); $t = 0; if (is_dir($p)) foreach (new DirectoryIterator($p) as $f) { if (!$f->isDot() && $f->isFile()) $t += (int)$f->getSize(); } return $t; };
+                $vqNeed = 0;
+                foreach (['.enc', '.meta.enc', '.chunks'] as $vqSuf) {
+                    $vqNeed += $vqSz($srcDir . DIRECTORY_SEPARATOR . $uuid . $vqSuf) - $vqSz($destDir . DIRECTORY_SEPARATOR . $uuid . $vqSuf);
+                }
+                if ($vqNeed > 0) {
+                    $vqChk = $fileManager->checkQuotaPublic($storageId, $vqNeed);
+                    if (empty($vqChk['allowed'])) { $result = ['success' => false, 'error' => $vqChk['error'] ?? __('quota_exceeded', '용량이 부족합니다.')]; break; }
+                }
+            }
+            
             $copied = 0;
             $filesToDelete = []; // cut 모드: 복사 성공 후 원본 삭제
+            // ★ (2026-10-29 09:14, 20차) 하나라도 복사에 실패하면 원본은 그대로 두고, 대상에 만든 일부 사본은 지우고 실패로 답함 — 종전엔 청크 하나가 실패해도
+            //   .meta.enc 를 지워 원본 보관함 목록에서 파일이 사라지고 대상에는 깨진 항목이 남았음
+            $vcFailed = false;
+            $vcMade = [];   // 대상에 새로 만든 것(실패 시 되돌림)
+            // ★ (2026-10-29 15:35, 21차 재점검) 대상에 같은 uuid 사본이 이미 있으면(같은 파일을 두 번 복사) 그 파일은 되돌리기에서 지우지 않고,
+            //   사용량은 늘어난 만큼만 — 20차엔 덮어쓴 파일도 '새로 만든 것' 으로 보아 실패 때 기존 사본을 지웠고(재현: 조각 실패 → 기존 사본 깨짐),
+            //   성공 때도 전체 크기를 또 더해 사용량이 부풀었음(재현: 두 번째 복사 +6200)
+            $vcPre = [];    // 대상 경로 => 복사 전 크기(원래 있던 파일만)
+            $vcNote = function (string $p) use (&$vcPre) { clearstatcache(true, $p); if (is_file($p)) $vcPre[$p] = (int)@filesize($p); };
             
             // 1) uuid.enc (단일 암호화 파일)
             $encFile = $srcDir . DIRECTORY_SEPARATOR . $uuid . '.enc';
             if (file_exists($encFile)) {
                 $destFile = $destDir . DIRECTORY_SEPARATOR . $uuid . '.enc';
+                $vcNote($destFile);
                 if (@copy($encFile, $destFile)) {
-                    $copied++;
+                    $copied++; $vcMade[] = $destFile;
                     if ($copyMode === 'cut') $filesToDelete[] = $encFile;
-                }
+                } else { $vcFailed = true; }
             }
             
             // 2) uuid.meta.enc (메타데이터)
             $metaFile = $srcDir . DIRECTORY_SEPARATOR . $uuid . '.meta.enc';
-            if (file_exists($metaFile)) {
+            if (!$vcFailed && file_exists($metaFile)) {
                 $destMeta = $destDir . DIRECTORY_SEPARATOR . $uuid . '.meta.enc';
+                $vcNote($destMeta);
                 if (@copy($metaFile, $destMeta)) {
-                    $copied++;
+                    $copied++; $vcMade[] = $destMeta;
                     if ($copyMode === 'cut') $filesToDelete[] = $metaFile;
-                }
+                } else { $vcFailed = true; }
             }
             
             // 3) uuid.chunks/ (청크 폴더)
             $chunksDir = $srcDir . DIRECTORY_SEPARATOR . $uuid . '.chunks';
-            if (is_dir($chunksDir)) {
+            if (!$vcFailed && is_dir($chunksDir)) {
                 $destChunks = $destDir . DIRECTORY_SEPARATOR . $uuid . '.chunks';
-                if (!is_dir($destChunks)) @mkdir($destChunks, 0755, true);
+                $vcChunksNew = !is_dir($destChunks);
+                if ($vcChunksNew) @mkdir($destChunks, 0755, true);
                 $chunkCopied = true;
+                $vcChunkFiles = [];
                 $chunkIter = new DirectoryIterator($chunksDir);
                 foreach ($chunkIter as $cf) {
                     if ($cf->isDot()) continue;
-                    if (!@copy($cf->getPathname(), $destChunks . DIRECTORY_SEPARATOR . $cf->getFilename())) {
-                        $chunkCopied = false;
-                    }
+                    $vcTarget = $destChunks . DIRECTORY_SEPARATOR . $cf->getFilename();
+                    $vcNote($vcTarget);
+                    if (@copy($cf->getPathname(), $vcTarget)) { $vcChunkFiles[] = $vcTarget; }
+                    else { $chunkCopied = false; }
                 }
                 if ($chunkCopied) {
                     $copied++;
                     if ($copyMode === 'cut') $filesToDelete[] = $chunksDir;
+                } else {
+                    $vcFailed = true;
                 }
+                foreach ($vcChunkFiles as $vcf) $vcMade[] = $vcf;
+                if ($vcChunksNew) $vcMade[] = $destChunks;
+            }
+            
+            if ($vcFailed) {
+                // 대상에 만든 것만 되돌림(파일 먼저, 새로 만든 청크 폴더는 마지막에)
+                foreach ($vcMade as $vm) { if (is_file($vm) && !isset($vcPre[$vm])) @unlink($vm); }   // 원래 있던 사본은 남김
+                foreach ($vcMade as $vm) { if (is_dir($vm)) @rmdir($vm); }
+                $result = ['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')];
+                break;
+            }
+            
+            // ★ (2026-10-29 11:08, 20차 점검) 복사(copy)는 같은 스토리지에 데이터가 늘어나므로 사용량에 더함 — 종전엔 반영하지 않았음. 잘라내기는 같은 스토리지 안 이동이라 변화 없음
+            if ($copied > 0 && $copyMode !== 'cut') {
+                $vcAdd = 0;
+                foreach ($vcMade as $vm) { if (is_file($vm)) { clearstatcache(true, $vm); $vcAdd += (int)@filesize($vm) - (int)($vcPre[$vm] ?? 0); } }
+                if ($vcAdd > 0) $storage->updateUsedSize($storageId, $vcAdd);
             }
             
             // cut 모드: 모든 복사 성공 후 원본 삭제
@@ -15957,6 +17405,16 @@ try {
             $path = $input['path'] ?? '';
             $uuid = $input['uuid'] ?? '';
             $chunkSize = (int)($input['chunk_size'] ?? 5242880); // 기본 5MB
+            // ★ (2026-10-29 02:36, 16차) 권한 확인 — 종전엔 로그인만 봐서 읽기만 되는 사용자도 남의 암호화 파일을 쪼개고 원본을 지울 수 있었음.
+            //   원본(.enc)을 지우고 새 형식으로 다시 쓰므로 스토리지·폴더 쓰기 권한. 조각 크기도 64KB~64MB 로 제한(1바이트면 파일 수천만 개)
+            if (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $path, 'can_write')) {
+                $result = ['success' => false, 'error' => __('no_write_permission', '쓰기 권한이 없습니다.')];
+                break;
+            }
+            if ($chunkSize < 65536 || $chunkSize > 67108864) {
+                $result = ['success' => false, 'error' => __('api_err_invalid_request', '잘못된 요청입니다.')];
+                break;
+            }
             
             if (empty($uuid) || !preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $uuid)) {
                 $result = ['success' => false, 'error' => 'Invalid UUID'];
@@ -16062,7 +17520,8 @@ try {
             $path = $_POST['path'] ?? '';
             
             // 폴더 읽기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $path, 'can_read')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, $path, 'can_read')) {
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
             }
@@ -16095,6 +17554,12 @@ try {
             }
             $basePath = $_vp['basePath'];
             $vaultDir = $_vp['vaultDir'];
+            // ★ (2026-10-29 18:30, 22차 점검) 보관함 폴더의 미리보기일 때만(화면은 보관함 안에서만 부름) — 종전엔 읽기 권한만 있으면 아무 폴더 경로로
+            //   서버 임시 폴더에 크기 제한 없이 계속 써 디스크를 채울 수 있었음
+            if (!file_exists($vaultDir . DIRECTORY_SEPARATOR . '.vault.json')) {
+                $result = ['success' => false, 'error' => __('vault_err_not_vault', '보관함 폴더가 아닙니다.')];
+                break;
+            }
             
             // 임시 파일은 data/vault_temp/ 에 저장 (한글 경로 문제 회피)
             $tempBaseDir = DATA_PATH . DIRECTORY_SEPARATOR . 'vault_temp';
@@ -16161,7 +17626,8 @@ try {
             $path = $_GET['path'] ?? '';
             
             // 폴더 읽기 권한 체크
-            if (!$storage->checkFolderPermission($storageId, $path, 'can_read')) {
+            // ★ (2026-10-28 19:55, 6차 점검) 스토리지 권한도 확인 — 종전엔 폴더 권한(규칙이 없으면 통과)만 봐서 남의 홈 스토리지에 쓰거나 내려받을 수 있었음(재현)
+            if (!$storage->checkPermission($storageId, 'can_read') || !$storage->checkFolderPermission($storageId, $path, 'can_read')) {
                 http_response_code(403);
                 $result = ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                 break;
@@ -16203,6 +17669,8 @@ try {
                 break;
             }
             
+            @touch($filePath);   // ★ (2026-10-30 01:56, 26차 점검) 읽을 때마다 연장 — 큰(조각 저장) 보관함 동영상·음악은 이 임시 파일로 재생되는데, 수정 시각 기준 5분 자동 정리가 재생 중에도 지워 되감기·이어 재생이 끊겼음
+            clearstatcache(true, $filePath);
             $size = filesize($filePath);
             $ext = strtolower(pathinfo($safeName, PATHINFO_EXTENSION));
             $mimeTypes = [
@@ -16227,6 +17695,14 @@ try {
                 if (preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $m)) {
                     $start = (int)$m[1];
                     if (!empty($m[2])) $end = (int)$m[2];
+                    // ★ (2026-10-30 00:51, 25차 — 24차 남은 낮은 것) 범위 끝을 파일 크기로 줄이고, 시작이 끝·크기를 넘으면 416(vault_download 와 같은 기준) —
+                    //   종전엔 'bytes=0-999999' 에 Content-Length 1000000 을 보내고(실제 10바이트, 재현) 잘못된 범위에도 206 으로 답했음
+                    if ($start > $end || $start >= $size) {
+                        http_response_code(416);
+                        header("Content-Range: bytes */{$size}");
+                        exit;
+                    }
+                    $end = min($end, $size - 1);
                     $httpCode = 206;
                 }
             }
@@ -16329,7 +17805,8 @@ try {
         
         // ===== 아이콘 관리 (관리자 전용) =====
         case 'icon_manager':
-            if (!$auth->isAdmin() && !$auth->isAdminOrSubAdmin()) {
+            // ★ (2026-10-29 18:06, 22차 점검) 부관리자는 '시스템 설정' 권한이 있을 때만 — 종전엔 관리 권한이 하나도 없는 부관리자도 API 로 전체 아이콘·확장자 매핑을 바꿀 수 있었음(화면 메뉴는 부관리자에게 안 보임)
+            if (!$auth->isAdmin() && !($auth->isAdminOrSubAdmin() && $auth->hasAdminPerm('system_settings'))) {
                 http_response_code(403);
                 $result = ['success' => false, 'error' => '관리자 권한이 필요합니다'];
                 break;
@@ -16465,5 +17942,7 @@ try {
 } catch (\Throwable $e) {
     http_response_code(500);
     _sessionDebugLog('EXCEPTION', 'msg=' . substr($e->getMessage(), 0, 200) . ' file=' . basename($e->getFile()) . ':' . $e->getLine());
-    echo json_encode(['success' => false, 'error' => __('server_error_prefix') . $e->getMessage()]);
+    // ★ (2026-10-28 21:19, 8차 점검) 오류 문구에 서버 절대 경로(설치 폴더)가 그대로 나가던 것 — 설치 폴더 부분만 지움(문구 자체는 종전대로)
+    $errMsg = str_ireplace([__DIR__ . DIRECTORY_SEPARATOR, __DIR__ . '/', str_replace('\\', '/', __DIR__) . '/', __DIR__], '', $e->getMessage());   // ★ (2026-10-28 21:53, 9차) 윈도우 드라이브 문자 대소문자 차이(e:\ / E:\)도 지우게 대소문자 무시
+    echo json_encode(['success' => false, 'error' => __('server_error_prefix') . $errMsg]);
 }

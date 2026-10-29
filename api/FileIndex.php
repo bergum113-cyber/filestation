@@ -8,6 +8,7 @@ class FileIndex {
     private $db = null;  // SQLite3 또는 null
     private string $dbPath;
     private bool $available = false;
+    private bool $remoteListIncomplete = false;   // ★ (2026-10-29 18:06, 22차 점검) 원격 재구축 중 하위 목록 실패 여부
     
     private function __construct() {
         // SQLite3 확장 사용 가능 여부 확인
@@ -140,7 +141,12 @@ class FileIndex {
         $stmt->bindValue(':filepath', $filepath, SQLITE3_TEXT);
         $stmt->bindValue(':is_dir', $info['is_dir'] ?? 0, SQLITE3_INTEGER);
         $stmt->bindValue(':size', $info['size'] ?? 0, SQLITE3_INTEGER);
-        $stmt->bindValue(':modified', $info['modified'] ?? date('Y-m-d H:i:s'), SQLITE3_TEXT);
+        // ★ (2026-10-29 11:13, 20차 점검) 수정 시각은 늘 'Y-m-d H:i:s' 글자로 — 종전엔 폴더 색인(indexFolder)·압축 등이 초(정수)로 넣어 형식이 섞였고,
+        //   동기화(글자끼리 비교)가 그 항목들을 매번 바뀐 것으로 보고 다시 썼음
+        $ixMod = $info['modified'] ?? null;
+        if (is_int($ixMod) || is_float($ixMod) || (is_string($ixMod) && ctype_digit($ixMod))) $ixMod = date('Y-m-d H:i:s', (int)$ixMod);
+        elseif (!is_string($ixMod) || $ixMod === '') $ixMod = date('Y-m-d H:i:s');
+        $stmt->bindValue(':modified', $ixMod, SQLITE3_TEXT);
         $stmt->bindValue(':extension', strtolower($extension), SQLITE3_TEXT);
         
         return $stmt->execute() !== false;
@@ -156,6 +162,24 @@ class FileIndex {
         $stmt->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
         $stmt->bindValue(':filepath', $filepath, SQLITE3_TEXT);
         return $stmt->execute() !== false;
+    }
+    
+    /**
+     * ★ (2026-10-29 22:39, 24차 점검) 스토리지 하나의 인덱스 전부(행·스토리지별 동기화 시각·체크포인트) 삭제 — 스토리지 삭제 때 사용.
+     *   번호는 '최대+1' 로 다시 쓰여, 지운 스토리지의 인덱스를 같은 번호의 새 스토리지가 물려받았음(사용량 덮어쓰기·검색·원격 목록)
+     */
+    public function removeStorage(int $storageId): bool {
+        if (!$this->available) return false;
+        $stmt = $this->db->prepare('DELETE FROM files WHERE storage_id = :storage_id');
+        $stmt->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
+        $ok = $stmt->execute() !== false;
+        $dm = $this->db->prepare('DELETE FROM meta WHERE key = :key');
+        $dm->bindValue(':key', 'last_sync_storage_' . $storageId, SQLITE3_TEXT);
+        $dm->execute();
+        $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
+        $cp = $dataDir . DIRECTORY_SEPARATOR . 'index_sync_checkpoint_' . $storageId . '.json';
+        if (is_file($cp)) @unlink($cp);
+        return $ok;
     }
     
     /**
@@ -191,6 +215,16 @@ class FileIndex {
      */
     public function moveFile(int $storageId, string $oldPath, string $newPath): bool {
         if (!$this->available) return false;
+        // ★ (2026-10-29 22:06, 24차 점검) 덮어쓰기 이동이면 대상 자리의 옛 행(폴더면 그 아래까지)을 먼저 지움 — 종전엔 UNIQUE(storage_id, filepath) 충돌로 UPDATE 가 실패해
+        //   원본 경로의 유령 항목이 남고 대상은 옛 크기·시각 그대로였음(직접 이동·끌어 놓기)
+        //   원본 행이 있을 때만(같은 이동을 두 번 부르는 경로가 있어 — FileManager 와 api.php — 두 번째에 옮겨 놓은 행을 지우지 않게)
+        if ($oldPath !== $newPath) {
+            $chk = $this->db->prepare('SELECT 1 FROM files WHERE storage_id = :sid AND filepath = :p LIMIT 1');
+            $chk->bindValue(':sid', $storageId, SQLITE3_INTEGER);
+            $chk->bindValue(':p', $oldPath, SQLITE3_TEXT);
+            $chkRes = $chk->execute();
+            if ($chkRes && $chkRes->fetchArray()) $this->removeFolder($storageId, $newPath);
+        }
         
         // 파일 자체 이동
         $stmt = $this->db->prepare('
@@ -205,12 +239,16 @@ class FileIndex {
         $stmt->execute();
         
         // 하위 항목 이동 (폴더인 경우)
-        $oldPattern = $oldPath . '/%';
+        // ★ (2026-10-28 18:22, 소스 점검 5단계) LIKE → 범위 조건(removeFolder 와 같은 방식). 종전엔 `LIKE '경로/%'` 라 폴더 이름의
+        //   '_'·'%' 가 와일드카드로 동작해 형제 폴더(예: a_b 이동 시 a-b/…)의 행까지 새 경로로 바꿨고, 대소문자도 무시됐음.
+        //   범위 조건은 와일드카드·대소문자 문제가 없고 인덱스를 탐.
+        $oldPrefix = $oldPath . '/';
         $oldLen = strlen($oldPath);
         
-        $selectStmt = $this->db->prepare('SELECT id, filepath FROM files WHERE storage_id = :storage_id AND filepath LIKE :pattern');
+        $selectStmt = $this->db->prepare('SELECT id, filepath FROM files WHERE storage_id = :storage_id AND filepath >= :rlo AND filepath < :rhi');
         $selectStmt->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
-        $selectStmt->bindValue(':pattern', $oldPattern, SQLITE3_TEXT);
+        $selectStmt->bindValue(':rlo', $oldPrefix, SQLITE3_TEXT);
+        $selectStmt->bindValue(':rhi', substr($oldPrefix, 0, -1) . '0', SQLITE3_TEXT);
         $result = $selectStmt->execute();
         
         while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
@@ -243,8 +281,9 @@ class FileIndex {
             $useEscape = true;
         } else {
             // 일반 검색: 양쪽에 % 추가
-            $query = '%' . $query . '%';
-            $useEscape = false;
+            // ★ (2026-10-29 22:08, 24차 점검) 검색어 속 '_'·'%' 는 글자 그대로(와일드카드 검색과 같은 이스케이프) — 종전엔 'a_b' 가 'axb' 도, '%' 하나가 전부를 찾았음
+            $query = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $query) . '%';
+            $useEscape = true;
         }
         
         $escapeSql = $useEscape ? " ESCAPE '\\'" : "";
@@ -320,11 +359,10 @@ class FileIndex {
             $pattern = trim($pattern);
             if (empty($pattern)) continue;
             
-            // 와일드카드를 SQL LIKE로 변환: * → %, ? → _
-            $likePattern = str_replace(['*', '?'], ['%', '_'], $pattern);
-            // 특수문자 이스케이프 (% _ 제외)
-            $likePattern = addcslashes($likePattern, '%_\\');
-            $likePattern = str_replace(['\\%', '\\_'], ['%', '_'], $likePattern);
+            // ★ (2026-10-29 11:12, 20차 점검) 이름에 든 % _ \ 는 먼저 글자로 이스케이프한 뒤 * ? 만 와일드카드로 — 종전엔 변환 뒤 이스케이프를 다시 풀어
+            //   이름의 '_'·'%' 도 와일드카드가 돼, 'pat_20*' 에 'patx20a.txt' 까지 잡혔음(재현. 인덱스 없을 때의 matchPattern 은 글자 그대로)
+            $likePattern = addcslashes($pattern, '%_\\');
+            $likePattern = str_replace(['*', '?'], ['%', '_'], $likePattern);
             $likePatterns[] = $likePattern;
         }
         
@@ -336,6 +374,7 @@ class FileIndex {
         
         // 경로 조건
         $normalizedPath = empty($basePath) ? '' : rtrim(str_replace('\\', '/', $basePath), '/');
+        $likePath = addcslashes($normalizedPath, '%_\\');   // ★ 경로 조건도 폴더 이름의 % _ 를 글자로(아래 ESCAPE '\')
         
         if ($scope === 'current') {
             // 현재 폴더만 - 직접 자식만 검색
@@ -345,16 +384,16 @@ class FileIndex {
             } else {
                 // 하위 폴더: 정확히 basePath/filename 형태인 것만
                 // filepath가 basePath/로 시작하고, 그 이후에 /가 없는 것
-                $conditions[] = "(filepath LIKE :path_direct AND filepath NOT LIKE :path_subdir)";
-                $bindings[':path_direct'] = $normalizedPath . '/%';
-                $bindings[':path_subdir'] = $normalizedPath . '/%/%';
+                $conditions[] = "(filepath LIKE :path_direct ESCAPE '\\' AND filepath NOT LIKE :path_subdir ESCAPE '\\')";
+                $bindings[':path_direct'] = $likePath . '/%';
+                $bindings[':path_subdir'] = $likePath . '/%/%';
             }
         } else {
             // 재귀 검색
             if (!empty($normalizedPath)) {
                 // basePath 하위 전체
-                $conditions[] = "(filepath LIKE :path_prefix OR filepath = :path_exact)";
-                $bindings[':path_prefix'] = $normalizedPath . '/%';
+                $conditions[] = "(filepath LIKE :path_prefix ESCAPE '\\' OR filepath = :path_exact)";
+                $bindings[':path_prefix'] = $likePath . '/%';
                 $bindings[':path_exact'] = $normalizedPath;
             }
             // 루트에서 재귀는 조건 없음 (전체 검색)
@@ -409,6 +448,8 @@ class FileIndex {
      */
     public function rebuildStorage(int $storageId, string $basePath): int {
         if (!$this->available) return 0;
+        // ★ (2026-10-28) 안전장치 — 로컬 경로가 비어 있으면(원격 스토리지 등) 서버 최상위 경로('/이름')를 보게 되므로 아무것도 안 함
+        if (trim($basePath) === '') return 0;   // (기존 인덱스를 지우기 전에 멈춤)
         
         // 트랜잭션 시작 (대량 INSERT 성능 개선)
         $this->db->exec('BEGIN TRANSACTION');
@@ -493,6 +534,14 @@ class FileIndex {
     public function rebuildStorageRemote(int $storageId, $adapter, ?callable $progressCallback = null): int {
         if (!$this->available) return 0;
         
+        // ★ (2026-10-29 18:06, 22차 점검) 루트 목록이 실패하면(어댑터 listFailed — 20차) 기존 인덱스를 지우지 않고 실패로 —
+        //   종전엔 실패를 빈 폴더로 보고 인덱스를 0건으로 만든 뒤 '완전 동기화' 시각까지 찍어, 다음 사용량 재계산 때 used_size 가 0 이 됐음(용량 한도 풀림)
+        $adapter->list('');
+        if (property_exists($adapter, 'listFailed') && $adapter->listFailed) {
+            throw new Exception('remote list failed');
+        }
+        $this->remoteListIncomplete = false;
+        
         $this->db->exec('BEGIN TRANSACTION');
         
         try {
@@ -506,7 +555,15 @@ class FileIndex {
             $this->db->exec('COMMIT');
             $this->setMeta('last_rebuild', date('Y-m-d H:i:s'));
             $this->setMeta('last_sync', date('Y-m-d H:i:s'));
-            $this->setMeta('last_sync_storage_' . $storageId, date('Y-m-d H:i:s'));
+            // ★ (2026-10-29 18:06, 22차 점검) 하위 폴더 목록이 하나라도 실패했으면 '완전 동기화' 시각을 남기지 않음(사용량 재계산이 빠진 인덱스를 믿지 않게)
+            //   예전 시각도 지움 — 남겨 두면 사용량 재계산·인덱스 목록이 그 시각을 보고 빠진 인덱스를 그대로 믿었음(변경 검토에서 발견)
+            if (empty($this->remoteListIncomplete)) {
+                $this->setMeta('last_sync_storage_' . $storageId, date('Y-m-d H:i:s'));
+            } else {
+                $dm = $this->db->prepare('DELETE FROM meta WHERE key = :key');
+                $dm->bindValue(':key', 'last_sync_storage_' . $storageId, SQLITE3_TEXT);
+                $dm->execute();
+            }
             
             // 체크포인트가 있었다면 삭제
             $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
@@ -527,6 +584,7 @@ class FileIndex {
         
         try {
             $items = $adapter->list($path);
+            if (property_exists($adapter, 'listFailed') && $adapter->listFailed) $this->remoteListIncomplete = true;   // ★ (22차) 목록 실패 기록
             foreach ($items as $item) {
                 $filename = $item['name'] ?? '';
                 if ($filename === '' || substr($filename, 0, 1) === '.') continue;
@@ -779,6 +837,8 @@ class FileIndex {
      */
     public function syncStorage(int $storageId, string $basePath): array {
         if (!$this->available) return ['added' => 0, 'removed' => 0, 'updated' => 0];
+        // ★ (2026-10-28) 안전장치 — 로컬 경로가 비어 있으면(원격 스토리지 등) 서버 최상위 경로('/이름')를 보게 되므로 아무것도 안 함
+        if (trim($basePath) === '') return ['added' => 0, 'removed' => 0, 'updated' => 0];
         
         $startTime = time();
         $maxTime = 300; // 스토리지당 최대 300초
@@ -1174,6 +1234,8 @@ class FileIndex {
      */
     public function indexFolder(int $storageId, string $basePath, string $relativePath): void {
         if (!$this->available) return;
+        // ★ (2026-10-28) 안전장치 — 로컬 경로가 비어 있으면(원격 스토리지 등) 서버 최상위 경로('/이름')를 보게 되므로 아무것도 안 함
+        if (trim($basePath) === '') return;
         
         $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
         if (!is_dir($fullPath)) return;

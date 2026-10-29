@@ -45,11 +45,16 @@ if (!$isLoggedIn && method_exists($auth, 'checkRememberToken')) {
     }
 }
 // Kerberos/SPNEGO 자동 로그인 (AD 조인 환경)
+// ★ (2026-10-29 09:14, 20차) 관문 없이 바로 로그인시키던 것 → 2FA 를 켠 계정·막힌 IP 도 첫 화면만 열면 코드 입력 없이 들어왔음(17차 때 이곳을 빠뜨림)
+// ★ (2026-10-29 15:35, 21차 재점검) 20차엔 이곳을 지우고 api.php 'me' 에만 맡겼는데, 웹서버의 Kerberos(SPNEGO) 인증을 index.php(또는 /)에만
+//   걸어 둔 서버에선 api.php 요청에 REMOTE_USER 가 없어 자동 로그인이 멈출 수 있음 → 되살리되 'me' 와 같은 관문(ssoGate: IP·국가 제한, 2FA)을 거침.
+//   2FA 계정이면 여기서는 로그인시키지 않고(대기 표시만) 'me' 가 코드 입력 화면을 띄움. IP 판단은 Auth 의 신뢰 프록시 규칙(api.php 와 같음)
 if (!$isLoggedIn) {
     try {
         $ssoAuth = new SSOAuth();
         $kerberosUser = $ssoAuth->kerberosAutoLogin();
-        if ($kerberosUser) {
+        $kerbGate = $kerberosUser ? $auth->ssoGate($kerberosUser, false, 'kerberos') : null;
+        if ($kerberosUser && $kerbGate && !empty($kerbGate['success']) && empty($kerbGate['2fa_required'])) {
             session_regenerate_id(true);
             $_SESSION['user_id'] = $kerberosUser['id'];
             $_SESSION['username'] = $kerberosUser['username'];
@@ -480,11 +485,12 @@ ob_start('fs_icon_convert_html');
                         <!-- 브라우저 자동완성 방지용 더미 필드 -->
                         <input type="text" style="display:none" aria-hidden="true">
                         <input type="password" style="display:none" aria-hidden="true">
-                        <input type="search" id="search-input" placeholder="<?php echo $currentLang === 'en' ? 'Search... (e.g. *.mp4, doc*)' : '전체 검색... (예: *.mp4, 문서*)'; ?>" autocomplete="off" name="q_search_<?= time() ?>" readonly onfocus="this.removeAttribute('readonly')">
+                        <input type="search" id="search-input" placeholder="<?php echo $currentLang === 'en' ? 'Search... (e.g. *.mp4, doc*)' : '검색... (예: *.mp4, 문서*)'; ?>" autocomplete="off" name="q_search_<?= time() ?>" readonly onfocus="this.removeAttribute('readonly')">
+                        <?php /* ★ (2026-10-28 13:22, 펜닐) 검색창 안 ✕(11:49 추가)·필터 버튼 제거 — 조건은 검색 결과 띠의 범위·유형·날짜·크기 칩으로, 종료는 띠의 ✕ 로. 브라우저 기본 ✕ 는 CSS 로 계속 숨김
+                                 안내 문구도 '필터 검색' → '스토리지 범위'(공용·외부 스토리지를 열어 두고 검색하거나 범위 칩으로 고르면 그 스토리지 — 인덱스 없으면 실시간) */ ?>
                         <button id="search-btn" title="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>"><?= fsi('search') ?></button>
-                        <button id="search-filter-toggle" title="<?php echo $currentLang === 'en' ? 'Toggle Filter' : '필터 표시/숨김'; ?>"><?= fsi('sliders') ?></button>
                     </div>
-                    <div class="search-hint"><?= fsi('search') ?> <?php echo $currentLang === 'en' ? 'Integrated: fast (indexed)' : '통합검색: 빠름 (인덱스)'; ?> | <?= fsi('sliders') ?> <?php echo $currentLang === 'en' ? 'Filter: real-time (no index needed)' : '필터 검색: 실시간 (인덱스 불필요)'; ?></div>
+                    <div class="search-hint"><?= fsi('search') ?> <?php echo $currentLang === 'en' ? 'Integrated: fast (indexed)' : '통합검색: 빠름 (인덱스)'; ?> | <?= fsi('hard-drive') ?> <?php echo $currentLang === 'en' ? 'Storage scope: real-time if not indexed' : '스토리지 범위: 인덱스 없으면 실시간'; ?></div>
                 </div>
                 <div class="header-right">
                     <button id="mobile-search-btn" class="mobile-search-btn" aria-label="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>" title="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></button>
@@ -506,10 +512,9 @@ ob_start('fs_icon_convert_html');
                 <div class="mobile-search-row">
                     <input type="search" id="mobile-search-input" placeholder="<?php echo $currentLang === 'en' ? 'Search...' : '검색...'; ?>" autocomplete="off" name="q_mobile_<?= time() ?>" readonly onfocus="this.removeAttribute('readonly')">
                     <button id="mobile-search-submit" aria-label="<?php echo $currentLang === 'en' ? 'Search' : '검색'; ?>"><?= fsi('search') ?></button>
-                    <button id="mobile-filter-toggle" title="<?php echo $currentLang === 'en' ? 'Filter' : '필터'; ?>"><?= fsi('sliders') ?></button>
                     <button id="mobile-search-close" aria-label="<?php echo $currentLang === 'en' ? 'Close' : '닫기'; ?>"><?= fsi('x') ?></button>
                 </div>
-                <div class="search-hint mobile-search-hint"><?= fsi('search') ?> <?php echo $currentLang === 'en' ? 'Integrated: fast (indexed)' : '통합검색: 빠름 (인덱스)'; ?> | <?= fsi('sliders') ?> <?php echo $currentLang === 'en' ? 'Filter: real-time (no index needed)' : '필터 검색: 실시간 (인덱스 불필요)'; ?></div>
+                <div class="search-hint mobile-search-hint"><?= fsi('search') ?> <?php echo $currentLang === 'en' ? 'Integrated: fast (indexed)' : '통합검색: 빠름 (인덱스)'; ?> | <?= fsi('hard-drive') ?> <?php echo $currentLang === 'en' ? 'Storage scope: real-time if not indexed' : '스토리지 범위: 인덱스 없으면 실시간'; ?></div>
             </div>
             
             <!-- 본문 -->
@@ -602,7 +607,8 @@ ob_start('fs_icon_convert_html');
                 <!-- 파일 영역 -->
                 <main class="file-area">
                     <!-- 검색 필터 영역 -->
-                    <div id="search-filters" class="search-filters" style="display:none;">
+                    <?php /* ★ (2026-10-28 13:22, 펜닐) 필터 창은 화면에 띄우지 않음(여는 버튼 제거) — 검색 결과 띠의 칩이 이 입력칸들에 값을 넣고 읽음(스토리지 목록·유형 목록도 여기서 가져감). 그래서 지우지 않고 숨긴 채 둠 */ ?>
+                    <div id="search-filters" class="search-filters" style="display:none;" aria-hidden="true">
                         <div class="filter-row">
                             <div class="filter-item">
                                 <label><?php echo $currentLang === 'en' ? 'Storage' : '스토리지'; ?></label>
@@ -633,20 +639,22 @@ ob_start('fs_icon_convert_html');
                                 <span>~</span>
                                 <input type="number" id="filter-size-max" placeholder="<?php echo $currentLang === 'en' ? 'Max' : '최대'; ?>" min="0" style="width:70px;">
                             </div>
-                            <div class="filter-actions">
-                                <button id="btn-apply-filter" class="btn btn-sm btn-primary"><?php echo $currentLang === 'en' ? 'Apply' : '적용'; ?></button>
-                                <button id="btn-reset-filter" class="btn btn-sm"><?php echo $currentLang === 'en' ? 'Reset' : '초기화'; ?></button>
-                            </div>
                         </div>
                     </div>
                     
                     <!-- 검색 결과 헤더 (검색 모드일 때만 표시) -->
+                    <?php /* ★ (2026-10-28, 펜닐 선택 05) 검색 표시줄 — 테마 강조색 띠
+                             ★ (2026-10-28 11:15, 펜닐 선택 A — Google Drive·Gmail·Synology·윈도우 탐색기 방식) 검색어는 위 검색창에 그대로 두고(고쳐서 다시 검색),
+                               띠에는 '검색 결과 N개' + 범위·유형·날짜·크기 칩(눌러서 고르기, 고른 조건은 흰 칩 + ✕) + 오른쪽 끝 ✕(검색 종료)만.
+                               모바일은 위 검색창이 안 보여 띠 첫 줄에 검색어 칸(누르면 검색창이 열려 고쳐서 다시 검색). 내용은 app.js doSearch → _renderSearchHeader */ ?>
                     <div id="search-result-header" class="search-result-header" style="display:none;">
-                        <div class="search-info">
-                            <span class="search-query"></span>
+                        <button type="button" class="sr-qfield" title="<?php echo $currentLang === 'en' ? 'Edit search' : '검색어 고치기'; ?>"><?= fsi('search') ?><span class="sr-qfield-text"></span></button>
+                        <div class="sr-main">
+                            <span class="sr-title"><?php echo $currentLang === 'en' ? 'Search Results' : '검색 결과'; ?></span>
                             <span class="search-count"></span>
+                            <div class="sr-chips"></div>
                         </div>
-                        <button id="btn-exit-search" class="btn btn-sm"><?php echo $currentLang === 'en' ? '✕ Exit Search' : '✕ 검색 종료'; ?></button>
+                        <button id="btn-exit-search" type="button" title="<?php echo $currentLang === 'en' ? 'Exit Search' : '검색 종료'; ?>" aria-label="<?php echo $currentLang === 'en' ? 'Exit Search' : '검색 종료'; ?>"><?= fsi('x') ?></button>
                     </div>
                     
                     <!-- 모바일 현재 위치 -->
@@ -726,6 +734,9 @@ ob_start('fs_icon_convert_html');
                                     <div class="sort-option" data-sort="date">📅 <?php echo $currentLang === 'en' ? 'Date' : '날짜'; ?> <span class="sort-arrow"></span></div>
                                     <div class="sort-option" data-sort="size">📊 <?php echo $currentLang === 'en' ? 'Size' : '크기'; ?> <span class="sort-arrow"></span></div>
                                     <div class="sort-option" data-sort="type">📂 <?php echo $currentLang === 'en' ? 'Type' : '유형'; ?> <span class="sort-arrow"></span></div>
+                                    <!-- ★ (2026-10-28, 펜닐) 숨긴 항목 표시 — 윈도우 탐색기 보기 > 표시 > 숨긴 항목(app.js setShowHidden) -->
+                                    <div class="sort-menu-divider"></div>
+                                    <div id="opt-show-hidden-row" class="sort-extra-option" role="menuitemcheckbox"><input type="checkbox" id="opt-show-hidden" tabindex="-1"> <?php echo $currentLang === 'en' ? 'Show hidden items' : '숨긴 항목 표시'; ?></div>
                                 </div>
                             </div>
                             <button id="btn-view-grid" class="btn-icon active" title="<?php _e('grid_view'); ?>"><svg class="fs-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></button>
@@ -1730,6 +1741,20 @@ password=mypass</pre>
                             </select>
                         </div>
                     </div>
+                    <?php /* ★ (2026-10-29 03:51, 17차) SSO 연결 — 관리자·부관리자 계정은 SSO 자동 연결이 막혀 있어 여기서 관리자가 직접 연결(관리자만 바꿀 수 있음) */ ?>
+                    <div class="form-row-2col" id="user-sso-group" style="display:none;">
+                        <div class="form-group">
+                            <label><?php echo $currentLang === 'en' ? 'SSO link' : 'SSO 연결'; ?></label>
+                            <select id="user-sso-provider">
+                                <option value=""><?php echo $currentLang === 'en' ? 'Not linked' : '연결 안 함'; ?></option>
+                                <option value="ldap">LDAP/AD</option>
+                                <option value="oidc">OIDC</option>
+                                <option value="saml">SAML</option>
+                                <option value="kerberos">Kerberos</option>
+                            </select>
+                            <small style="color:var(--fs-text-3,#888);font-size:11px;"><?php echo $currentLang === 'en' ? 'Admin/sub-admin accounts are not linked to SSO automatically. Choose the provider to allow SSO login for this account.' : '관리자·부관리자 계정은 SSO 로 자동 연결되지 않아요. 이 계정으로 SSO 로그인을 허용할 제공자를 고르세요.'; ?></small>
+                        </div>
+                    </div>
                     <div class="form-row-2col">
                         <div class="form-group">
                             <label><?php echo $currentLang === 'en' ? 'Storage Quota Limit' : '저장 용량 제한'; ?></label>
@@ -1768,17 +1793,19 @@ password=mypass</pre>
                     <div id="sub-admin-perms" class="sub-admin-section" style="display:none;">
                         <h4>🔧 <?php echo $currentLang === 'en' ? 'Sub Admin Permissions' : '부 관리자 접근 권한'; ?></h4>
                         <p class="setting-desc"><?php echo $currentLang === 'en' ? 'Select admin menus accessible to sub-admins.' : '부 관리자가 접근할 수 있는 관리 메뉴를 선택하세요.'; ?></p>
+                        <?php /* ★ (2026-10-30 00:54, 25차 — 펜닐 선택 '부관리자 화면을 서버에 맞춤') 서버가 부관리자에게 주는 권한만 고르게 — 공유·전체 휴지통·차단·백신·랜섬웨어·업로드 설정은
+                                 서버가 실제 관리자만 받거나 부관리자에겐 자기 것만 보여 줘서 골라도 쓸 수 없었음 → 숨김(이미 저장된 값은 그대로 둠). 각 권한으로 열리는 메뉴를 이름에 적음 */ ?>
                         <div class="admin-menu-checks">
-                            <label><input type="checkbox" name="admin_perm" value="storages"> <?php echo $currentLang === 'en' ? '💾 Storage Management' : '💾 스토리지 관리'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="users"> <?php echo $currentLang === 'en' ? '👥 User Management' : '👥 사용자 관리'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="shares"> <?php echo $currentLang === 'en' ? '🔗 Share Management' : '🔗 공유 관리'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="logins"> <?php echo $currentLang === 'en' ? '📋 Login History' : '📋 로그인 기록'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="trash"> <?php echo $currentLang === 'en' ? '🗑️ All Trash' : '🗑️ 전체 휴지통'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="security"> <?php echo $currentLang === 'en' ? '🔒 IP/Country Blocking' : '🔒 IP/국가 차단 설정'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="antivirus"> <?php echo $currentLang === 'en' ? '🛡️ Antivirus Settings' : '🛡️ 백신 설정'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="ransomware"> <?php echo $currentLang === 'en' ? '🔐 Ransomware Protection' : '🔐 랜섬웨어 방지'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="upload_settings"> <?php echo $currentLang === 'en' ? '📤 Upload Settings' : '📤 업로드 설정'; ?></label>
-                            <label><input type="checkbox" name="admin_perm" value="system_settings"> <?php echo $currentLang === 'en' ? '🔧 System Settings' : '🔧 시스템 설정'; ?></label>
+                            <label><input type="checkbox" name="admin_perm" value="storages"> <?php echo $currentLang === 'en' ? '💾 Storage Management (+ Bulk Delete)' : '💾 스토리지 관리 (+ 조건부 삭제)'; ?></label>
+                            <label><input type="checkbox" name="admin_perm" value="users"> <?php echo $currentLang === 'en' ? '👥 User Management (+ Roles, Speed Limit, Deleted Users, Notice, Terms)' : '👥 사용자 관리 (+ 역할·속도 제한·탈퇴 기록·공지·이용약관)'; ?></label>
+                            <label style="display:none;"><input type="checkbox" name="admin_perm" value="shares"> <?php echo $currentLang === 'en' ? '🔗 Share Management' : '🔗 공유 관리'; ?></label>
+                            <label><input type="checkbox" name="admin_perm" value="logins"> <?php echo $currentLang === 'en' ? '📋 Login History (+ Activity Logs, Access Stats)' : '📋 로그인 기록 (+ 활동 로그·접속 통계)'; ?></label>
+                            <label style="display:none;"><input type="checkbox" name="admin_perm" value="trash"> <?php echo $currentLang === 'en' ? '🗑️ All Trash' : '🗑️ 전체 휴지통'; ?></label>
+                            <label style="display:none;"><input type="checkbox" name="admin_perm" value="security"> <?php echo $currentLang === 'en' ? '🔒 IP/Country Blocking' : '🔒 IP/국가 차단 설정'; ?></label>
+                            <label style="display:none;"><input type="checkbox" name="admin_perm" value="antivirus"> <?php echo $currentLang === 'en' ? '🛡️ Antivirus Settings' : '🛡️ 백신 설정'; ?></label>
+                            <label style="display:none;"><input type="checkbox" name="admin_perm" value="ransomware"> <?php echo $currentLang === 'en' ? '🔐 Ransomware Protection' : '🔐 랜섬웨어 방지'; ?></label>
+                            <label style="display:none;"><input type="checkbox" name="admin_perm" value="upload_settings"> <?php echo $currentLang === 'en' ? '📤 Upload Settings' : '📤 업로드 설정'; ?></label>
+                            <label><input type="checkbox" name="admin_perm" value="system_settings"> <?php echo $currentLang === 'en' ? '🔧 Board & Extension Icon Management' : '🔧 게시판·확장자 아이콘 관리'; ?></label>
                             <label><input type="checkbox" name="admin_perm" value="system_info"> <?php echo $currentLang === 'en' ? '📊 System Info' : '📊 시스템 정보'; ?></label>
                         </div>
                     </div>
@@ -3525,8 +3552,8 @@ while ($true) {
                             <br>
                             <strong><?php echo $currentLang === 'en' ? '🔍 Search' : '🔍 검색'; ?></strong><br>
                             <?php echo $currentLang === 'en'
-                                ? '• <strong>Integrated</strong>: Fast (index) — indexed storages only<br>• <strong>Storage filter</strong>: Real-time (no index) — slower for large storages<br><small style="color:var(--fs-text-3, #888);">※ Rebuild indexes for fast integrated search across all storages.</small>'
-                                : '• <strong>통합 검색</strong>: 빠름 (인덱스) — 인덱스 구축된 스토리지만<br>• <strong>필터 검색</strong>: 실시간 (인덱스 불필요) — 파일 많으면 느림<br><small style="color:var(--fs-text-3, #888);">※ 인덱스 재구축 시 모든 스토리지가 통합 검색에 포함됩니다.</small>'; ?>
+                                ? '• <strong>Integrated</strong>: Fast (index) — indexed storages only<br>• <strong>Storage scope</strong>: searching while a public/external storage is open, or picking one in the Scope chip of the results bar, searches that storage — real-time if it has no index (slower for large storages)<br><small style="color:var(--fs-text-3, #888);">※ Rebuild indexes for fast integrated search across all storages.</small>'
+                                : '• <strong>통합 검색</strong>: 빠름 (인덱스) — 인덱스 구축된 스토리지만<br>• <strong>스토리지 범위 검색</strong>: 공용·외부 스토리지를 열어 두고 검색하거나 검색 결과 띠의 &lsquo;범위&rsquo;에서 고르면 그 스토리지 — 인덱스가 없으면 실시간(파일 많으면 느림)<br><small style="color:var(--fs-text-3, #888);">※ 인덱스 재구축 시 모든 스토리지가 통합 검색에 포함됩니다.</small>'; ?>
                     </div>
                     
                     <div class="index-actions">
@@ -3850,7 +3877,7 @@ desktop.ini"></textarea>
                         <small style="color:var(--fs-text-3, #5f6368);font-size:11px;"><?php echo $currentLang === 'en' ? 'Comma separated. Empty = all allowed' : '쉼표로 구분. 비어있으면 모두 허용'; ?></small>
                         <small style="display:block;color:var(--fs-text-3, #888);font-size:11px;margin-top:2px;"><?php echo $currentLang === 'en' ? 'e.g.) jpg,png,gif,pdf,zip,hwp,doc,docx,xls,xlsx' : '예) jpg,png,gif,pdf,zip,hwp,doc,docx,xls,xlsx'; ?></small>
                         <small style="display:block;color:var(--fs-fg-err, #c62828);font-size:11px;margin-top:4px;">🔒 <?php echo $currentLang === 'en' 
-                            ? 'Always blocked: php, phtml, php3~7, phar, jsp, asp, aspx, cgi, htaccess, user.ini' 
+                            ? 'Always blocked: php, phtml, php3~7, phar, phps, jsp, jspx, asp, aspx, cgi, htaccess, user.ini' 
                             : '항상 차단: php, phtml, php3~7, phar, phps, jsp, jspx, asp, aspx, cgi, htaccess, user.ini'; ?></small>
                     </div>
                     <div style="display:flex;gap:12px;">
@@ -5497,6 +5524,15 @@ desktop.ini"></textarea>
                         <?php echo $currentLang === 'en' ? 'Automatically create FileStation account on first login' : '첫 로그인 시 FileStation 계정 자동 생성'; ?>
                     </label>
                 </div>
+                <div style="margin-top:8px;">
+                    <?php /* ★ (2026-10-29 08:26, 19차) 계정 연결 기준(제공자별) */ ?>
+                    <label style="font-size:12px;font-weight:600;"><?php echo $currentLang === 'en' ? 'Match existing account by' : '기존 계정 연결 기준'; ?></label>
+                    <select id="sso-kerberos-match-by" class="form-control" style="font-size:12px;margin-top:4px;max-width:320px;">
+                        <option value="username_email"><?php echo $currentLang === 'en' ? 'Username first, then email' : '아이디 먼저, 없으면 메일'; ?></option>
+                        <option value="username"><?php echo $currentLang === 'en' ? 'Username only' : '아이디만'; ?></option>
+                        <option value="email"><?php echo $currentLang === 'en' ? 'Email only' : '메일만'; ?></option>
+                    </select>
+                </div>
                 <div style="margin-bottom:10px;">
                     <label style="font-size:12px;font-weight:600;"><?php echo $currentLang === 'en' ? 'Default Role' : '기본 역할'; ?></label>
                     <select id="sso-kerberos-default-role" class="form-control" style="font-size:12px;margin-top:4px;">
@@ -5593,6 +5629,15 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                     <label style="font-size:12px;"><input type="checkbox" id="sso-ldap-starttls"> STARTTLS</label>
                     <label style="font-size:12px;"><input type="checkbox" id="sso-ldap-auto-create" checked> <?php echo $currentLang === 'en' ? 'Auto create user' : '자동 계정 생성'; ?></label>
                 </div>
+                <div style="margin-top:8px;">
+                    <?php /* ★ (2026-10-29 08:26, 19차) 계정 연결 기준(제공자별) */ ?>
+                    <label style="font-size:12px;font-weight:600;"><?php echo $currentLang === 'en' ? 'Match existing account by' : '기존 계정 연결 기준'; ?></label>
+                    <select id="sso-ldap-match-by" class="form-control" style="font-size:12px;margin-top:4px;max-width:320px;">
+                        <option value="username_email"><?php echo $currentLang === 'en' ? 'Username first, then email' : '아이디 먼저, 없으면 메일'; ?></option>
+                        <option value="username"><?php echo $currentLang === 'en' ? 'Username only' : '아이디만'; ?></option>
+                        <option value="email"><?php echo $currentLang === 'en' ? 'Email only' : '메일만'; ?></option>
+                    </select>
+                </div>
                 <div style="margin-top:10px;">
                     <button class="btn btn-sm btn-secondary" onclick="App.testLDAPConnection()">🔍 <?php echo $currentLang === 'en' ? 'Test Connection' : '연결 테스트'; ?></button>
                     <span id="sso-ldap-test-result" style="font-size:12px;margin-left:8px;"></span>
@@ -5657,6 +5702,15 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                     <label style="font-size:12px;"><input type="checkbox" id="sso-oidc-auto-create" checked> <?php echo $currentLang === 'en' ? 'Auto create user' : '자동 계정 생성'; ?></label>
                     <label style="font-size:12px;margin-left:12px;"><input type="checkbox" id="sso-oidc-auto-login"> <?php echo $currentLang === 'en' ? 'Auto-login (Seamless SSO: skip login screen if already authenticated at IdP)' : '자동 로그인 (IdP에 이미 인증된 경우 로그인 화면 없이 자동 진입)'; ?></label>
                 </div>
+                <div style="margin-top:8px;">
+                    <?php /* ★ (2026-10-29 08:26, 19차) 계정 연결 기준(제공자별) */ ?>
+                    <label style="font-size:12px;font-weight:600;"><?php echo $currentLang === 'en' ? 'Match existing account by' : '기존 계정 연결 기준'; ?></label>
+                    <select id="sso-oidc-match-by" class="form-control" style="font-size:12px;margin-top:4px;max-width:320px;">
+                        <option value="username_email"><?php echo $currentLang === 'en' ? 'Username first, then email' : '아이디 먼저, 없으면 메일'; ?></option>
+                        <option value="username"><?php echo $currentLang === 'en' ? 'Username only' : '아이디만'; ?></option>
+                        <option value="email"><?php echo $currentLang === 'en' ? 'Email only' : '메일만'; ?></option>
+                    </select>
+                </div>
             </div>
             
             <!-- SAML 2.0 설정 -->
@@ -5698,10 +5752,20 @@ AuthNegotiateDelegateAllowlist: *.your.domain.com</pre>
                 <div style="margin-top:6px;">
                     <label style="font-size:12px;"><input type="checkbox" id="sso-saml-auto-create" checked> <?php echo $currentLang === 'en' ? 'Auto create user' : '자동 계정 생성'; ?></label>
                 </div>
+                <div style="margin-top:8px;">
+                    <?php /* ★ (2026-10-29 08:26, 19차) 계정 연결 기준(제공자별) */ ?>
+                    <label style="font-size:12px;font-weight:600;"><?php echo $currentLang === 'en' ? 'Match existing account by' : '기존 계정 연결 기준'; ?></label>
+                    <select id="sso-saml-match-by" class="form-control" style="font-size:12px;margin-top:4px;max-width:320px;">
+                        <option value="username_email"><?php echo $currentLang === 'en' ? 'Username first, then email' : '아이디 먼저, 없으면 메일'; ?></option>
+                        <option value="username"><?php echo $currentLang === 'en' ? 'Username only' : '아이디만'; ?></option>
+                        <option value="email"><?php echo $currentLang === 'en' ? 'Email only' : '메일만'; ?></option>
+                    </select>
+                </div>
                 <div style="margin-top:10px;padding:8px;background:var(--fs-surface-2, #f5f5f5);border-radius:6px;">
                     <small style="font-size:11px;color:var(--fs-text-2, #666);">
                         📄 SP Metadata URL: <code id="sso-saml-metadata-url">api.php?action=sso_saml_metadata</code>
-                        <button class="btn btn-xs" onclick="navigator.clipboard.writeText(location.origin+'/api.php?action=sso_saml_metadata');App.toast(t('nt_copied','복사되었습니다.'),'success');" style="margin-left:4px;">📋 <?php echo $currentLang === 'en' ? 'Copy' : '복사'; ?></button>
+                        <?php /* ★ (2026-10-30 00:57, 25차 — 24차 남은 낮은 것) 하위 폴더에 설치해도 맞는 주소로 복사(종전엔 늘 사이트 최상위 /api.php) */ ?>
+                        <button class="btn btn-xs" onclick="navigator.clipboard.writeText(location.origin+location.pathname.replace(/[^\/]*$/,'')+'api.php?action=sso_saml_metadata');App.toast(t('nt_copied','복사되었습니다.'),'success');" style="margin-left:4px;">📋 <?php echo $currentLang === 'en' ? 'Copy' : '복사'; ?></button>
                     </small>
                 </div>
             </div>

@@ -22,6 +22,9 @@ if (!$auth->isLoggedIn()) {
     header('HTTP/1.1 401 Unauthorized');
     exit(__('api_login_required'));
 }
+// ★ (2026-10-29 11:16, 20차 점검) 보관함 미리보기 연장(touch)·정리(cleanup) 요청에 붙일 보안 토큰 — 종전엔 토큰 없이(본문에 빈 값) 보내 늘 403 이라
+//   열어 둔 사이 연장이 안 되고 닫을 때 임시 파일도 지워지지 않았음(재현). 서버는 POST 토큰을 머리글·폼·주소에서 읽음
+$fsViewerCsrf = getCsrfToken();
 
 $storage = new Storage();
 
@@ -195,7 +198,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     header('Content-Type: ' . $mime);
     header('Content-Length: ' . $filesize);
     header('Accept-Ranges: bytes');
-    header('Cache-Control: public, max-age=86400');
+    header('Cache-Control: private, max-age=86400');   // ★ (2026-10-29 11:17, 20차 점검) public → private — 로그인한 사람의 파일이라 중간 공유 캐시(리버스 프록시 등)에 남지 않게(브라우저 캐시는 그대로)
     
     // Range 요청 처리
     if (isset($_SERVER['HTTP_RANGE'])) {
@@ -943,7 +946,7 @@ ob_start('fs_icon_convert_html');
             viewerContainer.innerHTML = `
                 <div class="error-container">
                     <div class="error-icon">📄</div>
-                    <div class="error-message">${message}</div>
+                    <div class="error-message">${escapeHtml(String(message))}</div><!-- ★ (2026-10-29 21:20, 24차 점검) 오류 문구 escape(hwp_viewer 와 같게) — 라이브러리 오류에 파일 안 경로 등 문서 내용이 들어갈 수 있음 -->
                     <button class="error-btn" onclick="window.close()"><?php _e('viewer_close'); ?></button>
                 </div>
             `;
@@ -1071,7 +1074,7 @@ ob_start('fs_icon_convert_html');
             if (tempId && storageId) {
                 // 뷰어 열린 동안 2분마다 touch (서버 정리에서 제외)
                 const keepAlive = setInterval(function() {
-                    fetch('api.php?action=vault_preview_touch', {
+                    fetch('api.php?action=vault_preview_touch&csrf_token=' + encodeURIComponent(<?php echo json_encode($fsViewerCsrf); ?>), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ temp_id: tempId, storage_id: parseInt(storageId), path: path || '' })
@@ -1084,7 +1087,7 @@ ob_start('fs_icon_convert_html');
                     if (document.visibilityState === 'hidden') {
                         cleanupTimer = setTimeout(function() {
                             clearInterval(keepAlive);
-                            navigator.sendBeacon('api.php?action=vault_preview_cleanup',
+                            navigator.sendBeacon('api.php?action=vault_preview_cleanup&csrf_token=' + encodeURIComponent(<?php echo json_encode($fsViewerCsrf); ?>),
                                 JSON.stringify({ temp_id: tempId, storage_id: parseInt(storageId), path: path || '', csrf_token: '' }));
                         }, 5000);
                     } else {

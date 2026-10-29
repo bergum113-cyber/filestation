@@ -34,8 +34,12 @@ class Auth {
                 return ['success' => false, 'error' => $ipCheck['reason']];
             }
             
+            // ★ (2026-10-29 18:45, 22차 점검) 잠금 횟수는 실제 계정 아이디로 셈 — 숫자 아이디는 DB 비교가 숫자로 돼('020231234'·'20231234.0' 도 같은 계정)
+            //   종전엔 입력한 글자 그대로 세어, 표기만 바꾸면 잠금 없이 계속 시도할 수 있었음. 없는 아이디는 종전처럼 입력값
+            $lockUser = $this->db->find('users', ['username' => $username]);
+            $lockName = $lockUser ? (string)$lockUser['username'] : $username;
             // 브루트포스 체크
-            if ($this->isLockedOut($username, $ip)) {
+            if ($this->isLockedOut($lockName, $ip)) {
                 $this->logLogin($username, false, $ip, __('api_log_account_locked', '계정 잠금'));
                 return ['success' => false, 'error' => __('api_err_login_locked', '로그인 시도 횟수 초과. 잠시 후 다시 시도하세요.')];
             }
@@ -44,7 +48,7 @@ class Auth {
             $user = $this->db->find('users', ['username' => $username]);
             
             if (!$user || !password_verify($password, $user['password'])) {
-                $this->recordFailedAttempt($username, $ip);
+                $this->recordFailedAttempt($lockName, $ip);
                 // 사용자가 존재하면 DB의 username 사용, 아니면 입력값 사용
                 $logUsername = $user ? $user['username'] : $username;
                 $this->logLogin($logUsername, false, $ip, __('api_log_invalid_creds', '잘못된 인증정보'));
@@ -103,7 +107,8 @@ class Auth {
                 $_SESSION['2fa_pending_user'] = [
                     'id' => $user['id'],
                     'username' => $user['username'],
-                    'remember' => $remember
+                    'remember' => $remember,
+                    'started_at' => time()   // ★ (2026-10-28 18:22) 대기 만료(10분) 기준
                 ];
                 
                 return [
@@ -114,7 +119,7 @@ class Auth {
             }
             
             // 성공 - 실패 기록 초기화
-            $this->clearFailedAttempts($username, $ip);
+            $this->clearFailedAttempts($lockName, $ip);
             
             // Session Fixation 방지: 세션 ID 재생성
             // ★ session_regenerate_id 전에 sessions DB에서 이전 session_id 제거
@@ -227,7 +232,26 @@ class Auth {
         // 세션 타임아웃 체크 (요청당 1회만)
         if (!self::$sessionTimeoutChecked) {
             self::$sessionTimeoutChecked = true;
-            
+
+            // ★ (2026-10-29 03:11, 16차) 세션 강제 종료·계정 정지/비활성을 즉시 반영 — 종전엔 로그인 뒤 $_SESSION['user_id'] 만 봐서,
+            //   '세션 종료' 를 눌러도(기록만 지워져 recordSession 이 다시 넣음) 끊기지 않고, 정지·비활성 처리한 계정의 기존 세션도 계속 살아 있었음(재현)
+            if ($this->isSessionRevoked(session_id()) || !$this->isAccountUsable((int)$_SESSION['user_id'])) {
+                $uid0 = $_SESSION['user_id'] ?? null;
+                if ($uid0) $this->removeSession((int)$uid0, session_id());
+                // ★ (2026-10-29 09:57, 20차 점검) 끊긴 기기의 '로그인 유지' 토큰도 폐기 — 종전엔 세션만 끊겨 같은 요청에서 토큰으로 바로 다시 로그인됐음(재현).
+                //   토큰은 세션과 연결돼 있지 않아, 이 요청이 들고 온 쿠키(=끊긴 그 기기의 것)만 지움. 다른 기기의 로그인 유지는 그대로
+                if (isset($_COOKIE['remember_token'])) {
+                    $this->deleteRememberToken((string)$_COOKIE['remember_token']);
+                    setcookie('remember_token', '', ['expires' => time() - 3600, 'path' => '/', 'secure' => $this->isHttps(), 'httponly' => true, 'samesite' => 'Lax']);
+                    unset($_COOKIE['remember_token']);
+                }
+                session_unset();
+                session_destroy();
+                if (session_status() === PHP_SESSION_NONE) session_start();
+                self::$user = null;
+                return false;
+            }
+
             // 로그인 유지 사용자는 타임아웃 무시
             if (empty($_SESSION['remember_me'])) {
                 $settings = $this->db->load('settings');
@@ -259,7 +283,7 @@ class Auth {
             //   recordSession은 로그인 시점만 호출 → Remember Me 자동 로그인 시 DB 미기록
             //   isLoggedIn에서 한 번 더 호출 → DB 기록 보장 + last_activity 갱신
             //   이미 있으면 last_activity만 갱신, 없으면 추가
-            $this->recordSession($_SESSION['user_id'], $_SERVER['REMOTE_ADDR'] ?? '');
+            $this->recordSession($_SESSION['user_id'], $this->getClientIP());   // ★ (2026-10-29 18:45, 22차 점검) 신뢰 프록시 규칙(getClientIP)으로 — 종전엔 요청마다 프록시 주소로 덮어썼음(로그인 때와 다름)
         }
         
         return isset($_SESSION['user_id']);
@@ -361,6 +385,37 @@ class Auth {
     }
     
     // 사용자 관리
+    /**
+     * ★ (2026-10-30 01:42, 26차 — 24차 결정 필요 '메일 중복' 자동 선택: 거부) 다른 계정이 이미 쓰는 메일인지(대소문자·앞뒤 공백 무시) — 본인 메일 변경(24차)과 같은 기준을
+     *   관리자 사용자 추가·수정, 가입, 삭제 사용자 복원에도. 메일로 계정을 찾는 아이디 찾기·비밀번호 찾기·SSO 계정 연결이 엉뚱한 계정을 고르지 않게
+     */
+    public static function emailInUse(JsonDB $db, string $email, int $exceptId = 0): bool {
+        $email = trim($email);
+        if ($email === '') return false;
+        foreach (($db->load('users') ?: []) as $ou) {
+            if ((int)($ou['id'] ?? 0) !== $exceptId && strcasecmp(trim((string)($ou['email'] ?? '')), $email) === 0) return true;
+        }
+        return false;
+    }
+
+    /**
+     * ★ (2026-10-29 17:46, 22차 점검) 아이디 중복·예약어 공통 검사 — 홈 폴더는 USER_FILES_ROOT/아이디 이고 Windows 는 대소문자를 구분하지 않아,
+     *   'Viewer'·'VIEWER' 가 'viewer' 와 같은 폴더를 쓰게 됐고('viewer ' 도 앞뒤 공백 그대로 저장됐음 — 재현), '_deleted' 는 삭제된 사용자 보관 폴더가 홈이 됐음.
+     *   반환: null = 사용 가능 / 'exists' = 이미 있음(대소문자 무시) / 'reserved' = 쓸 수 없는 이름
+     */
+    public static function usernameProblem(JsonDB $db, string $username): ?string {
+        $u = strtolower(trim($username));
+        if ($u === '' || trim($u, '.') === '' || $u === '_deleted') return 'reserved';
+        foreach (($db->load('users') ?: []) as $x) {
+            $xu = strtolower(trim((string)($x['username'] ?? '')));
+            if ($xu === $u) return 'exists';
+            // ★ (2026-10-29 21:59, 24차 점검) 숫자 아이디는 DB 찾기(JsonDB::matchValue)가 숫자로 비교해 '020231234'·'20231234' 를 같은 계정으로 봄 — 같은 기준으로 중복 처리
+            //   (종전엔 따로 만들어져, 나중 계정은 로그인하면 앞 계정을 찾아 비밀번호가 늘 틀렸다고 나왔음)
+            if (is_numeric($xu) && is_numeric($u) && (int)$xu === (int)$u) return 'exists';
+        }
+        return null;
+    }
+
     public function createUser(array $data): array {
         if (empty($data['username']) || empty($data['password'])) {
             return ['success' => false, 'error' => __('id_pw_required')];
@@ -378,10 +433,15 @@ class Auth {
             return ['success' => false, 'error' => __('err_display_name_too_long', '표시 이름은 30자 이내로 입력하세요.')];
         }
         
-        $existing = $this->db->find('users', ['username' => $data['username']]);
-        if ($existing) {
+        // ★ (2026-10-29 17:46, 22차 점검) 대소문자 무시 + 예약어(usernameProblem) — 종전엔 정확히 같은 글자만 막았음
+        $unProblem = self::usernameProblem($this->db, $username);
+        if ($unProblem === 'exists') {
             return ['success' => false, 'error' => __('username_already_exists')];
         }
+        if ($unProblem === 'reserved') {
+            return ['success' => false, 'error' => __('api_err_username_chars', '아이디는 영문, 숫자, 밑줄만 사용 가능합니다.')];
+        }
+        $data['username'] = $username;   // ★ (22차) 앞뒤 공백 뺀 값으로 저장 — 종전엔 검사만 trim 하고 원래 값('viewer ')을 저장했음
         
         // 탈퇴/삭제된 사용자 중복 체크
         $deletedUsers = $this->db->load('deleted_users') ?: [];
@@ -393,6 +453,9 @@ class Auth {
         
         if (strlen($data['password']) < 8 || strlen($data['password']) > 72) {
             return ['success' => false, 'error' => __('api_err_password_length', '비밀번호는 8~72자여야 합니다.')];
+        }
+        if (self::emailInUse($this->db, (string)($data['email'] ?? ''))) {   // ★ (2026-10-30 01:42, 26차 — 24차 결정 필요 '메일 중복' 자동 선택: 거부)
+            return ['success' => false, 'error' => __('err_email_in_use', '다른 계정이 이미 쓰는 메일입니다.')];
         }
         
         $role = $data['role'] ?? 'user';
@@ -444,11 +507,23 @@ class Auth {
             }
             $updateData['display_name'] = $data['display_name'];
         }
-        if (isset($data['email'])) $updateData['email'] = $data['email'];
+        if (isset($data['email'])) {
+            // 메일을 바꿀 때만(이미 겹쳐 있던 옛 자료여도 다른 항목 수정은 막지 않게)
+            if (strcasecmp(trim((string)($targetUser['email'] ?? '')), trim((string)$data['email'])) !== 0 && self::emailInUse($this->db, (string)$data['email'], $id)) {   // ★ (2026-10-30 01:42, 26차 — 24차 결정 필요 '메일 중복' 자동 선택: 거부)
+                return ['success' => false, 'error' => __('err_email_in_use', '다른 계정이 이미 쓰는 메일입니다.')];
+            }
+            $updateData['email'] = $data['email'];
+        }
         if (isset($data['role'])) $updateData['role'] = $data['role'];
-        if (isset($data['admin_perms'])) $updateData['admin_perms'] = $data['admin_perms'];
+        // ★ (2026-10-29 09:40, 20차 점검) 화면은 권한을 전부 끄면 null 을 보냄 — 종전엔 isset 이 false 라 옛 권한이 그대로 남아 회수가 안 됐음
+        if (array_key_exists('admin_perms', $data)) $updateData['admin_perms'] = is_array($data['admin_perms']) ? array_values($data['admin_perms']) : [];
         if (isset($data['is_active'])) $updateData['is_active'] = $data['is_active'];
         if (isset($data['quota'])) $updateData['quota'] = (int)$data['quota'];
+        // ★ (2026-10-29 03:51, 17차) SSO 연결(관리자가 직접) — 값은 정해진 제공자만, '' 는 연결 해제. 누가 보낼 수 있는지는 api.php(관리자만)에서 거름
+        if (array_key_exists('sso_provider', $data)) {
+            $sp = (string)($data['sso_provider'] ?? '');
+            if ($sp === '' || in_array($sp, ['ldap', 'oidc', 'saml', 'kerberos'], true)) $updateData['sso_provider'] = ($sp === '' ? null : $sp);
+        }
         if (!empty($data['password'])) {
             if (strlen($data['password']) < 8 || strlen($data['password']) > 72) {
                 return ['success' => false, 'error' => __('api_err_password_length', '비밀번호는 8~72자여야 합니다.')];
@@ -491,6 +566,12 @@ class Auth {
         }
         
         $this->db->update('users', ['id' => $id], $updateData);
+        // ★ (2026-10-29 03:11, 16차) 관리자가 비밀번호를 바꾸거나 계정을 비활성/정지하면 그 사용자의 로그인 유지 토큰도 폐기(훔친 쿠키 차단)
+        if (isset($updateData['password'])
+            || (isset($updateData['is_active']) && !$updateData['is_active'])
+            || (isset($updateData['status']) && $updateData['status'] !== 'active')) {
+            $this->deleteRememberTokensForUser($id);
+        }
         return ['success' => true];
     }
     
@@ -548,7 +629,8 @@ class Auth {
     public function getUsers(): array {
         $users = $this->db->load('users');
         return array_map(function($u) {
-            unset($u['password']);
+            // ★ (2026-10-29 09:53, 20차 점검) 2FA 비밀키(암호화본)·백업 코드·앱 비밀번호 해시도 빼고 보냄 — 종전엔 사용자 관리 권한 부관리자 화면까지 그대로 내려갔음(화면은 2fa_enabled 만 씀)
+            unset($u['password'], $u['2fa_secret'], $u['2fa_backup_codes'], $u['app_passwords']);
             return $u;
         }, $users);
     }
@@ -567,10 +649,11 @@ class Auth {
         $this->db->update('users', ['id' => $this->getUserId()], [
             'password' => password_hash($newPassword, PASSWORD_DEFAULT)
         ]);
-        
+        $this->deleteRememberTokensForUser((int)$this->getUserId());   // ★ (2026-10-29 03:11, 16차) 비밀번호 바꾸면 기존 로그인 유지 토큰 폐기
+
         return ['success' => true];
     }
-    
+
     /**
      * 회원 탈퇴 (사용자 직접)
      */
@@ -686,11 +769,35 @@ class Auth {
         $this->db->save('video_progress', array_values($vpRows));
         
         // 10. 공유 링크 삭제 (해당 사용자가 만든 공유)
+        // ★ (2026-10-29 03:11, 16차) 공유는 created_by 로 저장되는데 종전엔 user_id 로만 걸러 한 건도 안 지워졌음. created_by·user_id 둘 다 봄.
+        //   또 사용자가 만들었거나 받은 내부 공유(internal_shares)·폴더 규칙(folder_permissions)도 정리 — 안 지우면 ID 가 재사용될 때(다음 가입자=max+1)
+        //   그 공유·규칙을 물려받을 수 있었음
         $shares = $this->db->load('shares');
         $shares = array_filter($shares, function($s) use ($userId) {
-            return ($s['user_id'] ?? 0) !== $userId;
+            return ($s['user_id'] ?? 0) !== $userId && (int)($s['created_by'] ?? 0) !== $userId;
         });
         $this->db->save('shares', array_values($shares));
+
+        $ishares = $this->db->load('internal_shares');
+        $ishares = array_filter($ishares, function($s) use ($userId) {
+            return (int)($s['shared_by'] ?? 0) !== $userId && (int)($s['shared_with'] ?? 0) !== $userId;
+        });
+        $this->db->save('internal_shares', array_values($ishares));
+
+        $fperms = $this->db->load('folder_permissions');
+        $fperms = array_filter($fperms, function($p) use ($userId) {
+            return (int)($p['user_id'] ?? 0) !== $userId;
+        });
+        $this->db->save('folder_permissions', array_values($fperms));
+        // ★ (2026-10-29 21:17, 24차 점검) 사용자별 속도 제한(QoS)도 지움 — 번호가 재사용되면 새 사용자가 지운 사람의 개별 제한(또는 해제)을 물려받았음(위 16차와 같은 이유)
+        $qosFile = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/qos_settings.json';
+        if (is_file($qosFile)) {
+            $qos = json_decode((string)@file_get_contents($qosFile), true);
+            if (is_array($qos) && isset($qos['users'][(string)$userId])) {
+                unset($qos['users'][(string)$userId]);
+                @file_put_contents($qosFile, json_encode($qos, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+            }
+        }
         
         // 11. 2FA 설정 삭제
         $twofa = $this->db->load('twofa');
@@ -722,12 +829,22 @@ class Auth {
         });
         $this->db->save('login_attempts', array_values($attempts));
         
-        // 14. 휴지통 삭제
-        $trash = $this->db->load('trash');
-        $trash = array_filter($trash, function($t) use ($userId) {
-            return ($t['user_id'] ?? 0) !== $userId;
-        });
-        $this->db->save('trash', array_values($trash));
+        // 14. 휴지통 기록 주인 정리
+        // ★ (2026-10-29 10:15, 20차 점검) 잠금 안에서 최신 목록에 적용 — 종전엔 읽고-저장 사이에 다른 요청이 더한 휴지통 기록이 덮여 사라질 수 있었음
+        // ★ (2026-10-29 11:58, 20차 점검) 휴지통 기록의 사용자 키는 'deleted_by'(FileManager·WebDAV 가 그렇게 씀) — 종전엔 없는 키 'user_id' 로 걸러
+        //   아무것도 안 바뀌었고, 지운 사용자의 번호가 새 사용자에게 다시 붙으면(번호 = 가장 큰 번호 + 1) 새 사용자 휴지통에 이전 사용자 파일이 보였음(재현)
+        // ★ (2026-10-29 15:35, 21차 재점검) 기록·사본은 지우지 않고 주인 번호만 0 으로(이름 deleted_by_name 은 남김) — 20차엔 사본까지 영구 삭제해
+        //   그 사용자가 공용 스토리지에서 지운 파일을 관리자가 더는 복원할 수 없었음(재현). 관리자 '전체 휴지통' 에서 그대로 보이고 복원·비우기 가능
+        //   (사용자 폴더를 지우지 않고 _deleted 로 옮겨 두는 아래 16단계와 같은 취지)
+        $trashF = function ($trash) use ($userId) {
+            $trash = is_array($trash) ? array_values($trash) : [];
+            foreach ($trash as &$t) {
+                if ((int)($t['deleted_by'] ?? 0) === $userId) $t['deleted_by'] = 0;
+            }
+            unset($t);
+            return $trash;
+        };
+        if (!$this->db->atomicUpdate('trash', $trashF)) $this->db->save('trash', $trashF($this->db->load('trash')));
         
         // 15. 파일 잠금 삭제
         $lockedFiles = $this->db->load('locked_files');
@@ -852,7 +969,23 @@ class Auth {
     // ===== IP/국가 제한 =====
     private function getClientIP(): string {
         // 전역 getClientIP() 사용 (TRUSTED_PROXIES 검증 포함)
-        return \getClientIP();
+        // ★ (2026-10-29 10:27, 20차 점검) 전역 함수는 api.php 에만 있어 WebDAV(mydav.php)·index.php 에선 없음
+        if (function_exists('getClientIP')) return \getClientIP();
+        // ★ (2026-10-29 15:35, 21차 재점검) 그때도 api.php getClientIP 와 같은 규칙(신뢰 프록시면 프록시 헤더의 원래 주소) — 20차엔 접속 주소만 써서,
+        //   신뢰 프록시를 설정한 서버에선 WebDAV·index.php 의 IP 제한이 프록시 주소로 판단됐음
+        $remoteAddr = (string)($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
+        $trusted = defined('TRUSTED_PROXIES') ? (array)TRUSTED_PROXIES : [];
+        if (empty($trusted)) return $remoteAddr;
+        $isTrusted = false;
+        foreach ($trusted as $proxy) {
+            $proxy = (string)$proxy;
+            if (strpos($proxy, '/') !== false ? $this->ipInRange($remoteAddr, $proxy) : $remoteAddr === $proxy) { $isTrusted = true; break; }
+        }
+        if (!$isTrusted) return $remoteAddr;
+        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) return (string)$_SERVER['HTTP_CF_CONNECTING_IP'];
+        if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) { $ips = array_map('trim', explode(',', (string)$_SERVER['HTTP_X_FORWARDED_FOR'])); return $ips[0]; }
+        if (!empty($_SERVER['HTTP_X_REAL_IP'])) return (string)$_SERVER['HTTP_X_REAL_IP'];
+        return $remoteAddr;
     }
     
     private function getSecuritySettings(): array {
@@ -989,8 +1122,10 @@ class Auth {
             return;
         }
         
-        $logs = $this->db->load('security_block_logs');
-        $logs[] = [
+        // ★ (2026-10-29 21:53, 24차 점검) 잠금 안에서 읽고 씀(선택 삭제 23차와 같은 잠금) — 종전엔 따로 읽고 써서, 차단이 이어지는 중에 지운 기록이 되살아났음
+        $entry = [
+            // ★ (2026-10-29 20:14, 23차 점검) 기록마다 고유 번호 — 선택 삭제가 위치 대신 이 번호로 지움(1000건 넘어 앞부분이 잘리면 위치가 밀려 엉뚱한 기록이 지워졌음)
+            'lid' => bin2hex(random_bytes(6)),
             'ip' => $ip,
             'reason' => $reason,
             'country' => $this->getCountryFromIP($ip),
@@ -998,13 +1133,15 @@ class Auth {
             'uri' => $_SERVER['REQUEST_URI'] ?? '',
             'created_at' => date('Y-m-d H:i:s')
         ];
-        
-        // 최대 1000개 로그 유지
-        if (count($logs) > 1000) {
-            $logs = array_slice($logs, -500);
-        }
-        
-        $this->db->save('security_block_logs', array_values($logs));
+        $this->db->atomicUpdate('security_block_logs', function ($logs) use ($entry) {
+            $logs = is_array($logs) ? array_values($logs) : [];
+            $logs[] = $entry;
+            // 최대 1000개 로그 유지
+            if (count($logs) > 1000) {
+                $logs = array_slice($logs, -500);
+            }
+            return array_values($logs);
+        });
     }
     
     public function testIPRestriction(): array {
@@ -1022,7 +1159,26 @@ class Auth {
     
     private function ipInRange(string $ip, string $range): bool {
         // 전역 ipInCidr() 사용 (IPv4+IPv6 지원)
-        return \ipInCidr($ip, $range);
+        if (function_exists('ipInCidr')) return \ipInCidr($ip, $range);
+        // ★ (2026-10-29 10:28, 20차 점검) 전역 함수는 api.php 에만 있어 WebDAV(mydav.php)에선 같은 계산을 여기서(api.php ipInCidr 와 동일)
+        if (strpos($range, '/') === false) return $ip === $range;
+        list($subnet, $bits) = explode('/', $range);
+        $bits = (int)$bits;
+        $ipBin = @inet_pton($ip);
+        $subnetBin = @inet_pton($subnet);
+        if ($ipBin === false || $subnetBin === false) return false;
+        if (strlen($ipBin) !== strlen($subnetBin)) return false;
+        $byteLen = strlen($ipBin);
+        $fullBytes = intdiv($bits, 8);
+        $remainBits = $bits % 8;
+        for ($i = 0; $i < $fullBytes && $i < $byteLen; $i++) {
+            if ($ipBin[$i] !== $subnetBin[$i]) return false;
+        }
+        if ($remainBits > 0 && $fullBytes < $byteLen) {
+            $mask = 0xFF << (8 - $remainBits) & 0xFF;
+            if ((ord($ipBin[$fullBytes]) & $mask) !== (ord($subnetBin[$fullBytes]) & $mask)) return false;
+        }
+        return true;
     }
     
     private function getCountryFromIP(string $ip): string {
@@ -1470,6 +1626,9 @@ class Auth {
         $token = $_COOKIE['remember_token'];
         $hashedToken = hash('sha256', $token);
         
+        // ★ (2026-10-29 18:30, 22차 점검) IP·국가 제한 확인(로그인과 같은 규칙) — 종전엔 '로그인 유지' 토큰이 있으면 막힌 IP·국가에서도 그대로 자동 로그인됐음
+        if (!$this->checkIPRestriction($this->getClientIP())['allowed']) return false;
+        
         $tokens = $this->db->load('remember_tokens');
         foreach ($tokens as $t) {
             if (hash_equals($t['token'] ?? '', $hashedToken) && strtotime($t['expires'] ?? '0') > time()) {
@@ -1506,10 +1665,21 @@ class Auth {
         $tokens = array_filter($tokens, fn($t) => ($t['token'] ?? '') !== $hashedToken);
         $this->db->save('remember_tokens', array_values($tokens));
     }
+
+    /**
+     * ★ (2026-10-29 03:11, 16차) 한 사용자의 로그인 유지 토큰을 모두 폐기 — 비밀번호 변경·초기화·2FA 켜기 때 호출.
+     *   종전엔 탈퇴/삭제(deleteUserData)에서만 지워, 훔친 remember 쿠키가 비밀번호를 바꾸거나 2FA 를 켜도 최대 10년간 로그인됐음
+     */
+    public function deleteRememberTokensForUser(int $userId): void {
+        $tokens = $this->db->load('remember_tokens');
+        $tokens = array_filter($tokens, fn($t) => (int)($t['user_id'] ?? 0) !== $userId);
+        $this->db->save('remember_tokens', array_values($tokens));
+    }
     
     // ===== 세션 관리 =====
     private function recordSession(int $userId, string $ip): void {
         if (!defined('SESSION_TRACKING_ENABLED') || !SESSION_TRACKING_ENABLED) return;
+        if (defined('FS_WEBDAV_REQUEST')) return;   // ★ (2026-10-29 09:14, 20차) WebDAV(쿠키 없는 1회성 세션)는 기록하지 않음 — mydav.php 참고
         
         $sessions = $this->db->load('sessions');
         $sessionId = session_id();
@@ -1538,10 +1708,13 @@ class Auth {
         
         // 동시 세션 제한
         if (defined('SESSION_MAX_CONCURRENT') && SESSION_MAX_CONCURRENT > 0) {
-            $userSessions = array_filter($sessions, fn($s) => ($s['user_id'] ?? 0) === $userId);
+            // ★ (2026-10-30 01:50, 26차 점검) 동시 세션 수는 하루 안에 쓴 세션만 셈 — 25차에 목록 보관을 세션 수명(제한 없음이면 30일)으로 늘리면서, 쿠키를 잃고 '로그인 유지'로
+            //   다시 들어온 기기의 죽은 기록까지 수에 들어가 며칠 쉰 살아 있는 세션이 밀려 끊겼음(로그인 유지 토큰까지 지워짐). 하루 넘은 기록은 목록·끊기 대상으로만 남음
+            $userSessions = array_filter($sessions, fn($s) => ($s['user_id'] ?? 0) === $userId && (($s['session_id'] ?? '') === $sessionId || strtotime($s['last_activity'] ?? '0') > time() - 86400));
             if (count($userSessions) > SESSION_MAX_CONCURRENT) {
                 usort($userSessions, fn($a, $b) => strtotime($a['last_activity'] ?? '0') - strtotime($b['last_activity'] ?? '0'));
                 $toRemove = array_slice($userSessions, 0, count($userSessions) - SESSION_MAX_CONCURRENT);
+                $this->revokeSessionIds(array_map(fn($r) => $r['session_id'] ?? '', $toRemove));   // ★ (2026-10-29 03:11, 16차) 밀려난 세션은 실제로 끊음
                 foreach ($toRemove as $r) {
                     $sessions = array_filter($sessions, fn($s) => ($s['session_id'] ?? '') !== ($r['session_id'] ?? ''));
                 }
@@ -1549,7 +1722,10 @@ class Auth {
         }
         
         // 24시간 이상 비활성 세션 정리
-        $sessions = array_filter($sessions, fn($s) => strtotime($s['last_activity'] ?? '0') > strtotime('-24 hours'));
+        // ★ (2026-10-30 01:10, 25차 재검토) PHP 세션 수명(세션 유지 '제한 없음'이면 30일, config.php)만큼 — 24시간으로 두면 하루 넘게 쉰 기기 세션이 목록에서 빠져
+        //   '세션 종료'·'다른 세션 모두 종료'로 끊을 수 없고 동시 세션 수에도 안 잡힌 채 돌아와 로그인됐음(25차 수명 변경과 맞춤)
+        $_sessLife = max(86400, (int)ini_get('session.gc_maxlifetime'));
+        $sessions = array_filter($sessions, fn($s) => strtotime($s['last_activity'] ?? '0') > time() - $_sessLife);
         
         $this->db->save('sessions', array_values($sessions));
     }
@@ -1558,6 +1734,51 @@ class Auth {
         $sessions = $this->db->load('sessions');
         $sessions = array_filter($sessions, fn($s) => !(($s['user_id'] ?? 0) === $userId && ($s['session_id'] ?? '') === $sessionId));
         $this->db->save('sessions', array_values($sessions));
+    }
+
+    /**
+     * ★ (2026-10-29 03:11, 16차) 강제 종료된 세션 ID 목록(revoked_sessions.json: session_id→끊은 시각).
+     *   '세션 종료'·'다른 세션 모두 종료'·동시 세션 초과 정리에서 지운 세션 ID 를 여기에 적어, 그 세션의 다음 요청을 isLoggedIn 이 끊음.
+     *   세션은 어차피 24시간이면 만료되므로 그보다 오래된 항목은 지움(파일이 계속 커지지 않게)
+     */
+    private function revokeSessionIds(array $sessionIds): void {
+        $sessionIds = array_values(array_filter(array_map('strval', $sessionIds), fn($x) => $x !== ''));
+        if (!$sessionIds) return;
+        $revoked = $this->db->load('revoked_sessions');
+        $now = time();
+        foreach ($sessionIds as $sid) $revoked[$sid] = $now;
+        $_sessLife = max(86400, (int)ini_get('session.gc_maxlifetime'));   // ★ (2026-10-30 01:10, 25차 재검토) 끊은 세션 기록도 PHP 세션 수명만큼 보관(종전 하루 — 수명이 30일이면 하루 뒤 같은 세션으로 다시 들어올 수 있었음)
+        foreach ($revoked as $sid => $ts) { if (!is_int($ts) || $now - (int)$ts > $_sessLife) unset($revoked[$sid]); }
+        $this->db->save('revoked_sessions', $revoked);
+    }
+
+    private function isSessionRevoked(string $sessionId): bool {
+        if ($sessionId === '') return false;
+        $revoked = $this->db->load('revoked_sessions');
+        return isset($revoked[$sessionId]);
+    }
+
+    /**
+     * ★ (2026-10-29 03:11, 16차) 그 계정이 지금도 로그인 상태를 유지해도 되는지 — 정지(기간 지난 건 제외)·비활성·삭제 대기면 false.
+     *   로그인(login)의 상태 검사와 같은 기준. 계정을 못 찾으면(삭제됨) 로그인 유지 불가
+     */
+    private function isAccountUsable(int $userId): bool {
+        $u = $this->db->find('users', ['id' => $userId]);
+        if (!$u) return false;
+        // ★ (2026-10-29 18:30, 22차 점검) 세션에 적힌 아이디와 계정 아이디가 다르면(삭제된 사용자의 번호를 새 사용자가 받은 경우) 끊음 —
+        //   종전엔 번호만 봐서, 사용자를 지운 뒤 새로 만든 사용자가 같은 번호를 받으면 지운 사람의 남은 세션이 새 사용자로 로그인된 채가 됐음
+        if (isset($_SESSION['user_id'], $_SESSION['username']) && (int)$_SESSION['user_id'] === $userId && $_SESSION['username'] !== ''
+            && strtolower((string)$_SESSION['username']) !== strtolower((string)($u['username'] ?? ''))) return false;
+        $status = $u['status'] ?? 'active';
+        if ($status === 'suspended') {
+            $until = $u['suspend_until'] ?? null;
+            // 종료일이 지났으면 아직 로그인 가능(다음 로그인 때 자동 활성화됨). 그 외 정지는 끊음
+            if (!($until && strtotime($until) < strtotime('today'))) return false;
+        } elseif ($status !== 'active') {
+            return false; // pending·deleted 등
+        }
+        if (!($u['is_active'] ?? 1)) return false;
+        return true;
     }
     
     public function getSessions(): array {
@@ -1590,19 +1811,22 @@ class Auth {
         $found = false;
         $prefix = rtrim($sessionIdPrefix, '.');
         
+        $revokedId = '';
         foreach ($sessions as $key => $s) {
             if (($s['user_id'] ?? 0) === $userId && strpos($s['session_id'] ?? '', $prefix) === 0) {
+                $revokedId = $s['session_id'] ?? '';
                 unset($sessions[$key]);
                 $found = true;
                 break;
             }
         }
-        
+
         if (!$found) {
             return ['success' => false, 'error' => __('api_err_session_not_found', '세션을 찾을 수 없습니다.')];
         }
-        
+
         $this->db->save('sessions', array_values($sessions));
+        if ($revokedId !== '') $this->revokeSessionIds([$revokedId]);   // ★ (2026-10-29 03:11, 16차) 기록만 지우지 않고 실제로 끊음
         return ['success' => true];
     }
     
@@ -1612,9 +1836,15 @@ class Auth {
         
         $currentSessionId = session_id();
         $sessions = $this->db->load('sessions');
+        // ★ (2026-10-29 03:11, 16차) 끊는 세션 ID 를 모아 실제로 끊음(종전엔 기록만 지워 계속 로그인됐음)
+        $revokeIds = [];
+        foreach ($sessions as $s) {
+            if (($s['user_id'] ?? 0) === $userId && ($s['session_id'] ?? '') !== $currentSessionId) $revokeIds[] = $s['session_id'] ?? '';
+        }
         $sessions = array_filter($sessions, fn($s) => !(($s['user_id'] ?? 0) === $userId && ($s['session_id'] ?? '') !== $currentSessionId));
         $this->db->save('sessions', array_values($sessions));
-        
+        $this->revokeSessionIds($revokeIds);
+
         return ['success' => true];
     }
     
@@ -1679,7 +1909,8 @@ class Auth {
     // 로그인 로그 삭제 (관리자)
     public function deleteLoginLogs(array $ids): array {
         $user = $this->getUser();
-        if (!$user || ($user['role'] ?? '') !== 'admin') {
+        // ★ (2026-10-29 21:15, 24차 점검) '로그인 기록' 권한을 받은 부관리자도(api.php 의 requireAdminPerm('logins') 와 같은 기준) — 종전엔 관리자만이라 권한을 줘도 실패했음
+        if (!$user || !$this->hasAdminPerm('logins')) {
             return ['success' => false, 'error' => __('no_permission')];
         }
         
@@ -1693,7 +1924,7 @@ class Auth {
     // 전체 로그인 로그 삭제 (관리자)
     public function deleteAllLoginLogs(): array {
         $user = $this->getUser();
-        if (!$user || ($user['role'] ?? '') !== 'admin') {
+        if (!$user || !$this->hasAdminPerm('logins')) {   // ★ (2026-10-29 21:19, 24차 점검) 위와 같음
             return ['success' => false, 'error' => __('no_permission')];
         }
         
@@ -1704,7 +1935,7 @@ class Auth {
     // 오래된 로그인 로그 삭제 (관리자)
     public function deleteOldLoginLogs(int $days): array {
         $user = $this->getUser();
-        if (!$user || ($user['role'] ?? '') !== 'admin') {
+        if (!$user || !$this->hasAdminPerm('logins')) {   // ★ (2026-10-29 21:19, 24차 점검) 위와 같음
             return ['success' => false, 'error' => __('no_permission')];
         }
         
@@ -1718,13 +1949,16 @@ class Auth {
     }
     
     public function getLoginLogs(int $page = 1, int $perPage = 20, bool $all = false): array {
+        if ($perPage < 1) $perPage = 20;   // ★ (2026-10-29 03:19, 16차) per_page=0 이면 ceil(0 나눗셈) 으로 죽었음 — 1 미만은 기본값
+        if ($page < 1) $page = 1;
         $user = $this->getUser();
         if (!$user) return ['logs' => [], 'total' => 0, 'page' => 1, 'per_page' => $perPage, 'total_pages' => 0];
         
         $logs = $this->db->load('login_logs');
         
         // 관리자가 아니거나, all=false면 자신의 로그만
-        if (($user['role'] ?? '') !== 'admin' || !$all) {
+        // ★ (2026-10-29 21:15, 24차 점검) 전체 보기도 '로그인 기록' 권한 부관리자 허용(위와 같음)
+        if (!$this->hasAdminPerm('logins') || !$all) {
             $currentUsername = strtolower(trim($user['username'] ?? ''));
             $logs = array_filter($logs, function($l) use ($currentUsername) {
                 $logUsername = strtolower(trim($l['username'] ?? ''));
@@ -1836,10 +2070,11 @@ class Auth {
         
         // 세션 정리
         unset($_SESSION['2fa_setup_secret']);
-        
+        $this->deleteRememberTokensForUser((int)$user['id']);   // ★ (2026-10-29 03:11, 16차) 2FA 를 켜면 기존 로그인 유지 토큰 폐기(그 토큰은 2FA 를 안 거치므로)
+
         // 캐시 갱신
         self::$user = null;
-        
+
         return [
             'success' => true,
             'message' => __('api_2fa_enabled', '2FA가 활성화되었습니다.'),
@@ -1868,15 +2103,16 @@ class Auth {
         }
         
         // 2FA 활성화 상태면 OTP 검증
-        if (!empty($user['2fa_enabled']) && !empty($code)) {
+        // ★ (2026-10-29 03:11, 16차) 코드를 반드시 검증 — 종전엔 '&& !empty($code)' 라 code 를 빈 값으로 보내면 OTP 검사를 건너뛰어
+        //   비밀번호만으로 2FA 를 끌 수 있었음(재현). 백업 코드도 인정
+        if (!empty($user['2fa_enabled'])) {
             require_once __DIR__ . '/TOTP.php';
             $secret = $this->decrypt2FASecret($fullUser['2fa_secret'] ?? '');
-            
-            if (!TOTP::verify($secret, $code) && !$this->verifyBackupCode($user['id'], $code)) {
+            if ($secret === '' || $code === '' || (!TOTP::verify($secret, $code) && !$this->verifyBackupCode($user['id'], $code))) {
                 return ['success' => false, 'error' => __('api_err_invalid_otp', '인증 코드가 올바르지 않습니다.')];
             }
         }
-        
+
         // 2FA 정보 제거
         $this->db->update('users', ['id' => $user['id']], [
             '2fa_enabled' => false,
@@ -1894,10 +2130,130 @@ class Auth {
     /**
      * 2FA 검증 (로그인 2단계)
      */
+    /** ★ (2026-10-28 19:55, 6차 점검) 2FA 틀린 횟수(사용자 단위, 15분 창) */
+    private function twoFaFailFile(int $uid): string {
+        $dir = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/rate_limits';
+        if (!is_dir($dir)) @mkdir($dir, 0755, true);
+        return $dir . '/2fa_' . $uid . '.json';
+    }
+    /** ★ (2026-10-28 20:42, 7차 점검) 잠금 안에서 15분 창의 시도 수를 세어 10회 미만이면 이번 시도를 기록하고 true, 아니면 false */
+    private function twoFaAttemptReserve(int $uid, int $max = 10, int $window = 900): bool {
+        $fp = @fopen($this->twoFaFailFile($uid), 'c+');
+        if (!$fp) return true;   // 기록 파일을 못 열면 막지 않음(종전 동작과 같게 — 로그인 자체를 막지 않도록)
+        $ok = true;
+        if (flock($fp, LOCK_EX)) {
+            $now = time();
+            $data = @json_decode((string)stream_get_contents($fp), true) ?: [];
+            $data = array_values(array_filter($data, fn($t) => ($now - (int)$t) < $window));
+            if (count($data) >= $max) {
+                $ok = false;
+            } else {
+                $data[] = $now;
+                ftruncate($fp, 0); rewind($fp); fwrite($fp, json_encode($data)); fflush($fp);
+            }
+            flock($fp, LOCK_UN);
+        }
+        fclose($fp);
+        return $ok;
+    }
+    // ★ (2026-10-28 21:19, 8차 점검) 지우지 않고 잠금 안에서 비움 — 윈도우에선 다른 요청이 열어 둔 파일 삭제가 조용히 실패해 기록이 남을 수 있었음
+    private function twoFaFailClear(int $uid): void {
+        $f = $this->twoFaFailFile($uid);
+        if (!is_file($f)) return;
+        $fp = @fopen($f, 'c+'); if (!$fp) return;
+        if (flock($fp, LOCK_EX)) { ftruncate($fp, 0); fflush($fp); flock($fp, LOCK_UN); }
+        fclose($fp);
+    }
+
+    /**
+     * ★ (2026-10-29 03:51, 17차) SSO(LDAP·OIDC·SAML·Kerberos) 로그인 공통 관문 — 일반 로그인(login)과 같은 기준을 SSO 에도 적용.
+     *   종전엔 SSO 로 들어오면 IP/국가 제한·2FA 를 모두 건너뛰고 바로 로그인됐음.
+     *   반환: ['success'=>false,'error'=>…] 거부 / ['success'=>true,'2fa_required'=>true] 2FA 대기(세션에 pending 저장) / ['success'=>true] 바로 로그인해도 됨
+     */
+    public function ssoGate(array $fsUser, bool $remember, string $provider): array {
+        $ip = $this->getClientIP();
+        $uname = (string)($fsUser['username'] ?? '');
+        $ipCheck = $this->checkIPRestriction($ip);
+        if (!$ipCheck['allowed']) {
+            $this->logLogin($uname, false, $ip, $ipCheck['reason'] . ' (SSO ' . $provider . ')');
+            return ['success' => false, 'error' => $ipCheck['reason']];
+        }
+        $full = $this->db->find('users', ['id' => (int)($fsUser['id'] ?? 0)]);
+        if ($full && !empty($full['2fa_enabled'])) {
+            $_SESSION['2fa_pending_user'] = [
+                'id' => $full['id'],
+                'username' => $full['username'],
+                'remember' => $remember,
+                'started_at' => time(),
+                'sso_provider' => $provider
+            ];
+            return ['success' => true, '2fa_required' => true, 'message' => __('api_2fa_required', '2단계 인증이 필요합니다.')];
+        }
+        $this->logLogin($uname, true, $ip, 'SSO ' . $provider);
+        // ★ (2026-10-29 09:55, 20차 점검) 로컬 로그인처럼 개인 폴더('내 파일') 스토리지 보장 — 종전엔 로컬 로그인에서만 만들어, SSO 로 생긴 계정은 '내 파일' 이 없었음(재현)
+        if ($full && defined('AUTO_CREATE_USER_FOLDER') && AUTO_CREATE_USER_FOLDER) {
+            $this->ensureUserFolder($full);
+        }
+        return ['success' => true];
+    }
+
+    /** ★ (2026-10-29 03:51, 17차) LDAP 로그인 시도 제한 — 일반 로그인과 같은 잠금(isLockedOut·recordFailedAttempt) 사용. 종전엔 횟수 제한이 없어 비밀번호 대입·AD 계정 잠금 유발이 가능했음 */
+    //   ★ (2026-10-29 07:45, 18차) 잠금 기준 아이디는 앞뒤 공백 없앤 소문자 — AD 는 대소문자를 안 가려 'Admin'·'ADMIN' 으로 바꿔 가며 시도 횟수를 늘릴 수 있었음
+    private function ssoLockKey(string $username): string {
+        return 'ldap:' . mb_strtolower(trim($username), 'UTF-8');
+    }
+    public function ssoAttemptAllowed(string $username): bool {
+        return !$this->isLockedOut($this->ssoLockKey($username), $this->getClientIP());
+    }
+    public function ssoAttemptFailed(string $username): void {
+        $ip = $this->getClientIP();
+        $this->recordFailedAttempt($this->ssoLockKey($username), $ip);
+        $this->logLogin($username, false, $ip, 'LDAP 인증 실패');
+    }
+    public function ssoAttemptSucceeded(string $username): void {
+        $this->clearFailedAttempts($this->ssoLockKey($username), $this->getClientIP());
+    }
+    /**
+     * ★ (2026-10-29 07:45, 18차) LDAP 로그인 전 IP·국가 제한 — 일반 로그인처럼 인증 '전' 에 확인. 종전(17차)엔 LDAP 인증 뒤 ssoGate 에서만 봐서,
+     *   막힌 IP 에서도 응답 문구 차이로 비밀번호가 맞는지 알 수 있었고 계정 자동 생성도 먼저 됐음. 거부면 사유, 허용이면 null
+     */
+    public function ssoIpDenied(string $username, string $provider): ?string {
+        $ip = $this->getClientIP();
+        $ipCheck = $this->checkIPRestriction($ip);
+        if ($ipCheck['allowed']) return null;
+        $this->logLogin($username, false, $ip, $ipCheck['reason'] . ' (SSO ' . $provider . ')');
+        return (string)$ipCheck['reason'];
+    }
+
+    /** ★ (2026-10-29 10:27, 20차 점검) WebDAV 인증 전 IP·국가 제한 — 웹 로그인과 같은 규칙. 막히면 로그인 기록에 남기고 true */
+    public function webdavIpDenied(string $username): bool {
+        $ip = $this->getClientIP();
+        $ipCheck = $this->checkIPRestriction($ip);
+        if ($ipCheck['allowed']) return false;
+        $this->logLogin($username, false, $ip, $ipCheck['reason'] . ' (WebDAV)');
+        return true;
+    }
+
     public function verify2FA(string $code): array {
         $pendingUser = $_SESSION['2fa_pending_user'] ?? null;
         if (!$pendingUser) {
             return ['success' => false, 'error' => __('api_2fa_not_pending', '2FA 인증 대기 상태가 아닙니다.')];
+        }
+        // ★ (2026-10-28 18:22, 소스 점검 5단계) 2FA 대기 상태 만료 — 종전엔 만료가 없어 pending 을 무한정 두고 코드를 계속 시도할 수 있었음(10분)
+        if (isset($pendingUser['started_at']) && (time() - (int)$pendingUser['started_at']) > 600) {
+            unset($_SESSION['2fa_pending_user']);
+            return ['success' => false, 'error' => __('api_2fa_expired', '인증 시간이 지났습니다. 다시 로그인하세요.')];
+        }
+        // ★ (2026-10-28 18:22, 소스 점검 5단계) 코드 무차별 대입 제한 — 틀린 횟수를 세어 너무 많으면 막음.
+        //   종전엔 횟수 제한이 없어 시간창 ±1(약 3/10^6/회)을 여러 요청으로 나눠 맞출 수 있었고, 매 시도마다 백업코드 10개를 password_verify 해 부하도 컸음
+        // ★ (2026-10-28 19:55, 6차 점검) 세션 단위로만 세어 다시 로그인하면(새 세션) 횟수가 0 으로 돌아갔음(주석의 '사용자 단위'와 달랐음) →
+        //   사용자별 파일(data/rate_limits/2fa_<id>.json)에 15분 동안 틀린 시각을 쌓아 10회면 막음. 성공하면 지움
+        // ★ (2026-10-28 20:42, 7차 점검) 세기와 더하기를 한 잠금 안에서(시도를 먼저 1회로 기록, 맞으면 지움) — 종전엔 센 뒤 따로 더해
+        //   여러 세션에서 동시에 보내면 모두 10회 미만으로 보고 통과할 수 있었음
+        $tfUid = (int)($pendingUser['id'] ?? 0);
+        if (!$this->twoFaAttemptReserve($tfUid)) {
+            unset($_SESSION['2fa_pending_user']);
+            return ['success' => false, 'error' => __('api_err_too_many_attempts', '시도가 너무 많습니다. 잠시 후 다시 시도하세요.')];
         }
         
         $user = $this->db->find('users', ['id' => $pendingUser['id']]);
@@ -1923,8 +2279,10 @@ class Auth {
         }
         
         if (!$isValid) {
+            // (시도는 위 twoFaAttemptReserve 에서 이미 1회로 기록됨 — 사용자 단위)
             return ['success' => false, 'error' => __('api_err_invalid_otp', '인증 코드가 올바르지 않습니다.')];
         }
+        $this->twoFaFailClear($tfUid);   // ★ 성공 시 초기화
         
         // 로그인 완료 — Session Fixation 방지
         // ★ session_regenerate_id 전에 sessions DB에서 이전 session_id 제거 (유령 세션 방지)
@@ -1933,6 +2291,9 @@ class Auth {
         }
         session_regenerate_id(true);
         $_SESSION['user_id'] = $user['id'];
+        // ★ (2026-10-29 10:44, 20차 점검) 일반 로그인처럼 이름·역할도 — 종전엔 2FA 로 들어오면 비어 있어 사용자 삭제 기록의 '삭제한 사람' 이 'admin' 으로 남는 등 어긋났음
+        $_SESSION['username'] = $user['username'] ?? '';
+        $_SESSION['role'] = $user['role'] ?? 'user';
         $_SESSION['last_activity'] = time();
         self::$user = $user;
         
@@ -2034,6 +2395,9 @@ class Auth {
         if (!$user) {
             return ['success' => false, 'error' => __('api_login_required')];
         }
+        // ★ (2026-10-29 21:15, 24차 점검) 남은 백업 코드 수는 DB 의 전체 기록으로 셈 — getUser() 는 백업 코드를 지운 정보라 늘 0개로 보였음(재현)
+        $_fu = $this->db->find('users', ['id' => $user['id']]);
+        if (is_array($_fu)) $user['2fa_backup_codes'] = $_fu['2fa_backup_codes'] ?? [];
         
         $backupCodesCount = 0;
         if (!empty($user['2fa_backup_codes']) && is_array($user['2fa_backup_codes'])) {
@@ -2176,8 +2540,25 @@ class Auth {
         
         // 임시 비밀번호 생성 (8자리)
         $tempPassword = $this->generateTempPassword();
-        
-        // 비밀번호 업데이트
+
+        // ★ (2026-10-29 03:11, 16차) 메일을 먼저 보내고, 성공했을 때만 비밀번호를 바꿈 — 종전엔 비밀번호부터 바꾸고 메일을 보내,
+        //   SMTP 미설정 등으로 메일이 실패하면 임시 비밀번호를 아무도 모르는 채 계정이 잠겼음(재현). 메일 실패 시 기존 비밀번호 유지
+        $siteName = defined('SITE_NAME') ? SITE_NAME : __('site_name_default');
+        $subject = __f('email_temp_pw_subject', ['siteName' => $siteName]);
+        $message = __f('email_temp_pw_greeting', ['displayName' => $user['display_name']]);
+        $message .= __('email_temp_pw_body');
+        $message .= __f('email_temp_pw_id', ['username' => $username]);
+        $message .= __f('email_temp_pw_value', ['password' => $tempPassword]);
+        $message .= __('email_temp_pw_change');
+        $message .= __('email_ignore_if_not_you');
+
+        $sent = $this->sendEmail($email, $subject, $message);
+
+        if (!$sent) {
+            return ['success' => false, 'error' => __('api_err_email_send_failed', '이메일 발송에 실패했습니다. 관리자에게 문의하세요.')];
+        }
+
+        // 메일 발송 성공 → 비밀번호 업데이트 + 기존 로그인 유지 토큰 폐기
         $users = $this->db->load('users');
         foreach ($users as &$u) {
             if ($u['id'] === $user['id']) {
@@ -2187,25 +2568,11 @@ class Auth {
                 break;
             }
         }
+        unset($u);
         $this->db->save('users', $users);
-        
-        // 이메일 발송
-        $siteName = defined('SITE_NAME') ? SITE_NAME : __('site_name_default');
-        $subject = __f('email_temp_pw_subject', ['siteName' => $siteName]);
-        $message = __f('email_temp_pw_greeting', ['displayName' => $user['display_name']]);
-        $message .= __('email_temp_pw_body');
-        $message .= __f('email_temp_pw_id', ['username' => $username]);
-        $message .= __f('email_temp_pw_value', ['password' => $tempPassword]);
-        $message .= __('email_temp_pw_change');
-        $message .= __('email_ignore_if_not_you');
-        
-        $sent = $this->sendEmail($email, $subject, $message);
-        
-        if ($sent) {
-            return ['success' => true, 'message' => __('api_temp_password_sent', '임시 비밀번호가 이메일로 발송되었습니다.')];
-        } else {
-            return ['success' => false, 'error' => __('api_err_email_send_failed', '이메일 발송에 실패했습니다. 관리자에게 문의하세요.')];
-        }
+        $this->deleteRememberTokensForUser((int)$user['id']);
+
+        return ['success' => true, 'message' => __('api_temp_password_sent', '임시 비밀번호가 이메일로 발송되었습니다.')];
     }
     
     /**
@@ -2284,34 +2651,42 @@ class Auth {
             if (!$socket) {
                 return false;
             }
+            // ★ (2026-10-29 09:58, 20차 점검) 단계마다 서버 응답 코드 확인 — 종전엔 응답을 안 봐서 인증 실패·수신 거부여도 늘 성공(true)으로 답해,
+            //   16차의 '메일이 실제로 나갔을 때만 임시 비밀번호로 바꿈' 이 무력했음(재현: 가짜 SMTP 550·535 에도 성공). api.php sendSmtpEmail 과 같은 기준
+            $ok = function (string $resp, array $codes) use ($socket): bool {
+                foreach ($codes as $c) { if (strpos($resp, (string)$c) === 0) return true; }
+                @fwrite($socket, "QUIT\r\n"); @fclose($socket);
+                return false;
+            };
+            $ehloHost = preg_replace('/[^a-zA-Z0-9.\-]/', '', $_SERVER['HTTP_HOST'] ?? 'localhost');
             
-            $this->smtpRead($socket);
+            if (!$ok($this->smtpRead($socket), [220])) return false;
             
             // EHLO
-            $this->smtpSend($socket, "EHLO " . preg_replace('/[^a-zA-Z0-9.\-]/', '', $_SERVER['HTTP_HOST'] ?? 'localhost'));
+            if (!$ok($this->smtpSend($socket, "EHLO " . $ehloHost), [250])) return false;
             
             // STARTTLS (if tls)
             if ($secure === 'tls') {
-                $this->smtpSend($socket, "STARTTLS");
-                stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
-                $this->smtpSend($socket, "EHLO " . preg_replace('/[^a-zA-Z0-9.\-]/', '', $_SERVER['HTTP_HOST'] ?? 'localhost'));
+                if (!$ok($this->smtpSend($socket, "STARTTLS"), [220])) return false;
+                if (!@stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) { @fclose($socket); return false; }
+                if (!$ok($this->smtpSend($socket, "EHLO " . $ehloHost), [250])) return false;
             }
             
             // AUTH LOGIN
             if ($user && $pass) {
-                $this->smtpSend($socket, "AUTH LOGIN");
-                $this->smtpSend($socket, base64_encode($user));
-                $this->smtpSend($socket, base64_encode($pass));
+                if (!$ok($this->smtpSend($socket, "AUTH LOGIN"), [334])) return false;
+                if (!$ok($this->smtpSend($socket, base64_encode($user)), [334])) return false;
+                if (!$ok($this->smtpSend($socket, base64_encode($pass)), [235])) return false;
             }
             
             // MAIL FROM
-            $this->smtpSend($socket, "MAIL FROM:<{$from}>");
+            if (!$ok($this->smtpSend($socket, "MAIL FROM:<{$from}>"), [250])) return false;
             
             // RCPT TO
-            $this->smtpSend($socket, "RCPT TO:<{$to}>");
+            if (!$ok($this->smtpSend($socket, "RCPT TO:<{$to}>"), [250, 251])) return false;
             
             // DATA
-            $this->smtpSend($socket, "DATA");
+            if (!$ok($this->smtpSend($socket, "DATA"), [354])) return false;
             
             // Message
             $data = "From: {$fromHeader}\r\n";
@@ -2322,7 +2697,7 @@ class Auth {
             $data .= $message . "\r\n";
             $data .= ".";
             
-            $this->smtpSend($socket, $data);
+            if (!$ok($this->smtpSend($socket, $data), [250])) return false;
             
             // QUIT
             $this->smtpSend($socket, "QUIT");
@@ -2354,7 +2729,7 @@ class Auth {
      */
     public function getAccessStats(): array {
         $user = $this->getUser();
-        if (!$user || ($user['role'] ?? '') !== 'admin') {
+        if (!$user || !$this->hasAdminPerm('logins')) {   // ★ (2026-10-29 22:39, 24차 점검) 로그인 기록 함수들(24차)·api.php requireAdminPerm('logins') 와 같은 기준
             return ['success' => false, 'error' => __('api_err_no_permission', '권한이 없습니다.')];
         }
         

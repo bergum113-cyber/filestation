@@ -104,7 +104,16 @@
         //   고치지 않고 틀 안의 변화를 지켜본다. 탐색기는 배지를 바꿀 때 className 을 통째로 다시 써 표시가 지워질 수 있어 class 변화도 본다 —
         //   이미 맞는 상태면 classList.toggle 이 아무것도 바꾸지 않아 되먹임 반복이 없다. 다음 프레임에 한 번만, 떼어낼 때 해제.
         const markErrorBadges = () => {
-            try { wrap.querySelectorAll('.video-stream-badge, .stream-badge').forEach((b) => { b.classList.toggle('fsvs-badge-error', /^\s*❌/.test(b.textContent || '')); }); } catch (e) {}
+            // ★ (2026-10-29 21:57, 24차 점검) ❌ 가 fs-icons.js 로 선 그림(.fs-ico-err)으로 바뀐 뒤에도 오류로 알아봄 — 종전엔 글자만 봐서 10-26 이후 오류 배지가 다시 말줄임됐음
+            const _isErrBadge = (b) => {
+                if (/^\s*❌/.test(b.textContent || '')) return true;
+                for (const n of b.childNodes) {   // 앞쪽 공백 글자는 건너뛰고 첫 내용이 오류 아이콘이면
+                    if (n.nodeType === 3 && !n.nodeValue.trim()) continue;
+                    return n.nodeType === 1 && n.classList && n.classList.contains('fs-ico-err');
+                }
+                return false;
+            };
+            try { wrap.querySelectorAll('.video-stream-badge, .stream-badge').forEach((b) => { b.classList.toggle('fsvs-badge-error', _isErrBadge(b)); }); } catch (e) {}
         };
         let badgeRaf = 0;
         const badgeMo = new MutationObserver(() => {
@@ -960,7 +969,7 @@
             const b = btn('fsvs-mrow fsvs-mopt' + (active ? ' is-on' : ''), null, label);
             b.setAttribute('role', 'menuitemradio'); b.setAttribute('aria-checked', active ? 'true' : 'false');
             const c = el('span', 'fsvs-mck'); if (active) c.innerHTML = ICON.check;
-            b.append(c, txt('fsvs-ml', label));
+            b.append(c, txt('fsvs-ml fs-noico', label));   // ★ (2026-10-29 22:39, 24차 점검) 선택지 이름(자막·음성 트랙 이름)은 사용자 글자 — 이모지를 그림으로 안 바꿈
             b.addEventListener('click', () => { try { fn(); } catch (e) {} });
             menu.append(b);
         };

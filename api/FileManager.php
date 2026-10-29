@@ -4,6 +4,7 @@
  * 로컬 및 원격 스토리지(FTP, SFTP, WebDAV, S3) 지원
  */
 require_once __DIR__ . '/IconUrl.php';
+require_once __DIR__ . '/HiddenItems.php';   // ★ (2026-10-28) 숨김 항목(시스템 파일·오피스 임시·사용자 숨김)
 
 class FileManager {
     private $db;
@@ -412,7 +413,10 @@ class FileManager {
             $items = [];
             
             foreach ($rawItems as $raw) {
-                $filename = $raw['name'];
+                // ★ (2026-10-29 21:41, 24차 점검) 이름·경로는 문자열로 — SFTP(phpseclib rawlist)는 이름을 배열 키로 써서 '2024' 같은 숫자 이름이 정수가 되어,
+                //   화면의 name.split() 이 오류를 내 그 폴더 목록이 그려지지 않았음(인덱스 목록 쪽은 이미 문자열 처리)
+                $filename = (string)$raw['name'];
+                $raw['path'] = (string)($raw['path'] ?? '');
                 // 숨김 파일 제외
                 if (substr($filename, 0, 1) === '.') continue;
                 
@@ -464,7 +468,8 @@ class FileManager {
         
         // home 타입: 사용자별 quota 체크
         if ($storageType === 'home') {
-            $userId = $this->auth->getUserId();
+            // ★ (2026-10-29 10:02, 20차 점검) 홈 주인의 한도로 — 종전엔 요청한 사람 기준이라 파일받기 링크(비로그인=무제한)·내부 공유 업로드로 주인 한도를 넘길 수 있었음(재현)
+            $userId = (int)($storageInfo['owner_id'] ?? 0) ?: $this->auth->getUserId();
             $user = $this->db->find('users', ['id' => $userId]);
             $quota = (int)($user['quota'] ?? 0);
             
@@ -525,6 +530,32 @@ class FileManager {
         }
         
         return ['allowed' => true];
+    }
+    
+    /**
+     * ★ (2026-10-29 21:44, 24차 점검) 복사·다른 스토리지로 이동·끌어 복사의 대상 용량 확인 — 종전엔 이 경로들에 용량 확인이 없어 한도를 넘겨 저장됐음
+     *   (WebDAV COPY·MOVE 는 20차에 507). 대상에 한도가 있을 때만 크기를 잼(21차와 같은 이유 — 큰 폴더를 한 번 더 훑지 않게).
+     *   필요량 = 원본 크기 − (덮어쓰기면) 지워질 같은 이름 대상 크기. 막아야 하면 오류 문구, 아니면 null
+     */
+    private function transferQuotaError(int $destStorageId, string $srcFull, string $destTargetFull, string $duplicateAction): ?string {
+        $info = $this->storage->getStorageById($destStorageId);
+        if (!$info) return null;
+        if (($info['storage_type'] ?? '') === 'home') {
+            $uid = (int)($info['owner_id'] ?? 0) ?: (int)$this->auth->getUserId();
+            $hasQuota = ((int)(($this->db->find('users', ['id' => $uid]) ?: [])['quota'] ?? 0)) > 0;
+        } else {
+            $hasQuota = (int)($info['quota'] ?? 0) > 0;
+        }
+        if (!$hasQuota) return null;
+        $sz = function ($p) { clearstatcache(true, $p); return is_dir($p) ? (int)$this->getDirectorySize($p) : (is_file($p) ? (int)@filesize($p) : 0); };
+        $need = $sz($srcFull);
+        // ★ (2026-10-29 22:39, 24차 점검) 대상이 원본 자신(같은 폴더에 '덮어쓰기'로 복사)이면 copy() 가 새 이름 사본을 만들므로 빼지 않음 — 종전엔 필요량 0 으로 통과해 한도를 넘겼음(2회차 재검토)
+        $tqSame = (($rs = realpath($srcFull)) !== false && $rs === realpath($destTargetFull));
+        if ($duplicateAction === 'skip' && file_exists($destTargetFull) && !$tqSame) return null;   // ★ (2026-10-29 23:24, 24차 점검) 같은 이름이 있어 건너뛸 항목은 복사되지 않으므로 용량 확인 안 함(3회차 재검토)
+        if (!$tqSame && !in_array($duplicateAction, ['rename', 'skip'], true) && file_exists($destTargetFull)) $need -= $sz($destTargetFull);
+        if ($need <= 0) return null;
+        $q = $this->checkQuota($destStorageId, $need);
+        return empty($q['allowed']) ? (string)($q['error'] ?? __('quota_exceeded', '용량이 부족합니다.')) : null;
     }
     
     // 용량 체크 - API용 public 메서드
@@ -716,6 +747,9 @@ class FileManager {
         }
         
         $mode = $settings['mode'] ?? 'all';
+        // ★ (2026-10-28 17:42, 소스 점검 3단계) 실제로 저장될 이름(sanitizeFilename 을 거친 이름)으로 검사 — 종전엔 정리 전 이름으로 검사해서
+        //   'x.p:hp'(검사 때 확장자 'p:hp' → 통과, 저장 때 ':' 가 빠져 'x.php') 처럼 저장 후에야 실행 확장자가 되는 이름이 통과했음(재현)
+        $filename = $this->sanitizeFilename(basename(str_replace('\\', '/', $filename)));
         $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
         
         // 서버 실행 확장자는 모든 모드에서 항상 차단
@@ -738,6 +772,20 @@ class FileManager {
                     ];
                 }
             }
+        }
+        // ★ (2026-10-29 18:30, 22차 점검) 서버 설정 파일 이름(.htaccess·.user.ini·web.config 등)도 공통 기준(fsServerExecReason)으로 — 조각 업로드·이름 바꾸기와 같게
+        if (($ucExec = \fsServerExecReason($filename)) !== null) {
+            return ['allowed' => false, 'reason' => $ucExec];
+        }
+        
+        // 최대 파일 크기 검증
+        // ★ (2026-10-29 10:00, 20차 점검) 모드 판단 앞으로 옮김 — 종전엔 '모두 허용'(기본값)이면 여기 오기 전에 끝나 최대 크기 설정이 무시됐음(재현)
+        $maxSize = (int)($settings['max_filesize'] ?? 0);
+        if ($maxSize > 0 && $fileSize > 0 && $fileSize > $maxSize * 1024 * 1024) {
+            return [
+                'allowed' => false,
+                'reason' => __('upload_file_too_large', '파일 크기가 제한을 초과합니다') . ": " . round($fileSize / 1024 / 1024, 1) . "MB / {$maxSize}MB"
+            ];
         }
         
         if ($mode === 'all') {
@@ -768,16 +816,43 @@ class FileManager {
             }
         }
         
-        // 최대 파일 크기 검증
-        $maxSize = (int)($settings['max_filesize'] ?? 0);
-        if ($maxSize > 0 && $fileSize > 0 && $fileSize > $maxSize * 1024 * 1024) {
-            return [
-                'allowed' => false,
-                'reason' => __('upload_file_too_large', '파일 크기가 제한을 초과합니다') . ": " . round($fileSize / 1024 / 1024, 1) . "MB / {$maxSize}MB"
-            ];
-        }
-        
         return ['allowed' => true, 'mime_check' => $settings['mime_check'] ?? true];
+    }
+    
+    /** ★ (2026-10-29 18:45, 22차 점검) 공유 쪽 옛 업로드 경로(ShareManager)에서도 같은 검사를 쓰려고 */
+    public function checkRansomwarePublic(string $filename): array {
+        return $this->checkRansomwareExtension($filename);
+    }
+
+    /**
+     * ★ (2026-10-30 00:48, 25차 — 펜닐 선택 'WebDAV 도 웹 업로드와 같게') WebDAV 올리기 앞 검사 — 업로드 설정(허용·차단 확장자, 최대 크기, 서버 실행 이름)과
+     *   랜섬웨어 의심 확장자. 웹 일반 업로드(upload)와 같은 순서·같은 함수. 막아야 하면 사유 문자열, 괜찮으면 null
+     */
+    public function davUploadPrecheck(string $filename, int $fileSize = 0): ?string {
+        $uc = $this->checkUploadSettings($filename, max(0, $fileSize));
+        if (empty($uc['allowed'])) return (string)($uc['reason'] ?? __('api_err_dangerous_ext', '보안상 허용되지 않는 파일 형식입니다'));
+        $rc = $this->checkRansomwareExtension($this->sanitizeFilename(basename(str_replace('\\', '/', $filename))));
+        if (empty($rc['allowed'])) return (string)($rc['reason'] ?? '');
+        return null;
+    }
+
+    /**
+     * ★ (2026-10-30 00:48, 25차) WebDAV 로 다 받은 임시 파일 검사 — 최대 크기(Content-Length 없던 경우)·내용 형식(MIME, 업로드 설정의 mime_check)·
+     *   랜섬웨어 내용 검사. 웹 조각 업로드 완료 때와 같은 함수. 막아야 하면 사유 문자열, 괜찮으면 null
+     */
+    public function davUploadPostcheck(string $tmpPath, string $filename): ?string {
+        $size = (int)(@filesize($tmpPath) ?: 0);
+        $uc = $this->checkUploadSettings($filename, $size);
+        if (empty($uc['allowed'])) return (string)($uc['reason'] ?? __('api_err_dangerous_ext', '보안상 허용되지 않는 파일 형식입니다'));
+        if (($uc['mime_check'] ?? true) && !$this->validateMimeType($tmpPath, $filename)) return (string)__('file_type_invalid');
+        $cc = $this->checkRansomwareContent($tmpPath, $filename);
+        if (empty($cc['allowed'])) return (string)($cc['reason'] ?? '');
+        return null;
+    }
+
+    /** ★ (2026-10-30 00:48, 25차) 대량 삭제·덮어쓰기 감지(랜섬웨어 방지 설정의 bulk_protection)를 WebDAV 에서도 — 웹 삭제·덮어쓰기와 같은 기록·같은 한도 */
+    public function checkBulkOperationPublic(string $operationType): array {
+        return $this->checkBulkOperation($operationType);
     }
     
     private function checkRansomwareExtension(string $filename): array {
@@ -893,7 +968,7 @@ class FileManager {
             'gz'   => ['1F8B'],
             'bz2'  => ['425A68'],
             'xz'   => ['FD377A585A00'],
-            'tar'  => ['7573746172'],  // "ustar" at offset 257
+            // ★ (2026-10-30 01:46, 26차 점검) tar 는 'ustar' 가 257번째 바이트에 있어 앞 16바이트 비교로는 정상 tar 가 늘 '불일치'였음(재현) → 검사에서 뺌(옛 v7 tar 는 표시 자체가 없음)
             
             // 실행파일
             'exe'  => ['4D5A'],  // MZ
@@ -912,8 +987,8 @@ class FileManager {
             
             // 기타
             'sqlite' => ['53514C697465'],  // SQLite
-            'xml'  => ['3C3F786D6C'],  // <?xml
-            'html' => ['3C21444F43', '3C68746D6C', '3C48544D4C'],  // <!DOC, <html, <HTML
+            // ★ (2026-10-30 01:46, 26차 점검) xml·html 은 글자 파일이라 앞부분이 정해져 있지 않음(소문자 <!doctype, BOM, 주석, 선언 없는 xml) — 정상 파일이 늘 '불일치'였음(재현) → 검사에서 뺌.
+            //   글자 파일에 숨긴 실행 코드는 MIME 검사(validateMimeType)가 따로 막음
             'rtf'  => ['7B5C727466'],  // {\rtf
         ];
         
@@ -937,6 +1012,13 @@ class FileManager {
         
         $headerHex = strtoupper(bin2hex($header));
         $expectedSigs = $signatures[$ext];
+        
+        // ★ (2026-10-30 01:46, 26차 점검) MP3: ID3 태그 또는 MPEG 프레임 동기 비트(첫 바이트 FF + 다음 바이트 상위 3비트) — 종전 목록(FFFB/FFF3/FFF2)은 CRC 있는 프레임(FFFA 등)을 '불일치'로 봤음(재현)
+        if ($ext === 'mp3') {
+            if (strpos($headerHex, '494433') === 0) return ['valid' => true, 'expected' => 'ID3', 'actual' => 'ID3'];
+            if (strlen($header) >= 2 && ord($header[0]) === 0xFF && (ord($header[1]) & 0xE0) === 0xE0) return ['valid' => true, 'expected' => 'MPEG sync', 'actual' => substr($headerHex, 0, 4)];
+            return ['valid' => false, 'expected' => 'ID3 or MPEG frame sync', 'actual' => substr($headerHex, 0, 16)];
+        }
         
         // MP4/MOV/3GP: ftyp가 offset 4에 위치 (처음 4바이트는 박스 크기)
         if (in_array($ext, ['mp4', 'm4v', 'm4a', 'mov', '3gp'])) {
@@ -1058,10 +1140,11 @@ class FileManager {
     /**
      * 파일 버전 저장 (덮어쓰기 전)
      */
-    private function saveFileVersion(string $filePath, string $relativePath, int $storageId): void {
+    // ★ (2026-10-29 20:10, 23차 점검) $force — 버전 복원 직전 현재 파일 보관용(버전 기능이 꺼져 있어도 저장). 다른 호출은 종전 그대로
+    private function saveFileVersion(string $filePath, string $relativePath, int $storageId, bool $force = false): void {
         $config = $this->getRansomwareConfig();
         
-        if (empty($config['versioning'])) {
+        if (empty($config['versioning']) && !$force) {
             return;
         }
         
@@ -1072,7 +1155,7 @@ class FileManager {
         // 제외 확장자 체크
         $ext = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
         $excludeList = $config['version_exclude'] ?? '';
-        if (!empty($excludeList)) {
+        if (!$force && !empty($excludeList)) {   // ★ (2026-10-29 21:43, 24차 점검) 복원 직전 보관($force)은 제외 확장자여도 저장(23차 확인창 안내대로)
             $excluded = array_map(function($e) {
                 return ltrim(trim($e), '.');
             }, explode(',', strtolower($excludeList)));
@@ -1169,7 +1252,8 @@ class FileManager {
             
             // 고아 스냅샷 확인: 원본 파일도 없고 휴지통에도 없는 경우
             $sid = $meta['storage_id'] ?? 0;
-            $path = $meta['path'] ?? '';
+            // ★ (2026-10-29 03:11, 16차) 버전 메타는 saveFileVersion 이 'file_path' 로 저장하는데 종전엔 'path' 로 읽어 늘 빈 값 → 고아 버전 정리가 전혀 안 됐음. 둘 다 봄
+            $path = $meta['file_path'] ?? ($meta['path'] ?? '');
             $fileHash = md5($sid . '/' . $path);
             $isOrphan = false;
             
@@ -1264,7 +1348,8 @@ class FileManager {
             if (!$meta) continue;
             
             // 이 버전이 삭제 대상 폴더 하위인지 확인
-            $storedPath = ($meta['storage_id'] ?? '') . '/' . ($meta['path'] ?? '');
+            // ★ (2026-10-29 03:11, 16차) 메타 키는 'file_path'(saveFileVersion 저장). 종전엔 'path' 로 읽어 늘 빈 값 → 폴더 삭제 때 하위 파일들의 버전이 정리되지 않았음
+            $storedPath = ($meta['storage_id'] ?? '') . '/' . ($meta['file_path'] ?? ($meta['path'] ?? ''));
             if (str_starts_with($storedPath, $prefix) || $storedPath === $storageId . '/' . $relativePath) {
                 foreach (scandir($hashPath) as $file) {
                     if ($file === '.' || $file === '..') continue;
@@ -1305,9 +1390,16 @@ class FileManager {
         
         $versionDir = DATA_PATH . '/file_versions';
         $fileHash = md5($storageId . '/' . $relativePath);
+        // ★ (2026-10-29 02:36, 16차) 버전 ID 검사(내려받기 file_version_download 와 같은 기준) — 종전엔 그대로 이어 붙여 '../../users.json' 으로
+        //   쓰기 권한만 있는 사용자가 서버 파일(사용자 목록·비밀번호 해시 등)을 자기 파일로 복사해 갈 수 있었음(재현)
+        if ($versionId === '' || $versionId !== basename($versionId) || !preg_match('/^[a-zA-Z0-9_.-]+$/', $versionId) || strpos($versionId, '..') !== false) {
+            return ['success' => false, 'error' => __('api_err_version_file_not_found', '버전 파일을 찾을 수 없습니다.')];
+        }
         $versionFile = $versionDir . '/' . $fileHash . '/' . $versionId;
         
-        if (!file_exists($versionFile)) {
+        $vfReal = realpath($versionFile);
+        $vdReal = realpath($versionDir . '/' . $fileHash);
+        if (!file_exists($versionFile) || $vfReal === false || $vdReal === false || !is_file($vfReal) || !isSubPath($vfReal, $vdReal)) {
             return ['success' => false, 'error' => __('api_err_version_file_not_found', '버전 파일을 찾을 수 없습니다.')];
         }
         
@@ -1317,12 +1409,37 @@ class FileManager {
         if (!$this->isPathSafe($basePath, $targetPath)) {
             return ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
         }
+        // ★ (2026-10-29 10:07, 20차 점검) 잠긴 파일은 버전 복원으로도 덮어쓰지 않음 — 종전엔 그대로 덮어썼음(재현)
+        if ($this->isFileLocked($storageId, ltrim(str_replace('\\', '/', $relativePath), '/'))) {
+            return ['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')];
+        }
         
-        // Windows 표준: 복원 시에는 현재 파일 백업하지 않음
-        // 복원은 되돌릴 수 없음 (덮어쓰기)
+        // ★ (2026-10-29 20:10, 23차 점검, 펜닐 결정 '복원 전 현재 파일을 버전으로 저장') 복원 확인창 안내("현재 파일은 새 버전으로 저장됩니다")대로
+        //   덮어쓰기 전에 현재 파일을 새 버전으로 남김 — 종전엔 백업 없이 덮어써서 복원을 되돌릴 수 없었음(재현).
+        //   버전 수 한도 때문에 현재 파일을 저장하면서 복원할 (가장 오래된) 버전이 지워질 수 있어, 복원할 내용을 먼저 임시 파일로 떼어 둠
+        // ★ (2026-10-29 21:39, 24차 점검) 크기가 늘면 용량 확인, 복원 뒤 크기 차이를 사용량에 반영(조각 업로드·텍스트 저장 같은 다른 덮어쓰기와 같게) — 종전엔 둘 다 없었음(재현)
+        $vrOld = is_file($targetPath) ? (int)filesize($targetPath) : 0;
+        $vrNew = (int)filesize($versionFile);
+        if ($vrNew > $vrOld) {
+            $vrQuota = $this->checkQuota($storageId, $vrNew - $vrOld);
+            if (empty($vrQuota['allowed'])) return ['success' => false, 'error' => $vrQuota['error'] ?? __('api_err_restore_failed', '파일 복원에 실패했습니다.')];
+        }
+        $restoreTmp = @tempnam(DATA_PATH, 'vrs_');
+        if ($restoreTmp === false || !@copy($versionFile, $restoreTmp)) {
+            if ($restoreTmp !== false) @unlink($restoreTmp);
+            return ['success' => false, 'error' => __('api_err_restore_failed', '파일 복원에 실패했습니다.')];
+        }
+        if (is_file($targetPath)) {
+            $this->saveFileVersion($targetPath, $relativePath, $storageId, true);
+        }
         
         // 버전 복원
-        if (@copy($versionFile, $targetPath)) {
+        $restored = @copy($restoreTmp, $targetPath);
+        @unlink($restoreTmp);
+        if ($restored) {
+            clearstatcache();
+            $vrDiff = (int)@filesize($targetPath) - $vrOld;
+            if ($vrDiff !== 0) $this->storage->updateUsedSize($storageId, $vrDiff);
             return ['success' => true, 'message' => __('api_file_restored', '파일이 복원되었습니다.')];
         }
         
@@ -1705,6 +1822,15 @@ class FileManager {
         if (!$ransomCheck['allowed']) {
             return ['success' => false, 'error' => '🔐 ' . $ransomCheck['reason']];
         }
+        // ★ (2026-10-29 17:52, 22차 점검) 실제로 저장될 이름(sanitizeFilename 뒤)으로도 같은 검사 — 종전엔 정리 전 이름만 봐서
+        //   'x.enc*rypted' 가 검사를 지나 'x.encrypted' 로 저장됐음(재현)
+        $savedName = $this->sanitizeFilename($file['name']);
+        if ($savedName !== $file['name']) {
+            $uc2 = $this->checkUploadSettings($savedName, $fileSize);
+            if (!$uc2['allowed']) return ['success' => false, 'error' => '📤 ' . $uc2['reason']];
+            $rc2 = $this->checkRansomwareExtension($savedName);
+            if (!$rc2['allowed']) return ['success' => false, 'error' => '🔐 ' . $rc2['reason']];
+        }
         
         // MIME 타입 검증 (확장자 위장 방지) — 업로드 설정에서 끌 수 있음
         $mimeCheckEnabled = $uploadCheck['mime_check'] ?? true;
@@ -1717,6 +1843,11 @@ class FileManager {
         if (!$virusScan['clean']) {
             $threat = $virusScan['threat'] ?? __('unknown_threat');
             return ['success' => false, 'error' => __('virus_detected') . $threat];
+        }
+        // ★ (2026-10-30 01:46, 26차 점검) 랜섬웨어 내용 검사(시그니처) — 조각 업로드·WebDAV 와 같게. 종전엔 일반 업로드(작은 파일·새 텍스트 파일·보관함 붙여넣기)만 빠져 '불일치 차단'을 켜도 그대로 저장됐음(재현)
+        $contentCheck = $this->checkRansomwareContent($file['tmp_name'], $savedName);
+        if (!$contentCheck['allowed']) {
+            return ['success' => false, 'error' => '🔐 ' . $contentCheck['reason']];
         }
         
         // 원격 스토리지인 경우
@@ -1782,6 +1913,10 @@ class FileManager {
             // 파일 내용 읽어서 업로드
             $content = file_get_contents($file['tmp_name']);
             if ($adapter->write($remotePath, $content)) {
+                // ★ (2026-10-29 17:52, 22차 점검) 원격 일반(비조각) 업로드도 사용량 반영 — 종전엔 조각 업로드(uploadChunkRemote)만 늘리고 이 경로는 빠져 용량 한도를 넘길 수 있었음(재현 +0)
+                $this->storage->updateUsedSize($storageId, strlen($content));
+                // ★ (2026-10-29 23:42, 24차 점검) 원격 업로드도 인덱스에(로컬 업로드와 같게) — 종전엔 빠져, 인덱스로 먼저 답하는 원격 목록·검색에 다음 동기화까지 안 보였음(5회차 재검토)
+                try { $this->fileIndex->addFile($storageId, trim(str_replace('\\', '/', $remotePath), '/'), ['is_dir' => 0, 'size' => strlen($content), 'modified' => date('Y-m-d H:i:s')]); } catch (\Throwable $e) {}
                 return [
                     'success' => true,
                     'filename' => basename($remotePath),
@@ -1818,6 +1953,14 @@ class FileManager {
             if (!$ransomCheck['allowed']) {
                 return ['success' => false, 'error' => '🔐 ' . $ransomCheck['reason']];
             }
+            // ★ (2026-10-29 17:52, 22차 점검) 저장될 이름(sanitizeFilename 뒤)으로도 같은 검사(일반 업로드와 같게)
+            $savedName = $this->sanitizeFilename((string)$data['filename']);
+            if ($savedName !== $data['filename']) {
+                $uc2 = $this->checkUploadSettings($savedName, $totalSize);
+                if (!$uc2['allowed']) return ['success' => false, 'error' => '📤 ' . $uc2['reason']];
+                $rc2 = $this->checkRansomwareExtension($savedName);
+                if (!$rc2['allowed']) return ['success' => false, 'error' => '🔐 ' . $rc2['reason']];
+            }
         }
         
         // 원격 스토리지인 경우 별도 처리
@@ -1842,6 +1985,11 @@ class FileManager {
         $chunkIndex = (int)$data['chunkIndex'];
         $totalChunks = (int)$data['totalChunks'];
         $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', $data['uploadId']); // 보안
+        // ★ (2026-10-29 00:28, 13차 점검) 업로드 ID 가 비면(정리 후 빈 문자열 포함) 조각 폴더가 chunks 최상위가 돼 다른 업로드와 섞이고,
+        //   끝난 업로드 표시가 최상위에 남아 이후 ID 없는 업로드가 전부 '이미 조립됨' 으로 처리될 수 있어 거부 (앱 화면은 항상 ID 를 보냄)
+        if ($uploadId === '') {
+            return ['success' => false, 'error' => __('api_err_invalid_request', '잘못된 요청입니다.')];
+        }
         $totalSize = (int)($data['totalSize'] ?? 0);
         $lastModified = (int)($data['lastModified'] ?? 0);
         
@@ -1876,6 +2024,11 @@ class FileManager {
         
         // 임시 청크 저장 디렉토리
         $tempDir = DATA_PATH . '/chunks/' . $uploadId;
+        // ★ (2026-10-29 00:28, 13차 점검) 이미 조립을 시작했거나 끝난 업로드(잠금 = 끝난 업로드 표시)면 아무것도 쓰지 않고 '이미 조립됨' 으로 답함 —
+        //   조각·메타를 다시 쓰면 끝난 표시 폴더에 쌓이고 메타 시작 시각이 갱신돼 하루 뒤 정리도 늦어졌음. 조립 중이라도 이미 모든 조각이 모인 상태라 안전
+        if (is_file($tempDir . '/.assembling.lock')) {
+            return ['success' => true, 'complete' => true, 'filename' => $filename, 'deduped' => true];
+        }
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
@@ -1901,7 +2054,10 @@ class FileManager {
         $chunkPath = $tempDir . '/chunk_' . str_pad($chunkIndex, 8, '0', STR_PAD_LEFT);
         
         if (isset($data['file']['tmp_name'])) {
-            move_uploaded_file($data['file']['tmp_name'], $chunkPath);
+            // ★ (2026-10-29 10:01, 20차 점검) 저장 결과 확인 — 종전엔 실패(PHP 업로드 한도 초과·디스크 부족 등)해도 성공으로 답해 업로드가 끝나지 않은 채 멈췄음(재현)
+            if (!@move_uploaded_file($data['file']['tmp_name'], $chunkPath)) {
+                return ['success' => false, 'error' => __('chunk_save_fail', '청크 저장 실패')];
+            }
         } else {
             return ['success' => false, 'error' => __('chunk_file_missing')];
         }
@@ -1932,15 +2088,34 @@ class FileManager {
             $meta = json_decode(file_get_contents($metaFile), true);
             $dupAction = $meta['duplicateAction'] ?? 'rename';
             
+            // ★ (2026-10-29 10:03, 20차 점검) 실제 조각 합계가 첫 조각 때 신고한 크기(totalSize)보다 크면 용량을 다시 확인 — 종전엔 신고값만 봐서
+            //   totalSize=0(검사 건너뜀)이나 작은 값으로 보내면 한도를 넘겨 올라갔음(재현). 조립 전이라 홈 사용량에 새 파일이 아직 안 들어 있음
+            $chunkSum = 0;
+            foreach ((glob($tempDir . '/chunk_*') ?: []) as $_cf) $chunkSum += (int)@filesize($_cf);
+            if ($chunkSum > (int)($meta['totalSize'] ?? 0)) {
+                $quotaCheck = $this->checkQuota($storageId, $chunkSum);
+                if (!$quotaCheck['allowed']) {
+                    $this->cleanupChunks($tempDir);
+                    return ['success' => false, 'error' => $quotaCheck['error']];
+                }
+            }
+            // ★ (2026-10-29 10:58, 20차 점검) 최종 파일 이름(이 마지막 요청의 이름)으로 랜섬웨어 확장자 다시 확인 — 종전엔 첫 조각 이름만 봐서 둘째 조각부터 이름을 바꾸면 통과했음(재현)
+            $rwFinal = $this->checkRansomwareExtension($filename);
+            if (!$rwFinal['allowed']) {
+                $this->cleanupChunks($tempDir);
+                return ['success' => false, 'error' => '🔐 ' . $rwFinal['reason']];
+            }
+            
             // 대상 파일 경로
             $originalPath = $targetDir . DIRECTORY_SEPARATOR . $filename;
             
             // duplicateAction에 따른 처리
+            $owBak = null; $owSize = 0;   // ★ (2026-10-29 02:36, 16차) 덮어쓰기 때 기존 파일을 지우지 않고 비켜 둔 이름·빼 둔 사용량(실패하면 되돌림)
             if (file_exists($originalPath)) {
                 switch ($dupAction) {
                     case 'skip':
                         // 건너뛰기: 청크 정리 후 종료
-                        $this->cleanupChunks($tempDir);
+                        $this->finishChunks($tempDir);   // ★ (2026-10-29 00:28, 13차) 끝난 업로드 표시는 남김
                         return [
                             'success' => true,
                             'complete' => true,
@@ -1949,6 +2124,20 @@ class FileManager {
                         ];
                     
                     case 'overwrite':
+                        // ★ (2026-10-29 00:02, 12차 점검) 같은 이름이 폴더면 파일로 덮어쓸 수 없음 — 종전엔 폴더 크기만큼 사용량을 빼고 버전 저장까지 한 뒤
+                        //   지우기(unlink)가 조용히 실패해 '파일 생성 실패' 로 끝나면서 사용량이 틀어지고 업로드 조각이 남았음(재현). 먼저 거부하고 조각 정리
+                        if (is_dir($originalPath)) {
+                            $this->cleanupChunks($tempDir);
+                            return ['success' => false, 'error' => __('err_overwrite_folder_with_file', '같은 이름의 폴더가 있어 파일로 덮어쓸 수 없습니다.')];
+                        }
+                        // ★ (2026-10-29 10:05, 20차 점검) 잠긴 파일은 업로드로도 덮어쓸 수 없음(텍스트 저장·끌어 이동과 같음) — 종전엔 그대로 덮어썼음(재현)
+                        $_lkBase = rtrim(str_replace('\\', '/', $basePath), '/');
+                        $_lkFull = str_replace('\\', '/', $originalPath);
+                        $_lkRel = (strpos($_lkFull, $_lkBase . '/') === 0) ? substr($_lkFull, strlen($_lkBase) + 1) : ltrim(rtrim((string)$relativePath, '/') . '/' . $filename, '/');
+                        if ($this->isFileLocked($storageId, $_lkRel)) {
+                            $this->cleanupChunks($tempDir);
+                            return ['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')];
+                        }
                         // 대량 덮어쓰기 감지
                         $bulkCheck = $this->checkBulkOperation('overwrite');
                         if (!$bulkCheck['allowed']) {
@@ -1965,11 +2154,16 @@ class FileManager {
                         }
                         
                         // 덮어쓰기 전 파일 버전 저장
-                        $fileRelPath = ltrim($relativePath . '/' . $filename, '/');
+                        // ★ (2026-10-29 10:59, 20차 점검) 실제 위치 기준 경로(폴더 업로드의 하위 폴더 포함 — 위 잠금 확인과 같은 값) — 종전엔 하위 폴더를 빼
+                        //   'fv/sub/a.txt' 의 이전 버전이 'fv/a.txt' 의 버전으로 저장됐음(재현)
+                        $fileRelPath = $_lkRel;
                         $this->saveFileVersion($originalPath, $fileRelPath, $storageId);
                         
                         // 덮어쓰기: 기존 파일 삭제
-                        @unlink($originalPath);
+                        // ★ (2026-10-29 02:36, 16차) 바로 지우지 않고 비켜 둠(복사·이동의 owMoveAside 와 같음) — 종전엔 먼저 지워서, 뒤의 백신·형식·랜섬웨어 검사나 조각 누락으로
+                        //   실패하면 새 파일도 지워지고 원본도 없어졌음. 비켜 두기에 실패하면(잠김 등) 종전처럼 'wb' 로 덮어씀
+                        $owBak = $this->owMoveAside($originalPath);
+                        if ($owBak !== null) $owSize = (int)($existingSize ?? 0);
                         $targetPath = $originalPath;
                         break;
                     
@@ -1985,6 +2179,10 @@ class FileManager {
             
             $outFile = fopen($targetPath, 'wb');
             if (!$outFile) {
+                $this->cleanupChunks($tempDir);   // ★ (2026-10-29 00:28, 13차) 실패 — 잠금까지 지워 다시 시도할 수 있게(종전엔 남은 잠금 때문에 재시도가 가짜 '완료')
+                // ★ (2026-10-30 01:46, 26차 점검) 비켜 두기도 실패(잠김 등)해 원본이 그대로인데 열기도 실패하면, 위에서 미리 뺀 사용량을 되돌림 — 종전엔 시도할 때마다 그 크기만큼 줄었음
+                if ($owBak === null && !empty($existingSize) && $targetPath === $originalPath && file_exists($originalPath)) $this->storage->updateUsedSize($storageId, (int)$existingSize);
+                $this->owUploadRollback($storageId, $originalPath, $owBak, $owSize);   // ★ (2026-10-29 02:36, 16차) 비켜 둔 원본 되돌림
                 return ['success' => false, 'error' => __('file_create_fail')];
             }
             
@@ -1995,6 +2193,8 @@ class FileManager {
                 if (!file_exists($chunkFile)) {
                     fclose($outFile);
                     unlink($targetPath);
+                    $this->cleanupChunks($tempDir);   // ★ (2026-10-29 00:28, 13차) 실패 — 잠금까지 지움
+                    $this->owUploadRollback($storageId, $originalPath, $owBak, $owSize);   // ★ (2026-10-29 02:36, 16차) 비켜 둔 원본 되돌림
                     return ['success' => false, 'error' => __f('chunk_missing', ['i' => $i])];
                 }
                 
@@ -2015,6 +2215,7 @@ class FileManager {
                 @unlink($targetPath);
                 $this->cleanupChunks($tempDir);
                 $threat = $virusScan['threat'] ?? __('unknown_threat');
+                $this->owUploadRollback($storageId, $originalPath, $owBak, $owSize);   // ★ (2026-10-29 02:36, 16차) 비켜 둔 원본 되돌림
                 return ['success' => false, 'error' => __('virus_detected') . $threat];
             }
             
@@ -2022,10 +2223,18 @@ class FileManager {
             //   기존: 청크 업로드 로컬 경로에만 MIME 검증 누락 (원격 청크 업로드는 라인 1945에서 호출됨)
             //   업로드 설정의 mime_check 옵션 존중 (일반 업로드 라인 1493과 동일 패턴)
             $_chunkMimeCheck = $this->checkUploadSettings($filename, $finalSize);
+            // ★ (2026-10-28 17:42, 소스 점검 3단계) 완료 때 다시 검사한 결과의 '허용 안 됨' 도 따름(종전엔 mime_check 값만 읽고 allowed 는 무시)
+            if (empty($_chunkMimeCheck['allowed'])) {
+                @unlink($targetPath);
+                $this->cleanupChunks($tempDir);
+                $this->owUploadRollback($storageId, $originalPath, $owBak, $owSize);   // ★ (2026-10-29 02:36, 16차) 비켜 둔 원본 되돌림
+                return ['success' => false, 'error' => $_chunkMimeCheck['reason'] ?? __('api_err_dangerous_ext', '보안상 허용되지 않는 파일 형식입니다.')];
+            }
             $_chunkMimeEnabled = $_chunkMimeCheck['mime_check'] ?? true;
             if ($_chunkMimeEnabled && !$this->validateMimeType($targetPath, $filename)) {
                 @unlink($targetPath);
                 $this->cleanupChunks($tempDir);
+                $this->owUploadRollback($storageId, $originalPath, $owBak, $owSize);   // ★ (2026-10-29 02:36, 16차) 비켜 둔 원본 되돌림
                 return ['success' => false, 'error' => __('file_type_invalid')];
             }
             
@@ -2034,6 +2243,7 @@ class FileManager {
             if (!$contentCheck['allowed']) {
                 @unlink($targetPath);
                 $this->cleanupChunks($tempDir);
+                $this->owUploadRollback($storageId, $originalPath, $owBak, $owSize);   // ★ (2026-10-29 02:36, 16차) 비켜 둔 원본 되돌림
                 return ['success' => false, 'error' => '🔐 ' . $contentCheck['reason']];
             }
             
@@ -2054,7 +2264,8 @@ class FileManager {
             }
             
             // 임시 파일 정리
-            $this->cleanupChunks($tempDir);
+            $this->owDiscard($owBak);   // ★ (2026-10-29 02:36, 16차) 새 파일이 모든 검사를 통과 — 비켜 둔 원본 정리
+            $this->finishChunks($tempDir);   // ★ (2026-10-29 00:28, 13차) 끝난 업로드 표시(잠금)는 남김 — 재전송 중복 방지
             
             // 사용량 업데이트 (finalSize는 바이러스 검사 시 이미 계산됨)
             $this->storage->updateUsedSize($storageId, $finalSize);
@@ -2069,6 +2280,11 @@ class FileManager {
                     $indexPath = empty($relativePath) ? $fileRelativePath : $relativePath . '/' . implode('/', $pathParts) . '/' . basename($targetPath);
                 }
             }
+            // ★ (2026-10-29 11:00, 20차 점검) 실제 저장 위치 기준 경로로 — 종전엔 맨 위 폴더 업로드면 클라이언트가 보낸 이름을 그대로 써, 같은 이름이 있어
+            //   'a (2).txt' 로 저장돼도 인덱스엔 'a.txt' 로 들어갔음(재현). 저장 위치가 스토리지 경로 아래가 아니면 종전 계산 유지
+            $_ixBase = rtrim(str_replace('\\', '/', $basePath), '/');
+            $_ixFull = str_replace('\\', '/', $targetPath);
+            if (strpos($_ixFull, $_ixBase . '/') === 0) $indexPath = substr($_ixFull, strlen($_ixBase) + 1);
             $this->fileIndex->addFile($storageId, $indexPath, [
                 'is_dir' => 0,
                 'size' => filesize($targetPath),
@@ -2100,9 +2316,18 @@ class FileManager {
      */
     private function uploadChunkRemote(int $storageId, string $relativePath, array $data): array {
         $filename = $this->sanitizeFilename($data['filename']);
+        // ★ (2026-10-28 17:42, 소스 점검 3단계) 원격 청크 업로드도 매 조각에서 실행 확장자 검사(첫 조각만 검사해서 마지막 조각 이름을 바꾸면 통과할 수 있었음)
+        if (($execReason = \fsServerExecReason($filename)) !== null) {
+            return ['success' => false, 'error' => $execReason];
+        }
         $chunkIndex = (int)$data['chunkIndex'];
         $totalChunks = (int)$data['totalChunks'];
         $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', $data['uploadId']);
+        // ★ (2026-10-29 00:28, 13차 점검) 업로드 ID 가 비면(정리 후 빈 문자열 포함) 조각 폴더가 chunks 최상위가 돼 다른 업로드와 섞이고,
+        //   끝난 업로드 표시가 최상위에 남아 이후 ID 없는 업로드가 전부 '이미 조립됨' 으로 처리될 수 있어 거부 (앱 화면은 항상 ID 를 보냄)
+        if ($uploadId === '') {
+            return ['success' => false, 'error' => __('api_err_invalid_request', '잘못된 요청입니다.')];
+        }
         $totalSize = (int)($data['totalSize'] ?? 0);
         $lastModified = (int)($data['lastModified'] ?? 0);
         $duplicateAction = $data['duplicateAction'] ?? 'rename';
@@ -2114,6 +2339,10 @@ class FileManager {
         }
         
         $tempDir = $tempBase . DIRECTORY_SEPARATOR . $uploadId;
+        // ★ (2026-10-29 00:28, 13차 점검) 끝난(또는 조립 중인) 업로드면 아무것도 쓰지 않고 '이미 조립됨'(로컬 uploadChunk 와 같음)
+        if (is_file($tempDir . '/.assembling.lock')) {
+            return ['success' => true, 'complete' => true, 'filename' => $filename, 'deduped' => true];
+        }
         if (!is_dir($tempDir)) {
             if (!mkdir($tempDir, 0755, true)) {
                 return ['success' => false, 'error' => __('temp_folder_create_fail')];
@@ -2135,7 +2364,8 @@ class FileManager {
                 'totalSize' => $totalSize,
                 'lastModified' => $lastModified,
                 'relativePath' => $relativePath,
-                'duplicateAction' => $duplicateAction
+                'duplicateAction' => $duplicateAction,
+                'startTime' => time()   // ★ (2026-10-29 02:36, 16차) 시작 시각 — 없어서 13차부터 원격 조각 폴더도 정리하자 '올리는 중' 조각이 지워졌음(재현)
             ]));
         }
         
@@ -2164,6 +2394,7 @@ class FileManager {
             $tempFile = $tempDir . '/merged_' . $filename;
             $outFile = fopen($tempFile, 'wb');
             if (!$outFile) {
+                $this->cleanupChunks($tempDir);   // ★ (2026-10-29 00:28, 13차) 실패 — 잠금까지 지움
                 return ['success' => false, 'error' => __('temp_file_create_fail')];
             }
             
@@ -2171,6 +2402,7 @@ class FileManager {
                 $chunkFile = $tempDir . '/chunk_' . str_pad($i, 8, '0', STR_PAD_LEFT);
                 if (!file_exists($chunkFile)) {
                     fclose($outFile);
+                    $this->cleanupChunks($tempDir);   // ★ (2026-10-29 00:28, 13차) 실패 — 잠금까지 지움
                     return ['success' => false, 'error' => __f('chunk_missing', ['i' => $i])];
                 }
                 $inFile = fopen($chunkFile, 'rb');
@@ -2183,6 +2415,24 @@ class FileManager {
             
             // 바이러스 검사 (병합된 파일에 대해)
             $mergedSize = filesize($tempFile);
+            // ★ (2026-10-29 10:04, 20차 점검) 합친 실제 크기로 최대 크기·용량 확인 — 종전엔 첫 조각 때 신고한 totalSize 로만 봐서(0 이면 건너뜀)
+            //   원격 조각 업로드는 한도를 넘겨 올라갔음(재현. 일반 업로드는 막힘)
+            $_rUc = $this->checkUploadSettings($filename, (int)$mergedSize);
+            if (empty($_rUc['allowed'])) {
+                $this->cleanupChunks($tempDir);
+                return ['success' => false, 'error' => '📤 ' . ($_rUc['reason'] ?? '')];
+            }
+            $_rQc = $this->checkQuota($storageId, (int)$mergedSize);
+            if (empty($_rQc['allowed'])) {
+                $this->cleanupChunks($tempDir);
+                return ['success' => false, 'error' => $_rQc['error'] ?? ''];
+            }
+            // ★ (2026-10-29 10:58, 20차 점검) 최종 이름으로 랜섬웨어 확장자 다시 확인(로컬 조각과 같음)
+            $_rRw = $this->checkRansomwareExtension($filename);
+            if (!$_rRw['allowed']) {
+                $this->cleanupChunks($tempDir);
+                return ['success' => false, 'error' => '🔐 ' . $_rRw['reason']];
+            }
             $virusScan = $this->scanForVirus($tempFile, $filename, $mergedSize);
             if (!$virusScan['clean']) {
                 // 바이러스 발견 시 정리
@@ -2192,7 +2442,8 @@ class FileManager {
             }
             
             // MIME 타입 검증 (병합된 최종 파일)
-            if (!$this->validateMimeType($tempFile, $filename)) {
+            // ★ (2026-10-29 10:56, 20차 점검) 업로드 설정의 MIME 검사 끄기를 따름(로컬 조각·일반 업로드와 같음) — 종전엔 원격만 늘 검사해 설정을 꺼도 거부됐음
+            if (($_rUc['mime_check'] ?? true) && !$this->validateMimeType($tempFile, $filename)) {
                 $this->cleanupChunks($tempDir);
                 return ['success' => false, 'error' => __('api_err_dangerous_file', '보안상 허용되지 않는 파일입니다.')];
             }
@@ -2211,16 +2462,48 @@ class FileManager {
                 return ['success' => false, 'error' => $this->getLastAdapterError()];
             }
             
+            // ★ (2026-10-29 21:37, 24차 점검) 폴더째 올리기(relativePath)면 원격에도 하위 폴더를 만들어 그 안에 저장(로컬 uploadChunk 와 같게) — 종전엔 하위 폴더를 무시하고
+            //   모든 파일을 대상 폴더 한 곳에 이름만으로 쌓아, '덮어쓰기'면 대상 폴더의 같은 이름 파일과 하위 폴더끼리 같은 이름 파일을 덮어썼음(재현)
+            $rcRel = $data['relativePath'] ?? null;
+            if (is_string($rcRel) && $rcRel !== '') {
+                $rcParts = explode('/', str_replace('\\', '/', $rcRel));
+                array_pop($rcParts);
+                $rcParts = array_map([$this, 'sanitizeFilename'], $rcParts);   // 로컬 uploadChunk 와 같은 이름 정리(api.php 폴더 권한 검사도 같은 기준)
+                if ($rcParts) {
+                    $rcDir = trim((string)$relativePath, '/');
+                    foreach ($rcParts as $rcPart) {
+                        $rcDir = ($rcDir === '' ? '' : $rcDir . '/') . $rcPart;
+                        if (!$adapter->exists($rcDir) && !$adapter->mkdir($rcDir)) {
+                            $this->cleanupChunks($tempDir);
+                            return ['success' => false, 'error' => __('folder_create_fail') . $rcDir];
+                        }
+                    }
+                    $relativePath = $rcDir;
+                }
+            }
             // 원격 대상 경로 계산
             $remotePath = empty($relativePath) ? $filename : rtrim($relativePath, '/') . '/' . $filename;
             
             // 중복 처리
+            $owRBak = null; $owRSize = 0;   // ★ (2026-10-29 02:36, 16차) 덮어쓰기에서 비켜 둔 원본·빼 둔 사용량
             if ($adapter->exists($remotePath)) {
                 switch ($duplicateAction) {
                     case 'skip':
-                        $this->cleanupChunks($tempDir);
+                        $this->finishChunks($tempDir);   // ★ (2026-10-29 00:28, 13차)
                         return ['success' => true, 'complete' => true, 'skipped' => true, 'filename' => $filename];
                     case 'overwrite':
+                        // ★ (2026-10-29 00:02, 12차 점검) 같은 이름이 폴더면 거부(원격은 delete 가 폴더를 지움 — WebDAV 원격은 안의 내용까지, 재현) +
+                        //   덮어써서 지워질 대상 권한(11차 overwriteTargetAllowed 와 같은 기준). 종전엔 폴더 권한 검사가 업로드 대상 폴더(path)뿐이었음
+                        $ovIsDir = method_exists($adapter, 'isDir') && $adapter->isDir($remotePath);   // ★ (2026-10-29 00:28, 13차) 한 번만 확인(원격 요청 절약·문구 일관)
+                        if ($ovIsDir || !$this->overwriteTargetAllowed($storageId, (string)$relativePath, $filename)) {
+                            $this->cleanupChunks($tempDir);
+                            return ['success' => false, 'error' => $ovIsDir ? __('err_overwrite_folder_with_file', '같은 이름의 폴더가 있어 파일로 덮어쓸 수 없습니다.') : __('no_permission_dot', '권한이 없습니다.')];
+                        }
+                        // ★ (2026-10-29 10:05, 20차 점검) 잠긴 파일은 덮어쓰지 않음(로컬 조각 업로드와 같음)
+                        if ($this->isFileLocked($storageId, trim($remotePath, '/'))) {
+                            $this->cleanupChunks($tempDir);
+                            return ['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')];
+                        }
                         // 대량 덮어쓰기 감지
                         $bulkCheck = $this->checkBulkOperation('overwrite');
                         if (!$bulkCheck['allowed']) {
@@ -2232,7 +2515,10 @@ class FileManager {
                         if ($existingSize > 0) {
                             $this->storage->updateUsedSize($storageId, -$existingSize);
                         }
-                        $adapter->delete($remotePath);
+                        // ★ (2026-10-29 02:36, 16차) 바로 지우지 않고 비켜 둠(copyRemote·moveRemote 의 owRemoteAside 와 같음) — 종전엔 먼저 지워 저장이 실패하면 원본이 없어졌음.
+                        //   비켜 두기에 실패하면 종전처럼 지움
+                        $owRBak = $this->owRemoteAside($adapter, $remotePath);
+                        if ($owRBak === null) $adapter->delete($remotePath); else $owRSize = (int)$existingSize;
                         break;
                     case 'rename':
                     default:
@@ -2250,15 +2536,35 @@ class FileManager {
             }
             
             // 파일 읽고 원격에 쓰기
-            $content = file_get_contents($tempFile);
-            $uploadResult = $adapter->write($remotePath, $content);
+            // ★ (2026-10-29 01:12, 14차) FTP·WebDAV 는 합친 파일을 메모리에 통째로 올리지 않고 흘려 보냄(writeFromFile) — 종전엔 file_get_contents 로
+            //   파일 크기만큼 서버 메모리를 썼음(config.php 가 memory_limit 를 무제한으로 둬 오류는 안 나지만 4GB 파일이면 4GB). 시험: 100MB → 104MB 에서 4MB.
+            //   다른 어댑터(SFTP·S3·SMB)는 종전 방식.
+            //   저장 중 예외가 나도 조각·잠금을 지우고 실패로 답함(종전엔 잠금이 남아 같은 ID 재시도가 가짜 '이미 조립됨' 이 될 수 있었음)
+            try {
+                if (method_exists($adapter, 'writeFromFile')) {
+                    $uploadResult = $adapter->writeFromFile($remotePath, $tempFile);
+                } else {
+                    $content = file_get_contents($tempFile);
+                    $uploadResult = ($content !== false) && $adapter->write($remotePath, $content);
+                    unset($content);
+                }
+            } catch (\Throwable $e) {
+                error_log('[uploadChunkRemote] write 예외: ' . $e->getMessage());
+                $uploadResult = false;
+            }
             
-            // 임시 파일 정리
-            $this->cleanupChunks($tempDir);
+            // 임시 파일 정리 — ★ (2026-10-29 00:28, 13차) 성공이면 끝난 업로드 표시(잠금)는 남기고, 실패면 다시 시도할 수 있게 모두 지움
+            if ($uploadResult) $this->finishChunks($tempDir); else $this->cleanupChunks($tempDir);
+            // ★ (2026-10-29 02:36, 16차) 덮어쓰기에서 비켜 둔 원본 — 성공이면 지우고, 실패면 제자리로(빼 둔 사용량도 되돌림)
+            if (!empty($owRBak)) {
+                if ($uploadResult) { $this->owRemoteDiscard($adapter, $owRBak); }
+                else { $this->owRemoteRestore($adapter, $remotePath, $owRBak); if (!empty($owRSize)) $this->storage->updateUsedSize($storageId, $owRSize); }
+            }
             
             if ($uploadResult) {
-                // 원격 스토리지 사용량 증가
-                $this->storage->updateUsedSize($storageId, $totalSize);
+                // 원격 스토리지 사용량 증가 — ★ (2026-10-29 04:14, 17차) 실제 합친 파일 크기로(종전엔 클라이언트가 보낸 totalSize 를 그대로 믿었음)
+                $this->storage->updateUsedSize($storageId, (int)$mergedSize);
+                try { $this->fileIndex->addFile($storageId, trim(str_replace('\\', '/', $remotePath), '/'), ['is_dir' => 0, 'size' => (int)$mergedSize, 'modified' => date('Y-m-d H:i:s')]); } catch (\Throwable $e) {}   // ★ (2026-10-29 23:42, 24차 점검) 원격 조각 업로드도 인덱스에(위 일반 업로드와 같음)
                 return [
                     'success' => true,
                     'complete' => true,
@@ -2285,22 +2591,49 @@ class FileManager {
     private function cleanupChunks(string $tempDir): void {
         if (!is_dir($tempDir)) return;
         
-        $files = glob($tempDir . '/*');
-        foreach ($files as $file) {
+        // ★ (2026-10-29 00:02, 12차 점검) 점으로 시작하는 파일(조립 잠금 '.assembling.lock')도 지움 — glob('*') 은 점 파일을 못 찾아
+        //   잠금 파일이 남고 rmdir 이 실패해, 업로드마다 조각 폴더가 하나씩 쌓이고 하루 지난 정리(cleanupOldChunks)로도 안 지워졌음(재현)
+        //   ★ (2026-10-29 00:28, 13차 점검) 잠금 파일은 맨 마지막에 지움 — 이름순으로 먼저 지우면 조각이 남은 채 잠금만 없는 틈에
+        //   늦게 온 요청이 잠금을 다시 잡아 지워지는 중인 조각으로 조립을 시도할 수 있었음
+        $lock = $tempDir . '/.assembling.lock';
+        foreach ((@scandir($tempDir) ?: []) as $entry) {
+            if ($entry === '.' || $entry === '..' || $entry === '.assembling.lock') continue;
+            $file = $tempDir . '/' . $entry;
             if (is_file($file)) {
-                unlink($file);
+                @unlink($file);
             }
         }
-        rmdir($tempDir);
+        if (is_file($lock)) @unlink($lock);
+        @rmdir($tempDir);
+    }
+
+    /**
+     * ★ (2026-10-29 00:28, 13차 점검) 업로드가 끝났을 때(완료·건너뛰기) — 조각·메타는 지우고 조립 잠금 파일만 '끝난 업로드' 표시로 남김.
+     *   12차에서 잠금까지 지우게 했더니, 응답을 못 받은 클라이언트가 같은 업로드 ID 로 다시 보내면 파일이 한 번 더 만들어졌음
+     *   ('x (2).txt', 사용량 두 번 — 재현). 남은 잠금이 있으면 재전송은 종전처럼 '이미 조립됨(deduped)' 으로 끝남.
+     *   잠금만 남은 폴더는 하루 뒤 cleanupOldChunks(폴더 수정 시각 기준)가 지움 — 12차의 점 파일 정리 덕에 이제 실제로 지워짐
+     */
+    private function finishChunks(string $tempDir): void {
+        if (!is_dir($tempDir)) return;
+        foreach ((@scandir($tempDir) ?: []) as $entry) {
+            if ($entry === '.' || $entry === '..' || $entry === '.assembling.lock') continue;
+            $file = $tempDir . '/' . $entry;
+            if (is_file($file)) @unlink($file);
+        }
+        if (!is_file($tempDir . '/.assembling.lock')) @rmdir($tempDir);   // 잠금이 없으면(조립 전 건너뛰기 등) 폴더째 지움
     }
     
     // 오래된 청크 정리 (1일 이상)
     public function cleanupOldChunks(): int {
-        $chunksDir = DATA_PATH . '/chunks';
-        if (!is_dir($chunksDir)) return 0;
+        // ★ (2026-10-29 00:28, 13차 점검) 원격 업로드 임시 폴더(시스템 임시 폴더의 webhard_chunks_remote)도 정리 — 종전엔 data/chunks 만 봐서
+        //   원격 업로드 조각 폴더는 한 번도 정리되지 않았고, 13차부터 남기는 '끝난 업로드 표시' 폴더도 영영 남을 뻔했음
+        $dirs = [];
+        foreach ([DATA_PATH . '/chunks', sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'webhard_chunks_remote'] as $chunksDir) {
+            if (is_dir($chunksDir)) $dirs = array_merge($dirs, glob($chunksDir . '/*', GLOB_ONLYDIR) ?: []);
+        }
+        if (!$dirs) return 0;
         
         $cleaned = 0;
-        $dirs = glob($chunksDir . '/*', GLOB_ONLYDIR);
         
         foreach ($dirs as $dir) {
             $metaFile = $dir . '/meta.json';
@@ -2308,7 +2641,9 @@ class FileManager {
             
             if (file_exists($metaFile)) {
                 $meta = json_decode(file_get_contents($metaFile), true);
-                if (time() - ($meta['startTime'] ?? 0) > 86400) {
+                // ★ (2026-10-29 02:36, 16차) 시작 시각이 없는 메타(16차 전 원격 업로드)는 폴더 수정 시각으로 — 종전엔 0 으로 봐 올리는 중이어도 바로 지웠음
+                $metaStart = (is_array($meta) && isset($meta['startTime'])) ? (int)$meta['startTime'] : (int)@filemtime($dir);
+                if (time() - $metaStart > 86400) {
                     $shouldClean = true;
                 }
             } else {
@@ -3298,11 +3633,13 @@ class FileManager {
         $pipeKillSid = $_GET['pipe_kill'] ?? $_POST['pipe_kill'] ?? null;
         if ($pipeKillSid) {
             $sid = $pipeKillSid;
-            if (PHP_OS_FAMILY === 'Windows' && preg_match('/^[a-f0-9]+$/', $sid)) {
+            // ★ (2026-10-29 10:56, 20차 점검) sid 형식을 만들 때(client_sid: a-z0-9)와 같게 + 정확히 그 sid 만 — 종전엔 16진수만 받아 화면이 만든 sid(36진수)는
+            //   거의 항상 무시돼 창을 닫아도 ffmpeg 가 안 꺼졌고, 받는 경우엔 앞부분만 맞아도(예: '3') 다른 사람의 변환까지 껐음
+            if (PHP_OS_FAMILY === 'Windows' && preg_match('/^[a-z0-9]{8,64}$/', $sid)) {
                 $output = shell_exec('wmic process where "name=\'ffmpeg.exe\'" get processid,commandline /format:csv 2>NUL');
                 if ($output) {
                     foreach (explode("\n", $output) as $line) {
-                        if (strpos($line, 'pipesid_' . $sid) !== false && preg_match('/,(\d+)\s*$/', $line, $m)) {
+                        if (preg_match('/pipesid_' . preg_quote($sid, '/') . '(?![a-z0-9])/i', $line) && preg_match('/,(\d+)\s*$/', $line, $m)) {
                             exec('taskkill /F /PID ' . (int)$m[1] . ' 2>NUL');
                         }
                     }
@@ -4221,6 +4558,8 @@ class FileManager {
             // HLS 재생 로그
             $playLog = $dataDir . '/hls_playback.log';
             $plog = function($msg) use ($playLog, $sessionId) {
+                // ★ (2026-10-29 21:40, 24차 점검) 5MB 넘으면 .1 로 돌려 씀(한 벌만 보관) — 종전엔 재생 목록 요청마다 끝없이 커졌음(정리하는 곳 없음)
+                if (@filesize($playLog) > 5 * 1024 * 1024) @rename($playLog, $playLog . '.1');
                 file_put_contents($playLog, date('H:i:s') . " [$sessionId] $msg\n", FILE_APPEND);
             };
             
@@ -6238,8 +6577,15 @@ class FileManager {
         }
         
         // 폴더인 경우 ZIP으로 압축해서 다운로드
+        // ★ (2026-10-28 21:19, 8차 점검) 폴더 ZIP 은 미리보기가 아니라 내려받기라 inline 이어도 can_download 확인, 폴더 권한으로 막힌 하위 항목은 뺌 —
+        //   종전엔 inline=1 만 붙이면 내려받기 권한 없이도, 막힌 하위 폴더까지 통째로 받을 수 있었음(재현. folder_download_stream 과 같은 기준)
         if (is_dir($fullPath)) {
-            $this->downloadFolderAsZip($fullPath);
+            if (!$this->storage->checkPermission($storageId, 'can_download')
+                || !$this->storage->checkFolderPermission($storageId, trim(str_replace('\\', '/', $relativePath), '/'), 'can_read')) {
+                http_response_code(403);
+                exit(__('no_permission_dot', '권한이 없습니다.'));
+            }
+            $this->downloadFolderAsZip($fullPath, $storageId, $relativePath);
             return;
         }
         
@@ -6587,7 +6933,7 @@ class FileManager {
     }
     
     // 폴더를 ZIP으로 압축해서 다운로드
-    private function downloadFolderAsZip(string $folderPath): void {
+    private function downloadFolderAsZip(string $folderPath, int $storageId = 0, string $storageRel = ''): void {
         // ★ 잔류 정리 안전망 (v5.8.1c — 다운로드 중단 시 unlink 못 한 zip 자동 정리)
         //   readfile() 도중 사용자 abort/네트워크 끊김 시 @unlink 미실행 → 임시폴더 누수.
         //   1시간 이상 된 것만 자동 삭제 (현재 진행 중인 다운로드 영향 없음).
@@ -6616,8 +6962,11 @@ class FileManager {
         );
         
         $fileCount = 0;
+        $dzHasRules = $storageId > 0 && !empty($this->storage->getFolderPermissions($storageId));   // ★ (2026-10-28 21:19, 8차 점검)
+        $dzBase = trim(str_replace('\\', '/', $storageRel), '/');
         foreach ($iterator as $file) {
-            $relativePath = $folderName . DIRECTORY_SEPARATOR . $iterator->getSubPathname();
+            if ($dzHasRules && !$this->zipEntryReadable($storageId, ($dzBase !== '' ? $dzBase . '/' : '') . str_replace('\\', '/', $iterator->getSubPathname()), $file->isDir())) continue;   // 막힌 하위 항목 제외
+            $relativePath = str_replace('\\', '/', $folderName . '/' . $iterator->getSubPathname());   // ★ (2026-10-30 02:05, 26차 점검) ZIP 항목 이름은 '/' 로(규격) — Windows 에선 '\\' 가 들어가 macOS·리눅스·아이폰에서 '폴더\\파일' 이름의 파일 하나로 풀렸음
             if ($file->isDir()) {
                 $zip->addEmptyDir($relativePath);
             } else {
@@ -6716,11 +7065,12 @@ class FileManager {
     }
     
     // 파일/폴더 삭제
-    public function delete(int $storageId, string $relativePath, string $progressFile = '', bool $permanent = false): array {
+    public function delete(int $storageId, string $relativePath, string $progressFile = '', bool $permanent = false, bool $skipBulkCheck = false): array {
         @set_time_limit(0);
         
         // 빈 경로 삭제 차단 (스토리지 루트 삭제 방지)
-        if (empty(trim($relativePath, '/\\ '))) {
+        // ★ (2026-10-28 17:05) '.'·'./'·'/./' 처럼 실제로는 루트를 가리키는 경로도 차단 — 종전엔 '.' 이 통과해 영구 삭제면 스토리지 내용 전체가 지워졌음(재검토 발견·재현)
+        if (empty(trim($relativePath, '/\\ ')) || $this->isRootLikePath($relativePath)) {
             return ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
         }
         
@@ -6733,15 +7083,21 @@ class FileManager {
             return ['success' => false, 'error' => __('api_err_file_locked', '잠긴 파일은 삭제할 수 없습니다.')];
         }
         
-        // 대량 삭제 감지
-        $bulkCheck = $this->checkBulkOperation('delete');
-        if (!$bulkCheck['allowed']) {
-            return ['success' => false, 'error' => '🔐 ' . $bulkCheck['reason']];
+        // 대량 삭제 감지 — ★ (2026-10-29 02:36, 16차) 관리자 '일괄 삭제(bulkDelete)' 는 원래 이 검사를 안 거쳤으므로 그대로(skipBulkCheck)
+        if (!$skipBulkCheck) {
+            $bulkCheck = $this->checkBulkOperation('delete');
+            if (!$bulkCheck['allowed']) {
+                return ['success' => false, 'error' => '🔐 ' . $bulkCheck['reason']];
+            }
         }
         
         // 원격 스토리지인 경우 (휴지통으로 다운로드 후 원격에서 삭제)
         if ($this->isRemoteStorage($storageId)) {
-            return $this->deleteRemoteToTrash($storageId, $relativePath);
+            $remoteDel = $this->deleteRemoteToTrash($storageId, $relativePath);
+            if (($remoteDel['success'] ?? false) && class_exists('HiddenItems')) HiddenItems::removePath($storageId, $relativePath);   // ★ (2026-10-28) 아래 로컬과 같음
+            // ★ (2026-10-29 23:35, 24차 점검) 인덱스에서도 뺌(파일·폴더 하위 포함) — 종전엔 api.php 'delete' 만 따로 지워, 작업 큐 선택 삭제·조건부 일괄 삭제로 지운 원격 항목이 검색·목록에 남았음(4회차 재검토)
+            if ($remoteDel['success'] ?? false) { try { $this->fileIndex->removeFolder($storageId, trim(str_replace('\\', '/', $relativePath), '/')); } catch (\Throwable $e) {} }
+            return $remoteDel;
         }
         
         $basePath = $this->storage->getRealPath($storageId);
@@ -6753,6 +7109,14 @@ class FileManager {
         
         if (!file_exists($fullPath)) {
             return ['success' => false, 'error' => __('file_not_found')];
+        }
+        
+        // ★ (2026-10-28 17:05) 실제 위치가 스토리지 루트 자체면 거부(경로 표기와 무관하게 — 마지막 방어선)
+        $realDelTarget = realpath($fullPath);
+        $realDelBase = realpath($basePath);
+        if ($realDelTarget !== false && $realDelBase !== false
+            && (DIRECTORY_SEPARATOR === '\\' ? strcasecmp($realDelTarget, $realDelBase) === 0 : $realDelTarget === $realDelBase)) {
+            return ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
         }
         
         $isDir = is_dir($fullPath);
@@ -6816,7 +7180,11 @@ class FileManager {
         // 관련 공유 링크 정리
         $this->cleanupSharesForPath($storageId, $relativePath, $isDir);
         
-        return ['success' => true];
+        // ★ (2026-10-28, 펜닐) 숨김 표시 정리 — 같은 이름으로 새로 만든 파일이 숨겨지지 않게.
+        //   선택 삭제는 작업 큐(JobManager)로, 한 개 삭제는 api.php 'delete' 로 들어와 둘 다 여기를 지남(종전엔 api.php 에서만 처리)
+        if (class_exists('HiddenItems')) HiddenItems::removePath($storageId, $relativePath);
+        
+        return ['success' => true, 'permanent' => $permanent];   // ★ (2026-10-30 03:03, 26차 재검토) 보관함 항목처럼 스스로 영구 삭제로 바꾼 경우를 부른 쪽이 알게(폴더 권한 규칙 정리)
     }
     
     /**
@@ -6850,21 +7218,34 @@ class FileManager {
         if ($isDir) {
             // 폴더인 경우 재귀적으로 다운로드
             if (!$this->downloadRemoteFolder($adapter, $relativePath, $trashPath)) {
+                if (is_dir($trashPath)) $this->deleteDirectory($trashPath);   // ★ (2026-10-29 15:35, 21차 재점검) 받다 만 사본(기록 없음) 정리 — 로컬 휴지통 이동(20차)과 같음
                 return ['success' => false, 'error' => __('trash_move_fail_folder_error')];
             }
         } else {
             // 파일인 경우 직접 다운로드
             $content = $adapter->read($relativePath);
-            if ($content === false) {
+            // ★ (2026-10-28 17:05) 원격 read() 는 실패해도 false 가 아니라 '' 를 돌려줌 — 내용이 비었는데 원격 크기가 0 보다 크면 읽기 실패로 봄(다른 원격 복사 경로와 같은 기준). 종전엔 빈 파일을 쓰고 원본을 지울 수 있었음
+            if ($content === false || ($content === '' && $adapter->getSize($relativePath) > 0)) {
                 return ['success' => false, 'error' => __('trash_move_fail_read_error')];
             }
             if (file_put_contents($trashPath, $content) === false) {
+                @unlink($trashPath);   // ★ 21차 재점검: 쓰다 만 사본 정리
                 return ['success' => false, 'error' => __('trash_move_fail_save_error')];
             }
         }
         
         // 원격에서 삭제
-        if (!$adapter->delete($relativePath)) {
+        // ★ (2026-10-29 09:23, 20차) 폴더는 안쪽부터 지움(deleteRemoteDir) — FTP·SFTP·SMB 의 delete 는 빈 폴더만 지워(rmdir) 내용이 있는 폴더는
+        //   늘 '삭제 실패' 였음(전부 받은 뒤 버림). 안쪽 일부만 지워지고 폴더가 남으면, 받은 사본은 버리지 않고 휴지통에 남겨(복원 가능) 실패로 알림
+        $rmPartial = false;
+        if ($isDir) {
+            $this->deleteRemoteDir($adapter, $relativePath);
+            $rmOk = !$adapter->exists($relativePath);
+            $rmPartial = !$rmOk;
+        } else {
+            $rmOk = $adapter->delete($relativePath);
+        }
+        if (!$rmOk && !$rmPartial) {
             // 다운로드 성공했지만 원격 삭제 실패 시 휴지통 파일 삭제
             if ($isDir) {
                 $this->deleteDirectory($trashPath);
@@ -6876,8 +7257,7 @@ class FileManager {
         
         // 휴지통 DB에 기록 (원격 스토리지 표시)
         $fileSize = $isDir ? $this->getDirectorySize($trashPath) : filesize($trashPath);
-        $trash = $this->db->load('trash');
-        $trash[] = [
+        $this->trashAppend([
             'id' => $trashId,
             'name' => $filename,
             'original_path' => $relativePath,
@@ -6889,8 +7269,14 @@ class FileManager {
             'size' => $fileSize,
             'trash_path' => $trashPath,
             'is_remote' => true  // 원격 스토리지 표시
-        ];
-        $this->db->save('trash', $trash);
+        ]);
+        
+        if ($rmPartial) {
+            // 폴더가 다 지워지지 않음 — 휴지통 사본은 남겨 두고 실패로(사용량은 다음 재계산에 맡김)
+            return ['success' => false, 'error' => __('remote_file_delete_fail'), 'partial' => true];
+        }
+        // ★ (2026-10-29 09:23, 20차) 원격 스토리지 사용량에서 지운 만큼 뺌 — 17차부터 원격으로 들어오는 복사·이동은 더하는데 삭제는 빼지 않아 늘기만 했음
+        $this->storage->updateUsedSize($storageId, -(int)$fileSize);
         
         return ['success' => true, 'remote' => true];
     }
@@ -6904,7 +7290,8 @@ class FileManager {
         }
         
         $items = $adapter->list($remotePath);
-        if ($items === false || !is_array($items)) {
+        // ★ (2026-10-29 09:23, 20차) 어댑터는 목록 실패도 [] 로 돌려줘 이 검사가 늘 거짓이었음 → listFailed 로 확인(실패면 휴지통 이동을 멈춰 원본을 지우지 않음)
+        if ($items === false || !is_array($items) || $this->adapterListFailed($adapter)) {
             return false;
         }
         
@@ -6918,7 +7305,11 @@ class FileManager {
                 }
             } else {
                 $content = $adapter->read($itemRemotePath);
-                if ($content === false || file_put_contents($itemLocalPath, $content) === false) {
+                // ★ (2026-10-28 17:05) 원격 read() 는 실패해도 false 가 아니라 '' 를 돌려줌 — 내용이 비었는데 원격 크기가 0 보다 크면 읽기 실패로 봄(다른 원격 복사 경로와 같은 기준). 종전엔 빈 파일을 쓰고 원본을 지울 수 있었음
+                if ($content === false || ($content === '' && $adapter->getSize($itemRemotePath) > 0)) {
+                    return false;
+                }
+                if (file_put_contents($itemLocalPath, $content) === false) {
                     return false;
                 }
             }
@@ -6928,7 +7319,14 @@ class FileManager {
     }
     
     // 휴지통으로 이동
-    private function moveToTrash(int $storageId, string $relativePath, string $fullPath, string $progressFile = ''): array {
+    /**
+     * ★ (2026-10-29 21:23, 24차 점검) 내부 공유 받은 사람의 삭제용 — 휴지통 기록의 '지운 사람'을 공유한 사람(주인)으로 남겨 주인이 자기 휴지통에서 복원할 수 있게
+     */
+    public function moveToTrashAs(int $storageId, string $relativePath, string $fullPath, array $asUser): array {
+        return $this->moveToTrash($storageId, $relativePath, $fullPath, '', $asUser);
+    }
+    
+    private function moveToTrash(int $storageId, string $relativePath, string $fullPath, string $progressFile = '', ?array $asUser = null): array {
         @set_time_limit(0);
         // 휴지통 폴더 경로
         $trashDir = TRASH_PATH;
@@ -6936,7 +7334,8 @@ class FileManager {
             mkdir($trashDir, 0755, true);
         }
         
-        $user = $this->auth->getUser();
+        $user = $asUser ?? $this->auth->getUser();
+        $trashPartial = false;   // ★ (2026-10-29 21:23, 24차 점검) 폴더를 복사 후 지울 때 원본이 일부 남았는지
         $isDir = is_dir($fullPath);
         $trashId = uniqid('trash_');
         
@@ -6947,16 +7346,22 @@ class FileManager {
         // 폴더이고 진행률 추적이 필요하면 copyDirectory 사용 (파일 단위 진행률 표시)
         if ($isDir && $progressFile) {
             if (!$this->copyDirectory($fullPath, $trashPath, $progressFile)) {
+                if (is_dir($trashPath)) $this->deleteDirectory($trashPath);   // ★ (2026-10-29 11:06, 20차 점검) 만들다 만 휴지통 사본 지움(원본은 그대로) — 종전엔 휴지통 폴더에 남아 쌓였음(재현)
                 return ['success' => false, 'error' => __('trash_move_fail')];
             }
             $this->deleteDirectory($fullPath);
+            clearstatcache();
+            $trashPartial = file_exists($fullPath);
         } else if (!@rename($fullPath, $trashPath)) {
             // rename 실패 시 복사 후 삭제
             if ($isDir) {
                 if (!$this->copyDirectory($fullPath, $trashPath, $progressFile)) {
+                    if (is_dir($trashPath)) $this->deleteDirectory($trashPath);   // 만들다 만 휴지통 사본 지움(원본은 그대로)
                     return ['success' => false, 'error' => __('trash_move_fail')];
                 }
                 $this->deleteDirectory($fullPath);
+                clearstatcache();
+                $trashPartial = file_exists($fullPath);
             } else {
                 if (!@copy($fullPath, $trashPath)) {
                     return ['success' => false, 'error' => __('trash_move_fail')];
@@ -6969,9 +7374,8 @@ class FileManager {
         }
         
         // 휴지통 DB에 기록
-        $trash = $this->db->load('trash');
         $fileCount = $isDir ? $this->countAllFiles($trashPath) : 1;
-        $trash[] = [
+        $this->trashAppend([
             'id' => $trashId,
             'name' => basename($fullPath),
             'original_path' => $relativePath,
@@ -6983,9 +7387,13 @@ class FileManager {
             'size' => $isDir ? $this->getDirectorySize($trashPath) : filesize($trashPath),
             'file_count' => $fileCount,
             'trash_path' => $trashPath
-        ];
-        $this->db->save('trash', $trash);
+        ]);
         
+        // ★ (2026-10-29 21:23, 24차 점검) 원본 폴더가 일부 남았으면(다른 프로그램이 쓰는 파일 등) 휴지통 사본은 남기되(지운 부분 복원용) 실패로 답함 —
+        //   종전엔 결과를 보지 않아 '삭제 성공'·사용량 전체 차감·인덱스 제거가 됐음(22차 다른 스토리지 이동과 같은 문제, 누락)
+        if ($trashPartial) {
+            return ['success' => false, 'error' => __('file_in_use', '파일이 사용 중이어서 삭제할 수 없습니다.'), 'partial' => true];
+        }
         return ['success' => true];
     }
     
@@ -7010,8 +7418,7 @@ class FileManager {
         
         // 이전 방식으로 저장된 항목 (trash_path 없음) - DB에서만 제거
         if (empty($item['trash_path'])) {
-            unset($trash[$itemIndex]);
-            $this->db->save('trash', array_values($trash));
+            $this->trashRemoveIds([(string)$item['id']]);
             return ['success' => false, 'error' => __('old_delete_no_restore')];
         }
         
@@ -7020,13 +7427,18 @@ class FileManager {
         if (!$this->storage->checkPermission($storageId, 'can_write')) {
             return ['success' => false, 'error' => __('api_err_no_write_perm', '쓰기 권한이 없습니다.')];
         }
+        // ★ (2026-10-28 22:39, 10차 점검) 되돌릴 자리(원래 위치)의 폴더 권한 — 종전엔 폴더 규칙을 보지 않아, 지운 뒤 쓰기를 막은 폴더(또는 그 아래)로도 되돌려졌음
+        $rsRel = trim(str_replace('\\', '/', (string)($item['original_path'] ?? '')), '/');
+        $rsDir = dirname($rsRel); if ($rsDir === '.') $rsDir = '';
+        if ($rsRel !== '' && (!$this->storage->checkFolderPermission((int)$storageId, $rsDir ?: $rsRel, 'can_write') || !$this->storage->checkFolderTreePermission((int)$storageId, $rsRel, 'can_write'))) {
+            return ['success' => false, 'error' => __('api_err_no_write_perm', '쓰기 권한이 없습니다.')];
+        }
         
         $trashPath = $item['trash_path'];
         
         if (!file_exists($trashPath)) {
             // 휴지통 파일이 없으면 DB에서만 제거
-            unset($trash[$itemIndex]);
-            $this->db->save('trash', array_values($trash));
+            $this->trashRemoveIds([(string)$item['id']]);
             return ['success' => false, 'error' => __('trash_file_missing')];
         }
         
@@ -7056,6 +7468,7 @@ class FileManager {
         // 폴더이고 진행률 추적이 필요하면 copyDirectory 사용 (파일 단위 진행률 표시)
         if ($item['is_dir'] && $progressFile) {
             if (!$this->copyDirectory($trashPath, $restorePath, $progressFile)) {
+                if (is_dir($restorePath)) $this->deleteDirectory($restorePath);   // ★ (2026-10-29 11:06, 20차 점검) 만들다 만 복원 사본 지움(새 이름 자리라 기존 파일 아님, 휴지통 쪽은 그대로)
                 return ['success' => false, 'error' => __('restore_fail')];
             }
             $this->deleteDirectory($trashPath);
@@ -7063,6 +7476,7 @@ class FileManager {
             // rename 실패 시 복사 후 삭제
             if ($item['is_dir']) {
                 if (!$this->copyDirectory($trashPath, $restorePath, $progressFile)) {
+                    if (is_dir($restorePath)) $this->deleteDirectory($restorePath);   // 만들다 만 복원 사본 지움
                     return ['success' => false, 'error' => __('restore_fail')];
                 }
                 $this->deleteDirectory($trashPath);
@@ -7075,8 +7489,7 @@ class FileManager {
         }
         
         // 휴지통 DB에서 제거
-        unset($trash[$itemIndex]);
-        $this->db->save('trash', array_values($trash));
+        $this->trashRemoveIds([(string)$item['id']]);
         
         // 사용량 증가 (복원된 파일/폴더 크기)
         $restoredSize = $item['is_dir'] ? $this->getDirectorySize($restorePath) : filesize($restorePath);
@@ -7119,7 +7532,11 @@ class FileManager {
         }
         
         // 원격으로 업로드
+        // ★ (2026-10-29 15:35, 21차 재점검) 복원한 크기를 사용량에 더함 — 20차에 원격 삭제(휴지통)는 사용량을 빼게 했는데 복원은 더하지 않아,
+        //   삭제→복원을 반복하면 파일은 그대로인데 사용량만 줄었음(재현). 로컬 복원과 같은 처리
+        $rrSize = 0;
         if ($item['is_dir']) {
+            $rrSize = $this->getDirectorySize($trashPath);
             if (!$this->uploadFolderToRemote($adapter, $trashPath, $restorePath)) {
                 return ['success' => false, 'error' => __('remote_restore_fail')];
             }
@@ -7129,12 +7546,13 @@ class FileManager {
             if ($content === false || !$adapter->write($restorePath, $content)) {
                 return ['success' => false, 'error' => __('remote_restore_fail')];
             }
+            $rrSize = strlen($content);
             @unlink($trashPath);
         }
+        if ($rrSize > 0) $this->storage->updateUsedSize((int)$storageId, $rrSize);
         
         // 휴지통 DB에서 제거
-        unset($trash[$itemIndex]);
-        $this->db->save('trash', array_values($trash));
+        $this->trashRemoveIds([(string)$item['id']]);
         
         return ['success' => true, 'restored_path' => basename($restorePath), 'remote' => true];
     }
@@ -7203,12 +7621,13 @@ class FileManager {
         $storageId = $item['storage_id'] ?? 0;
         $originalPath = $item['original_path'] ?? '';
         if ($storageId && $originalPath) {
+            // ★ (2026-10-29 21:49, 24차 점검) 폴더면 하위 파일 버전도(16차 휴지통 비우기 emptyTrash 와 같게, 누락) — 종전엔 폴더 하나만 영구 삭제하면 안 파일들의 버전이 남았음
+            if ($item['is_dir'] ?? ($item['is_directory'] ?? false)) $this->deleteDirectoryVersions((int)$storageId, $originalPath, '');
             $this->deleteFileVersions($storageId, $originalPath);
         }
         
         // 휴지통 DB에서 제거
-        unset($trash[$itemIndex]);
-        $this->db->save('trash', array_values($trash));
+        $this->trashRemoveIds([(string)$item['id']]);
         
         return ['success' => true];
     }
@@ -7216,15 +7635,15 @@ class FileManager {
     // 휴지통 비우기
     public function emptyTrash(?int $userId = null): array {
         $trash = $this->db->load('trash');
-        $newTrash = [];
+        $removedIds = [];
         $deletedCount = 0;
         
         foreach ($trash as $item) {
             // 사용자 ID가 지정되면 해당 사용자 것만 삭제
             if ($userId !== null && ($item['deleted_by'] ?? 0) != $userId) {
-                $newTrash[] = $item;
                 continue;
             }
+            $removedIds[] = (string)($item['id'] ?? '');
             
             $trashPath = $item['trash_path'] ?? '';
             if (file_exists($trashPath)) {
@@ -7238,7 +7657,7 @@ class FileManager {
             // 파일 버전도 삭제
             $storageId = $item['storage_id'] ?? 0;
             $originalPath = $item['original_path'] ?? '';
-            $wasDirectory = $item['is_directory'] ?? false;
+            $wasDirectory = $item['is_dir'] ?? ($item['is_directory'] ?? false);   // ★ (2026-10-29 03:11, 16차) 휴지통 레코드는 'is_dir' 키 — 종전엔 'is_directory' 로 읽어 폴더 버전 정리가 호출되지 않았음
             if ($storageId && $originalPath) {
                 if ($wasDirectory) {
                     $this->deleteDirectoryVersions($storageId, $originalPath, '');
@@ -7249,9 +7668,24 @@ class FileManager {
             $deletedCount++;
         }
         
-        $this->db->save('trash', $newTrash);
+        $this->trashRemoveIds($removedIds);
         
         return ['success' => true, 'deleted_count' => $deletedCount];
+    }
+    
+    /**
+     * ★ (2026-10-29 10:15, 20차 점검) 휴지통 기록 추가·제거는 잠금 안에서 최신 목록에 — 종전엔 처음 읽은 목록에 더하거나 빼서 통째로 저장해,
+     *   동시에 지우면(여러 사람·여러 창) 서로의 기록을 덮어써 일부 항목이 목록에서 사라졌음(재현: 40개 동시 삭제 → 기록 38~39개, 나머지는 휴지통 폴더에만 남아 복원 불가)
+     */
+    private function trashAppend(array $rec): void {
+        $ok = $this->db->atomicUpdate('trash', function ($t) use ($rec) { $t = is_array($t) ? array_values($t) : []; $t[] = $rec; return $t; });
+        if (!$ok) { $t = $this->db->load('trash') ?: []; $t[] = $rec; $this->db->save('trash', array_values($t)); }
+    }
+    private function trashRemoveIds(array $ids): void {
+        $ids = array_flip(array_filter(array_map('strval', $ids), fn($x) => $x !== ''));
+        if (!$ids) return;
+        $f = function ($t) use ($ids) { return array_values(array_filter(is_array($t) ? $t : [], fn($x) => !isset($ids[(string)($x['id'] ?? '')]))); };
+        if (!$this->db->atomicUpdate('trash', $f)) { $this->db->save('trash', $f($this->db->load('trash') ?: [])); }
     }
     
     // 휴지통 목록 조회
@@ -7281,12 +7715,87 @@ class FileManager {
                     $item['file_count'] = $item['is_dir'] ? 0 : 1;
                 }
             }
+            unset($item['trash_path']);   // ★ (2026-10-29 10:46, 20차 점검) 서버 절대 경로는 화면에 안 씀 — 내려보내지 않음(종전엔 그대로 노출)
         }
+        unset($item);
         
         return ['success' => true, 'items' => array_values($trash)];
     }
     
     // 폴더 복사 (휴지통 이동용)
+    /**
+     * ★ (2026-10-28 17:05) '.'·'./'·'a/..' 처럼 조각을 정리하면 아무것도 안 남는(= 스토리지 루트) 경로인지. '..' 는 위로 올라감으로 계산
+     */
+    private function isRootLikePath(string $path): bool {
+        $parts = preg_split('#[\\\\/]+#', $path);
+        $depth = 0;
+        foreach ($parts as $p) {
+            $p = trim($p);
+            if ($p === '' || $p === '.') continue;
+            if ($p === '..') { $depth = max(0, $depth - 1); continue; }
+            $depth++;
+        }
+        return $depth === 0;
+    }
+
+    /**
+     * ★ (2026-10-28 17:05) 덮어쓰기 안전 — 기존 대상을 지우지 않고 같은 폴더의 임시 이름('~$fsow-…', 목록에선 늘 숨김)으로 비켜 둠.
+     *   복사·이동이 끝까지 성공하면 owDiscard 로 지우고, 실패하면 owRestore 로 되돌림. 비켜 두기에 실패하면 null(덮어쓰지 않음)
+     */
+    /**
+     * ★ (2026-10-28 23:26, 11차 점검) 같은 이름 덮어쓰기를 해도 되는지 — 지워질 기존 대상(대상 폴더 안 $name)과 그 아래 보호 폴더의
+     *   삭제·쓰기 권한(폴더 권한: 삭제는 쓰기 값을 따름 — Storage::folderRuleAllows). 웹 복사·이동·작업 큐·다른 스토리지 복사 공통
+     */
+    private function overwriteTargetAllowed(int $storageId, string $destDir, string $name): bool {
+        $rel = trim(trim(str_replace('\\', '/', $destDir), '/') . '/' . $name, '/');
+        if ($rel === '') return false;
+        return $this->storage->checkFolderTreePermission($storageId, $rel, 'can_delete')
+            && $this->storage->checkFolderTreePermission($storageId, $rel, 'can_write');
+    }
+
+    private function owMoveAside(string $path): ?string {
+        $bak = dirname($path) . DIRECTORY_SEPARATOR . '~$fsow-' . bin2hex(random_bytes(4)) . '-' . basename($path);
+        return @rename($path, $bak) ? $bak : null;
+    }
+    private function owRestore(string $newPath, ?string $bak): void {
+        if (!$bak || !file_exists($bak)) return;
+        if (file_exists($newPath)) {
+            if (is_dir($newPath)) $this->deleteDirectory($newPath); else @unlink($newPath);
+        }
+        @rename($bak, $newPath);
+    }
+    /** ★ (2026-10-29 02:36, 16차) 업로드 덮어쓰기가 실패했을 때 — 비켜 둔 원본을 제자리로, 빼 두었던 사용량도 되돌림 */
+    private function owUploadRollback(int $storageId, string $originalPath, ?string &$bak, int $size): void {
+        if (!$bak) return;
+        $this->owRestore($originalPath, $bak);
+        $bak = null;
+        if ($size > 0) $this->storage->updateUsedSize($storageId, $size);
+    }
+        private function owDiscard(?string $bak): void {
+        if (!$bak || !file_exists($bak)) return;
+        if (is_dir($bak)) $this->deleteDirectory($bak); else @unlink($bak);
+    }
+
+    /** ★ (2026-10-28 17:05) 원격 스토리지용 — 같은 방식(기존 대상을 '~$fsow-…' 이름으로 비켜 둠 → 성공하면 지움 / 실패하면 되돌림) */
+    private function owRemoteAside($adapter, string $path): ?string {
+        $p = str_replace('\\', '/', $path);
+        $pos = strrpos($p, '/');
+        $dir = $pos === false ? '' : substr($p, 0, $pos);
+        $bak = ($pos === false ? '' : $dir . '/') . '~$fsow-' . bin2hex(random_bytes(4)) . '-' . substr($p, $pos === false ? 0 : $pos + 1);
+        return $adapter->rename($path, $bak) ? $bak : null;
+    }
+    private function owRemoteRestore($adapter, string $newPath, ?string $bak): void {
+        if (!$bak) return;
+        if ($adapter->exists($newPath)) {
+            if ($adapter->isDir($newPath)) $this->deleteRemoteDir($adapter, $newPath); else $adapter->delete($newPath);
+        }
+        $adapter->rename($bak, $newPath);
+    }
+    private function owRemoteDiscard($adapter, ?string $bak): void {
+        if (!$bak || !$adapter->exists($bak)) return;
+        if ($adapter->isDir($bak)) $this->deleteRemoteDir($adapter, $bak); else $adapter->delete($bak);
+    }
+
     private function copyDirectory(string $src, string $dst, ?string $progressFile = null, ?array &$progressState = null): bool {
         $dir = opendir($src);
         if (!$dir) return false;
@@ -7427,6 +7936,10 @@ class FileManager {
     }
 
     public function rename(int $storageId, string $relativePath, string $newName): array {
+        // ★ (2026-10-29 17:46, 22차 점검) 스토리지 루트 자체의 이름 바꾸기 거부(이동과 같은 기준)
+        if (trim(str_replace('\\', '/', $relativePath), "/. \t") === '') {
+            return ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
+        }
         if (!$this->storage->checkPermission($storageId, 'can_write')) {
             return ['success' => false, 'error' => __('api_err_no_write_perm', '쓰기 권한이 없습니다.')];
         }
@@ -7448,6 +7961,10 @@ class FileManager {
             
             if (!$adapter->exists($relativePath)) {
                 return ['success' => false, 'error' => __('file_not_found')];
+            }
+            // ★ (2026-10-28 17:42, 소스 점검 3단계) 파일 이름을 서버 실행 확장자로 바꾸지 못하게(업로드와 같은 기준) — 종전엔 'a.txt' → 'a.php' 가 그대로 됐음(재현). 폴더 이름은 실행과 무관해 그대로
+            if (!$adapter->isDir($relativePath) && ($execReason = $this->serverExecNameReason($safeNewName)) !== null) {
+                return ['success' => false, 'error' => $execReason];
             }
             
             $parentDir = dirname($relativePath);
@@ -7476,7 +7993,13 @@ class FileManager {
         
         if (!file_exists($fullPath)) {
             error_log('[FileStation] rename file_not_found: storage=' . $storageId . ', path=' . $relativePath . ', fullPath=' . $fullPath);
-            return ['success' => false, 'error' => __('file_not_found'), 'debug' => ['storage_id' => $storageId, 'path' => $relativePath, 'fullPath' => $fullPath, 'locale' => setlocale(LC_ALL, 0)]];
+            // ★ (2026-10-28 22:39, 10차 점검) 응답에 서버 절대 경로(fullPath)가 나가던 것 뺌 — 진단용 나머지(스토리지·상대 경로·로캘)는 그대로
+            return ['success' => false, 'error' => __('file_not_found'), 'debug' => ['storage_id' => $storageId, 'path' => $relativePath, 'locale' => setlocale(LC_ALL, 0)]];
+        }
+        
+        // ★ (2026-10-28 17:42, 소스 점검 3단계) 파일 이름을 서버 실행 확장자로 바꾸지 못하게(업로드와 같은 기준) — 종전엔 'a.txt' → 'a.php' 가 그대로 됐음(재현). 폴더 이름은 실행과 무관해 그대로
+        if (!is_dir($fullPath) && ($execReason = $this->serverExecNameReason($safeNewName)) !== null) {
+            return ['success' => false, 'error' => $execReason];
         }
         
         // ★ (2026-10-27 14시, 펜닐) 대소문자만 바꾸는 이름 변경(show.mkv → Show.mkv) 허용 — 윈도우는 대소문자를 구분하지 않아
@@ -7496,12 +8019,45 @@ class FileManager {
             ? basename($newPath) 
             : $parentRelPath . '/' . basename($newPath);
         $this->fileIndex->moveFile($storageId, $relativePath, $newRelPath);
+        // ★ (2026-10-29 21:13, 24차 점검) 옛 경로의 외부·내부 공유 정리(22차 이동과 같은 이유) — 종전엔 이름을 바꾼 뒤 같은 이름으로 새 파일이 생기면 옛 공유 링크로 그 파일이 공개됐음(재현)
+        $this->cleanupSharesForPath($storageId, $relativePath, is_dir($newPath));
         
         return ['success' => true, 'name' => basename($newPath)];
     }
     
     // 이동
+    /**
+     * 이동 — 실제 이동은 moveInner(), 성공하면 숨김 표시(HiddenItems)도 옮긴 자리로
+     * ★ (2026-10-28, 펜닐) 붙여넣기 이동은 작업 큐(JobManager)로, 직접 이동은 api.php 'move' 로 들어오는데
+     *   종전엔 api.php 에서만 숨김 표시를 옮겨 붙여넣기 이동엔 안 따라갔음 → 두 길이 다 지나는 여기서 처리.
+     *   실제 놓인 이름(같은 이름이 있어 '이름 변경'이면 x (2).txt)을 쓰고, 대상 경로의 옛 표시(덮어쓴 항목)는 지움.
+     */
     public function move(int $sourceStorageId, string $sourcePath, int $destStorageId, string $destPath, string $duplicateAction = 'overwrite'): array {
+        // ★ (2026-10-29 17:46, 22차 점검) 원본이 스토리지 루트('', '/', '.')면 거부 — 종전엔 source='' 로 부르면 스토리지(홈) 안의 모든 항목이 통째로 옮겨졌음(재현). 삭제(api.php delete)와 같은 기준
+        if (trim(str_replace('\\', '/', $sourcePath), "/. \t") === '') {
+            return ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
+        }
+        $result = $this->moveInner($sourceStorageId, $sourcePath, $destStorageId, $destPath, $duplicateAction);
+        if (($result['success'] ?? false) && empty($result['skipped']) && class_exists('HiddenItems')) {
+            try {
+                // ★ (2026-10-28) 놓인 이름 — 로컬·같은 원격 이동은 'name', 원격이 끼는 이동(복사 후 원본 삭제)의 파일은 'filename'
+                $name = $result['name'] ?? ($result['filename'] ?? null);
+                if ($name === null && $duplicateAction === 'rename') {
+                    // 원격이 끼는 '폴더' 이동은 놓인 이름을 안 돌려줌 → '이름 변경'이면 실제 이름을 알 수 없어,
+                    //   원래 이름으로 옮기면 대상에 원래 있던 같은 이름 항목의 표시를 지우고 엉뚱하게 붙이게 됨 → 원래 자리 표시만 정리(옮긴 항목은 보이게 — 안전한 쪽)
+                    HiddenItems::removePath($sourceStorageId, $sourcePath);
+                } else {
+                    $name = (string)($name ?? basename(str_replace('\\', '/', $sourcePath)));
+                    $dp = HiddenItems::norm($destPath);
+                    HiddenItems::movePath($sourceStorageId, $sourcePath, $destStorageId, $dp === '' ? $name : $dp . '/' . $name, true);
+                    try { $this->storage->moveFolderPermissions($sourceStorageId, $sourcePath, $destStorageId, $dp === '' ? $name : $dp . '/' . $name); } catch (\Throwable $e) {}   // ★ (2026-10-30 01:52, 26차 점검) 폴더 권한 규칙도 옮긴 자리로(작업 큐 이동 포함)
+                }
+            } catch (\Throwable $e) { /* 숨김 표시 실패는 이동 결과에 영향 없음 */ }
+        }
+        return $result;
+    }
+    
+    private function moveInner(int $sourceStorageId, string $sourcePath, int $destStorageId, string $destPath, string $duplicateAction = 'overwrite'): array {
         try {
             @set_time_limit(0);
             
@@ -7527,26 +8083,40 @@ class FileManager {
             // 원격 ↔ 로컬 간 이동 (복사 후 원본 삭제)
             if ($sourceIsRemote !== $destIsRemote) {
                 $copyResult = $this->copy($sourceStorageId, $sourcePath, $destStorageId, $destPath, $duplicateAction);
-                if ($copyResult['success'] ?? false) {
+                // ★ (2026-10-28, 펜닐 승인) 같은 이름이 있어 '건너뛰기'면 복사가 안 됐는데도 성공(skipped)이 와서 원본을 지웠음(데이터 손실) → 건너뜀이면 원본 유지
+                if (($copyResult['success'] ?? false) && empty($copyResult['skipped'])) {
                     // 복사 성공 시 원본 삭제
+                    // ★ (2026-10-29 09:23, 20차) 원본이 실제로 지워졌는지 확인하고, 지워졌을 때만 원본 사용량을 뺌 — 종전엔 먼저 빼고(17차) 삭제 결과를 보지 않아,
+                    //   Windows 에서 원본이 사용 중이면 양쪽에 남은 채 '이동 성공' 이 되고 사용량만 줄었음
+                    $srcGone = false;
+                    $srcWasDir = false;
                     if ($sourceIsRemote) {
                         $srcAdapter = $this->getAdapter($sourceStorageId);
                         if ($srcAdapter) {
-                            if ($srcAdapter->isDir($sourcePath)) {
+                            if ($srcWasDir = $srcAdapter->isDir($sourcePath)) {
                                 $this->deleteRemoteDir($srcAdapter, $sourcePath);
                             } else {
                                 $srcAdapter->delete($sourcePath);
                             }
+                            $srcGone = !$srcAdapter->exists($sourcePath);
                         }
                     } else {
                         $srcBase = $this->storage->getRealPath($sourceStorageId);
                         $srcFull = $this->buildPath($srcBase, $sourcePath);
-                        if (is_dir($srcFull)) {
+                        if ($srcWasDir = is_dir($srcFull)) {
                             $this->deleteDirectory($srcFull);
                         } else {
                             @unlink($srcFull);
                         }
+                        clearstatcache(true, $srcFull);
+                        $srcGone = !file_exists($srcFull);
                     }
+                    if (!$srcGone) {
+                        return ['success' => false, 'error' => __('api_err_move_src_left', '복사는 됐지만 원본을 지우지 못했습니다. 원본이 그대로 남아 있습니다.'), 'copied' => true];
+                    }
+                    $this->storage->updateUsedSize($sourceStorageId, -(int)($copyResult['bytes'] ?? 0));
+                    // ★ (2026-10-29 17:53, 22차 점검) 옮겨져 없어진 원본 경로의 공유 링크·내부 공유 정리(로컬끼리 이동과 같게) — 종전엔 남아서, 같은 경로에 새 파일이 생기면 옛 링크로 그 파일이 공개됐음(재현)
+                    $this->cleanupSharesForPath($sourceStorageId, $sourcePath, $srcWasDir);
                 }
                 return $copyResult;
             }
@@ -7559,15 +8129,25 @@ class FileManager {
             // 서로 다른 원격 스토리지 간 이동 (복사 후 원본 삭제)
             if ($sourceIsRemote && $destIsRemote && $sourceStorageId !== $destStorageId) {
                 $copyResult = $this->copyRemoteToRemote($sourceStorageId, $sourcePath, $destStorageId, $destPath, $duplicateAction);
-                if ($copyResult['success'] ?? false) {
+                // ★ (2026-10-28) 위와 같음 — 건너뜀이면 원본 유지
+                if (($copyResult['success'] ?? false) && empty($copyResult['skipped'])) {
                     $srcAdapter = $this->getAdapter($sourceStorageId);
+                    $srcGone = false;
+                    $srcWasDir = false;
                     if ($srcAdapter) {
-                        if ($srcAdapter->isDir($sourcePath)) {
+                        if ($srcWasDir = $srcAdapter->isDir($sourcePath)) {
                             $this->deleteRemoteDir($srcAdapter, $sourcePath);
                         } else {
                             $srcAdapter->delete($sourcePath);
                         }
+                        $srcGone = !$srcAdapter->exists($sourcePath);
                     }
+                    // ★ (2026-10-29 09:23, 20차) 원본이 지워졌을 때만 원본 사용량 차감(위와 같음)
+                    if (!$srcGone) {
+                        return ['success' => false, 'error' => __('api_err_move_src_left', '복사는 됐지만 원본을 지우지 못했습니다. 원본이 그대로 남아 있습니다.'), 'copied' => true];
+                    }
+                    $this->storage->updateUsedSize($sourceStorageId, -(int)($copyResult['bytes'] ?? 0));
+                    $this->cleanupSharesForPath($sourceStorageId, $sourcePath, $srcWasDir);   // ★ (2026-10-29 17:53, 22차 점검) 위와 같음
                 }
                 return $copyResult;
             }
@@ -7596,6 +8176,21 @@ class FileManager {
             if (!file_exists($sourceFullPath)) {
                 return ['success' => false, 'error' => __('src_file_not_exist') . $sourcePath];
             }
+            // ★ (2026-10-29 21:44, 24차 점검) 다른 스토리지로 옮길 때 대상 용량 확인(같은 스토리지 안 이동은 늘지 않음)
+            if ($sourceStorageId !== $destStorageId && ($tqErr = $this->transferQuotaError($destStorageId, $sourceFullPath, $destFullPath . DIRECTORY_SEPARATOR . basename($sourceFullPath), $duplicateAction)) !== null) {
+                return ['success' => false, 'error' => $tqErr];
+            }
+            
+            // ★ (2026-10-28 19:55, 6차 점검) 자기 안으로 옮기기를 대상 폴더를 만들기 '전'에 거부 — 종전엔 없는 대상 폴더(a/새/하위)를 먼저 만든 뒤
+            //   아래 검사에서 거부해 빈 폴더가 남았음. 대상이 아직 없으면 가장 가까운 있는 상위 폴더 기준으로 비교
+            if (is_dir($sourceFullPath) && ($realSrcPre = realpath($sourceFullPath)) !== false) {
+                $probe = $destFullPath; $tail = '';
+                while (!file_exists($probe) && dirname($probe) !== $probe) { $tail = DIRECTORY_SEPARATOR . basename($probe) . $tail; $probe = dirname($probe); }
+                $realProbe = realpath($probe);
+                if ($realProbe !== false && \isSubPath($realProbe . $tail, $realSrcPre)) {
+                    return ['success' => false, 'error' => __('err_move_into_self', '폴더를 자기 자신 안으로 옮길 수 없습니다.')];
+                }
+            }
             
             // 대상 폴더 존재 확인 및 생성
             if (!is_dir($destFullPath)) {
@@ -7614,6 +8209,33 @@ class FileManager {
                 return ['success' => true, 'skipped' => true];
             }
             
+            // ★ (2026-10-28 17:05) 폴더를 자기 자신 안(하위 폴더)으로 이동 방지(같은 스토리지면 OS 가 거부하지만, 경로가 겹치는 다른 스토리지·복사 후 삭제 경로까지)
+            if ($realSrc !== false && is_dir($sourceFullPath)) {
+                $realDestDir = realpath($destFullPath);
+                if ($realDestDir !== false && \isSubPath($realDestDir, $realSrc)) {
+                    return ['success' => false, 'error' => __('err_move_into_self', '폴더를 자기 자신 안으로 옮길 수 없습니다.')];
+                }
+            }
+            // ★ (2026-10-28 17:05) 덮어쓸 대상 안에 원본이 있으면 거부 — 종전엔 대상을 먼저 지워 원본까지 사라졌음
+            if (file_exists($newPath) && $duplicateAction !== 'skip' && $duplicateAction !== 'rename' && $realSrc !== false) {
+                $realNew = realpath($newPath);
+                if ($realNew !== false && $realNew !== $realSrc && \isSubPath($realSrc, $realNew)) {
+                    return ['success' => false, 'error' => __('err_overwrite_contains_src', '덮어쓸 대상 안에 원본이 있어 덮어쓸 수 없습니다.')];
+                }
+            }
+            
+            // ★ (2026-10-28 17:05) 덮어쓰기는 기존 대상을 비켜 두었다가(owMoveAside) 성공하면 지우고 실패하면 되돌림 — 종전엔 먼저 지운 뒤 옮기기가 실패하면(사용 중인 파일 등) 대상만 사라졌음
+            $owBackup = null;
+            $owSize = 0;
+            $owFail = function (array $res) use (&$owBackup, &$owSize, &$newPath, $destStorageId) {
+                if ($owBackup) {
+                    $this->owRestore($newPath, $owBackup);
+                    if ($owSize > 0) $this->storage->updateUsedSize($destStorageId, $owSize);
+                    $owBackup = null;
+                }
+                return $res;
+            };
+            
             // 중복 처리
             if (file_exists($newPath)) {
                 switch ($duplicateAction) {
@@ -7624,13 +8246,11 @@ class FileManager {
                         break;
                     case 'overwrite':
                     default:
-                        // 덮어쓰기 전 기존 파일 크기 차감
-                        $existingSize = is_dir($newPath) ? $this->getDirectorySize($newPath) : (filesize($newPath) ?: 0);
-                        if ($existingSize > 0) {
-                            $this->storage->updateUsedSize($destStorageId, -$existingSize);
+                        // ★ (2026-10-28 23:26, 11차 점검) 덮어쓰면 기존 대상(폴더면 안의 내용까지)이 지워지므로 그 대상 자신 + 안의 보호 폴더의 삭제·쓰기 권한 — 종전엔 대상 폴더의 쓰기만 봐서 쓰기 금지 폴더를 같은 이름으로 덮어쓰면 통째로 사라졌음(재현, WebDAV 는 9차에 막음)
+                        if (!$this->overwriteTargetAllowed((int)$destStorageId, (string)$destPath, basename(str_replace('\\', '/', (string)$newPath)))) {
+                            return ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                         }
-                        
-                        // 대량 덮어쓰기 감지
+                        // 대량 덮어쓰기 감지 — ★ (2026-10-28 17:05) 사용량 차감보다 먼저
                         $bulkCheck = $this->checkBulkOperation('overwrite');
                         if (!$bulkCheck['allowed']) {
                             return ['success' => false, 'error' => '🔐 ' . $bulkCheck['reason']];
@@ -7642,11 +8262,16 @@ class FileManager {
                             $this->saveFileVersion($newPath, $fileRelPath, $destStorageId);
                         }
                         
-                        // 기존 파일/폴더 삭제
-                        if (is_dir($newPath)) {
-                            $this->deleteDirectory($newPath);
-                        } else {
-                            @unlink($newPath);
+                        // ★ 기존 파일/폴더는 지우지 않고 비켜 둠(성공하면 아래에서 지움, 실패하면 되돌림)
+                        $existingSize = is_dir($newPath) ? $this->getDirectorySize($newPath) : (filesize($newPath) ?: 0);
+                        $owBackup = $this->owMoveAside($newPath);
+                        if (!$owBackup) {
+                            return ['success' => false, 'error' => __('err_overwrite_aside_failed', '기존 항목을 옮길 수 없어 덮어쓰지 않았습니다. (사용 중인 파일이 있는지 확인하세요)')];
+                        }
+                        // 덮어쓰기 전 기존 파일 크기 차감
+                        if ($existingSize > 0) {
+                            $this->storage->updateUsedSize($destStorageId, -$existingSize);
+                            $owSize = $existingSize;
                         }
                         break;
                 }
@@ -7659,7 +8284,7 @@ class FileManager {
             if ($isSameStorage) {
                 // 같은 스토리지: rename 사용
                 if (!@rename($sourceFullPath, $newPath)) {
-                    return ['success' => false, 'error' => __('api_err_move_failed', '이동에 실패했습니다.')];
+                    return $owFail(['success' => false, 'error' => __('api_err_move_failed', '이동에 실패했습니다.')]);
                 }
             } else {
                 // 다른 스토리지: 복사 후 삭제
@@ -7675,16 +8300,32 @@ class FileManager {
                         'totalFiles' => $totalFileCount,
                         'lastUpdate' => 0
                     ];
-                    $this->copyDirectory($sourceFullPath, $newPath, $progressFile, $progressState);
+                    $cdOk = $this->copyDirectory($sourceFullPath, $newPath, $progressFile, $progressState);
                     @unlink($progressFile);
                     
                     // 취소 시 부분 복사된 폴더 삭제, 원본은 유지
                     if ($this->isCancelled()) {
                         if (is_dir($newPath)) $this->deleteDirectory($newPath);
-                        return ['success' => false, 'error' => 'cancelled'];
+                        return $owFail(['success' => false, 'error' => 'cancelled']);
+                    }
+                    // ★ (2026-10-28 17:05) 복사 중 실패(디스크 부족·잠긴 파일 등)면 원본을 지우지 않음 — 종전엔 결과를 안 보고 원본을 지워 일부만 남았음(재검토 발견)
+                    if (!$cdOk) {
+                        if (is_dir($newPath)) $this->deleteDirectory($newPath);
+                        return $owFail(['success' => false, 'error' => __('api_err_move_failed', '이동에 실패했습니다.')]);
                     }
                     
                     $this->deleteDirectory($sourceFullPath);
+                    // ★ (2026-10-29 17:51, 22차 점검) 원본 폴더를 다 못 지웠으면(사용 중·잠긴 파일) 성공으로 알리지 않음 — 종전엔 결과를 안 봐서
+                    //   원본에 일부가 남았는데도 '이동 완료'였고 사용량은 원본 전체를 뺐음(재현). 복사본은 완전하니 대상은 그대로 두고, 사용량은 실제로 지운 만큼만
+                    clearstatcache();
+                    if (file_exists($sourceFullPath)) {
+                        $remain = is_dir($sourceFullPath) ? $this->getDirectorySize($sourceFullPath) : 0;
+                        $this->storage->updateUsedSize($sourceStorageId, -max(0, $sourceSize - $remain));
+                        $this->storage->updateUsedSize($destStorageId, $sourceSize);
+                        $this->owDiscard($owBackup);
+                        $owBackup = null;
+                        return ['success' => false, 'error' => __('api_err_move_src_partial', '복사는 끝났지만 원본 폴더의 일부를 지우지 못했습니다(사용 중인 파일). 원본 위치를 확인하세요.')];
+                    }
                 } else {
                     $fileSize = filesize($sourceFullPath) ?: 0;
                     $progressThreshold = 50 * 1024 * 1024; // 50MB
@@ -7700,7 +8341,7 @@ class FileManager {
                             if ($src) fclose($src);
                             if ($dst) fclose($dst);
                             @unlink($progressFile);
-                            return ['success' => false, 'error' => __('api_err_move_failed', '이동에 실패했습니다.')];
+                            return $owFail(['success' => false, 'error' => __('api_err_move_failed', '이동에 실패했습니다.')]);
                         }
                         
                         $chunkSize = 8 * 1024 * 1024;
@@ -7738,25 +8379,38 @@ class FileManager {
                         // 취소 시 부분 복사된 파일 삭제 (원본은 유지)
                         if ($cancelled) {
                             @unlink($newPath);
-                            return ['success' => false, 'error' => 'cancelled'];
+                            return $owFail(['success' => false, 'error' => 'cancelled']);
                         }
                         
                         if ($copied < $fileSize) {
                             @unlink($newPath);
-                            return ['success' => false, 'error' => __('api_err_move_failed', '이동에 실패했습니다.')];
+                            return $owFail(['success' => false, 'error' => __('api_err_move_failed', '이동에 실패했습니다.')]);
                         }
                     } else {
                         if (!@copy($sourceFullPath, $newPath)) {
-                            return ['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')];
+                            @unlink($newPath);
+                            return $owFail(['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')]);
                         }
                     }
-                    @unlink($sourceFullPath);
+                    // ★ (2026-10-29 17:51, 22차 점검) 원본을 못 지웠으면(Windows 에서 열려 있는 파일 등) 복사본을 지우고 실패 — 종전엔 결과를 안 봐서
+                    //   원본과 사본이 둘 다 남았는데 '이동 완료'였고 사용량은 원본 쪽만 줄었음(재현)
+                    if (!@unlink($sourceFullPath)) {
+                        clearstatcache();
+                        if (file_exists($sourceFullPath)) {
+                            @unlink($newPath);
+                            return $owFail(['success' => false, 'error' => __('api_err_file_in_use', '파일이 사용 중이라 옮길 수 없습니다.')]);
+                        }
+                    }
                 }
                 
                 // 스토리지 사용량 업데이트
                 $this->storage->updateUsedSize($sourceStorageId, -$sourceSize);
                 $this->storage->updateUsedSize($destStorageId, $sourceSize);
             }
+            
+            // ★ (2026-10-28 17:05) 끝까지 성공 — 비켜 둔 기존 항목 지움
+            $this->owDiscard($owBackup);
+            $owBackup = null;
             
             // 인덱스 업데이트
             $newRelPath = empty($destPath) ? basename($newPath) : $destPath . '/' . basename($newPath);
@@ -7769,14 +8423,56 @@ class FileManager {
             $isDir = is_dir($newPath) || (isset($sourceFullPath) && !file_exists($sourceFullPath));
             $this->cleanupSharesForPath($sourceStorageId, $sourcePath, $isDir);
             
-            return ['success' => true];
+            // ★ (2026-10-28) 실제로 놓인 이름도 돌려줌 — 같은 이름이 있어 '이름 변경'(x (2).txt)으로 옮겨졌을 때
+            //   api.php 가 원래 이름으로 숨김 표시·인덱스를 옮겨 엉뚱한(원래 있던) 파일에 붙던 것 방지
+            return ['success' => true, 'name' => basename($newPath)];
         } catch (\Exception $e) {
+            if (isset($owFail)) $owFail([]);   // ★ (2026-10-28 17:05) 예외로 끝나도 비켜 둔 기존 항목 되돌림
             return ['success' => false, 'error' => __('move_error') . $e->getMessage()];
         }
     }
     
+    /**
+     * ★ (2026-10-28 17:42, 소스 점검 3단계) 압축을 푼 결과에서 서버 실행 파일 이름(업로드와 같은 기준) + 아파치·PHP 설정 파일('.htaccess'·'.htpasswd'·'.user.ini') 을 지움.
+     *   압축 풀기는 늘 새 폴더(폴더 모드) 또는 임시 stage(여기에 풀기)에 하므로 여기 있는 건 모두 압축에서 나온 것 — 기존 사용자 파일은 건드리지 않음.
+     *   종전엔 압축 안의 .php 등이 그대로 풀려 업로드 차단을 우회할 수 있었음. 지운 개수를 돌려줌
+     */
+    private function removeBlockedExtracted(string $dir): int {
+        if ($dir === '' || !is_dir($dir)) return 0;
+        $removed = 0;
+        try {
+            $it = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($dir, \RecursiveDirectoryIterator::SKIP_DOTS), \RecursiveIteratorIterator::CHILD_FIRST);
+            foreach ($it as $f) {
+                if ($f->isDir()) continue;
+                $base = strtolower(rtrim($f->getFilename(), ' .'));
+                if (in_array($base, ['.htaccess', '.htpasswd', '.user.ini'], true) || \fsServerExecReason($base) !== null) {
+                    if (@unlink($f->getPathname())) $removed++;
+                }
+            }
+        } catch (\Throwable $e) {}
+        return $removed;
+    }
+
     // 압축 해제
+    /**
+     * ★ (2026-10-29 04:14, 17차) 압축 풀기 — 풀린 크기('added_size')를 스토리지 사용량(used_size)에 더함.
+     *   종전엔 풀기로 늘어난 용량이 사용량에 안 잡혀, 다음 주기 재계산 전까지 용량 제한(quota) 검사가 실제보다 여유 있게 통과했음
+     */
     public function extractZip(int $storageId, string $zipPath, string $destPath = '', ?callable $progressCallback = null, string $password = '', string $mode = 'folder'): array {
+        $this->usedMeasureExtract = $this->usedTracked($storageId);   // ★ (2026-10-29 07:45, 18차) 홈이면 크기 재지 않음
+        try {
+            $r = $this->extractZipRun($storageId, $zipPath, $destPath, $progressCallback, $password, $mode);
+        } finally {
+            $this->usedMeasureExtract = true;
+        }
+        if (!empty($r['success']) && (int)($r['added_size'] ?? 0) > 0) {
+            $this->storage->updateUsedSize($storageId, (int)$r['added_size']);
+        }
+        unset($r['added_size']);
+        return $r;
+    }
+
+    private function extractZipRun(int $storageId, string $zipPath, string $destPath = '', ?callable $progressCallback = null, string $password = '', string $mode = 'folder'): array {
         if (!$this->storage->checkPermission($storageId, 'can_write')) {
             return ['success' => false, 'error' => __('api_err_no_write_perm', '쓰기 권한이 없습니다.')];
         }
@@ -7925,6 +8621,8 @@ class FileManager {
                     $progressCallback($i + 1, $totalFiles, $filename);
                 }
             }
+            $blockedRemoved = $this->removeBlockedExtracted($zipStage);   // ★ (2026-10-28 17:42) 실행 파일 이름 빼고 옮김
+            $addedSize = $this->usedMeasureExtract ? $this->usedLocalSize($zipStage) : 0;   // ★ (2026-10-29 04:14, 17차) 옮기기 전 stage 크기 = 새로 늘어난 크기
             // stage → extractDir 으로 '최상위 항목 단위' 이동 (폴더/파일 충돌 시 '(2)'로 분리, 기존 데이터 보존)
             if (is_dir($zipStage)) {
                 $zdh = @opendir($zipStage);
@@ -7978,16 +8676,68 @@ class FileManager {
         
         $zip->close();
         
+        // ★ (2026-10-28 17:42) 폴더 모드는 새 폴더에 바로 풀었으므로 여기서 실행 파일 이름 정리(여기에 풀기는 위에서 stage 기준으로 정리함)
+        if (!$isHereMode) $blockedRemoved = $this->removeBlockedExtracted($extractDir);
+        if (!$isHereMode) $addedSize = $this->usedMeasureExtract ? $this->usedLocalSize($extractDir) : 0;   // ★ (2026-10-29 04:14, 17차) 새 폴더 크기
+
         // extracted_to: '여기에 풀기'는 extractDir이 현재 폴더 자체라 폴더명이 무의미하므로 압축파일명 표시.
+        // ★ (2026-10-29 21:48, 24차 점검) 스토리지 기준 상대 경로도 돌려줌(7z·분할 풀기와 같게) — api.php 가 인덱스 갱신에 화면용 이름(extracted_to)을 경로로 써서
+        //   하위 폴더의 압축·'여기에 풀기'면 풀린 파일이 인덱스에 안 들어갔음
+        $_rxBase = rtrim(str_replace('\\', '/', $basePath), '/'); $_rxDir = str_replace('\\', '/', $extractDir);
+        $relExtractDir = ($_rxDir === $_rxBase) ? '' : ((strpos($_rxDir, $_rxBase . '/') === 0) ? substr($_rxDir, strlen($_rxBase) + 1) : basename($extractDir));
         return [
-            'success' => true, 
+            'success' => true,
             'extracted_to' => $isHereMode ? basename($fullZipPath) : basename($extractDir),
-            'file_count' => $totalFiles
+            'path' => $relExtractDir,
+            'file_count' => $totalFiles,
+            'blocked_removed' => (int)($blockedRemoved ?? 0),
+            'added_size' => (int)($addedSize ?? 0)
         ];
     }
     
     // 압축 생성
+    /**
+     * ★ (2026-10-28 21:19, 8차 점검) 압축 결과 파일 검사 — 압축은 스토리지에 새 파일을 쓰는 작업인데 종전엔 읽기 권한만 보고,
+     *   결과 이름도 검사하지 않아 읽기 전용 사용자가 'evil.php'·'.htaccess' 같은 파일을 만들 수 있었음(재현). 또 첫 항목의 폴더 권한만 봤음.
+     *   → 스토리지 쓰기 + 결과 폴더 쓰기 권한, 이름 정리(경로 제거·위험 문자) + '.zip' 보장 + 서버 실행 이름 차단, 모든 항목의 폴더 읽기 권한.
+     *   문제가 있으면 오류 문구, 괜찮으면 null($zipName 은 정리된 이름으로 바뀜)
+     */
+    private function zipPrepareOutput(int $storageId, array $paths, string &$zipName, bool $autoName = false): ?string {
+        if (!$this->storage->checkPermission($storageId, 'can_write')) {
+            return __('api_err_no_write_perm', '쓰기 권한이 없습니다.');
+        }
+        $zipName = $this->sanitizeFilename(basename(str_replace('\\', '/', $zipName)));
+        if (strtolower(pathinfo($zipName, PATHINFO_EXTENSION)) !== 'zip') $zipName .= '.zip';
+        // ★ (2026-10-28 21:53, 9차 점검) 이름을 안 줘서 자동으로 정한 이름('x.php' 폴더 → 'x.php.zip')이 걸리면 거부 대신 'archive_날짜.zip'
+        if (\fsServerExecReason($zipName) !== null && $autoName) $zipName = 'archive_' . kstDate('Ymd_His') . '.zip';
+        if (($execReason = \fsServerExecReason($zipName)) !== null) return $execReason;
+        $first = trim(str_replace('\\', '/', (string)($paths[0] ?? '')), '/');
+        $outDir = dirname($first); if ($outDir === '.') $outDir = '';
+        if (!$this->storage->checkFolderPermission($storageId, $outDir, 'can_write')) {
+            return __('api_err_no_write_perm', '쓰기 권한이 없습니다.');
+        }
+        foreach ($paths as $p) {
+            if (!is_string($p)) return __('api_err_invalid_path', '잘못된 경로입니다.');
+            $pn = trim(str_replace('\\', '/', $p), '/');
+            $d = dirname($pn); if ($d === '.') $d = '';
+            // 들어 있는 폴더 + 항목 자신(폴더를 고른 경우 그 폴더의 규칙)
+            if (!$this->storage->checkFolderPermission($storageId, $d ?: $pn, 'can_read') || ($pn !== '' && !$this->storage->checkFolderPermission($storageId, $pn, 'can_read'))) {
+                return __('no_permission_dot', '권한이 없습니다.');
+            }
+        }
+        return null;
+    }
+
+    /** ★ (2026-10-28 21:19, 8차 점검) 압축에 넣을 폴더 안 항목이 폴더 권한상 읽기 가능한지(폴더는 그 폴더, 파일은 들어 있는 폴더 기준) */
+    private function zipEntryReadable(int $storageId, string $storageRel, bool $isDir): bool {
+        $rel = trim(str_replace('\\', '/', $storageRel), '/');
+        $chk = $isDir ? $rel : dirname($rel);
+        if ($chk === '.') $chk = '';
+        return $this->storage->checkFolderPermission($storageId, $chk, 'can_read');
+    }
+
     public function createZip(int $storageId, array $paths, string $zipName = '', ?callable $progressCallback = null, string $password = ''): array {
+        $zpAuto = (trim($zipName) === '');   // ★ (2026-10-28 21:53, 9차 점검) 이름을 안 줬는지(자동 이름 대체용)
         if (!$this->storage->checkPermission($storageId, 'can_read')) {
             return ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')];
         }
@@ -8036,6 +8786,12 @@ class FileManager {
             }
         }
         
+        // ★ (2026-10-28 21:19, 8차 점검) 결과 파일 검사(쓰기 권한·이름·항목별 폴더 권한 — zipPrepareOutput)
+        if (($zpErr = $this->zipPrepareOutput($storageId, $paths, $zipName, $zpAuto)) !== null) {
+            return ['success' => false, 'error' => $zpErr];
+        }
+        $zipHasRules = !empty($this->storage->getFolderPermissions($storageId));
+        
         // 첫 번째 파일의 디렉토리에 ZIP 생성
         $firstPath = $this->buildPath($basePath, $paths[0]);
         $zipDir = is_dir($firstPath) ? dirname($firstPath) : dirname($firstPath);
@@ -8071,9 +8827,11 @@ class FileManager {
                     \RecursiveIteratorIterator::SELF_FIRST
                 );
                 foreach ($iterator as $file) {
+                    // ★ (2026-10-28 21:19, 8차 점검) 폴더 권한으로 막힌 하위 항목은 뺌(종전엔 통째로 들어갔음, 재현)
+                    if ($zipHasRules && !$this->zipEntryReadable($storageId, $relativePath . '/' . str_replace('\\', '/', $iterator->getSubPathname()), $file->isDir())) continue;
                     $fileList[] = [
                         'full' => $file->getPathname(),
-                        'relative' => basename($fullPath) . DIRECTORY_SEPARATOR . $iterator->getSubPathname(),
+                        'relative' => str_replace('\\', '/', basename($fullPath) . '/' . $iterator->getSubPathname()),   // ★ (2026-10-30 02:05, 26차 점검) ZIP 항목 이름은 '/' 로(규격) — Windows 에선 '\\' 가 들어가 macOS·리눅스·아이폰에서 '폴더\\파일' 이름의 파일 하나로 풀렸음
                         'isDir' => $file->isDir()
                     ];
                 }
@@ -8139,7 +8897,9 @@ class FileManager {
             @unlink($zipFullPath);
             return ['success' => false, 'error' => __('no_files_to_compress')];
         }
-        
+        // ★ (2026-10-29 04:14, 17차) 만든 압축 파일 크기를 사용량에 더함(종전엔 안 잡혔음)
+        $this->storage->updateUsedSize($storageId, $this->usedLocalSize($zipFullPath));
+
         return [
             'success' => true,
             'zip_name' => basename($zipFullPath),
@@ -8158,6 +8918,7 @@ class FileManager {
      * @return array 결과
      */
     public function createSplitZip(int $storageId, array $paths, string $zipName = '', int $splitSizeMB = 100, ?callable $progressCallback = null, string $password = ''): array {
+        $zpAuto = (trim($zipName) === '');   // ★ (2026-10-28 21:53, 9차 점검)
         if (!$this->storage->checkPermission($storageId, 'can_read')) {
             return ['success' => false, 'error' => __('api_err_no_read_perm', '읽기 권한이 없습니다.')];
         }
@@ -8189,6 +8950,25 @@ class FileManager {
         if (strtolower(pathinfo($zipName, PATHINFO_EXTENSION)) !== 'zip') {
             $zipName .= '.zip';
         }
+        // ★ (2026-10-28 21:19, 8차 점검) 결과 파일 검사(쓰기 권한·이름·항목별 폴더 권한 — zipPrepareOutput).
+        //   분할 압축은 7-Zip 이 폴더를 통째로 넣어 하위 항목을 뺄 수 없으므로, 폴더 안에 폴더 권한으로 막힌 곳이 있으면 거부
+        if (($zpErr = $this->zipPrepareOutput($storageId, $paths, $zipName, $zpAuto)) !== null) {
+            return ['success' => false, 'error' => $zpErr];
+        }
+        if (!empty($this->storage->getFolderPermissions($storageId))) {
+            foreach ($paths as $zpRel) {
+                $zpFull = $this->buildPath($basePath, $zpRel);
+                if (!is_dir($zpFull) || !$this->isPathSafe($basePath, $zpFull)) continue;
+                try {
+                    $zpIt = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($zpFull, \RecursiveDirectoryIterator::SKIP_DOTS), \RecursiveIteratorIterator::SELF_FIRST);
+                    foreach ($zpIt as $zpF) {
+                        if ($zpF->isDir() && !$this->zipEntryReadable($storageId, trim(str_replace('\\', '/', $zpRel), '/') . '/' . str_replace('\\', '/', $zpIt->getSubPathname()), true)) {
+                            return ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
+                        }
+                    }
+                } catch (\Throwable $e) {}
+            }
+        }
         
         // 첫 번째 파일의 디렉토리에 ZIP 생성
         $firstPath = $this->buildPath($basePath, $paths[0]);
@@ -8196,7 +8976,9 @@ class FileManager {
         $zipFullPath = $zipDir . DIRECTORY_SEPARATOR . $zipName;
         
         // 중복 파일명 처리
-        $zipFullPath = $this->getUniqueFilename($zipFullPath);
+        // ★ (2026-10-29 07:45, 18차) 분할본은 name.zip 이 없고 name.zip.001… 만 남으므로 조각도 있는지 봐서 겹치면 'name (2).zip' 으로 — 종전엔 name.zip 만 봐서
+        //   예전 분할본과 같은 이름을 그대로 썼고, 7z 가 그 조각에 덧쓰려다 실패(코드 2)하면 17차 실패 정리가 예전 조각까지 지웠음(재현)
+        $zipFullPath = $this->uniqueSplitZipPath($zipFullPath);
         $zipName = basename($zipFullPath);
         
         if (!$this->isPathSafe($basePath, $zipFullPath)) {
@@ -8239,7 +9021,9 @@ class FileManager {
         file_put_contents($listFile2, "\xEF\xBB\xBF" . $listContent);
         
         // 보안: escapeShellPath로 경로 이스케이프 (command injection 방지)
-        $escapedZip = $this->escapeShellPath($zipName);
+        // ★ (2026-10-30 01:01, 25차 — 24차 확인 필요) 이름이 '-' 로 시작하면 7z 가 옵션으로 읽어 실패하고 엉뚱한 '@' 폴더까지 남았음(재현: '-w.zip'·'-sdel.zip'·'-pX.zip') →
+        //   같은 폴더(cd 한 곳) 기준 상대 경로 './이름' 으로 넘김. 만들어지는 파일 이름은 같음
+        $escapedZip = $this->escapeShellPath('.' . DIRECTORY_SEPARATOR . $zipName);
         $escapedListFile = $this->escapeShellPath($listFile2);
         
         $cmd = $this->escapeShellPath($sevenZipBin) . ' a -tzip -v' . $volumeSize . ' -scsUTF-8';
@@ -8279,6 +9063,19 @@ class FileManager {
             $progressCallback(0, 100, $zipName . ' (7-Zip)');
         }
         
+        // ★ (2026-10-29 07:45, 18차) 실행 전에 이미 있던 같은 이름 조각 목록 — 취소·실패 정리는 이번에 새로 생긴 것만 지움(위 이름 고유화와 이중 방어)
+        $splitIsOurs = function (string $df) use ($zipName): bool {
+            if ($df === $zipName) return true;
+            return strpos($df, $zipName . '.') === 0 && preg_match('/^\d{3,4}$/', substr($df, strlen($zipName) + 1)) === 1;
+        };
+        $splitPre = [];
+        foreach ((@scandir($zipDir) ?: []) as $df) { if ($splitIsOurs($df)) $splitPre[$df] = true; }
+        $splitCleanup = function () use ($zipDir, $splitIsOurs, &$splitPre) {
+            foreach ((@scandir($zipDir) ?: []) as $df) {
+                if ($splitIsOurs($df) && !isset($splitPre[$df])) @unlink($zipDir . DIRECTORY_SEPARATOR . $df);
+            }
+        };
+        
         // 백그라운드로 7-Zip 실행
         //         if ($debugLog) @file_put_contents($debugLog, date('H:i:s') . " CMD: " . ($bgCmd ?? $cmd) . "\n", FILE_APPEND);
         //         if ($debugLog) @file_put_contents($debugLog, date('H:i:s') . " listFile2: $listFile2\n", FILE_APPEND);
@@ -8314,6 +9111,7 @@ class FileManager {
         $waited = 0;
         
         usleep(2000000); // 2초 대기 (프로세스 시작 시간)
+        $sz7State = [];
         
         while ($waited < $maxWait) {
             // SSE keepalive + 클라이언트 연결 감지
@@ -8322,24 +9120,17 @@ class FileManager {
             
             // 클라이언트 연결 끊김 감지 (취소)
             if (connection_aborted()) {
-                // 7-zip 프로세스 강제 종료
-                if (DIRECTORY_SEPARATOR === '\\') {
-                    exec('taskkill /F /IM 7z.exe 2>NUL');
-                } else {
-                    exec('pkill -f "7z.*' . $escapedZip . '" 2>/dev/null');
-                }
+                // ★ (2026-10-29 04:04, 17차) 이 작업의 7z 만 종료 — 종전 taskkill /IM 7z.exe 는 다른 사용자의 7z 까지 모두 끔
+                //   (Linux pkill 은 escapeShellPath 결과를 큰따옴표 안에 또 넣어 패턴이 깨져 있었음)
+                $this->sz7Kill([basename($listFile2)]);
+                usleep(300000);
                 // 생성된 분할 파일 삭제
-                $dirFiles = @scandir($zipDir);
-                if ($dirFiles) {
-                    foreach ($dirFiles as $df) {
-                        if (strpos($df, $zipBaseName) === 0) {
-                            @unlink($zipDir . DIRECTORY_SEPARATOR . $df);
-                        }
-                    }
-                }
+                // ★ (2026-10-29 03:11, 16차) 이번에 만든 조각(name.zip.001…)과 name.zip 만 지움 — 종전엔 'name' 으로 시작하는 파일을 모두 지워,
+                //   예전 분할본(name.zip.001)이나 'name.zip (2).zip' 같은 기존 사용자 파일까지 지울 수 있었음
+                $splitCleanup();   // ★ (2026-10-29 07:45, 18차) 실행 전부터 있던 조각은 남김
                 @unlink($listFile2);
                 @unlink($resultFile);
-                
+
                 return ['success' => false, 'error' => 'cancelled'];
             }
             
@@ -8378,15 +9169,8 @@ class FileManager {
                     break;
                 }
                 
-                // fallback: tasklist
-                $isRunning = false;
-                if (DIRECTORY_SEPARATOR === '\\') {
-                    $check = @shell_exec('tasklist /FI "IMAGENAME eq 7z.exe" /NH 2>NUL');
-                    $isRunning = ($check && stripos($check, '7z.exe') !== false);
-                } else {
-                    $check = @shell_exec('pgrep -f "7z.*' . $escapedZip . '" 2>/dev/null');
-                    $isRunning = !empty(trim($check ?? ''));
-                }
+                // fallback: 이 작업의 7z 가 아직 도는지 (★ (2026-10-29 04:04, 17차) 종전엔 아무 7z 나 돌면 실행 중으로 봄)
+                $isRunning = $this->sz7Running([basename($listFile2)], $sz7State);
                 
                 if (!$isRunning) {
                     usleep(300000);
@@ -8398,10 +9182,16 @@ class FileManager {
             $waited++;
         }
         
+        // ★ (2026-10-29 04:04, 17차) 7z 종료 코드 확인 — 2 이상(치명 오류: 디스크 부족·읽기 실패 등)이면 만들다 만 조각을 지우고 실패로.
+        //   종전엔 코드를 읽지 않고 지워, 조각이 하나라도 있으면 성공으로 보고했음. 1(경고: 일부 파일 잠김 등)은 성공 유지
+        $sz7Code = $this->sz7ExitCode($resultFile);
         // 임시 파일 삭제
         @unlink($listFile2);
         @unlink($resultFile);
-        
+        if ($sz7Code !== null && $sz7Code >= 2) {
+            $splitCleanup();   // ★ (2026-10-29 07:45, 18차) 이번에 새로 생긴 조각만 지움
+            return ['success' => false, 'error' => __('compress_failed', '압축 실패') . ' (7-Zip ' . $sz7Code . ')'];
+        }
         
         if ($progressCallback) {
             $progressCallback(100, 100, $zipName . ' (100%)');
@@ -8433,10 +9223,15 @@ class FileManager {
         if ($splitCount === 0) {
             // 분할 안 됨 (파일이 분할 크기보다 작음) → 원본 zip이 생성됨
             if (file_exists($zipFullPath)) {
+                $this->storage->updateUsedSize($storageId, $this->usedLocalSize($zipFullPath));   // ★ (2026-10-29 04:14, 17차) 사용량 반영
                 return ['success' => true, 'zip_name' => $zipName, 'file_count' => $fileCount, 'split_count' => 1];
             }
             return ['success' => false, 'error' => __('compress_failed', '압축 실패')];
         }
+        // ★ (2026-10-29 04:14, 17차) 만든 조각들의 크기를 사용량에 더함(종전엔 안 잡혔음)
+        $splitTotal = 0;
+        foreach ($splitFiles as $sf) $splitTotal += $this->usedLocalSize($sf);
+        $this->storage->updateUsedSize($storageId, $splitTotal);
         
         return [
             'success' => true,
@@ -8491,6 +9286,9 @@ class FileManager {
             $extractDir = $this->getUniqueFilename($extractDir);
         }
         $safeCleanup = function() use (&$extractDir, $isHereMode) {
+            // ★ (2026-10-28 19:55, 6차 점검) 여기에 풀기는 임시 stage(.fs_extract_tmp_*)에 풀므로 그 stage 는 지움 — 종전엔 취소·실패 때도
+            //   여기에 풀기면 아무것도 안 지워 숨김 stage 폴더(압축에서 나온 파일 포함)가 사용자 폴더에 남았음. 기존 폴더(이름이 다름)는 그대로 보호
+            if ($isHereMode && strpos(basename($extractDir), '.fs_extract_tmp_') === 0) { if (is_dir($extractDir)) $this->deleteDirectory($extractDir); return; }
             if ($isHereMode) return; // 기존 폴더 보호
             if (is_dir($extractDir)) $this->deleteDirectory($extractDir);
         };
@@ -8529,7 +9327,9 @@ class FileManager {
         
         if ($isEncrypted && empty($password)) {
             // 암호화된 파일인데 패스워드 없음 → 패스워드 요청
-            if (!$isHereMode) @rmdir($extractDir); // 여기에 풀기면 기존 폴더 보호
+            // ★ (2026-10-29 11:05, 20차 점검) 여기에 풀기의 임시 stage(.fs_extract_tmp_*)도 지움(safeCleanup — 기존 폴더는 보호) — 종전엔 여기에 풀기면
+            //   방금 만든 빈 stage 폴더가 사용자 폴더에 남았음(재현)
+            $safeCleanup();
             return ['success' => false, 'error' => 'password_required', 'need_password' => true];
         }
         
@@ -8607,6 +9407,7 @@ class FileManager {
                     }
                     
                     // exitcode 0 = 성공 — 이미 해제 완료됨 (작은 파일)
+                    $sz7EarlyDone = true;
                     break;
                 }
                 usleep(100000); // 100ms
@@ -8623,19 +9424,22 @@ class FileManager {
         $lastPercent = 0;
         $maxWait = 7200;
         $waited = 0;
+        // ★ (2026-10-29 04:04, 17차) 이 작업의 7z 를 가리키는 표식(압축 파일 이름 + 풀 폴더 이름) — 취소·실행 중 판정이 다른 사용자의 7z 를 건드리지 않게
+        // ★ (2026-10-29 09:23, 20차) 이름(basename)이 아니라 전체 경로로 — 'a.zip'·'a' 같은 짧은 이름은 'data.zip' 을 풀던 다른 사용자의 7z 명령줄에도 들어 있어
+        //   취소 때 함께 꺼질 수 있었음(17차 표식이 너무 넓었음). 7z 에 넘긴 경로 그대로라 명령줄에 그대로 들어 있음
+        $sz7Markers = [$fullZipPath, $extractDir];
+        $sz7State = [];
         
         while ($waited < $maxWait) {
             // SSE keepalive
             echo ": keepalive\n\n";
             @flush();
+            if (!empty($sz7EarlyDone)) break;   // 암호 확인 단계에서 이미 끝남(종료 코드 0 확인됨)
             
             if (connection_aborted()) {
-                // 7-zip 프로세스 종료
-                if (DIRECTORY_SEPARATOR === '\\') {
-                    exec('taskkill /F /IM 7z.exe 2>NUL');
-                } else {
-                    exec('pkill -f ' . escapeshellarg('7z.*' . basename($fullZipPath)) . ' 2>/dev/null');
-                }
+                // ★ (2026-10-29 04:04, 17차) 이 작업의 7z 만 종료 — 종전 taskkill /IM 7z.exe 는 다른 사용자의 7z 까지 모두 끔
+                $this->sz7Kill($sz7Markers);
+                usleep(300000);
                 // 해제 폴더 삭제 (여기에 풀기면 기존 폴더 보호)
                 $safeCleanup();
                 @unlink($resultFile);
@@ -8665,15 +9469,8 @@ class FileManager {
                 break;
             }
             
-            // fallback: tasklist로도 체크
-            $isRunning = false;
-            if (DIRECTORY_SEPARATOR === '\\') {
-                $check = @shell_exec('tasklist /FI "IMAGENAME eq 7z.exe" /NH 2>NUL');
-                $isRunning = ($check && stripos($check, '7z.exe') !== false);
-            } else {
-                $check = @shell_exec('pgrep -f ' . escapeshellarg('7z.*' . basename($fullZipPath)) . ' 2>/dev/null');
-                $isRunning = !empty(trim($check ?? ''));
-            }
+            // fallback: 이 작업의 7z 가 아직 도는지 (★ (2026-10-29 04:04, 17차) 종전엔 아무 7z 나 돌면 실행 중으로 봄)
+            $isRunning = $this->sz7Running($sz7Markers, $sz7State);
             
             if (!$isRunning) {
                 usleep(300000);
@@ -8684,8 +9481,16 @@ class FileManager {
             $waited++;
         }
         
+        // ★ (2026-10-29 04:04, 17차) 7z 종료 코드 확인 — 2 이상(치명 오류: CRC·데이터 오류, 디스크 부족, 조각 누락 등)이면 일부만 풀린 걸 성공으로 보고하지 않음.
+        //   종전엔 코드를 읽지 않고 지워, 파일이 하나라도 풀렸으면 성공. 1(경고)은 성공 유지
+        $sz7Code = $this->sz7ExitCode($resultFile);
         // resultFile 정리
         @unlink($resultFile);
+        if ($sz7Code !== null && $sz7Code >= 2) {
+            $safeCleanup();
+            if ($isEncrypted) return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
+            return ['success' => false, 'error' => __('extract_failed', '압축 해제 실패') . ' (7-Zip ' . $sz7Code . ')'];
+        }
         
         // 결과 확인 — 해제된 파일 수 + 총 크기
         $fileCount = 0;
@@ -8711,6 +9516,11 @@ class FileManager {
             return ['success' => false, 'error' => __('extract_failed', '압축 해제 실패')];
         }
         
+        // ★ (2026-10-28 19:55, 6차 점검) 분할 압축(.zip.001)도 서버 실행 파일 이름 정리 — 종전엔 extractZip 이 여기로 바로 넘겨
+        //   removeBlockedExtracted 를 거치지 않아 압축 안의 .php 가 그대로 풀렸음. 폴더 모드는 새 폴더, 여기에 풀기는 stage 라 기존 파일은 안 건드림
+        $blockedRemoved = $this->removeBlockedExtracted($extractDir);
+        $addedSize = $this->usedMeasureExtract ? $this->usedLocalSize($extractDir) : 0;   // ★ (2026-10-29 04:14, 17차) 새 폴더 또는 옮기기 전 stage 크기 = 늘어난 크기
+
         // [여기에 풀기 최종 이동] stage → 사용자 폴더, 최상위 항목 단위(충돌 시 (2) 분리)
         if ($hereFinalDest !== null) {
             if (!is_dir($hereFinalDest)) @mkdir($hereFinalDest, 0755, true);
@@ -8732,17 +9542,21 @@ class FileManager {
         }
         
         // 상대 경로 계산
-        $relExtractDir = str_replace($basePath . DIRECTORY_SEPARATOR, '', $extractDir);
-        $relExtractDir = str_replace('\\', '/', $relExtractDir);
+        // ★ (2026-10-29 23:24, 24차 점검) 구분자를 맞춘 뒤 상대 경로로(ZipArchive 경로와 같게) — Windows 에서 기준 경로에 '/' 가 섞이면(USER_FILES_ROOT 기본값 등) 치환이 안 돼 절대경로가 나왔고,
+        //   24차에 인덱스 갱신이 이 값을 쓰게 되면서 풀린 파일이 인덱스에 안 들어갔음(3회차 재검토)
+        $_rxBase = rtrim(str_replace('\\', '/', $basePath), '/'); $_rxDir = rtrim(str_replace('\\', '/', $extractDir), '/');
+        $relExtractDir = ($_rxDir === $_rxBase) ? '' : ((strncasecmp($_rxDir, $_rxBase . '/', strlen($_rxBase) + 1) === 0) ? substr($_rxDir, strlen($_rxBase) + 1) : basename($_rxDir));
         
         return [
             'success' => true,
             'extracted_to' => $hereFinalDest !== null ? $basename : basename($extractDir),
             'file_count' => $fileCount,
-            'path' => $relExtractDir
+            'path' => $relExtractDir,
+            'blocked_removed' => (int)$blockedRemoved,
+            'added_size' => $addedSize
         ];
     }
-    
+
     /**
      * 7-Zip으로 아카이브 해제 (rar, 7z, iso, cab 등)
      */
@@ -8810,6 +9624,9 @@ class FileManager {
         // 안전 삭제: "여기에 풀기"면 extractDir(기존 폴더)을 삭제하지 않음.
         // 폴더 생성 모드일 때만 추출 폴더 정리.
         $safeCleanup = function() use (&$extractDir, $isHereMode) {
+            // ★ (2026-10-28 19:55, 6차 점검) 여기에 풀기는 임시 stage(.fs_extract_tmp_*)에 풀므로 그 stage 는 지움 — 종전엔 취소·실패 때도
+            //   여기에 풀기면 아무것도 안 지워 숨김 stage 폴더(압축에서 나온 파일 포함)가 사용자 폴더에 남았음. 기존 폴더(이름이 다름)는 그대로 보호
+            if ($isHereMode && strpos(basename($extractDir), '.fs_extract_tmp_') === 0) { if (is_dir($extractDir)) $this->deleteDirectory($extractDir); return; }
             if ($isHereMode) return; // 기존 폴더 보호 — 절대 삭제 안 함
             if (is_dir($extractDir)) $this->deleteDirectory($extractDir);
         };
@@ -9038,12 +9855,14 @@ class FileManager {
                                     closedir($cdh);
                                 }
                             }
+                            $sz7EarlyDone = true;
                             break; // 폴링 종료 → 아래 fileCount=0 → UnRAR 폴백 진입
                         }
                         $dbg("→ wrong_password 반환 (7z/zip exit≠0)");
                         $safeCleanup(); // 여기에 풀기면 기존 폴더 보호
                         return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
                     }
+                    $sz7EarlyDone = true;
                     break;
                 }
                 usleep(100000);
@@ -9058,17 +9877,19 @@ class FileManager {
         $lastPercent = 0;
         $maxWait = 7200;
         $waited = 0;
+        // ★ (2026-10-29 04:04, 17차) 이 작업의 7z 를 가리키는 표식(실제 넘긴 압축 파일 이름 + 풀 폴더 이름) — 취소·실행 중 판정이 다른 사용자의 7z 를 건드리지 않게
+        $sz7Markers = [$effectivePath, $extractDir];   // ★ (2026-10-29 09:23, 20차) 전체 경로로(위 extractSplitZip 과 같은 이유)
+        $sz7State = [];
         
         while ($waited < $maxWait) {
             echo ": keepalive\n\n";
             @flush();
+            if (!empty($sz7EarlyDone)) break;   // 암호 확인 단계에서 이미 끝남(결과 파일 읽음)
             
             if (connection_aborted()) {
-                if (DIRECTORY_SEPARATOR === '\\') {
-                    exec('taskkill /F /IM 7z.exe 2>NUL');
-                } else {
-                    exec('pkill -f ' . escapeshellarg('7z.*' . $basename) . ' 2>/dev/null');
-                }
+                // ★ (2026-10-29 04:04, 17차) 이 작업의 7z 만 종료 — 종전 taskkill /IM 7z.exe 는 다른 사용자의 7z 까지 모두 끔
+                $this->sz7Kill($sz7Markers);
+                usleep(300000);
                 $safeCleanup(); // 여기에 풀기면 기존 폴더(개인폴더 등) 보호 — 삭제 안 함
                 @unlink($resultFile);
                 return ['success' => false, 'error' => 'cancelled'];
@@ -9096,14 +9917,8 @@ class FileManager {
                 break;
             }
             
-            $isRunning = false;
-            if (DIRECTORY_SEPARATOR === '\\') {
-                $check = @shell_exec('tasklist /FI "IMAGENAME eq 7z.exe" /NH 2>NUL');
-                $isRunning = ($check && stripos($check, '7z.exe') !== false);
-            } else {
-                $check = @shell_exec('pgrep -f ' . escapeshellarg('7z.*' . $basename) . ' 2>/dev/null');
-                $isRunning = !empty(trim($check ?? ''));
-            }
+            // ★ (2026-10-29 04:04, 17차) 이 작업의 7z 가 아직 도는지 (종전엔 아무 7z 나 돌면 실행 중으로 봄)
+            $isRunning = $this->sz7Running($sz7Markers, $sz7State);
             
             if (!$isRunning) {
                 usleep(300000);
@@ -9114,8 +9929,18 @@ class FileManager {
             $waited++;
         }
         
+        // ★ (2026-10-29 04:04, 17차) 7z 종료 코드 확인 — rar 가 아니고 2 이상(치명 오류: CRC·데이터 오류, 디스크 부족 등)이면 일부만 풀린 걸 성공으로 보고하지 않음.
+        //   종전엔 코드를 읽지 않고 지워, 파일이 하나라도 풀렸으면 성공. 1(경고)은 성공 유지.
+        //   rar 는 7-Zip 실패 시 아래 UnRAR 폴백이 이어받는 기존 흐름을 그대로 둠
+        $sz7Code = $this->sz7ExitCode($resultFile);
+        $dbg("7z exitCode=" . ($sz7Code === null ? '[없음]' : $sz7Code));
         // resultFile 정리
         @unlink($resultFile);
+        if ($ext !== 'rar' && $sz7Code !== null && $sz7Code >= 2) {
+            $safeCleanup();
+            if ($isEncrypted) return ['success' => false, 'error' => 'wrong_password', 'need_password' => true];
+            return ['success' => false, 'error' => __('extract_failed', '압축 해제 실패') . ' (7-Zip ' . $sz7Code . ')'];
+        }
         
         // RAR 한글경로 우회용 영문 임시본(.fs_rar_src_*.rar)은 추출물이 아니므로 집계에서 제외.
         //   (UnRAR 폴백이 아직 쓸 수 있어 파일 자체는 폴백 후 최종 삭제.)
@@ -9218,7 +10043,7 @@ class FileManager {
                 //    'Program aborted'로 실패한다. → 압축파일이 있는 디렉토리로 cd 후 파일명만 상대경로로 넘기고,
                 //    추출 대상도 상대경로로 지정해 셸이 경로를 바이트 그대로 전달하게 한다(로케일 무관).
                 $archiveDir = dirname($effectivePath);
-                $archiveBase = basename($effectivePath);
+                $archiveBase = '.' . DIRECTORY_SEPARATOR . basename($effectivePath);   // ★ (2026-10-30 01:01, 25차 — 24차 확인 필요) '-' 로 시작하는 이름이 UnRAR 옵션으로 읽히지 않게(위 분할 압축과 같은 이유)
                 $urDest = rtrim($extractDir, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR;
                 // 추출 대상이 압축파일 디렉토리 하위면 상대경로로, 아니면 절대경로 유지
                 $urDestArg = $urDest;
@@ -9317,8 +10142,10 @@ class FileManager {
             $dbg("RAR 영문 작업폴더 → 실제 목적지 이동 완료: $rarRealExtractDir");
         }
         
-        $relExtractDir = str_replace($basePath . DIRECTORY_SEPARATOR, '', $extractDir);
-        $relExtractDir = str_replace('\\', '/', $relExtractDir);
+        // ★ (2026-10-29 23:24, 24차 점검) 구분자를 맞춘 뒤 상대 경로로(ZipArchive 경로와 같게) — Windows 에서 기준 경로에 '/' 가 섞이면(USER_FILES_ROOT 기본값 등) 치환이 안 돼 절대경로가 나왔고,
+        //   24차에 인덱스 갱신이 이 값을 쓰게 되면서 풀린 파일이 인덱스에 안 들어갔음(3회차 재검토)
+        $_rxBase = rtrim(str_replace('\\', '/', $basePath), '/'); $_rxDir = rtrim(str_replace('\\', '/', $extractDir), '/');
+        $relExtractDir = ($_rxDir === $_rxBase) ? '' : ((strncasecmp($_rxDir, $_rxBase . '/', strlen($_rxBase) + 1) === 0) ? substr($_rxDir, strlen($_rxBase) + 1) : basename($_rxDir));
         
         if ($dbgOn) {
             $dbg("→ 추출 성공: extracted_to=" . basename($extractDir) . ", fileCount=$fileCount, path=$relExtractDir");
@@ -9335,6 +10162,10 @@ class FileManager {
             }
         }
         
+        // ★ (2026-10-28 17:42, 소스 점검 3단계) 실행 파일 이름 정리 — $extractDir 은 새 폴더(폴더 모드) 또는 stage(여기에 풀기)라 압축에서 나온 것만 있음
+        $blockedRemoved = $this->removeBlockedExtracted($extractDir);
+        $addedSize = $this->usedMeasureExtract ? $this->usedLocalSize($extractDir) : 0;   // ★ (2026-10-29 04:14, 17차) 새 폴더 또는 옮기기 전 stage 크기 = 늘어난 크기(영문 임시본은 위에서 지워짐)
+
         // [여기에 풀기 최종 이동] stage(임시)에서 추출/보정/집계가 끝났으니, 사용자 폴더로 최상위 항목 단위 이동.
         //   최상위 폴더/파일이 기존과 충돌하면 '(2)'로 분리(병합 방지). 기존 데이터는 절대 덮어쓰지 않음.
         if ($hereFinalDest !== null) {
@@ -9361,8 +10192,9 @@ class FileManager {
                 $this->deleteDirectory($extractDir);
             }
             // 사용자에게 보여줄 경로/이름은 실제 목적지 기준으로
-            $relExtractDir = str_replace($basePath . DIRECTORY_SEPARATOR, '', $hereFinalDest);
-            $relExtractDir = str_replace('\\', '/', $relExtractDir);
+            // ★ (2026-10-29 23:35, 24차 점검) 위(3회차)와 같은 방식으로 — 이 줄이 옛 방식으로 덮어써 Windows 의 '여기에 풀기'는 여전히 절대경로가 나왔음(4회차 재검토)
+            $_rxBase = rtrim(str_replace('\\', '/', $basePath), '/'); $_rxDir = rtrim(str_replace('\\', '/', $hereFinalDest), '/');
+            $relExtractDir = ($_rxDir === $_rxBase) ? '' : ((strncasecmp($_rxDir, $_rxBase . '/', strlen($_rxBase) + 1) === 0) ? substr($_rxDir, strlen($_rxBase) + 1) : basename($_rxDir));
         }
         
         // extracted_to: 폴더 생성 모드는 만들어진 폴더명, '여기에 풀기'는 압축파일명을 보여준다.
@@ -9373,7 +10205,9 @@ class FileManager {
             'success' => true,
             'extracted_to' => $isHereMode ? $basename : basename($extractDir),
             'file_count' => $displayCount,
-            'path' => $relExtractDir
+            'path' => $relExtractDir,
+            'blocked_removed' => (int)$blockedRemoved,
+            'added_size' => $addedSize
         ];
     }
     
@@ -9418,6 +10252,22 @@ class FileManager {
             return ['success' => true, 'skipped' => true];
         }
         
+        // ★ (2026-10-28 17:05) 폴더를 자기 안으로 이동 방지 · 덮어쓸 대상 안에 원본이 있으면 거부(로컬 move 와 같은 기준, 경로 문자열로)
+        $srcN = trim(str_replace('\\', '/', $sourcePath), '/');
+        $dstDirN = trim(str_replace('\\', '/', $destPath), '/');
+        $newN = trim(str_replace('\\', '/', $newPath), '/');
+        // ★ (2026-10-28 19:55, 6차 점검) 표기만 다른 같은 경로('/a/x' 와 'a/x')는 자기 자신 — 종전엔 아래에서 '덮어쓸 대상 안에 원본' 오류로 나갔음
+        if ($srcN !== '' && $newN === $srcN) {
+            return ['success' => true, 'skipped' => true];
+        }
+        if ($srcN !== '' && ($dstDirN === $srcN || strpos($dstDirN . '/', $srcN . '/') === 0)) {
+            return ['success' => false, 'error' => __('err_move_into_self', '폴더를 자기 자신 안으로 옮길 수 없습니다.')];
+        }
+        if ($duplicateAction !== 'skip' && $duplicateAction !== 'rename' && $newN !== '' && strpos($srcN . '/', $newN . '/') === 0) {
+            return ['success' => false, 'error' => __('err_overwrite_contains_src', '덮어쓸 대상 안에 원본이 있어 덮어쓸 수 없습니다.')];
+        }
+        $owBak = null;
+        
         // 중복 처리
         if ($adapter->exists($newPath)) {
             switch ($duplicateAction) {
@@ -9435,18 +10285,25 @@ class FileManager {
                     break;
                 case 'overwrite':
                 default:
-                        // 덮어쓰기 전 기존 파일 크기 차감
-                        $existingSize = is_dir($newPath) ? $this->getDirectorySize($newPath) : (filesize($newPath) ?: 0);
-                        if ($existingSize > 0) {
-                            $this->storage->updateUsedSize($storageId, -$existingSize);
-                        }
+                    // ★ (2026-10-28 23:26, 11차 점검) 덮어쓰면 기존 대상(폴더면 안의 내용까지)이 지워지므로 그 대상 자신 + 안의 보호 폴더의 삭제·쓰기 권한 — 종전엔 대상 폴더의 쓰기만 봐서 쓰기 금지 폴더를 같은 이름으로 덮어쓰면 통째로 사라졌음(재현, WebDAV 는 9차에 막음)
+                    if (!$this->overwriteTargetAllowed((int)$storageId, (string)$destPath, basename(str_replace('\\', '/', (string)$newPath)))) {
+                        return ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
+                    }
+                        // 덮어쓰기 전 기존 파일 크기 — ★ (2026-10-29 09:23, 20차) 원격 경로라 로컬 파일 함수(filesize)로는 늘 0 이었음 → 어댑터로 잼(폴더는 알 수 없어 0, 다음 재계산이 보정)
+                        // ★ (2026-10-29 15:35, 21차 재점검) 빼는 것은 덮어쓰기가 성공한 뒤로 — 20차엔 먼저 빼고 대량작업 차단·비켜 두기 실패·이동/쓰기 실패로 끝나도
+                        //   되돌리지 않아, 실패할 때마다 사용량이 그 파일 크기만큼 줄었음(용량 한도 우회)
+                        $existingSize = (method_exists($adapter, 'getSize') && !$adapter->isDir($newPath)) ? (int)$adapter->getSize($newPath) : 0;
                         
                     // 대량 덮어쓰기 감지
                     $bulkCheck = $this->checkBulkOperation('overwrite');
                     if (!$bulkCheck['allowed']) {
                         return ['success' => false, 'error' => '🔐 ' . $bulkCheck['reason']];
                     }
-                    $adapter->delete($newPath);
+                    // ★ (2026-10-28 17:05) 먼저 지우지 않고 비켜 둠 — 이동이 실패하면 되돌림
+                    $owBak = $this->owRemoteAside($adapter, $newPath);
+                    if (!$owBak) {
+                        return ['success' => false, 'error' => __('err_overwrite_aside_failed', '기존 항목을 옮길 수 없어 덮어쓰지 않았습니다. (사용 중인 파일이 있는지 확인하세요)')];
+                    }
                     break;
             }
         }
@@ -9456,10 +10313,15 @@ class FileManager {
             $adapter->mkdir($destPath);
         }
         
+        $mvWasDir = $adapter->isDir($sourcePath);
         if ($adapter->rename($sourcePath, $newPath)) {
+            $this->cleanupSharesForPath($storageId, $sourcePath, $mvWasDir);   // ★ (2026-10-29 17:53, 22차 점검) 같은 원격 안 이동도 옛 경로 공유 정리(로컬 이동과 같게)
+            $this->owRemoteDiscard($adapter, $owBak);
+            if (!empty($existingSize) && $owBak) $this->storage->updateUsedSize($storageId, -(int)$existingSize);   // ★ 21차 재점검: 성공한 덮어쓰기만
             return ['success' => true, 'name' => basename($newPath), 'remote' => true];
         }
         
+        $this->owRemoteRestore($adapter, $newPath, $owBak);
         return ['success' => false, 'error' => __('api_err_move_failed', '이동에 실패했습니다.')];
     }
     
@@ -9527,6 +10389,20 @@ class FileManager {
             if (!file_exists($sourceFullPath)) {
                 return ['success' => false, 'error' => __('src_file_not_exist') . $sourcePath];
             }
+            // ★ (2026-10-29 21:44, 24차 점검) 대상 용량 확인(transferQuotaError 설명)
+            if (($tqErr = $this->transferQuotaError($destStorageId, $sourceFullPath, $destFullPath . DIRECTORY_SEPARATOR . basename($sourceFullPath), $duplicateAction)) !== null) {
+                return ['success' => false, 'error' => $tqErr];
+            }
+            
+            // ★ (2026-10-28 19:55, 6차 점검) 자기 안으로 복사를 대상 폴더를 만들기 '전'에 거부(이동과 같음 — 종전엔 빈 대상 폴더가 남았음)
+            if (is_dir($sourceFullPath) && ($realSrcPre = realpath($sourceFullPath)) !== false) {
+                $probe = $destFullPath; $tail = '';
+                while (!file_exists($probe) && dirname($probe) !== $probe) { $tail = DIRECTORY_SEPARATOR . basename($probe) . $tail; $probe = dirname($probe); }
+                $realProbe = realpath($probe);
+                if ($realProbe !== false && \isSubPath($realProbe . $tail, $realSrcPre)) {
+                    return ['success' => false, 'error' => __('err_copy_into_self', '폴더를 자기 자신 안으로 복사할 수 없습니다.')];
+                }
+            }
             
             // 대상 폴더 존재 확인 및 생성
             if (!is_dir($destFullPath)) {
@@ -9545,6 +10421,34 @@ class FileManager {
                 $newPath = $this->getUniqueFilename($newPath);
             }
             
+            // ★ (2026-10-28 17:05) 폴더를 자기 자신 안(하위 폴더)으로 복사 방지 — 종전엔 복사하는 동안 새로 생긴 폴더를 다시 읽어
+            //   A/sub/A/sub/A… 로 경로 길이 한계까지 끝없이 만들고 '성공' 으로 끝났음(재검토 발견·재현, 끌어다 놓기에만 막는 검사가 있었음)
+            if ($realSrc !== false && is_dir($sourceFullPath)) {
+                $realDestDir = realpath($destFullPath);
+                if ($realDestDir !== false && \isSubPath($realDestDir, $realSrc)) {
+                    return ['success' => false, 'error' => __('err_copy_into_self', '폴더를 자기 자신 안으로 복사할 수 없습니다.')];
+                }
+            }
+            // ★ (2026-10-28 17:05) 덮어쓸 대상 안에 원본이 있으면 거부 — 종전엔 대상을 먼저 지워 원본까지 사라졌음(예: A/A 를 위 폴더로 덮어쓰기, 재현)
+            if (file_exists($newPath) && $duplicateAction !== 'skip' && $duplicateAction !== 'rename' && $realSrc !== false) {
+                $realNew = realpath($newPath);
+                if ($realNew !== false && $realNew !== $realSrc && \isSubPath($realSrc, $realNew)) {
+                    return ['success' => false, 'error' => __('err_overwrite_contains_src', '덮어쓸 대상 안에 원본이 있어 덮어쓸 수 없습니다.')];
+                }
+            }
+            
+            // ★ (2026-10-28 17:05) 덮어쓰기는 기존 대상을 비켜 두었다가(owMoveAside) 성공하면 지우고 실패하면 되돌림 — 아래 실패 반환은 모두 $owFail 로
+            $owBackup = null;
+            $owSize = 0;
+            $owFail = function (array $res) use (&$owBackup, &$owSize, &$newPath, $destStorageId) {
+                if ($owBackup) {
+                    $this->owRestore($newPath, $owBackup);
+                    if ($owSize > 0) $this->storage->updateUsedSize($destStorageId, $owSize);
+                    $owBackup = null;
+                }
+                return $res;
+            };
+            
             // 중복 처리
             if (file_exists($newPath)) {
                 switch ($duplicateAction) {
@@ -9555,13 +10459,11 @@ class FileManager {
                         break;
                     case 'overwrite':
                     default:
-                        // 덮어쓰기 전 기존 파일 크기 차감
-                        $existingSize = is_dir($newPath) ? $this->getDirectorySize($newPath) : (filesize($newPath) ?: 0);
-                        if ($existingSize > 0) {
-                            $this->storage->updateUsedSize($destStorageId, -$existingSize);
+                        // ★ (2026-10-28 23:26, 11차 점검) 덮어쓰면 기존 대상(폴더면 안의 내용까지)이 지워지므로 그 대상 자신 + 안의 보호 폴더의 삭제·쓰기 권한 — 종전엔 대상 폴더의 쓰기만 봐서 쓰기 금지 폴더를 같은 이름으로 덮어쓰면 통째로 사라졌음(재현, WebDAV 는 9차에 막음)
+                        if (!$this->overwriteTargetAllowed((int)$destStorageId, (string)$destPath, basename(str_replace('\\', '/', (string)$newPath)))) {
+                            return ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
                         }
-                        
-                        // 대량 덮어쓰기 감지
+                        // 대량 덮어쓰기 감지 — ★ (2026-10-28 17:05) 사용량 차감보다 먼저(종전엔 차감한 뒤 거부되면 사용량만 줄어 있었음)
                         $bulkCheck = $this->checkBulkOperation('overwrite');
                         if (!$bulkCheck['allowed']) {
                             return ['success' => false, 'error' => '🔐 ' . $bulkCheck['reason']];
@@ -9573,11 +10475,16 @@ class FileManager {
                             $this->saveFileVersion($newPath, $fileRelPath, $destStorageId);
                         }
                         
-                        // 기존 파일/폴더 삭제
-                        if (is_dir($newPath)) {
-                            $this->deleteDirectory($newPath);
-                        } else {
-                            @unlink($newPath);
+                        // ★ 기존 파일/폴더는 지우지 않고 비켜 둠(성공하면 아래에서 지움, 실패하면 되돌림). 비켜 두지 못하면(잠김 등) 덮어쓰지 않음
+                        $existingSize = is_dir($newPath) ? $this->getDirectorySize($newPath) : (filesize($newPath) ?: 0);
+                        $owBackup = $this->owMoveAside($newPath);
+                        if (!$owBackup) {
+                            return ['success' => false, 'error' => __('err_overwrite_aside_failed', '기존 항목을 옮길 수 없어 덮어쓰지 않았습니다. (사용 중인 파일이 있는지 확인하세요)')];
+                        }
+                        // 덮어쓰기 전 기존 파일 크기 차감
+                        if ($existingSize > 0) {
+                            $this->storage->updateUsedSize($destStorageId, -$existingSize);
+                            $owSize = $existingSize;
                         }
                         break;
                 }
@@ -9596,13 +10503,18 @@ class FileManager {
                     'totalFiles' => $totalFileCount,
                     'lastUpdate' => 0
                 ];
-                $this->copyDirectory($sourceFullPath, $newPath, $progressFile, $progressState);
+                $cdOk = $this->copyDirectory($sourceFullPath, $newPath, $progressFile, $progressState);
                 @unlink($progressFile);
                 
                 // 취소 시 부분 복사된 폴더 삭제
                 if ($this->isCancelled()) {
                     if (is_dir($newPath)) $this->deleteDirectory($newPath);
-                    return ['success' => false, 'error' => 'cancelled'];
+                    return $owFail(['success' => false, 'error' => 'cancelled']);
+                }
+                // ★ (2026-10-28 17:05) 복사 중 실패(디스크 부족·읽기 오류 등) — 종전엔 결과를 안 보고 '성공' 으로 끝났음 → 부분 복사본 지우고 실패
+                if (!$cdOk) {
+                    if (is_dir($newPath)) $this->deleteDirectory($newPath);
+                    return $owFail(['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')]);
                 }
             } else {
                 $fileSize = filesize($sourceFullPath);
@@ -9619,7 +10531,7 @@ class FileManager {
                         if ($src) fclose($src);
                         if ($dst) fclose($dst);
                         @unlink($progressFile);
-                        return ['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')];
+                        return $owFail(['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')]);
                     }
                     
                     $chunkSize = 8 * 1024 * 1024; // 8MB 청크
@@ -9658,27 +10570,34 @@ class FileManager {
                     // 취소 시 부분 복사된 파일 삭제
                     if ($cancelled) {
                         @unlink($newPath);
-                        return ['success' => false, 'error' => 'cancelled'];
+                        return $owFail(['success' => false, 'error' => 'cancelled']);
                     }
                     
                     if ($copied < $fileSize) {
                         @unlink($newPath);
-                        return ['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')];
+                        return $owFail(['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')]);
                     }
                 } else {
                     // 소용량 파일: 기존 방식
                     if (!@copy($sourceFullPath, $newPath)) {
-                        return ['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')];
+                        @unlink($newPath);
+                        return $owFail(['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')]);
                     }
                 }
             }
+            
+            // ★ (2026-10-28 17:05) 끝까지 성공 — 비켜 둔 기존 항목 지움
+            $this->owDiscard($owBackup);
+            $owBackup = null;
             
             // 대상 스토리지 사용량 증가
             $copiedSize = is_dir($newPath) ? $this->getDirectorySize($newPath) : (filesize($newPath) ?: 0);
             $this->storage->updateUsedSize($destStorageId, $copiedSize);
             
-            return ['success' => true];
+            // ★ (2026-10-28) 실제로 놓인 이름도 돌려줌 — 같은 이름이 있어 '이름 변경'(x (2).txt)이면 인덱스가 원래 이름으로 들어가 새 파일이 검색에 안 잡히던 것 방지(move() 와 같음)
+            return ['success' => true, 'name' => basename($newPath)];
         } catch (\Exception $e) {
+            if (isset($owFail)) $owFail([]);   // ★ (2026-10-28 17:05) 예외로 끝나도 비켜 둔 기존 항목 되돌림
             return ['success' => false, 'error' => __('copy_error') . $e->getMessage()];
         }
     }
@@ -9722,46 +10641,83 @@ class FileManager {
                 return ['success' => true, 'skipped' => true];
             } elseif ($duplicateAction === 'rename') {
                 $newPath = $this->getUniqueFilename($newPath);
+            } elseif (!$this->overwriteTargetAllowed($dstStorageId, $dstPath, basename($newPath))) {   // ★ (2026-10-28 23:26, 11차 점검) 덮어쓸 대상 권한
+                return ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
             }
         }
         
+        // ★ (2026-10-29 04:14, 17차) 사용량 반영 — 대상(로컬)은 복사 전후 크기 차이만큼(덮어쓰기·폴더 합치기 포함). 종전엔 원격↔로컬 복사가 사용량에 안 잡혔음
+        $usedOn = $this->usedTracked($dstStorageId);   // ★ (2026-10-29 07:45, 18차) 홈이면 크기 재지 않음
+        $usedBefore = $usedOn ? $this->usedLocalSize($newPath) : 0;
+
         // 원격 파일/폴더 판별
         if ($adapter->isDir($srcPath)) {
             // 폴더: 재귀 복사
-            return $this->copyRemoteDirToLocal($adapter, $srcPath, $newPath);
+            // ★ (2026-10-28) 폴더도 실제로 놓인 이름(filename)을 돌려줌 — '이름 변경'이면 인덱스·숨김 표시가 새 이름을 따라가게(종전엔 파일만)
+            $dirRes = $this->copyRemoteDirToLocal($adapter, $srcPath, $newPath);
+            if ($dirRes['success'] ?? false) $dirRes['filename'] = basename($newPath);
+            if ($usedOn) $this->storage->updateUsedSize($dstStorageId, $this->usedLocalSize($newPath) - $usedBefore);   // 일부 실패여도 실제로 생긴 만큼
+            return $dirRes;
         }
         
         // 파일: 원격에서 읽어서 로컬에 저장 (스트리밍 우선)
+        // ★ (2026-10-28 17:05) 임시 파일('~$fsdl-…', 목록에선 숨김)에 받은 뒤 다 받으면 제자리로 — 종전엔 기존 파일을 바로 열어(wb) 비웠다가
+        //   받기가 실패하면 지워서 덮어쓰기 때 기존 파일이 사라졌고, 쓰기가 중간에 끊겨(디스크 부족) 잘린 파일도 '성공' 이었음(이동이면 원격 원본까지 삭제)
+        if (is_dir($newPath)) {
+            return ['success' => false, 'error' => __('local_write_failed', '로컬 파일 저장 실패')];
+        }
+        $expectedSize = (int)$adapter->getSize($srcPath);
+        $tmpPath = dirname($newPath) . DIRECTORY_SEPARATOR . '~$fsdl-' . bin2hex(random_bytes(4)) . '-' . basename($newPath);
+        $gotFile = false;
         if (method_exists($adapter, 'streamToOutput')) {
             // 스트리밍: 메모리 절약
-            $outFile = @fopen($newPath, 'wb');
+            $outFile = @fopen($tmpPath, 'wb');
             if ($outFile) {
-                ob_start(function($buffer) use ($outFile) {
-                    fwrite($outFile, $buffer);
+                $writeOk = true;
+                ob_start(function($buffer) use ($outFile, &$writeOk) {
+                    if ($buffer !== '' && fwrite($outFile, $buffer) !== strlen($buffer)) $writeOk = false;
                     return '';
                 }, 1024 * 1024);
                 $streamOk = $adapter->streamToOutput($srcPath);
                 ob_end_clean();
                 fclose($outFile);
-                if ($streamOk && filesize($newPath) > 0) {
-                    return ['success' => true, 'filename' => basename($newPath)];
+                clearstatcache(true, $tmpPath);
+                $got = @filesize($tmpPath) ?: 0;
+                if ($streamOk && $writeOk && $got > 0 && ($expectedSize <= 0 || $got >= $expectedSize)) {
+                    $gotFile = true;
+                } else {
+                    // 스트리밍 실패 시 임시 파일 삭제 후 read() 폴백
+                    @unlink($tmpPath);
                 }
-                // 스트리밍 실패 시 파일 삭제 후 read() 폴백
-                @unlink($newPath);
             }
         }
         
-        // 폴백: read()로 전체 로드
-        $content = $adapter->read($srcPath);
-        if ($content === '' && $adapter->getSize($srcPath) > 0) {
-            return ['success' => false, 'error' => __('remote_read_failed', '원격 파일 읽기 실패')];
+        if (!$gotFile) {
+            // 폴백: read()로 전체 로드
+            $content = $adapter->read($srcPath);
+            if ($content === '' && $expectedSize > 0) {
+                return ['success' => false, 'error' => __('remote_read_failed', '원격 파일 읽기 실패')];
+            }
+            if (@file_put_contents($tmpPath, $content) !== strlen($content)) {
+                @unlink($tmpPath);
+                return ['success' => false, 'error' => __('local_write_failed', '로컬 파일 저장 실패')];
+            }
         }
         
-        if (@file_put_contents($newPath, $content) === false) {
+        // 다 받았으면 제자리로(기존 파일이 있으면 그때 바꿈)
+        if (!@rename($tmpPath, $newPath)) {
+            if (file_exists($newPath) && @unlink($newPath) && @rename($tmpPath, $newPath)) {
+                $newSize = $this->usedLocalSize($newPath);
+                $this->storage->updateUsedSize($dstStorageId, $newSize - $usedBefore);   // ★ (2026-10-29 04:14, 17차)
+                return ['success' => true, 'filename' => basename($newPath), 'bytes' => $newSize];
+            }
+            @unlink($tmpPath);
             return ['success' => false, 'error' => __('local_write_failed', '로컬 파일 저장 실패')];
         }
-        
-        return ['success' => true, 'filename' => basename($newPath)];
+        $newSize = $this->usedLocalSize($newPath);
+        $this->storage->updateUsedSize($dstStorageId, $newSize - $usedBefore);   // ★ (2026-10-29 04:14, 17차)
+
+        return ['success' => true, 'filename' => basename($newPath), 'bytes' => $newSize];
     }
     
     private function copyRemoteDirToLocal($adapter, string $remotePath, string $localPath): array {
@@ -9770,36 +10726,68 @@ class FileManager {
         }
         
         $items = $adapter->list($remotePath);
+        // ★ (2026-10-29 09:23, 20차) 목록 실패를 빈 폴더로 보지 않음 — 종전엔 실패해도 '성공(0개)' 이라 이동이면 원격 원본 폴더를 지웠음
+        if ($this->adapterListFailed($adapter)) {
+            return ['success' => false, 'error' => __('remote_read_failed', '원격 파일 읽기 실패'), 'copied' => 0, 'failed' => 1, 'bytes' => 0];
+        }
         $copied = 0;
         $failed = 0;
-        
+        $bytes = 0;   // ★ (2026-10-29 04:14, 17차) 옮긴 바이트(이동 때 원본 사용량 차감용)
+
         foreach ($items as $item) {
             $name = $item['name'] ?? '';
             if ($name === '' || $name === '.' || $name === '..') continue;
-            
+
             $remoteItemPath = rtrim($remotePath, '/') . '/' . $name;
             $localItemPath = $localPath . DIRECTORY_SEPARATOR . $name;
-            
+
             if ($item['is_dir'] ?? false) {
                 $sub = $this->copyRemoteDirToLocal($adapter, $remoteItemPath, $localItemPath);
+                $bytes += (int)($sub['bytes'] ?? 0);
                 if ($sub['success'] ?? false) $copied += ($sub['copied'] ?? 1);
                 else $failed++;
             } else {
                 $content = $adapter->read($remoteItemPath);
-                if (@file_put_contents($localItemPath, $content) !== false) {
+                // ★ (2026-10-28 17:05) 원격 read() 는 실패해도 false 가 아니라 '' 를 돌려줌 — 내용이 비었는데 원격 크기가 0 보다 크면 읽기 실패로 봄(다른 원격 복사 경로와 같은 기준). 종전엔 빈 파일을 쓰고 원본을 지울 수 있었음
+                if ($content === '' && $adapter->getSize($remoteItemPath) > 0) {
+                    $failed++;
+                } elseif (@file_put_contents($localItemPath, $content) !== false) {
                     $copied++;
+                    $bytes += strlen($content);
                 } else {
                     $failed++;
                 }
             }
         }
-        
-        return ['success' => $failed === 0, 'copied' => $copied, 'failed' => $failed];
+
+        return ['success' => $failed === 0, 'copied' => $copied, 'failed' => $failed, 'bytes' => $bytes];
     }
     
     /**
      * 로컬 → 원격 복사
      */
+    /**
+     * ★ (2026-10-29 21:47, 24차 점검) 원격에 파일을 쓸 때 같은 이름이 있으면(덮어쓰기) 대량 덮어쓰기 검사 후 기존 파일을 비켜 뒀다가 성공하면 지우고 실패하면 되돌림
+     *   (같은 원격 안 복사 copyRemote 와 같은 방식) — 종전엔 바로 덮어써(FTP STOR 등) 도중에 끊기면 기존 파일이 잘린 채 남았고 랜섬웨어 대량 덮어쓰기 차단도 없었음.
+     *   성공이면 true, 아니면 오류 문구
+     */
+    private function remoteOverwriteWrite($adapter, string $remotePath, string $content) {
+        $aside = null;
+        if ($adapter->exists($remotePath) && !(method_exists($adapter, 'isDir') && $adapter->isDir($remotePath))) {
+            $bulk = $this->checkBulkOperation('overwrite');
+            if (!$bulk['allowed']) return '🔐 ' . $bulk['reason'];
+            $dir = dirname(str_replace('\\', '/', $remotePath));
+            $aside = (($dir === '.' || $dir === '') ? '' : $dir . '/') . '.fsow_' . bin2hex(random_bytes(4)) . '_' . basename($remotePath);
+            if (!$adapter->rename($remotePath, $aside)) $aside = null;   // 비켜 둘 수 없으면 종전처럼 바로 씀
+        }
+        if (!$adapter->write($remotePath, $content)) {
+            if ($aside !== null) { try { if ($adapter->exists($remotePath)) $adapter->delete($remotePath); } catch (\Throwable $e) {} $adapter->rename($aside, $remotePath); }
+            return __('remote_write_failed', '원격 파일 저장 실패');
+        }
+        if ($aside !== null) { try { $adapter->delete($aside); } catch (\Throwable $e) {} }
+        return true;
+    }
+    
     private function copyLocalToRemote(int $srcStorageId, string $srcPath, int $dstStorageId, string $dstPath, string $duplicateAction = 'overwrite'): array {
         $srcBasePath = $this->storage->getRealPath($srcStorageId);
         if (!$srcBasePath) {
@@ -9836,23 +10824,37 @@ class FileManager {
                     $remotePath = empty($dstPath) ? $newName : rtrim($dstPath, '/') . '/' . $newName;
                     $counter++;
                 } while ($adapter->exists($remotePath));
+            } elseif (!$this->overwriteTargetAllowed($dstStorageId, $dstPath, basename(str_replace('\\', '/', $remotePath)))) {   // ★ (2026-10-28 23:26, 11차 점검) 덮어쓸 대상 권한
+                return ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
             }
         }
         
         if (is_dir($srcFullPath)) {
-            return $this->copyLocalDirToRemote($srcFullPath, $adapter, $remotePath);
+            // ★ (2026-10-30 01:49, 26차 점검) 같은 이름 폴더 위에 '덮어쓰기'(합치기)면 대량 덮어쓰기 감지에 셈 — 파일 덮어쓰기(remoteOverwriteWrite)·로컬 폴더 덮어쓰기와 같게(종전엔 폴더만 빠졌음)
+            if ($duplicateAction === 'overwrite' && $adapter->exists($remotePath)) {
+                $bulkCheck = $this->checkBulkOperation('overwrite');
+                if (!$bulkCheck['allowed']) return ['success' => false, 'error' => '🔐 ' . $bulkCheck['reason']];
+            }
+            // ★ (2026-10-28) 위와 같음 — 폴더도 놓인 이름(filename)
+            $dirRes = $this->copyLocalDirToRemote($srcFullPath, $adapter, $remotePath);
+            if ($dirRes['success'] ?? false) $dirRes['filename'] = basename($remotePath);
+            // ★ (2026-10-29 04:14, 17차) 대상(원격) 사용량에 쓴 바이트만큼 더함(원격 폴더 합치기 때 덮인 파일 크기는 알 수 없어 다음 재계산이 보정)
+            $this->storage->updateUsedSize($dstStorageId, (int)($dirRes['bytes'] ?? 0));
+            return $dirRes;
         }
-        
+
         $content = @file_get_contents($srcFullPath);
         if ($content === false) {
             return ['success' => false, 'error' => __('local_read_failed', '로컬 파일 읽기 실패')];
         }
-        
-        if (!$adapter->write($remotePath, $content)) {
-            return ['success' => false, 'error' => __('remote_write_failed', '원격 파일 저장 실패')];
-        }
-        
-        return ['success' => true, 'filename' => basename($remotePath)];
+
+        // ★ (2026-10-29 04:14, 17차) 덮어쓰기면 기존 원격 파일 크기를 빼고 새 크기를 더함
+        $oldRemote = ($adapter->exists($remotePath) && method_exists($adapter, 'getSize')) ? (int)$adapter->getSize($remotePath) : 0;
+        $owr = $this->remoteOverwriteWrite($adapter, $remotePath, $content);
+        if ($owr !== true) return ['success' => false, 'error' => $owr];
+        $this->storage->updateUsedSize($dstStorageId, strlen($content) - $oldRemote);
+
+        return ['success' => true, 'filename' => basename($remotePath), 'bytes' => strlen($content)];
     }
     
     private function copyLocalDirToRemote(string $localPath, $adapter, string $remotePath): array {
@@ -9860,29 +10862,32 @@ class FileManager {
         
         $copied = 0;
         $failed = 0;
+        $bytes = 0;   // ★ (2026-10-29 04:14, 17차) 쓴 바이트
         $items = @scandir($localPath);
         if (!$items) return ['success' => false, 'error' => __('local_read_failed')];
-        
+
         foreach ($items as $item) {
             if ($item === '.' || $item === '..') continue;
             $localItemPath = $localPath . DIRECTORY_SEPARATOR . $item;
             $remoteItemPath = rtrim($remotePath, '/') . '/' . $item;
-            
+
             if (is_dir($localItemPath)) {
                 $sub = $this->copyLocalDirToRemote($localItemPath, $adapter, $remoteItemPath);
+                $bytes += (int)($sub['bytes'] ?? 0);
                 if ($sub['success'] ?? false) $copied += ($sub['copied'] ?? 1);
                 else $failed++;
             } else {
                 $content = @file_get_contents($localItemPath);
                 if ($content !== false && $adapter->write($remoteItemPath, $content)) {
                     $copied++;
+                    $bytes += strlen($content);
                 } else {
                     $failed++;
                 }
             }
         }
-        
-        return ['success' => $failed === 0, 'copied' => $copied, 'failed' => $failed];
+
+        return ['success' => $failed === 0, 'copied' => $copied, 'failed' => $failed, 'bytes' => $bytes];
     }
     
     /**
@@ -9911,23 +10916,36 @@ class FileManager {
                     $remoteDstPath = empty($dstPath) ? $newName : rtrim($dstPath, '/') . '/' . $newName;
                     $counter++;
                 } while ($dstAdapter->exists($remoteDstPath));
+            } elseif (!$this->overwriteTargetAllowed($dstStorageId, $dstPath, basename(str_replace('\\', '/', $remoteDstPath)))) {   // ★ (2026-10-28 23:26, 11차 점검) 덮어쓸 대상 권한
+                return ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
             }
         }
         
         if ($srcAdapter->isDir($srcPath)) {
-            return $this->copyRemoteDirToRemote($srcAdapter, $srcPath, $dstAdapter, $remoteDstPath);
+            // ★ (2026-10-30 01:49, 26차 점검) 위 로컬→원격과 같음(폴더 합치기 덮어쓰기도 대량 감지)
+            if ($duplicateAction === 'overwrite' && $dstAdapter->exists($remoteDstPath)) {
+                $bulkCheck = $this->checkBulkOperation('overwrite');
+                if (!$bulkCheck['allowed']) return ['success' => false, 'error' => '🔐 ' . $bulkCheck['reason']];
+            }
+            // ★ (2026-10-28) 위와 같음 — 폴더도 놓인 이름(filename)
+            $dirRes = $this->copyRemoteDirToRemote($srcAdapter, $srcPath, $dstAdapter, $remoteDstPath);
+            if ($dirRes['success'] ?? false) $dirRes['filename'] = basename($remoteDstPath);
+            $this->storage->updateUsedSize($dstStorageId, (int)($dirRes['bytes'] ?? 0));   // ★ (2026-10-29 04:14, 17차) 대상 사용량
+            return $dirRes;
         }
-        
+
         $content = $srcAdapter->read($srcPath);
         if ($content === '' && $srcAdapter->getSize($srcPath) > 0) {
             return ['success' => false, 'error' => __('remote_read_failed', '원격 파일 읽기 실패')];
         }
-        
-        if (!$dstAdapter->write($remoteDstPath, $content)) {
-            return ['success' => false, 'error' => __('remote_write_failed', '원격 파일 저장 실패')];
-        }
-        
-        return ['success' => true, 'filename' => basename($remoteDstPath)];
+
+        // ★ (2026-10-29 04:14, 17차) 덮어쓰기면 기존 대상 파일 크기를 빼고 새 크기를 더함
+        $oldRemote = ($dstAdapter->exists($remoteDstPath) && method_exists($dstAdapter, 'getSize')) ? (int)$dstAdapter->getSize($remoteDstPath) : 0;
+        $owr = $this->remoteOverwriteWrite($dstAdapter, $remoteDstPath, $content);
+        if ($owr !== true) return ['success' => false, 'error' => $owr];
+        $this->storage->updateUsedSize($dstStorageId, strlen($content) - $oldRemote);
+
+        return ['success' => true, 'filename' => basename($remoteDstPath), 'bytes' => strlen($content)];
     }
     
     /**
@@ -9953,31 +10971,40 @@ class FileManager {
         $dstAdapter->mkdir($dstPath);
         
         $items = $srcAdapter->list($srcPath);
+        if ($this->adapterListFailed($srcAdapter)) {   // ★ (2026-10-29 09:23, 20차) 목록 실패를 빈 폴더로 보지 않음(위와 같음)
+            return ['success' => false, 'error' => __('remote_read_failed', '원격 파일 읽기 실패'), 'copied' => 0, 'failed' => 1, 'bytes' => 0];
+        }
         $copied = 0;
         $failed = 0;
-        
+        $bytes = 0;   // ★ (2026-10-29 04:14, 17차) 쓴 바이트
+
         foreach ($items as $item) {
             $name = $item['name'] ?? '';
             if ($name === '' || $name === '.' || $name === '..') continue;
-            
+
             $srcItemPath = rtrim($srcPath, '/') . '/' . $name;
             $dstItemPath = rtrim($dstPath, '/') . '/' . $name;
-            
+
             if ($item['is_dir'] ?? false) {
                 $sub = $this->copyRemoteDirToRemote($srcAdapter, $srcItemPath, $dstAdapter, $dstItemPath);
+                $bytes += (int)($sub['bytes'] ?? 0);
                 if ($sub['success'] ?? false) $copied += ($sub['copied'] ?? 1);
                 else $failed++;
             } else {
                 $content = $srcAdapter->read($srcItemPath);
-                if ($dstAdapter->write($dstItemPath, $content)) {
+                // ★ (2026-10-28 17:05) 원격 read() 는 실패해도 false 가 아니라 '' 를 돌려줌 — 내용이 비었는데 원격 크기가 0 보다 크면 읽기 실패로 봄(다른 원격 복사 경로와 같은 기준). 종전엔 빈 파일을 쓰고 원본을 지울 수 있었음
+                if ($content === '' && $srcAdapter->getSize($srcItemPath) > 0) {
+                    $failed++;
+                } elseif ($dstAdapter->write($dstItemPath, $content)) {
                     $copied++;
+                    $bytes += strlen($content);
                 } else {
                     $failed++;
                 }
             }
         }
-        
-        return ['success' => $failed === 0, 'copied' => $copied, 'failed' => $failed];
+
+        return ['success' => $failed === 0, 'copied' => $copied, 'failed' => $failed, 'bytes' => $bytes];
     }
     
     private function copyRemote(int $storageId, string $sourcePath, string $destPath, string $duplicateAction = 'overwrite'): array {
@@ -10022,18 +11049,22 @@ class FileManager {
                     break;
                 case 'overwrite':
                 default:
-                        // 덮어쓰기 전 기존 파일 크기 차감
-                        $existingSize = is_dir($newPath) ? $this->getDirectorySize($newPath) : (filesize($newPath) ?: 0);
-                        if ($existingSize > 0) {
-                            $this->storage->updateUsedSize($storageId, -$existingSize);
-                        }
+                    // ★ (2026-10-28 23:26, 11차 점검) 덮어쓰면 기존 대상(폴더면 안의 내용까지)이 지워지므로 그 대상 자신 + 안의 보호 폴더의 삭제·쓰기 권한 — 종전엔 대상 폴더의 쓰기만 봐서 쓰기 금지 폴더를 같은 이름으로 덮어쓰면 통째로 사라졌음(재현, WebDAV 는 9차에 막음)
+                    if (!$this->overwriteTargetAllowed((int)$storageId, (string)$destPath, basename(str_replace('\\', '/', (string)$newPath)))) {
+                        return ['success' => false, 'error' => __('no_permission_dot', '권한이 없습니다.')];
+                    }
+                        // 덮어쓰기 전 기존 파일 크기 — ★ (2026-10-29 09:23, 20차) 원격 경로라 로컬 파일 함수(filesize)로는 늘 0 이었음 → 어댑터로 잼(폴더는 알 수 없어 0, 다음 재계산이 보정)
+                        // ★ (2026-10-29 15:35, 21차 재점검) 빼는 것은 덮어쓰기가 성공한 뒤로 — 20차엔 먼저 빼고 대량작업 차단·비켜 두기 실패·이동/쓰기 실패로 끝나도
+                        //   되돌리지 않아, 실패할 때마다 사용량이 그 파일 크기만큼 줄었음(용량 한도 우회)
+                        $existingSize = (method_exists($adapter, 'getSize') && !$adapter->isDir($newPath)) ? (int)$adapter->getSize($newPath) : 0;
                         
                     // 대량 덮어쓰기 감지
                     $bulkCheck = $this->checkBulkOperation('overwrite');
                     if (!$bulkCheck['allowed']) {
                         return ['success' => false, 'error' => '🔐 ' . $bulkCheck['reason']];
                     }
-                    $adapter->delete($newPath);
+                    // ★ (2026-10-28 17:05) 먼저 지우지 않음 — 원본을 다 읽은 뒤 비켜 두고 씀(읽기·쓰기가 실패하면 되돌림)
+                    $owOverwrite = true;
                     break;
             }
         }
@@ -10049,15 +11080,25 @@ class FileManager {
             return ['success' => false, 'error' => __('src_file_read_fail')];
         }
         
+        $owBak = null;
+        if (!empty($owOverwrite)) {
+            $owBak = $this->owRemoteAside($adapter, $newPath);
+            if (!$owBak) {
+                return ['success' => false, 'error' => __('err_overwrite_aside_failed', '기존 항목을 옮길 수 없어 덮어쓰지 않았습니다. (사용 중인 파일이 있는지 확인하세요)')];
+            }
+        }
+        
         if ($adapter->write($newPath, $content)) {
-            // 복사된 파일 크기만큼 사용량 증가
-            $copiedSize = strlen($content);
-            if ($copiedSize > 0) {
+            $this->owRemoteDiscard($adapter, $owBak);
+            // 복사된 파일 크기만큼 사용량 증가 (★ 21차 재점검: 덮어썼으면 기존 크기를 여기서 뺌 — 성공한 덮어쓰기만)
+            $copiedSize = strlen($content) - (($owBak && !empty($existingSize)) ? (int)$existingSize : 0);
+            if ($copiedSize !== 0) {
                 $this->storage->updateUsedSize($storageId, $copiedSize);
             }
             return ['success' => true, 'name' => basename($newPath), 'remote' => true];
         }
         
+        $this->owRemoteRestore($adapter, $newPath, $owBak);
         return ['success' => false, 'error' => __('api_err_copy_failed', '파일 복사에 실패했습니다.')];
     }
     
@@ -10075,7 +11116,10 @@ class FileManager {
         
         // 인덱스가 없으면 폴더 순회 (fallback)
         $storagePath = $this->storage->getRealPath($storageId);
+        // ★ (2026-10-29 23:24, 24차 점검) 기준 경로가 비면(원격) 폴더 순회 안 함, 검색 시작 폴더도 스토리지 안인지 확인 — 종전엔 원격 스토리지 번호로 드라이브 최상위 아래를 뒤질 수 있었음(3회차 재검토)
+        if (!$storagePath) return ['success' => true, 'results' => [], 'indexed' => false];
         $searchPath = $this->buildPath($storagePath, $basePath);
+        if (!$this->isPathSafe($storagePath, $searchPath)) return ['success' => true, 'results' => [], 'indexed' => false];
         
         $results = [];
         $this->searchRecursive($searchPath, $query, $storagePath, $results, 100);
@@ -10230,6 +11274,11 @@ class FileManager {
     /**
      * 파일/폴더 삭제 시 관련 공유 링크 및 내부 공유 정리
      */
+    /** ★ (2026-10-29 22:39, 24차 점검) 내부 공유 받은 사람 삭제(ShareManager)에서 같은 정리를 쓰려고 공개 */
+    public function cleanupSharesForPathPublic(int $storageId, string $relativePath, bool $isDir): void {
+        $this->cleanupSharesForPath($storageId, $relativePath, $isDir);
+    }
+    
     private function cleanupSharesForPath(int $storageId, string $relativePath, bool $isDir): void {
         try {
             // 1) 외부 공유 링크 정리
@@ -11618,8 +12667,12 @@ class FileManager {
             $this->saveFileVersion($localPath, $relativePath, $storageId);
             $perm = @fileperms($localPath);
             if ($perm !== false) @chmod($tmp, $perm & 0777);
+            $exOld = (int)@filesize($localPath);
             if (!@rename($tmp, $localPath)) return $fail('error', __('exif_strip_replace', '원본을 바꾸지 못했습니다(파일 사용 중일 수 있음).'));
             clearstatcache();
+            // ★ (2026-10-29 21:50, 24차 점검) 줄어든 크기를 사용량에 반영(텍스트 저장과 같게) — 종전엔 빠져 사진을 많이 처리하면 사용량이 실제보다 크게 남았음
+            $exDiff = (int)@filesize($localPath) - $exOld;
+            if ($exDiff !== 0) $this->storage->updateUsedSize($storageId, $exDiff);
             return ['success' => true, 'status' => 'stripped', 'removed' => $r['removed'], 'backup' => $backup, 'trailer' => (int)($r['trailer'] ?? 0),
                     'size' => (int)@filesize($localPath), 'modified' => date('Y-m-d H:i:s', (int)@filemtime($localPath))];
         } catch (\Throwable $e) {
@@ -12907,7 +13960,9 @@ class FileManager {
         $baseName = pathinfo($fullPath, PATHINFO_FILENAME);
         $outName = $baseName . '.mp4';
         $outPath = $dir . DIRECTORY_SEPARATOR . $outName;
-        if (file_exists($outPath) && realpath($outPath) !== realpath($fullPath)) {
+        // ★ (2026-10-29 09:23, 20차) 결과 이름이 원본 자신과 같아도(H.264 가 아닌 .mp4 변환) _h264 를 붙임 — 종전엔 자기 자신이면 그대로 둬
+        //   변환 결과가 원본을 덮어썼음('원본 보존' 을 골라도, 휴지통·잠금 확인 없이)
+        if (file_exists($outPath)) {
             // 동일 폴더에 같은 이름 mp4가 이미 있으면 _h264 suffix
             $outName = $baseName . '_h264.mp4';
             $outPath = $dir . DIRECTORY_SEPARATOR . $outName;
@@ -13020,7 +14075,8 @@ class FileManager {
             @unlink($stderrLog);
             if (PHP_OS_FAMILY === 'Windows') {
                 $batFile = sys_get_temp_dir() . '\\fs_conv_' . md5(uniqid()) . '.bat';
-                $batContent = "@echo off\r\nsetlocal disabledelayedexpansion\r\nchcp 65001 >nul\r\n" . $cmd . ' 2>"' . $stderrLog . '"' . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
+                // ★ (2026-10-29 21:50, 24차 점검) .bat 안에서는 '%' 가 변수 기호라 '%%' 로(7z 쪽 escapeShellPath 와 같음) — 종전엔 이름에 '%' 가 든 영상 변환이 늘 실패했음
+                $batContent = "@echo off\r\nsetlocal disabledelayedexpansion\r\nchcp 65001 >nul\r\n" . str_replace('%', '%%', $cmd) . ' 2>"' . $stderrLog . '"' . "\r\necho %ERRORLEVEL% > \"" . $resultFile . "\"\r\ndel \"%~f0\"\r\n";
                 @file_put_contents($batFile, $batContent);
                 pclose(popen('start /b cmd /c "' . $batFile . '"', 'r'));
             } else {
@@ -13179,6 +14235,8 @@ class FileManager {
                     }
                     $outRel = ltrim(str_replace($basePath, '', $outPath), '/\\');
                     $outRel = str_replace(DIRECTORY_SEPARATOR, '/', $outRel);
+                    // ★ (2026-10-29 09:23, 20차) 새로 만든 mp4 크기를 사용량에(홈은 사용량을 안 써 생략)
+                    if ($this->usedTracked($storageId)) $this->storage->updateUsedSize($storageId, (int)(@filesize($outPath) ?: 0));
                     // [진단] rename 성공 — 최종 출력 실재/크기 확인 (여기서 outPath 없으면 "완료인데 파일없음"의 증거)
                     $_cvLog('RENAMED outPath=' . $outPath . ' exists=' . (is_file($outPath) ? '1' : '0') . ' size=' . (is_file($outPath) ? filesize($outPath) : 'N/A') . ' outEqualsOrig=' . (realpath($outPath) === realpath($fullPath) ? '1' : '0'));
 
@@ -13211,7 +14269,9 @@ class FileManager {
                             $trashSkippedNoPerm = true; // 권한 없어 원본 보존됨 (UI 알림용)
                         } elseif (realpath($outPath) !== realpath($fullPath)) {
                             // 삭제 권한 있고 출력≠원본일 때만 휴지통 이동
-                            $tr = $this->moveToTrash($storageId, $relativePath, $fullPath);
+                            // ★ (2026-10-29 09:23, 20차) 일반 삭제(delete)로 — 종전엔 moveToTrash 만 불러 잠금 확인·공유 링크 정리·사용량·숨김 표시 정리를 건너뛰었음
+                            //   (16차 bulk_delete 와 같은 이유). 잠긴 파일이면 지우지 않고 원본 보존
+                            $tr = $this->delete($storageId, $relativePath, '', false, true);
                             $trashed = !empty($tr['success']);
                             // ★ 휴지통 이동 성공 시 파일 인덱스에서도 원본 제거.
                             //   moveToTrash는 인덱스를 건드리지 않고(휴지통 DB만 기록), 인덱스 제거는 호출자 책임 —
@@ -13283,7 +14343,11 @@ class FileManager {
             }
             if (time() - $startTime > $maxWait) {
                 $killConvFfmpeg(); // 시간 초과 — 매달린 ffmpeg 정리
-                @unlink($progressFile); @unlink($tmpOut);
+                // ★ (2026-10-29 11:06, 20차 점검) 끊김 처리(위)와 같은 정리 — 종전엔 기다리지 않고 바로 지워 윈도우에선 잠긴 미완성 출력(.converting)이
+                //   사용자 폴더에 남을 수 있었고, 결과·로그 임시 파일도 지우지 않았음
+                usleep(800000);
+                @unlink($progressFile); @unlink($resultFile); @unlink($stderrLog);
+                for ($i = 0; $i < 5; $i++) { clearstatcache(); if (!is_file($tmpOut)) break; if (@unlink($tmpOut)) break; usleep(400000); }
                 $sse('error', ['error' => __('convert_timeout', '변환 시간 초과')]);
                 return;
             }
@@ -14406,15 +15470,154 @@ class FileManager {
     /**
      * 파일이 잠겨있는지 확인
      */
+    /**
+     * ★ (2026-10-29 07:45, 18차) 이 스토리지가 사용량(used_size)을 쓰는지 — 홈은 사용자별 용량으로 따로 계산해 used_size 를 안 씀(updateUsedSize 도 무시).
+     *   홈에서는 폴더 크기를 재지 않게(큰 폴더를 끌어 복사·풀기 할 때 폴더 전체를 한 번 더 훑던 낭비)
+     */
+    private function usedTracked(int $storageId): bool {
+        $st = $this->storage->getStorageById($storageId);
+        return $st && ($st['storage_type'] ?? '') !== 'home';
+    }
+    /** ★ (2026-10-29 07:45, 18차) 압축 풀기 중 크기를 잴지(extractZip 이 스토리지 종류를 보고 정함) */
+    private bool $usedMeasureExtract = true;
+    
+    /** ★ (2026-10-29 09:23, 20차) 원격 어댑터의 마지막 list() 가 실패였는지(StorageAdapter 의 listFailed) */
+    private function adapterListFailed($adapter): bool {
+        return is_object($adapter) && property_exists($adapter, 'listFailed') && $adapter->listFailed;
+    }
+    
+    /** ★ (2026-10-29 04:14, 17차) 로컬 파일·폴더 크기(없으면 0) — 사용량(used_size) 반영용 */
+    private function usedLocalSize(string $fullPath): int {
+        clearstatcache(true, $fullPath);
+        if (is_dir($fullPath)) return $this->getDirectorySize($fullPath);
+        return is_file($fullPath) ? (int)(@filesize($fullPath) ?: 0) : 0;
+    }
+
+    /**
+     * ★ (2026-10-29 04:04, 17차) 이 작업의 7-Zip 프로세스만 찾기 — 명령줄에 $markers 가 모두 들어간 7z(7z/7za/7zz)만.
+     *   종전엔 취소 때 taskkill /IM 7z.exe 로 서버의 7z 를 모두 끄고(다른 사용자 압축·풀기까지 중단),
+     *   실행 중 판정도 '아무 7z 나 돌면 실행 중' 이었음.
+     *   반환: ['ok'=>조회 성공 여부, 'pids'=>[...]] — Windows 는 PowerShell(CIM)로 조회(명령은 -EncodedCommand 로 넘겨 따옴표·% 문제 없음).
+     *   조회가 실패하면 ok=false (부르는 쪽은 이때 아무것도 끄지 않음)
+     */
+    private function sz7Find(array $markers): array {
+        $markers = array_values(array_filter(array_map('strval', $markers), fn($m) => $m !== ''));
+        if (!$markers) return ['ok' => false, 'pids' => []];
+        $pids = [];
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $conds = [];
+            foreach ($markers as $m) {
+                $conds[] = '$_.CommandLine.IndexOf(\'' . str_replace("'", "''", $m) . '\', [StringComparison]::OrdinalIgnoreCase) -ge 0';
+            }
+            $ps = '\'FS_OK\'; Get-CimInstance Win32_Process -Filter "Name=\'7z.exe\' OR Name=\'7za.exe\' OR Name=\'7zz.exe\'" | '
+                . 'Where-Object { $_.CommandLine -and ' . implode(' -and ', $conds) . ' } | ForEach-Object { $_.ProcessId }';
+            $enc = base64_encode(mb_convert_encoding($ps, 'UTF-16LE', 'UTF-8'));
+            $out = (string)@shell_exec('powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ' . $enc . ' 2>NUL');
+            if (strpos($out, 'FS_OK') === false) return ['ok' => false, 'pids' => []];
+            foreach (preg_split('/\s+/', $out) as $t) { if ($t !== '' && ctype_digit($t)) $pids[] = (int)$t; }
+        } else {
+            // /proc 의 각 프로세스 명령줄을 직접 확인(정규식·셸 따옴표 문제 없음). 실행 파일이 7z 본체인 것만 — 감싼 셸(sh -c …)은 제외
+            $dh = @opendir('/proc');
+            if (!$dh) return ['ok' => false, 'pids' => []];
+            $me = getmypid();
+            while (($e = readdir($dh)) !== false) {
+                if (!ctype_digit($e)) continue;
+                $pid = (int)$e;
+                if ($pid === $me) continue;
+                $cl = @file_get_contents('/proc/' . $pid . '/cmdline');
+                if ($cl === false || $cl === '') continue;
+                $args = array_values(array_filter(explode("\0", $cl), 'strlen'));
+                $exe = strtolower(basename($args[0] ?? ''));
+                if (!in_array($exe, ['7z', '7za', '7zz', '7zzs', '7zip', '7z.exe', '7za.exe', '7zz.exe'], true)) continue;
+                $joined = implode(' ', $args);
+                $all = true;
+                foreach ($markers as $m) { if (stripos($joined, $m) === false) { $all = false; break; } }
+                if ($all) $pids[] = $pid;
+            }
+            closedir($dh);
+        }
+        return ['ok' => true, 'pids' => array_values(array_unique($pids))];
+    }
+
+    /** ★ (2026-10-29 04:04, 17차) 이 작업의 7z 만 종료 — 찾지 못하면 아무것도 끄지 않음(다른 사용자 작업 보호). 끈 개수 반환 */
+    private function sz7Kill(array $markers): int {
+        $f = $this->sz7Find($markers);
+        $n = 0;
+        foreach ($f['pids'] as $pid) {
+            if (DIRECTORY_SEPARATOR === '\\') @exec('taskkill /F /T /PID ' . (int)$pid . ' 2>NUL');
+            else @exec('kill -TERM ' . (int)$pid . ' 2>/dev/null');
+            $n++;
+        }
+        if (!$f['ok']) @error_log('[FileStation] 7z 취소: 프로세스 조회 실패 — 다른 작업 보호를 위해 종료하지 않음');
+        return $n;
+    }
+
+    /**
+     * ★ (2026-10-29 04:04, 17차) 이 작업의 7z 가 아직 도는지.
+     *   한 번 찾은 PID 는 기억해 가볍게 확인(Windows tasklist /FI PID, Linux /proc), 못 찾았으면 5초마다 다시 조회.
+     *   두 번 연속(약 10초) 못 찾으면 종전 방식으로 판정(18차 — 아래 참고).
+     *   조회 자체가 안 되면(PowerShell 없음 등) 종전 방식(아무 7z 나 돌면 실행 중) — 덜 끝났는데 끝났다고 보는 일이 없게
+     */
+    private function sz7Running(array $markers, array &$st): bool {
+        if (!empty($st['pids'])) {
+            foreach ($st['pids'] as $pid) {
+                if (DIRECTORY_SEPARATOR === '\\') {
+                    $o = (string)@shell_exec('tasklist /FI "PID eq ' . (int)$pid . '" /NH 2>NUL');
+                    if (preg_match('/\b' . (int)$pid . '\b/', $o)) return true;
+                } elseif (is_dir('/proc/' . (int)$pid)) {
+                    $stat = (string)@file_get_contents('/proc/' . (int)$pid . '/stat');
+                    if (!preg_match('/^\d+ \(.*\) Z /', $stat)) return true;   // 좀비(끝났지만 회수 전)는 끝난 것으로
+                }
+            }
+            return false;
+        }
+        $now = time();
+        if (isset($st['last']) && $now - $st['last'] < 5) return true;
+        $st['last'] = $now;
+        $f = $this->sz7Find($markers);
+        if ($f['pids']) { $st['pids'] = $f['pids']; return true; }
+        if ($f['ok']) {
+            $st['miss'] = ($st['miss'] ?? 0) + 1;
+            if ($st['miss'] < 2) return true;
+        }
+        // ★ (2026-10-29 07:45, 18차) 조회 실패, 또는 조회는 되는데 두 번(약 10초) 연속 이 작업의 7z 를 못 찾으면 종전 방식(아무 7z 나 돌면 실행 중)으로 판정 —
+        //   17차엔 못 찾으면 바로 '끝남' 으로 봐서, 표식이 명령줄과 안 맞는 환경(Windows 미검증)이면 7z 가 아직 도는데 끝난 것으로 볼 수 있었음.
+        //   이렇게 하면 종전보다 일찍 끝났다고 보는 일은 없음(다른 7z 가 돌면 종전처럼 기다림)
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $c = (string)@shell_exec('tasklist /FI "IMAGENAME eq 7z.exe" /NH 2>NUL');
+            return stripos($c, '7z.exe') !== false;
+        }
+        $c = (string)@shell_exec('pgrep -x 7z 2>/dev/null; pgrep -x 7za 2>/dev/null; pgrep -x 7zz 2>/dev/null; pgrep -x 7zzs 2>/dev/null');
+        return trim($c) !== '';
+    }
+
+    /** ★ (2026-10-29 04:04, 17차) 7z 종료 코드(결과 파일) — 0 성공, 1 경고, 2 이상 실패. 파일이 없거나 비면 null */
+    private function sz7ExitCode(string $resultFile): ?int {
+        if (!is_file($resultFile)) return null;
+        $t = trim((string)@file_get_contents($resultFile));
+        return ($t !== '' && preg_match('/^-?\d+$/', $t)) ? (int)$t : null;
+    }
+
     private function isFileLocked(int $storageId, string $relativePath): bool {
-        $locked = $this->db->find('locked_files', [
-            'storage_id' => $storageId,
-            'path' => $relativePath
-        ]);
-        return !empty($locked);
+        // ★ (2026-10-30 02:04, 26차 점검) 경로를 정리해 비교 — 'a//b'·'a/./b'·'\\' 구분자로 잠금 검사를 지나던 것(재현: 'lk//a.txt' 영구 삭제). 작업 큐처럼 api.php 앞단 정리를 거치지 않는 경로도 막음
+        $norm = function ($p) {
+            $p = str_replace('\\', '/', (string)$p);
+            $p = preg_replace('#(^|/)\.(?=/|$)#', '$1', $p);
+            $p = preg_replace('#/{2,}#', '/', $p);
+            $p = trim($p, '/');
+            return DIRECTORY_SEPARATOR === '\\' ? mb_strtolower($p) : $p;
+        };
+        $want = $norm($relativePath);
+        foreach (($this->db->load('locked_files') ?: []) as $l) {
+            if ((int)($l['storage_id'] ?? 0) === $storageId && $norm($l['path'] ?? '') === $want) return true;
+        }
+        return false;
     }
     
     private function isPathSafe(string $basePath, string $targetPath): bool {
+        // ★ (2026-10-29 21:12, 24차 점검) 기준 경로가 비면 거부 — 원격 스토리지(FTP·SFTP·WebDAV·S3)는 getRealPath() 가 '' 인데 realpath('') 가 PHP 작업 폴더(앱 폴더)를
+        //   돌려줘 통과했음 → 원격 스토리지 번호로 끌어 놓기를 보내면 앱 폴더 안의 남의 홈·data 파일을 복사·이동할 수 있었음(재현)
+        if (trim($basePath) === '') return false;
         // 경로 정규화 (Windows/Linux 호환)
         $basePath = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $basePath);
         $targetPath = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $targetPath);
@@ -14497,6 +15700,38 @@ class FileManager {
         
         $filename = trim($filename, '. ');
         return $filename ?: 'unnamed';
+    }
+
+    /**
+     * ★ (2026-10-28 17:42, 소스 점검 3단계) 서버에서 실행될 수 있는 이름인지(업로드와 같은 기준 — SERVER_EXEC_EXTS + 이중 확장자 'x.php.jpg').
+     *   저장될 이름(sanitizeFilename 뒤)으로 판단. 막아야 하면 사유 문자열, 괜찮으면 null. 이름 바꾸기 등 업로드 밖 경로에서 씀
+     */
+    public function serverExecNameReason(string $name): ?string {
+        return \fsServerExecReason($name);   // config.php 공통 함수(내부 공유·파일 드롭·WebDAV 와 같은 기준)
+    }
+    
+    /**
+     * ★ (2026-10-29 07:45, 18차) 분할 압축 이름 — name.zip 또는 name.zip.001… 이 하나라도 있으면 'name (2).zip', 'name (3).zip' … 중 빈 이름
+     */
+    private function uniqueSplitZipPath(string $path): string {
+        $dir = dirname($path);
+        $base = basename($path);
+        $taken = function (string $name) use ($dir): bool {
+            if (file_exists($dir . DIRECTORY_SEPARATOR . $name)) return true;
+            foreach ((@scandir($dir) ?: []) as $df) {
+                if (strpos($df, $name . '.') === 0 && preg_match('/^\d{3,4}$/', substr($df, strlen($name) + 1))) return true;
+            }
+            return false;
+        };
+        if (!$taken($base)) return $path;
+        $dot = strrpos($base, '.');
+        $stem = ($dot !== false && $dot > 0) ? substr($base, 0, $dot) : $base;
+        $ext = ($dot !== false && $dot > 0) ? substr($base, $dot) : '';
+        for ($i = 2; $i < 10000; $i++) {
+            $cand = $stem . ' (' . $i . ')' . $ext;
+            if (!$taken($cand)) return $dir . DIRECTORY_SEPARATOR . $cand;
+        }
+        return $this->getUniqueFilename($path);
     }
     
     private function getUniqueFilename(string $path): string {
@@ -15137,9 +16372,10 @@ class FileManager {
                     }
                     if (isset($exif['EXIF']['FNumber'])) {
                         $f = $exif['EXIF']['FNumber'];
-                        if (is_string($f) && strpos($f, '/') !== false) {
-                            list($n, $d) = explode('/', $f);
-                            $info['exif']['aperture'] = 'f/' . round($n / $d, 1);
+                        // ★ (2026-10-29 10:54, 20차 점검) 분모 0·숫자 아님은 건너뜀(fractionToFloat) — 종전엔 '28/0' 같은 값이면 0으로 나누기 오류로 상세 정보가 500 이었음(재현)
+                        $fv = $this->fractionToFloat($f);
+                        if ($fv !== null && is_string($f) && strpos($f, '/') !== false) {
+                            $info['exif']['aperture'] = 'f/' . round($fv, 1);
                         }
                     }
                     if (isset($exif['EXIF']['ISOSpeedRatings'])) {
@@ -15147,9 +16383,9 @@ class FileManager {
                     }
                     if (isset($exif['EXIF']['FocalLength'])) {
                         $fl = $exif['EXIF']['FocalLength'];
-                        if (is_string($fl) && strpos($fl, '/') !== false) {
-                            list($n, $d) = explode('/', $fl);
-                            $info['exif']['focal_length'] = round($n / $d) . 'mm';
+                        $flv = $this->fractionToFloat($fl);
+                        if ($flv !== null && is_string($fl) && strpos($fl, '/') !== false) {
+                            $info['exif']['focal_length'] = round($flv) . 'mm';
                         }
                     }
                     
@@ -15182,6 +16418,11 @@ class FileManager {
             $sharePath = ltrim(str_replace('\\', '/', $share['file_path'] ?? ''), '/');
             if ((int)($share['storage_id'] ?? 0) === (int)$storageId && $sharePath === $relPath && !empty($share['is_active'])) {
                 $info['shared'] = true;
+                // ★ (2026-10-29 17:50, 22차 점검) 공유 링크 정보(토큰 등)는 만든 사람·관리자에게만 — 종전엔 같은 스토리지를 읽을 수 있는 누구나
+                //   '자세한 정보'로 남의 공유 토큰(=비밀번호 없는 공유면 바로 받을 수 있는 주소)을 받았음(재현). 화면은 이 값을 쓰지 않음
+                if ((int)($share['created_by'] ?? 0) !== (int)$this->auth->getUserId() && !$this->auth->isAdmin()) {
+                    break;
+                }
                 $info['share_id'] = $share['id'];
                 $info['share_token'] = $share['token'];
                 $info['share_type'] = $share['share_type'] ?? 'download';
@@ -15215,8 +16456,10 @@ class FileManager {
         ];
     }
     
-    private function gpsToDecimal(array $coord, string $ref): ?float {
-        if (count($coord) < 3) return null;
+    private function gpsToDecimal($coord, $ref): ?float {
+        // ★ (2026-10-29 17:50, 22차 점검) EXIF 좌표가 배열이 아니면(손상·특이 기기 사진에서 문자열) 좌표 없음으로 — 종전엔 array 형 인자에 문자열이 들어가 TypeError 로 '자세한 정보' 전체가 500(재현)
+        if (!is_array($coord) || count($coord) < 3) return null;
+        $ref = is_string($ref) ? $ref : 'N';
         
         $degrees = $this->fractionToFloat($coord[0]);
         $minutes = $this->fractionToFloat($coord[1]);
@@ -15344,6 +16587,10 @@ class FileManager {
             return ['success' => false, 'error' => $action === 'copy' ? __('api_err_no_write_perm', '쓰기 권한이 없습니다.') : __('api_err_no_delete_perm', '삭제 권한이 없습니다.')];
         }
         
+        // ★ (2026-10-29 21:12, 24차 점검) 끌어 놓기는 로컬 경로가 있는 스토리지만(로컬·SMB) — 로컬 경로가 없는 원격(FTP·SFTP·WebDAV·S3)은 거부(isPathSafe 와 이중으로)
+        if (trim((string)$this->storage->getRealPath($storageId)) === '') {
+            return ['success' => false, 'error' => __('invalid_dst_path')];
+        }
         $basePath = $this->storage->getRealPath($storageId);
         $destFullPath = $this->buildPath($basePath, $destPath);
         
@@ -15370,7 +16617,14 @@ class FileManager {
                 $errors[] = __f('file_missing_for', ['source' => $source]);
                 continue;
             }
-            
+
+            // ★ (2026-10-29 03:19, 16차) 끌어서 '이동' 은 원본을 옮기므로(지우는 것과 같음) 잠긴 파일은 막음 — 종전엔 직접 이동·이름바꾸기만 막고
+            //   끌어 이동은 그대로 옮겼음. 복사는 원본을 건드리지 않으므로 종전대로 허용
+            if ($action !== 'copy' && $this->isFileLocked($storageId, $source)) {
+                $errors[] = $source . ': ' . __('exif_strip_locked', '잠긴 파일입니다.');
+                continue;
+            }
+
             $filename = basename($source);
             $targetPath = $destFullPath . DIRECTORY_SEPARATOR . $filename;
             
@@ -15397,13 +16651,32 @@ class FileManager {
             
             try {
                 if ($action === 'copy') {
-                    if (is_dir($sourceFullPath)) {
-                        $this->copyDirectory($sourceFullPath, $targetPath);
-                    } else {
-                        copy($sourceFullPath, $targetPath);
+                    // ★ (2026-10-29 21:44, 24차 점검) 대상 용량 확인(고유 이름으로 새로 만들어 덮어쓰기 없음)
+                    if (($tqErr = $this->transferQuotaError($storageId, $sourceFullPath, $targetPath, 'rename')) !== null) {
+                        $errors[] = $source . ': ' . $tqErr;
+                        continue;
                     }
+                    // ★ (2026-10-29 04:14, 17차) 복사 결과 확인 + 사용량 반영 — 종전엔 결과를 보지 않아 실패(디스크 부족 등)해도 성공으로 답했고,
+                    //   복사로 늘어난 용량이 사용량(used_size)에 안 잡혔음. 실패면 만들다 만 복사본을 지움(대상은 위에서 고유 이름이라 기존 것 아님)
+                    $ddOk = is_dir($sourceFullPath) ? $this->copyDirectory($sourceFullPath, $targetPath) : @copy($sourceFullPath, $targetPath);
+                    if (!$ddOk) {
+                        if (is_dir($targetPath)) $this->deleteDirectory($targetPath); elseif (is_file($targetPath)) @unlink($targetPath);
+                        $errors[] = $source . ': ' . __('api_err_copy_failed', '파일 복사에 실패했습니다.');
+                        continue;
+                    }
+                    if ($this->usedTracked($storageId)) $this->storage->updateUsedSize($storageId, $this->usedLocalSize($targetPath));   // ★ (2026-10-29 07:45, 18차) 홈이면 재지 않음
                 } else {
-                    rename($sourceFullPath, $targetPath);
+                    $_ddRenOk = @rename($sourceFullPath, $targetPath);
+                    // ★ (2026-10-29 09:23, 20차) 옮기기 실패(다른 프로그램이 사용 중 등)면 실패로 — 종전엔 결과와 상관없이 '이동 완료' 로 답했음
+                    if (!$_ddRenOk) {
+                        $errors[] = $source . ': ' . __('api_err_move_failed', '이동에 실패했습니다.');
+                        continue;
+                    }
+                    // ★ (2026-10-28) 끌어다 옮긴 항목은 숨김 표시도 옮긴 자리로(복사는 원본만 숨김 — 그대로)
+                    if ($_ddRenOk && class_exists('HiddenItems')) HiddenItems::movePath($storageId, $source, $storageId, $destPath . '/' . basename($targetPath), true);
+                    if ($_ddRenOk) { try { $this->storage->moveFolderPermissions($storageId, $source, $storageId, $destPath . '/' . basename($targetPath)); } catch (\Throwable $e) {} }   // ★ (2026-10-30 01:52, 26차 점검) 폴더 권한 규칙도
+                    // ★ (2026-10-29 21:13, 24차 점검) 옛 경로 공유 정리(일반 이동 move() 와 같게) — 종전엔 끌어 옮긴 항목의 공유가 옛 경로로 남았음
+                    $this->cleanupSharesForPath($storageId, $source, is_dir($targetPath));
                 }
                 
                 $results[] = [
@@ -15584,7 +16857,10 @@ class FileManager {
         }
         
         $basePath = $this->storage->getRealPath($storageId);
-        if (!$basePath) {
+        // ★ (2026-10-29 23:24, 24차 점검) 원격 스토리지(인덱스 검색 결과)도 지울 수 있게 — 검색(bulkSearch)은 원격을 지원하는데 삭제는 기준 경로가 없다고 늘 거부했음(3회차 재검토).
+        //   원격은 아래 delete() 가 원격 휴지통 경로(deleteRemoteToTrash)로 처리하고, 루트·폴더 권한 검사는 그대로
+        $bdRemote = !$basePath && $this->isRemoteStorage($storageId);
+        if (!$basePath && !$bdRemote) {
             return ['success' => false, 'error' => __('api_err_storage_not_found', '스토리지를 찾을 수 없습니다.')];
         }
         
@@ -15592,20 +16868,35 @@ class FileManager {
         $failed = 0;
         
         foreach ($paths as $relativePath) {
-            $fullPath = $this->buildPath($basePath, $relativePath);
-            
-            if (!$this->isPathSafe($basePath, $fullPath)) {
+            if (!$bdRemote) {
+                $fullPath = $this->buildPath($basePath, $relativePath);
+                
+                if (!$this->isPathSafe($basePath, $fullPath)) {
+                    $failed++;
+                    continue;
+                }
+                
+                if (!file_exists($fullPath)) {
+                    $failed++;
+                    continue;
+                }
+            } elseif (preg_match('#(^|[\\/])\.\.($|[\\/])#', (string)$relativePath)) {
                 $failed++;
                 continue;
             }
-            
-            if (!file_exists($fullPath)) {
+            // ★ (2026-10-28 22:39, 10차 점검) 폴더 권한(항목 자신 + 안의 보호 폴더 — 관리자에게도 적용하는 원칙)을 일반 삭제와 같은 기준으로 —
+            //   종전엔 관리자 일괄 삭제가 폴더 규칙을 전혀 보지 않았음. 막힌 항목은 실패로 셈
+            $bdRel = trim(str_replace('\\', '/', (string)$relativePath), '/');
+            $bdDir = dirname($bdRel); if ($bdDir === '.') $bdDir = '';
+            if (!$this->storage->checkFolderPermission($storageId, $bdDir ?: $bdRel, 'can_delete') || !$this->storage->checkFolderTreePermission($storageId, $bdRel, 'can_delete')) {
                 $failed++;
                 continue;
             }
             
             // 휴지통으로 이동
-            $result = $this->moveToTrash($storageId, $relativePath, $fullPath);
+            // ★ (2026-10-29 02:36, 16차) 일반 삭제(delete)와 같은 처리로 — 종전엔 moveToTrash 만 불러 '.'·'' 처럼 루트를 가리키는 경로면 스토리지 폴더 통째로
+            //   휴지통에 보낼 수 있었고, 잠금·vault 즉시 삭제 규칙·사용량·검색 목록·공유 링크 정리도 빠졌음
+            $result = $this->delete($storageId, (string)$relativePath, '', false, true);
             
             if ($result['success']) {
                 $deleted++;
@@ -16565,7 +17856,7 @@ class FileManager {
             $imgFileSize = @filesize($cacheImgFile);
             if ($imgFileSize !== false && $imgFileSize > 0) {
                 $mime = trim(@file_get_contents($cacheMetaFile));
-                if ($mime && preg_match('/^image\/[a-z0-9+-]+$/i', $mime)) {
+                if ($mime && preg_match('/^image\/(jpe?g|pjpeg|png|x-png|gif|webp|bmp|x-ms-bmp|avif|heic|heif)$/i', $mime)) {   // ★ (2026-10-30 01:54, 26차 점검) 그림(래스터)만(SVG 커버 제외 — 공유 페이지와 같은 기준)
                     // ★ ETag: 캐시 키 자체가 mtime 포함 → immutable 보장
                     //   브라우저가 If-None-Match 보내면 304 응답으로 트래픽 절약
                     $etag = '"' . $cacheKey . '"';
@@ -16607,6 +17898,7 @@ class FileManager {
         
         // 캐시 없음 → ID3v2에서 APIC 추출
         $cover = $this->extractID3v2Cover($fullPath);
+        if ($cover && !preg_match('/^image\/(jpe?g|pjpeg|png|x-png|gif|webp|bmp|x-ms-bmp|avif|heic|heif)$/i', (string)($cover['mime'] ?? ''))) $cover = null;   // ★ (2026-10-30 01:54, 26차 점검) SVG 등 그림 아닌 형식은 커버 없음으로
         if (!$cover) {
             // 커버 없음 → 네거티브 캐시 마커 저장 (다음 요청 시 파싱 건너뛰기)
             @file_put_contents($cacheNoCoverFile, '1');
@@ -17115,6 +18407,9 @@ class FileManager {
         
         $fullPath = rtrim($basePath, '/\\') . DIRECTORY_SEPARATOR . ltrim($path, '/\\');
         if (!file_exists($fullPath) || !is_readable($fullPath)) return null;
+        // ★ (2026-10-29 02:36, 16차) 스토리지 안인지 확인(앨범 표지 audioCover·썸네일과 같음) — 종전엔 없어 enc=b64 로 base64 에 '../' 를 숨기면
+        //   (전역 '..' 검사는 base64 글자만 봄) 다른 사용자 홈 등 스토리지 밖 음악 옆의 가사 파일을 읽을 수 있었음
+        if (!$this->isPathSafe($basePath, $fullPath)) return null;
         
         $ext = strtolower(pathinfo($fullPath, PATHINFO_EXTENSION));
         $audioExts = ['mp3', 'm4a', 'flac', 'ogg', 'wav', 'aac', 'opus', 'ape', 'alac', 'aiff'];

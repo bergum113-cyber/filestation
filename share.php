@@ -234,14 +234,49 @@ if ($download) {
 
 // 공유 정보 확인
 $result = $shareManager->accessShare($token, $password);
+// ★ (2026-10-29 21:56, 24차 점검) 공유 링크 방문을 활동 기록('공유 접근')에 남김 — 종전엔 이 기록을 남기는 곳이 화면에서 부르지 않는 api.php share_access 뿐이라
+//   관리자 활동 기록의 '공유 접근' 필터가 늘 비어 있었음. 페이지를 열 때만(내려받기·스트리밍 같은 하위 요청은 아님)
+// ★ (2026-10-30 01:54, 26차 점검) 같은 공유를 같은 사람이 짧은 사이에 다시 열면(트랙 넘기기·새로고침·자동 다음 재생 등) 기록하지 않음 — 세션은 30분, 쿠키 없는 반복 요청은
+//   주소(IP)+공유별 60초. 종전엔 열 때마다 한 줄씩 써서, 링크만 있으면 반복 접속으로 활동 기록(최대 1만 건)의 관리자 기록을 밀어낼 수 있었음
+$_saSkip = false;
+if (!empty($result['success'])) {
+    $_saNow = time();
+    if (!empty($_SESSION['share_visit_logged'][$token]) && $_saNow - (int)$_SESSION['share_visit_logged'][$token] < 1800) $_saSkip = true;
+    $_saThr = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data')) . '/rate_limits';
+    $_saThrFile = $_saThr . '/share_visit_' . md5((string)($_SERVER['REMOTE_ADDR'] ?? '') . '|' . $token);
+    if (!$_saSkip && is_file($_saThrFile) && $_saNow - (int)@filemtime($_saThrFile) < 60) $_saSkip = true;
+    if (!$_saSkip) {
+        $_SESSION['share_visit_logged'][$token] = $_saNow;
+        if (is_dir($_saThr) || @mkdir($_saThr, 0755, true)) @touch($_saThrFile);
+        if (mt_rand(1, 100) === 1) { foreach ((@glob($_saThr . '/share_visit_*') ?: []) as $_saOld) { if (@filemtime($_saOld) < $_saNow - 3600) @unlink($_saOld); } }   // ★ (2026-10-30 02:21, 26차 재검토) 오래된 억제 표시 정리
+    }
+}
+if (!empty($result['success']) && !$_saSkip) {
+    try {
+        $_saRec = JsonDB::getInstance()->find('shares', ['token' => $token]);
+        if ($_saRec) {
+            // ★ (2026-10-29 22:39, 24차 점검) 사용자 정보를 직접 넘김(세션 검사·만료 처리를 타지 않게 — 만료 세션 정리가 공유 비밀번호 인증을 지웠음)
+            $_saUid = (int)($_SESSION['user_id'] ?? 0);
+            $_saUser = $_saUid > 0 ? (JsonDB::getInstance()->find('users', ['id' => $_saUid]) ?: null) : null;
+            (new ActivityLog(JsonDB::getInstance(), new Auth()))->log(ActivityLog::TYPE_SHARE_ACCESS, [
+                'user_id' => $_saUser ? $_saUid : 0,
+                'username' => $_saUser ? (string)($_saUser['username'] ?? 'guest') : 'guest',
+                'display_name' => $_saUser ? (string)($_saUser['display_name'] ?? ($_saUser['username'] ?? 'Guest')) : 'Guest',
+                'storage_id' => (int)($_saRec['storage_id'] ?? 0),
+                'path' => (string)($_saRec['file_path'] ?? ''),
+                'filename' => basename(str_replace('\\', '/', (string)($_saRec['file_path'] ?? ''))),
+                'details' => 'Token: ' . $token . (isset($_GET['file']) ? ' / ' . basename((string)$_GET['file']) : '')
+            ]);
+        }
+    } catch (\Throwable $e) {}
+}
 $needsPassword = ($result['error'] ?? '') === 'password_required';
 $error = (!$result['success'] && !$needsPassword) ? $result['error'] : null;
 $share = $result['share'] ?? null;
 
 // 비밀번호 인증 성공 시 세션에 인증 완료 플래그 저장 (비밀번호 원문 미저장)
-if ($result['success'] && $password) {
-    $_SESSION['share_authenticated'][$token] = true;
-}
+// ★ (2026-10-29 18:46, 22차 점검) 표시는 accessShare 가 비밀번호 확인 때 '그 비밀번호에 묶인 값'으로 남김(종전 true — 비밀번호를 바꿔도 계속 통과)
+
 
 // ★ 폴더 stream + sub-file: 단일 트랙 페이지로 처리 (트랜스코드/HLS 등 단일 영상 흐름 재사용)
 $pageSubFile = null;          // 페이지 렌더링 시 sub-file (검증 통과 시만 설정)
@@ -1174,10 +1209,11 @@ ob_start('fs_icon_convert_html');
                             doneChunks += results.length;
                             // 청크 단위 진행률 콜백 (큰 파일도 진행 상황 표시)
                             if (onProgress) onProgress(Math.min(doneChunks, totalChunks) / totalChunks);
-                            for (const r of results) {
-                                if (r.success === false) return r;
-                                if (r.complete) return r;
-                            }
+                            // ★ (2026-10-29 01:12, 14차) 실패를 먼저 봄 — '이미 조립됨'(deduped) 응답이 먼저 오면 실제 조립 실패(검사 거부 등)를 놓쳤음
+                            const _fail = results.find(r => r.success === false);
+                            if (_fail) return _fail;
+                            const _done = results.find(r => r.complete && !r.deduped) || results.find(r => r.complete);
+                            if (_done) return _done;
                         }
                         return { success: true };
                     };
@@ -4387,7 +4423,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 // === 폴더 stream 모드: 다중 트랙 플레이리스트 ===
                 // 서버측 ShareManager::getSharedFolderTracks가 보안 검증 + 음악만 추출
                 // 각 트랙별 streamUrl/coverUrl/lyricsApiUrl는 sub-file 기반 (basename 화이트리스트 검증)
-                const folderTracks = <?= json_encode($folderTracks, JSON_UNESCAPED_UNICODE) ?>;
+                const folderTracks = <?= json_encode($folderTracks, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;<?php /* ★ (2026-10-30 01:54, 26차 점검) 파일 이름의 '<!--' 등이 스크립트를 깨지 않게(다른 자리와 같은 옵션) */ ?>
                 const folderStreamBase = "share.php?t=<?= urlencode($token) ?>&download=1&stream=1";
                 const folderCoverBase = "share.php?t=<?= urlencode($token) ?>&cover=1&sz=512";   // ★ (2026-09-23) 줄인 커버
                 const folderLyricsBase = "share.php?t=<?= urlencode($token) ?>&lyrics=1";
@@ -4422,7 +4458,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 const fileSize = playlist.reduce((sum, t) => sum + (folderTracks.find(ft => ft.file === t.fullName)?.size || 0), 0);
                 <?php else: ?>
                 // === 단일 파일 stream 모드 ===
-                const filename = <?= json_encode($share['filename']) ?>;
+                const filename = <?= json_encode($share['filename'], JSON_HEX_TAG | JSON_HEX_AMP) ?>;
                 const ext = filename.split('.').pop().toLowerCase();
                 const coverApiUrl = <?= json_encode($coverUrl) ?>;
                 const streamUrl = <?= json_encode($streamUrl) ?>;
@@ -5101,6 +5137,20 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         });
         
         // === 자막 파서 (SRT, VTT, SMI) ===
+        // ★ (2026-10-29 20:12, 23차 점검) 태그·엔티티 처리를 앱 화면(app.js _subtitleHtml, 21차)과 같게 —
+        //   ① '<' 바로 뒤가 이름(또는 VTT 시간 숫자)일 때만 태그로 지움(종전엔 'a < b > c' 의 글자까지 지웠음)
+        //   ② 엔티티를 풂(종전엔 &hellip; &#9834; 등이 '&hellip;' 글자 그대로 보였음). DOMParser 문서는 화면에 붙지 않아 실행·로드 없음.
+        //   이후 종전대로 전부 escape 하므로 화면에 HTML 로 들어가는 것은 없음
+        function subStripTags(s) {
+            return String(s).replace(/<\/?[a-z][a-z0-9.]*\b[^>]*>/gi, '').replace(/<\/?\d[^>]*>/g, '');
+        }
+        function subDecodeEnt(s) {
+            if (s.indexOf('&') === -1) return s;
+            try {
+                const b = new DOMParser().parseFromString('<!doctype html><body>' + s.replace(/</g, '&lt;').replace(/\n/g, '\uE002'), 'text/html').body;
+                return b ? b.textContent.replace(/\uE002/g, '\n') : s;
+            } catch (e) { return s; }
+        }
         function parseSubtitle(text, ext) {
             if (ext === 'vtt' || ext === 'srt') return parseSrt(text);
             if (ext === 'smi' || ext === 'sami') return parseSmi(text);
@@ -5119,7 +5169,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         const start = +m[1]*3600 + +m[2]*60 + +m[3] + +m[4]/1000;
                         const end = +m[5]*3600 + +m[6]*60 + +m[7] + +m[8]/1000;
                         // 보안: HTML 태그 제거 후 엔티티 이스케이프 (XSS 방어)
-                        let txt = lines.slice(i+1).join('\n').replace(/<[^>]+>/g, '').trim();
+                        let txt = subDecodeEnt(subStripTags(lines.slice(i+1).join('\n'))).trim();
                         if (txt) {
                             txt = txt
                                 .replace(/&/g, '&amp;')
@@ -5147,7 +5197,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             let m;
             while ((m = regex.exec(text)) !== null) {
                 const ms = parseInt(m[1]);
-                let txt = m[2].replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').replace(/\n[ \t]+\n/g, '\n\n').replace(/\n{2,}/g, '\n').trim();
+                let txt = subDecodeEnt(subStripTags(m[2].replace(/<br\s*\/?>/gi, '\n')).replace(/&nbsp;/gi, ' ')).replace(/\u00a0/g, ' ').replace(/\n[ \t]+\n/g, '\n\n').replace(/\n{2,}/g, '\n').trim();
                 const isEmpty = !txt || /^\s*$/.test(txt);
                 if (!isEmpty) {
                     // XSS 방어 (HTML 이스케이프) + \n → <br>
@@ -5188,9 +5238,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 const start = assTime(parts[1].trim());
                 const end = assTime(parts[2].trim());
                 // 보안: ASS 스타일 태그 {...} 제거 + HTML 태그 제거 (XSS 방어) + \N → <br>
-                let txt = parts.slice(9).join(',')
-                    .replace(/\{[^}]*\}/g, '')
-                    .replace(/<[^>]+>/g, '')
+                let txt = subDecodeEnt(subStripTags(parts.slice(9).join(',')
+                    .replace(/\{[^}]*\}/g, '')))
                     .trim();
                 // HTML 특수문자 이스케이프 후 \N → <br>
                 txt = txt

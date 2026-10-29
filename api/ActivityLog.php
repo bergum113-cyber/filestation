@@ -38,7 +38,9 @@ class ActivityLog {
      * $data에 user_id, username, display_name이 있으면 우선 사용 (로그인 시점 등)
      */
     public function log(string $type, array $data = []): int {
-        $user = $this->auth->getUser();
+        // ★ (2026-10-29 22:39, 24차 점검) 사용자 정보를 다 넘겨받으면 getUser() 를 부르지 않음 — getUser→isLoggedIn 이 만료 세션을 지우며(session_destroy)
+        //   share.php 에서 방금 저장한 공유 비밀번호 인증까지 지웠음(2회차 재검토)
+        $user = (isset($data['user_id'], $data['username'], $data['display_name'])) ? null : $this->auth->getUser();
         
         $logEntry = [
             'type' => $type,
@@ -51,7 +53,7 @@ class ActivityLog {
             'filename' => $data['filename'] ?? null,
             'size' => $data['size'] ?? null,
             'details' => $data['details'] ?? null,
-            'ip' => $_SERVER['REMOTE_ADDR'] ?? '',
+            'ip' => (empty($_SERVER['REMOTE_ADDR']) || !is_object($this->auth) || !method_exists($this->auth, 'getCurrentIP')) ? ($_SERVER['REMOTE_ADDR'] ?? '') : $this->auth->getCurrentIP(),   // ★ (2026-10-29 22:09, 24차 점검) 로그인 기록과 같은 신뢰 프록시 규칙(역방향 프록시 뒤에서 모두 프록시 주소로 남던 것). 22:30 — 백그라운드 작업(CLI, REMOTE_ADDR 없음)은 종전처럼 빈 값(127.0.0.1 로 바뀌지 않게)
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
             'created_at' => date('Y-m-d H:i:s')
         ];

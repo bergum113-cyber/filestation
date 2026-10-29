@@ -123,8 +123,17 @@ if (empty($toExecute)) {
     exit(0);
 }
 
+// ★ (2026-10-29 04:18, 17차) 작업별 잠금 — 앞 회차가 아직 돌고 있거나(긴 작업 + 매시 예약) 화면에서 같은 작업을 실행 중이면 이번엔 건너뜀.
+//   종전엔 매분 cron 이 같은 작업을 겹쳐 돌려 같은 대상에 동시에 쓰고 지울 수 있었음(last_run 은 끝날 때만 기록되므로 막히지 않았음)
+$syncLockDir = defined('DATA_PATH') ? DATA_PATH : ($baseDir . '/data');
 foreach ($toExecute as &$task) {
     $taskName = $task['name'] ?? 'Unnamed';
+    $syncLock = @fopen($syncLockDir . '/sync_task_' . (int)($task['id'] ?? 0) . '.lock', 'c');
+    if (!$syncLock || !flock($syncLock, LOCK_EX | LOCK_NB)) {
+        echo date('[Y-m-d H:i:s]') . " Skip sync task #{$task['id']}: {$taskName} (already running)\n";
+        if ($syncLock) fclose($syncLock);
+        continue;
+    }
     echo date('[Y-m-d H:i:s]') . " Starting sync task #{$task['id']}: {$taskName}\n";
     
     try {
@@ -155,20 +164,38 @@ foreach ($toExecute as &$task) {
         
         $srcAdapter = StorageAdapterFactory::create($srcStorage);
         $tgtAdapter = StorageAdapterFactory::create($tgtStorage);
+        // ★ (2026-10-29 02:36, 16차) 연결부터(화면 실행 sync_execute 와 같음) — 종전엔 connect() 를 안 불러 FTP·SMB 원본은 목록이 비어 '고아 삭제' 가 대상 전체를 지울 수 있었음
+        if (!$srcAdapter || !$srcAdapter->connect()) throw new Exception("Source storage connect failed (src:$srcStorageId)");
+        if (!$tgtAdapter || !$tgtAdapter->connect()) throw new Exception("Target storage connect failed (tgt:$tgtStorageId)");
         
         echo "  Adapters: src=" . get_class($srcAdapter) . ", tgt=" . get_class($tgtAdapter) . "\n";
         
         $stats = ['copied' => 0, 'updated' => 0, 'deleted' => 0, 'skipped' => 0, 'errors' => 0];
         
         // 재귀 파일 목록
-        $collectFiles = function($adapter, $basePath, $includeSubdir) use (&$collectFiles) {
+        $syncFailed = [];   // ★ (2026-10-29 19:04, 22차 점검) 목록을 못 읽은 하위 폴더(양쪽) — 그 아래는 이번 동기화에서 비교·복사·삭제하지 않음
+        $collectFiles = function($adapter, $basePath, $includeSubdir, $rootPath = null) use (&$collectFiles, &$syncFailed) {
+            if ($rootPath === null) $rootPath = $basePath;
             $files = [];
             $items = $adapter->list($basePath);
+            // ★ (2026-10-29 18:52, 22차 점검) 목록을 못 읽은 폴더를 빈 폴더로 보지 않음 — 종전엔 빈 폴더로 보고 계속해, '고아 삭제'가 켜져 있으면 대상의 그 폴더 아래를 지우고
+            //   양방향이면 대상 쪽으로 덮어쓸 수 있었음(16차의 '원본이 통째로 비면 삭제 건너뜀'은 맨 위만 막았음)
+            //   (없는 폴더 — 첫 동기화의 대상 등 — 는 원격 어댑터가 실패로 표시하므로 exists 로 다시 보고 빈 목록으로)
+            if (is_object($adapter) && property_exists($adapter, 'listFailed') && $adapter->listFailed) {
+                // ★ (2026-10-29 19:04, 22차 점검) 맨 위(작업 경로)를 못 읽으면 전체 중단, 하위 폴더 하나면 그 폴더만 이번에 건너뜀(변경 검토 반영 — 'System Volume Information' 같은 읽기 금지 폴더 때문에 전체가 멈추지 않게)
+                $sfExists = true;
+                try { $sfExists = ($basePath === '') || $adapter->exists($basePath); } catch (\Throwable $e) { $sfExists = true; }
+                if ($sfExists) {
+                    if ($basePath === $rootPath) throw new Exception(__('remote_read_failed', '원격 파일 읽기 실패') . ': ' . ($basePath === '' ? '/' : $basePath));
+                    $syncFailed[] = $rootPath === '' ? $basePath : substr($basePath, strlen($rootPath) + 1);
+                }
+                return [];
+            }
             foreach ($items as $item) {
                 $relPath = $basePath ? $basePath . '/' . $item['name'] : $item['name'];
                 if ($item['is_dir']) {
                     if ($includeSubdir) {
-                        $files = array_merge($files, $collectFiles($adapter, $relPath, true));
+                        $files = array_merge($files, $collectFiles($adapter, $relPath, true, $rootPath));
                         $files[] = ['path' => $relPath, 'is_dir' => true, 'modified' => $item['modified'] ?? 0, 'size' => 0];
                     }
                 } else {
@@ -195,6 +222,13 @@ foreach ($toExecute as &$task) {
         foreach ($tgtFiles as $f) {
             $key = $tgtPath ? substr($f['path'], strlen($tgtPath) + 1) : $f['path'];
             $tgtIndex[$key] = $f;
+        }
+        // ★ (2026-10-29 19:04, 22차 점검) 목록을 못 읽은 하위 폴더 아래는 양쪽 모두 이번에 빼고 진행(그 폴더를 빈 것으로 보고 지우거나 덮어쓰지 않게)
+        foreach (array_unique($syncFailed) as $sfKey) {
+            foreach ([&$srcIndex, &$tgtIndex] as &$sfIdx) {
+                foreach (array_keys($sfIdx) as $k) { if ($k === $sfKey || strpos($k, $sfKey . '/') === 0) unset($sfIdx[$k]); }
+            }
+            unset($sfIdx);
         }
         
         // 디렉토리 생성
@@ -241,7 +275,7 @@ foreach ($toExecute as &$task) {
                         $copyOk = $srcAdapter->copyFileTo($srcFullPath, $tgtAdapter, $tgtFullPath);
                     } else {
                         $content = $srcAdapter->read($srcFullPath);
-                        if ($content === false) throw new Exception('Read failed');
+                        if ($content === false || ($content === '' && (int)($sf['size'] ?? 0) > 0)) throw new Exception('Read failed');   // ★ (2026-10-29 09:23, 20차) 원격 read() 는 실패해도 '' 를 돌려줌 — 내용이 비었는데 목록상 크기가 0 보다 크면 읽기 실패로(종전엔 대상 파일을 빈 파일로 덮어썼음)
                         $copyOk = $tgtAdapter->write($tgtFullPath, $content);
                         unset($content);
                     }
@@ -283,7 +317,7 @@ foreach ($toExecute as &$task) {
                             $copyOk = $tgtAdapter->copyFileTo($tgtFullPath, $srcAdapter, $srcFullPath);
                         } else {
                             $content = $tgtAdapter->read($tgtFullPath);
-                            if ($content === false) throw new Exception('Read failed');
+                            if ($content === false || ($content === '' && (int)($tf['size'] ?? 0) > 0)) throw new Exception('Read failed');   // ★ (2026-10-29 09:23, 20차) 원격 read() 는 실패해도 '' 를 돌려줌 — 내용이 비었는데 목록상 크기가 0 보다 크면 읽기 실패로(종전엔 대상 파일을 빈 파일로 덮어썼음)
                             $copyOk = $srcAdapter->write($srcFullPath, $content);
                             unset($content);
                         }
@@ -301,6 +335,11 @@ foreach ($toExecute as &$task) {
         }
         
         // 고아 삭제
+        // ★ (2026-10-29 02:36, 16차) 원본 목록이 비었는데 대상엔 파일이 있으면 삭제하지 않음(원본 폴더 없음·읽기 실패 때 대상 전체 삭제 방지)
+        if ($deleteOrphan && empty($srcIndex) && !empty($tgtIndex)) {
+            echo "  [SKIP] orphan delete skipped: source list is empty (target protected)\n";
+            $deleteOrphan = false;
+        }
         if ($deleteOrphan && ($mode === 'one-way' || $mode === 'incremental')) {
             foreach ($tgtIndex as $key => $tf) {
                 if (!$tf['is_dir'] && !isset($srcIndex[$key])) {
@@ -336,8 +375,12 @@ foreach ($toExecute as &$task) {
         $task['last_status'] = 'error';
         echo "  ❌ Error: " . $e->getMessage() . "\n";
     }
+    // ★ (2026-10-29 04:18, 17차) 이 작업의 결과 칸만 최신 목록에 저장 — 종전엔 시작 때 읽은 목록 전체를 끝에 다시 저장해, 그사이 화면에서 바꾼 설정·
+    //   새로 만든 작업·지운 작업이 되돌아갔음
+    $db->update('sync_tasks', ['id' => $task['id']], ['last_run' => $task['last_run'] ?? date('Y-m-d H:i:s'), 'last_status' => $task['last_status'] ?? 'error']);
+    flock($syncLock, LOCK_UN);
+    fclose($syncLock);
 }
 unset($task);
 
-$db->save('sync_tasks', $tasks);
 echo date('[Y-m-d H:i:s]') . " Cron finished.\n";

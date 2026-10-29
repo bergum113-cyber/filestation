@@ -94,7 +94,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
         foreach (@glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'rhwpe_*') ?: [] as $_old) {
             if (is_file($_old) && filemtime($_old) < time() - 3600) @unlink($_old);
         }
-        $tempFile = tempnam(sys_get_temp_dir(), 'rhwpe_');
+        // ★ (2026-10-30 01:55, 26차 점검) 이름을 직접 만듦 — Windows 의 tempnam 은 접두어 앞 3글자만 써서(rhw….tmp) 위 정리(glob 'rhwpe_*')가 하나도 못 찾았음
+        $tempFile = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'rhwpe_' . bin2hex(random_bytes(8)) . '.tmp';
         $content = $adapter->read($filePath);
         $adapter->disconnect();
         if ($content === '' || $content === false) {
@@ -109,7 +110,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
         if (!$basePath) { http_response_code(403); exit; }
         $realFile = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $filePath);
         $realBase = realpath($basePath); $realTarget = realpath($realFile);
-        if (!$realBase || !$realTarget || strpos($realTarget, $realBase) !== 0) { http_response_code(403); exit; }
+        if (!$realBase || !$realTarget || !\isSubPath($realTarget, $realBase)) { http_response_code(403); exit; }
         $realFile = $realTarget; $cleanup = false;
     }
     if (!file_exists($realFile)) { http_response_code(404); exit; }
@@ -145,6 +146,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
         http_response_code(403);
         echo json_encode(['success' => false, 'error' => 'No folder write permission']); exit;
     }
+    // ★ (2026-10-29 10:25, 20차 점검) 잠긴 파일은 저장으로 덮어쓰지 않음(텍스트 저장과 같음) — 종전엔 그대로 덮어썼음(재현)
+    if (JsonDB::getInstance()->find('locked_files', ['storage_id' => $storageId, 'path' => $filePath])) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')]); exit;
+    }
     
     // 세션 락 해제: 원격 스토리지 업로드 중 웹하드가 블로킹되지 않도록
     if (session_status() === PHP_SESSION_ACTIVE) {
@@ -169,10 +175,20 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
         if (preg_match('/\.\.[\\/\\\\]/', $filePath)) {
             echo json_encode(['success' => false, 'error' => 'Invalid path']); exit;
         }
+        // ★ (2026-10-29 18:47, 22차 점검) 서버 실행 이름 검사(다른 이름으로 저장·텍스트 저장과 같음) — 종전엔 원격 '저장'에만 빠져 'x.php.hwp' 같은 이름을 새로 만들 수 있었음
+        if (!$auth->isAdminOrSubAdmin() && ($rsExec = \fsServerExecReason(basename(str_replace('\\', '/', $filePath)))) !== null) {   // 관리자는 '다른 이름으로 저장'과 같이 예외
+            http_response_code(403);
+            echo json_encode(['success' => false, 'error' => $rsExec]); exit;
+        }
         require_once __DIR__ . '/api/StorageAdapter.php';
         $adapter = StorageAdapterFactory::create($storageInfo);
         if (!$adapter || !$adapter->connect()) {
             echo json_encode(['success' => false, 'error' => 'Remote connection failed']); exit;
+        }
+        // ★ (2026-10-29 18:47, 22차 점검) '저장'은 있는 파일만 덮어씀(로컬 저장과 같음) — 종전엔 원격이면 없는 이름도 새로 만들었음
+        if (!$adapter->exists($filePath)) {
+            $adapter->disconnect();
+            echo json_encode(['success' => false, 'error' => __('file_not_found', '파일을 찾을 수 없습니다.')]); exit;
         }
         // ★ office_viewer.php 패턴 통일: write() 직접 호출 (upload() 메서드 없음)
         $ok = $adapter->write($filePath, $rawData);
@@ -187,8 +203,15 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
         $realBase = realpath($basePath);
         // 원본 파일이 존재해야 덮어쓰기 (경로 검증)
         $realTarget = realpath($realFile);
-        if (!$realBase || !$realTarget || strpos($realTarget, $realBase) !== 0) {
+        if (!$realBase || !$realTarget || !\isSubPath($realTarget, $realBase)) {
             echo json_encode(['success' => false, 'error' => 'Path traversal denied']); exit;
+        }
+        // ★ (2026-10-29 21:46, 24차 점검) 커지면 용량 확인, 저장 뒤 크기 차이를 사용량에 반영(22차 텍스트 저장 file_text_save 와 같게) — 종전엔 둘 다 없었음(재현)
+        $rwOld = (int)@filesize($realTarget);
+        $rwNeed = strlen($rawData) - $rwOld;
+        if ($rwNeed > 0) {
+            $rwQ = (new FileManager())->checkQuotaPublic($storageId, $rwNeed);
+            if (empty($rwQ['allowed'])) { echo json_encode(['success' => false, 'error' => $rwQ['error'] ?? 'Quota exceeded']); exit; }
         }
         // 원자적 쓰기: 임시파일 → rename
         $tempFile = $realTarget . '.rhwp_tmp_' . getmypid();
@@ -201,6 +224,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
             @unlink($tempFile);
             echo json_encode(['success' => false, 'error' => 'Rename failed']); exit;
         }
+        if ($written - $rwOld !== 0) $storage->updateUsedSize($storageId, $written - $rwOld);
         echo json_encode(['success' => true, 'size' => $written]);
     }
     exit;
@@ -235,6 +259,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     if (strtolower(pathinfo($newName, PATHINFO_EXTENSION)) !== $srcExt) {
         echo json_encode(['success' => false, 'error' => '확장자는 .' . $srcExt . ' 여야 합니다']); exit;
     }
+    // ★ (2026-10-29 10:25, 20차 점검) 서버 실행 이름(x.php.hwp 처럼 가운데 확장자 포함) 거부 — 텍스트 저장(file_text_save)과 같은 기준(관리자 제외). 종전엔 그대로 만들어졌음(재현)
+    if (!$auth->isAdminOrSubAdmin() && function_exists('fsServerExecReason') && ($rwExec = fsServerExecReason($newName)) !== null) {
+        echo json_encode(['success' => false, 'error' => $rwExec]); exit;
+    }
     
     if (!$storage->checkPermission($storageId, 'can_write')) {
         http_response_code(403);
@@ -256,6 +284,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     
     // 새 파일 경로 조합
     $newFilePath = $saveDir === '' ? $newName : ($saveDir . '/' . $newName);
+    // ★ (2026-10-29 10:25, 20차 점검) 덮어쓸 대상이 잠긴 파일이면 거부(덮어쓰기 확인 후 force=1 로 다시 와도)
+    if (JsonDB::getInstance()->find('locked_files', ['storage_id' => $storageId, 'path' => $newFilePath])) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')]); exit;
+    }
     
     // POST body에서 바이너리 읽기
     $rawData = file_get_contents('php://input');
@@ -311,7 +344,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         // 경로 탈출 검증: 디렉토리만 realpath 후 base 안에 있는지 확인
         $newDir = dirname($newRealFile);
         $realNewDir = realpath($newDir);
-        if (!$realNewDir || strpos($realNewDir, $realBase) !== 0) {
+        if (!$realNewDir || !\isSubPath($realNewDir, $realBase)) {
             echo json_encode(['success' => false, 'error' => 'Path traversal denied']); exit;
         }
         // 덮어쓰기 방지 (force=1 이면 덮어쓰기 허용)
@@ -322,9 +355,16 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         // 덮어쓰기 시에도 파일이 base 디렉토리 내부인지 확인
         if ($forceOverwrite && file_exists($newRealFile)) {
             $realExisting = realpath($newRealFile);
-            if (!$realExisting || strpos($realExisting, $realBase) !== 0) {
+            if (!$realExisting || !\isSubPath($realExisting, $realBase)) {
                 echo json_encode(['success' => false, 'error' => 'Path traversal denied (overwrite target)']); exit;
             }
+        }
+        // ★ (2026-10-29 21:46, 24차 점검) 용량 확인·사용량 반영(위 '저장'과 같음) — 종전엔 '다른 이름으로 저장'을 반복하면 한도와 상관없이 새 파일이 계속 생겼음
+        $rwOld = file_exists($newRealFile) ? (int)@filesize($newRealFile) : 0;
+        $rwNeed = strlen($rawData) - $rwOld;
+        if ($rwNeed > 0) {
+            $rwQ = (new FileManager())->checkQuotaPublic($storageId, $rwNeed);
+            if (empty($rwQ['allowed'])) { echo json_encode(['success' => false, 'error' => $rwQ['error'] ?? 'Quota exceeded']); exit; }
         }
         // 원자적 쓰기
         $tempFile = $newRealFile . '.rhwp_tmp_' . getmypid();
@@ -337,6 +377,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             @unlink($tempFile);
             echo json_encode(['success' => false, 'error' => 'Rename failed']); exit;
         }
+        if ($written - $rwOld !== 0) $storage->updateUsedSize($storageId, $written - $rwOld);
+        // ★ (2026-10-29 23:24, 24차 점검) 파일 인덱스에도(다른 새 파일 경로와 같게) — 종전엔 다른 이름으로 저장한 파일이 인덱스 재구축 전까지 검색에 안 나왔음(3회차 재검토)
+        try { $rwFi = FileIndex::getInstance(); if ($rwFi->isAvailable()) { clearstatcache(true, $newRealFile); $rwFi->addFile((int)$storageId, trim(str_replace('\\', '/', (string)$newFilePath), '/'), ['is_dir' => 0, 'size' => (int)$written, 'modified' => date('Y-m-d H:i:s', (int)@filemtime($newRealFile))]); } } catch (\Throwable $e) {}
         echo json_encode(['success' => true, 'size' => $written, 'path' => $newFilePath, 'name' => $newName]);
     }
     exit;
@@ -452,7 +495,8 @@ ob_start('fs_icon_convert_html');
 <body>
 <?php /* ★ (2026-10-26) 선 그림 아이콘 묶음 + 스크립트가 넣는 이모지도 바꾸는 fs-icons.js (index.php·share.php 와 같음) */ echo fs_icon_sprite(); ?>
 <script>window.FS_ICO_EMOJI = <?= fs_icon_map_json() ?>;</script>
-<script src="assets/js/fs-icons.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-icons.js'), 0, 10) ?>"></script>
+<?php /* ★ (2026-10-29 23:42, 24차 점검) 위 <base href="assets/rhwp/studio/"> 때문에 상대 주소가 studio/assets/js/… 로 풀려 404 → 루트 기준 주소로 */ ?>
+<script src="<?= htmlspecialchars(rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/')) ?>/assets/js/fs-icons.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-icons.js'), 0, 10) ?>"></script>
   <div id="studio-root">
     <!-- 메뉴바 -->
     <div id="menu-bar">
@@ -1300,8 +1344,11 @@ ob_start('fs_icon_convert_html');
                     }
                 }
                 // 3순위: 상태바 페이지 정보
+                // ★ (2026-10-29 22:09, 24차 점검) 처음 마크업 글자('1 / 1 쪽')와 달라졌을 때만 — 종전엔 처음 글자가 바로 이 조건에 맞아 첫 검사에서 늘 '불러옴'으로 끝나,
+                //   첫 주입이 실패해도 재시도가 돌지 않았음(빈 편집기로 남음)
                 const pageInfo = document.getElementById('sb-page');
-                if (pageInfo && pageInfo.textContent && /\d+\s*\/\s*[1-9]/.test(pageInfo.textContent)) {
+                if (pageInfo && window.__rhwpSbInit === undefined) window.__rhwpSbInit = pageInfo.textContent;
+                if (pageInfo && pageInfo.textContent && pageInfo.textContent !== window.__rhwpSbInit && /\d+\s*\/\s*[1-9]/.test(pageInfo.textContent)) {
                     resolve(true);
                     return;
                 }
@@ -1396,7 +1443,12 @@ ob_start('fs_icon_convert_html');
             headers: { 'Content-Type': 'application/octet-stream' },
             body: hwpData
         });
-        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        if (!resp.ok) {
+            // ★ (2026-10-29 18:47, 22차 점검) 서버가 준 이유(잠긴 파일·권한 없음 등)를 보여 줌 — 종전엔 'HTTP 403' 만 보였음
+            let _msg = 'HTTP ' + resp.status;
+            try { const j = await resp.json(); if (j && j.error) _msg = j.error; } catch (e) {}
+            throw new Error(_msg);
+        }
         const result = await resp.json();
         if (!result.success) throw new Error(result.error || '저장 실패');
         return result;
@@ -1732,13 +1784,11 @@ ob_start('fs_icon_convert_html');
         });
         if (!resp.ok) {
             // 파일 중복(409 대신 JSON로 처리되지만 HTTP 에러일 수도)
+            // ★ (2026-10-29 18:47, 22차 점검) 서버가 준 이유를 보여 줌 — 종전엔 자기가 던진 오류를 같은 catch 가 받아 늘 'HTTP 403' 으로 덮었음
             const txt = await resp.text();
-            try {
-                const j = JSON.parse(txt);
-                throw new Error(j.error || ('HTTP ' + resp.status));
-            } catch(e) {
-                throw new Error('HTTP ' + resp.status);
-            }
+            let _msg = 'HTTP ' + resp.status;
+            try { const j = JSON.parse(txt); if (j && j.error) _msg = j.error; } catch(e) {}
+            throw new Error(_msg);
         }
         const result = await resp.json();
         if (!result.success) {

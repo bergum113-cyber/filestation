@@ -91,6 +91,10 @@ if (!$storage->checkFolderPermission($storageId, $ooFileDir ?: $filePath)) {
 if ($mode === 'edit' && (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $ooFileDir ?: $filePath, 'can_write'))) {
     $mode = 'view'; // 쓰기 권한 없으면 보기 모드로 전환
 }
+// ★ (2026-10-29 10:26, 20차 점검) 잠긴 파일은 보기 모드로 — 종전엔 편집으로 열려 저장(콜백)되면 잠긴 파일을 덮어썼음(재현). 텍스트·한글 편집기 저장과 같은 기준
+if ($mode === 'edit' && JsonDB::getInstance()->find('locked_files', ['storage_id' => (int)$storageId, 'path' => $filePath])) {
+    $mode = 'view';
+}
 
 // 파일 정보 가져오기
 $storageInfo = $storage->getStorageById($storageId);
@@ -99,6 +103,10 @@ if (!$storageInfo) {
 }
 
 $basePath = $storageInfo['path'] ?? '';
+// ★ (2026-10-29 22:39, 24차 점검) 기준 경로가 비면(원격 스토리지) 거부 — realpath('') 가 앱 폴더라 앱 폴더 아래 파일을 편집기로 열고 저장할 수 있었음(api.php resolveOnlyOfficePath 와 같음)
+if (trim((string)$basePath) === '') {
+    die('<h2>' . __('oo_invalid_path') . '</h2><p>' . __('oo_invalid_path_desc') . '</p><a href="index.php">' . __('oo_go_back') . '</a>');
+}
 
 // 디버그: 경로 정보 확인
 $fullPath = rtrim($basePath, '/\\') . DIRECTORY_SEPARATOR . ltrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $filePath), '/\\');
@@ -107,7 +115,9 @@ $fullPath = rtrim($basePath, '/\\') . DIRECTORY_SEPARATOR . ltrim(str_replace(['
 $realBasePath = realpath($basePath);
 $realFullPath = realpath($fullPath);
 
-if (!$realBasePath || !$realFullPath || strpos($realFullPath, $realBasePath) !== 0) {
+// ★ (2026-10-29 11:16, 20차 점검) 접두사 비교(strpos) → 경로 단위 포함 검사(isSubPath) — 종전엔 '../store2/x.docx' 처럼 스토리지 폴더 이름으로 시작하는
+//   옆 폴더의 문서도 통과해 편집기가 열렸음(재현. 이 페이지엔 api.php 의 '..' 차단이 없음)
+if (!$realBasePath || !$realFullPath || !isSubPath($realFullPath, $realBasePath)) {
     die('<h2>' . __('oo_invalid_path') . '</h2><p>' . __('oo_invalid_path_desc') . '</p><a href="index.php">' . __('oo_go_back') . '</a>');
 }
 
@@ -149,6 +159,8 @@ $userName = $user['username'] ?? 'Anonymous';
 
 // 문서 고유 키 (파일 변경 시 갱신되어야 함)
 $documentKey = md5($storageId . ':' . $filePath . ':' . $fileModified . ':' . $fileSize);
+// ★ (2026-10-28 18:22, 소스 점검 5단계) 발급한 키 등록 — 다운로드·저장 콜백이 이 파일에 대해 발급한 키인지 확인함(config.php fsOoKeyRegister)
+fsOoKeyRegister($documentKey, (int)$storageId, (string)$filePath, $mode);
 
 // 콜백 URL (OnlyOffice에서 저장 시 호출)
 $callbackBaseUrl = $ONLYOFFICE_CALLBACK_URL ?: (
@@ -227,7 +239,9 @@ if (!empty($ONLYOFFICE_SECRET)) {
     $config['token'] = $token;
 }
 
-$configJson = json_encode($config, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+// ★ (2026-10-29 18:47, 22차 점검) <script> 안에 넣으므로 < > & ' 를 \u 로(JSON_HEX_*) — 종전엔 리눅스에서 파일 이름에 '</script>' 가 있으면 스크립트 구간이 끊겨 주입될 수 있었음.
+//   JSON 값은 그대로라 OnlyOffice 설정·JWT 서명(위에서 이미 만든 값)에는 영향 없음
+$configJson = json_encode($config, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
 ?>
 <!DOCTYPE html>
 <html lang="ko">

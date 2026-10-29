@@ -511,6 +511,16 @@ class Storage {
         $this->db->delete('storages', ['id' => $id]);
         $this->db->delete('permissions', ['storage_id' => $id]);
         $this->db->delete('shares', ['storage_id' => $id]);
+        // ★ (2026-10-29 22:00, 24차 점검) 이 스토리지 번호에 묶인 내부 공유·폴더 규칙·잠금·동기화 작업도 지움 — 번호는 '최대+1'로 다시 쓰여, 가장 큰 번호를 지우고
+        //   새로 만들면 옛 규칙·잠금이 새 스토리지에 걸리고 옛 동기화 작업(고아 삭제 포함)이 새 스토리지를 대상으로 돌 수 있었음(사용자 삭제 16차와 같은 이유)
+        $this->db->delete('internal_shares', ['storage_id' => $id]);
+        $this->db->delete('folder_permissions', ['storage_id' => $id]);
+        $this->db->delete('locked_files', ['storage_id' => $id]);
+        $syncTasks = $this->db->load('sync_tasks') ?: [];
+        $syncKeep = array_values(array_filter($syncTasks, fn($t) => (int)($t['source_storage_id'] ?? 0) !== $id && (int)($t['target_storage_id'] ?? 0) !== $id));
+        if (count($syncKeep) !== count($syncTasks)) $this->db->save('sync_tasks', $syncKeep);
+        // ★ (2026-10-29 22:39, 24차 점검) 파일 인덱스(검색·원격 목록·사용량 계산에 쓰임)도 같은 이유로 지움(2회차 재검토)
+        try { if (class_exists('FileIndex')) \FileIndex::getInstance()->removeStorage($id); } catch (\Throwable $e) {}
         
         // 캐시 무효화
         self::$storageCache = [];
@@ -596,8 +606,12 @@ class Storage {
                 }
             }
             // 중복/잘못된 공유 폴더 (storage_type이 없거나 다른데 이름이 "공유 폴더" 또는 "Shared Folder")
+            // ★ (2026-10-29 10:53, 20차 점검) 이름만 같은 정상 스토리지는 지우지 않음 — 종류가 비었거나 경로가 공용 폴더 경로와 같은 옛 잘못된 기록만.
+            //   종전엔 관리자가 로컬 스토리지 이름을 '공유 폴더' 로 지으면 다음 목록 조회 때 그 기록(권한·설정 포함)이 사라졌음(재현)
             elseif (($name === __('shared_folder_name') || $name === 'Shared Folder') && $type !== 'shared') {
-                $duplicates[] = $index;
+                $dupPath = (string)($s['path'] ?? '');
+                $isSharedRoot = $dupPath !== '' && ($rp1 = realpath($dupPath)) !== false && ($rp2 = realpath($sharedPath)) !== false && $rp1 === $rp2;
+                if ($type === '' || $isSharedRoot) $duplicates[] = $index;
             }
         }
         unset($s);
@@ -694,7 +708,9 @@ class Storage {
             if (self::$isAdminCache) {
                 return true;
             }
-            if ($permission === 'can_read' || $permission === 'can_download') {
+            // ★ (2026-10-29 21:52, 24차 점검) 보기(can_visible)도 — 스토리지 목록(getStorages)은 기록 없는 공용 폴더를 읽기 가능으로 보여 주는데 목록 열기(files)는
+            //   can_visible 로 확인해, 누르면 '권한이 없습니다'만 떴음(재현: 가입 등으로 공용 폴더 기록이 없는 사용자)
+            if ($permission === 'can_read' || $permission === 'can_download' || $permission === 'can_visible') {
                 return true;
             }
             return false;
@@ -724,6 +740,25 @@ class Storage {
      * 폴더별 권한 체크 - 해당 경로에 접근 가능한지 확인
      * 폴더 권한이 설정되지 않으면 스토리지 권한을 따름
      */
+    /**
+     * ★ (2026-10-28 17:23, 소스 점검 2단계) 폴더 권한 비교용 경로 정규화 — 종전엔 trim 만 해서
+     *   './secret'·'x/../secret'·끝에 점·공백 붙인 'secret.'·'secret ' 같은 표기가 'secret' 규칙에 안 걸려 폴더 권한을 우회할 수 있었음.
+     *   실제 파일 접근은 realpath(윈도우는 대소문자 무시)를 거치므로, 규칙 비교도 같은 수준으로: 조각 단위로 '.'·빈 조각 제거, '..' 로 위로,
+     *   조각 끝의 점·공백 제거(윈도우가 파일명에서 떼어냄). 비교는 윈도우에서 대소문자 무시(소문자로).
+     */
+    private function normFolderPath(string $path): string {
+        $path = str_replace('\\', '/', $path);
+        $out = [];
+        foreach (explode('/', $path) as $seg) {
+            $seg = rtrim(trim($seg), " .");
+            if ($seg === '' || $seg === '.') continue;
+            if ($seg === '..') { array_pop($out); continue; }
+            $out[] = $seg;
+        }
+        $joined = implode('/', $out);
+        return DIRECTORY_SEPARATOR === '\\' ? mb_strtolower($joined) : $joined;
+    }
+
     public function checkFolderPermission(int $storageId, string $folderPath, string $permission = 'can_read'): bool {
         // 관리자도 폴더 권한 적용 (스토리지 권한과 달리 폴더 권한은 모든 사용자에게 적용)
         
@@ -732,8 +767,8 @@ class Storage {
         
         if (empty($rules)) return true; // 폴더 권한 설정 없으면 스토리지 권한으로
         
-        // 경로 정규화
-        $folderPath = trim(str_replace('\\', '/', $folderPath), '/');
+        // 경로 정규화 (./ · ../ · 끝 점·공백 · 대소문자(윈도우) 까지 — 우회 방지)
+        $folderPath = $this->normFolderPath($folderPath);
         if ($folderPath === '') return true; // 루트는 항상 허용
         
         // 해당 경로에 매칭되는 가장 구체적인 규칙 찾기 (길이순 정렬)
@@ -743,7 +778,7 @@ class Storage {
         foreach ($rules as $rule) {
             if ((int)($rule['user_id'] ?? 0) !== (int)$userId) continue;
             
-            $rulePath = trim($rule['folder_path'] ?? '', '/');
+            $rulePath = $this->normFolderPath($rule['folder_path'] ?? '');
             if ($rulePath === '') continue;
             
             // 정확히 일치하거나 상위 경로인지 확인
@@ -757,9 +792,44 @@ class Storage {
         
         if ($matchedRule === null) return true; // 규칙 없으면 허용
         
-        return (bool)($matchedRule[$permission] ?? true);
+        return $this->folderRuleAllows($matchedRule, $permission);
+    }
+
+    /**
+     * ★ (2026-10-28 22:39, 10차 점검, 펜닐 결정 '쓰기 금지 = 삭제도 금지') 규칙 한 줄이 이 권한을 허용하는지.
+     *   폴더 권한 설정(관리 화면·folder_permission_set)은 보기·읽기·쓰기만 저장하고 삭제(can_delete)는 저장하지 않아,
+     *   종전엔 삭제 검사가 늘 '없음 = 허용' 으로 통과해 쓰기를 막은 폴더도 지워졌음(관리 API 로 만든 규칙으로 재현).
+     *   → can_delete 가 없는 규칙은 can_write 값을 따름(있으면 그 값). 다른 권한은 종전대로(없으면 허용)
+     */
+    private function folderRuleAllows(array $rule, string $permission): bool {
+        if ($permission === 'can_delete' && !array_key_exists('can_delete', $rule)) {
+            return (bool)($rule['can_write'] ?? true);
+        }
+        return (bool)($rule[$permission] ?? true);
     }
     
+    /**
+     * ★ (2026-10-28 21:53, 9차 점검) 항목 자신 + 그 아래에 걸린 폴더 권한 규칙까지 확인 — 폴더를 지우거나 옮기거나 복사·공유하면
+     *   안에 든 하위 폴더도 같이 지워지거나 옮겨지는데, 종전엔 들어 있는 상위 폴더 권한만 봐서 보호 폴더 자체나 그걸 품은 폴더를
+     *   지우고 옮기고 복사·공유할 수 있었음(재현). 펜닐 결정 "작업 자체를 거부": 이 사용자에게 걸린 규칙 중 대상 아래에 있는 규칙이
+     *   하나라도 이 권한을 막으면 false. 규칙 목록만 보므로(파일을 훑지 않음) 큰 폴더·원격 스토리지에서도 같음
+     */
+    public function checkFolderTreePermission(int $storageId, string $path, string $permission): bool {
+        if (!$this->checkFolderPermission($storageId, $path, $permission)) return false;
+        $rules = $this->getFolderPermissions($storageId);
+        if (empty($rules)) return true;
+        $userId = $this->auth->getUserId();
+        $base = $this->normFolderPath($path);
+        foreach ($rules as $rule) {
+            if ((int)($rule['user_id'] ?? 0) !== (int)$userId) continue;
+            $rulePath = $this->normFolderPath($rule['folder_path'] ?? '');
+            if ($rulePath === '') continue;
+            $under = ($base === '') ? true : (strpos($rulePath, $base . '/') === 0);
+            if ($under && !$this->folderRuleAllows($rule, $permission)) return false;
+        }
+        return true;
+    }
+
     /**
      * 파일 목록에서 폴더 권한에 따라 필터링
      */
@@ -775,7 +845,7 @@ class Storage {
         $userRules = array_filter($rules, fn($r) => (int)($r['user_id'] ?? 0) === (int)$userId);
         if (empty($userRules)) return $items; // 이 사용자에 대한 규칙 없으면 그대로
         
-        $currentPath = trim(str_replace('\\', '/', $currentPath), '/');
+        $currentPath = $this->normFolderPath($currentPath);
         
         return array_values(array_filter($items, function($item) use ($userRules, $currentPath) {
             $itemName = $item['name'] ?? '';
@@ -784,27 +854,29 @@ class Storage {
             // 파일은 항상 보임 (폴더 권한은 폴더만 제어)
             if (!$isDir) return true;
             
-            $itemPath = $currentPath === '' ? $itemName : $currentPath . '/' . $itemName;
+            // ★ (2026-10-28 17:23) 규칙 비교와 같은 정규화(대소문자·끝 점·공백)
+            $itemPath = $this->normFolderPath($currentPath === '' ? $itemName : $currentPath . '/' . $itemName);
             
+            // ★ (2026-10-29 11:11, 20차 점검) 자신·상위 규칙 중 가장 구체적인(긴) 규칙을 따름(checkFolderPermission 과 같은 기준) — 종전엔 경로순으로
+            //   먼저 만난 상위 규칙('A' 보임)에서 끝나, 하위 규칙('A/B' 숨김)이 있어도 목록에 보였음(재현. 들어가면 권한 없음)
+            $best = null; $bestLen = -1; $hasDescendant = false;
             foreach ($userRules as $rule) {
-                $rulePath = trim($rule['folder_path'] ?? '', '/');
+                $rulePath = $this->normFolderPath($rule['folder_path'] ?? '');
                 if ($rulePath === '') continue;
                 
-                // 이 폴더가 규칙 경로와 정확히 일치
-                if ($itemPath === $rulePath) {
-                    return (bool)($rule['can_visible'] ?? true);
-                }
-                
-                // 이 폴더가 규칙 경로의 하위 (상위 규칙 적용)
-                if (strpos($itemPath . '/', $rulePath . '/') === 0) {
-                    return (bool)($rule['can_visible'] ?? true);
+                // 이 폴더 자신 또는 상위 규칙
+                if ($itemPath === $rulePath || strpos($itemPath . '/', $rulePath . '/') === 0) {
+                    if (strlen($rulePath) > $bestLen) { $bestLen = strlen($rulePath); $best = $rule; }
+                    continue;
                 }
                 
                 // 이 폴더가 규칙 경로의 상위 (하위 탐색 위해 보여야 함)
                 if (strpos($rulePath . '/', $itemPath . '/') === 0) {
-                    return true;
+                    $hasDescendant = true;
                 }
             }
+            if ($best !== null) return (bool)($best['can_visible'] ?? true);
+            if ($hasDescendant) return true;
             
             // 규칙에 매칭되지 않는 폴더: 스토리지 권한 따름 (기본 보임)
             return true;
@@ -886,6 +958,48 @@ class Storage {
         return $this->db->save('folder_permissions', $all);
     }
     
+    /**
+     * ★ (2026-10-30 01:52, 26차 점검) 폴더 권한 규칙을 옮긴 자리로 따라가게(이름 바꾸기·이동) — 규칙은 경로 글자로 걸려 있어, 종전엔 상위 폴더 이름만 바꾸거나 옮기면
+     *   'Projects/Secret' 의 보기·읽기 금지 규칙이 새 경로('Projects2/Secret')에 적용되지 않아 막아 둔 폴더가 보였음. 숨김 표시(HiddenItems::movePath)와 같은 방식.
+     *   옮긴 자리에 같은 사용자 규칙이 이미 있으면 옮겨 온 규칙으로 바꿈. 바뀐 게 있으면 true
+     */
+    public function moveFolderPermissions(int $srcStorageId, string $oldPath, int $dstStorageId, string $newPath): bool {
+        $old = trim(preg_replace('#/{2,}#', '/', str_replace('\\', '/', $oldPath)), '/');   // ★ (2026-10-30 02:21, 26차 재검토) 겹친 '/' 정리
+        $new = trim(preg_replace('#/{2,}#', '/', str_replace('\\', '/', $newPath)), '/');
+        if ($old === '' || $new === '' || ($srcStorageId === $dstStorageId && $old === $new)) return false;
+        $ci = DIRECTORY_SEPARATOR === '\\';   // Windows 는 경로 대소문자를 가리지 않음
+        $match = function (string $p) use ($old, $ci): ?string {
+            $a = $ci ? mb_strtolower($p) : $p; $b = $ci ? mb_strtolower($old) : $old;
+            if ($a === $b) return '';
+            if (strpos($a, $b . '/') === 0) return $ci ? '/' . implode('/', array_slice(explode('/', $p), substr_count($old, '/') + 1)) : substr($p, strlen($old));   // ★ (2026-10-30 03:03, 26차 재검토) 소문자로 바꾸면 길이가 달라지는 글자(İ 등)가 있어 Windows 비교는 '/' 마디 수로 자름
+            return null;
+        };
+        $changed = false;
+        $this->db->atomicUpdate('folder_permissions', function ($all) use ($srcStorageId, $dstStorageId, $new, $match, &$changed) {
+            $all = is_array($all) ? $all : [];
+            $moved = [];
+            foreach ($all as $i => $rule) {
+                if ((int)($rule['storage_id'] ?? 0) !== $srcStorageId) continue;
+                $rest = $match(trim((string)($rule['folder_path'] ?? ''), '/'));
+                if ($rest === null) continue;
+                $rule['storage_id'] = $dstStorageId;
+                $rule['folder_path'] = $new . $rest;
+                $moved[] = $rule;
+                unset($all[$i]);
+            }
+            if (!$moved) return array_values($all);
+            $changed = true;
+            $ci = DIRECTORY_SEPARATOR === '\\';
+            $key = function ($r) use ($ci) { $fp = trim((string)($r['folder_path'] ?? ''), '/'); if ($ci) $fp = mb_strtolower($fp); return (int)($r['storage_id'] ?? 0) . '|' . $fp . '|' . (int)($r['user_id'] ?? 0); };   // ★ (2026-10-30 03:03, 26차 재검토) Windows 는 대소문자만 다른 같은 폴더 규칙이 둘 남지 않게
+            $mk = [];
+            foreach ($moved as $r) $mk[$key($r)] = true;
+            $all = array_filter($all, function ($r) use ($mk, $key) { return !isset($mk[$key($r)]); });
+            return array_values(array_merge($all, $moved));
+        });
+        if ($changed) self::$folderPermCache = [];
+        return $changed;
+    }
+
     /**
      * 스토리지의 전체 폴더 권한 목록 (관리자용)
      */
@@ -1438,10 +1552,19 @@ class Storage {
         // home 타입은 사용자별 quota 사용 (used_size 사용 안함)
         if (($storage['storage_type'] ?? '') === 'home') return;
         
-        $currentUsed = (int)($storage['used_size'] ?? 0);
-        $newUsed = max(0, $currentUsed + $sizeDelta);
-        
-        $this->db->update('storages', ['id' => $storageId], ['used_size' => $newUsed]);
+        if ($sizeDelta === 0) return;
+        // ★ (2026-10-29 04:18, 17차) 잠금 안에서 최신 값을 읽어 더함 — 종전엔 캐시에서 읽은 값에 더한 결과를 덮어써, 동시에 올리기·지우기가 겹치면
+        //   한쪽 변화가 사라졌음(예: 두 업로드가 같은 옛 값에 각자 더해 저장)
+        $this->db->atomicUpdate('storages', function ($rows) use ($storageId, $sizeDelta) {
+            foreach ($rows as &$row) {
+                if ((int)($row['id'] ?? 0) === $storageId) {
+                    $row['used_size'] = max(0, (int)($row['used_size'] ?? 0) + $sizeDelta);
+                    break;
+                }
+            }
+            unset($row);
+            return $rows;
+        });
         
         // 캐시 무효화
         self::$storageCache = [];

@@ -189,8 +189,8 @@ class JobManager {
                         $job['progress']['done_success'] = ($job['progress']['done_success'] ?? 0) + 1;
                     }
                     
-                    // 활동 로그
-                    if ($activityLog) {
+                    // 활동 로그 — ★ (2026-10-28) 건너뜀(같은 이름이 있어 아무것도 안 함)이면 기록·인덱스 갱신 안 함
+                    if ($activityLog && empty($result['skipped'])) {
                         $storageInfo = $storage->getStorageById($sourceStorageId);
                         $destStorageInfo = $storage->getStorageById($destStorageId);
                         $logType = $action === 'copy' ? ActivityLog::TYPE_COPY : ActivityLog::TYPE_MOVE;
@@ -203,21 +203,34 @@ class JobManager {
                         ]);
                     }
                     
-                    // 인덱스 갱신
-                    if ($autoIndex) {
+                    // 인덱스 갱신(건너뜀이면 안 함 — 종전엔 이동을 건너뛰어도 원본이 인덱스에서 빠졌음)
+                    if ($autoIndex && empty($result['skipped'])) {
                         $fileIndex = FileIndex::getInstance();
                         if ($fileIndex->isAvailable()) {
                             $destBasePath = $storage->getRealPath($destStorageId);
-                            $newPath = trim($destPath . '/' . basename($item['path']), '/');
+                            // ★ (2026-10-28) '이름 변경'으로 놓였으면 실제 이름 — 이동·복사 모두 'name'(로컬), 원격이 끼면 'filename', 없으면 원래 이름
+                            $_placedName = (string)($result['name'] ?? ($result['filename'] ?? basename($item['path'])));
+                            $newPath = trim($destPath . '/' . $_placedName, '/');
                             $fullPath = $destBasePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $newPath);
-                            if (is_dir($fullPath)) {
+                            // ★ (2026-10-28) 원격 스토리지는 로컬 경로가 빈 문자열이라 '/이름' 같은 서버 루트 경로를 보게 됨
+                            //   (예: 원격으로 'mnt' 폴더를 붙여넣으면 서버의 /mnt 내용이 그 원격 스토리지 인덱스에 들어가 검색에 보였음) → 로컬 경로가 있을 때만
+                            if ($destBasePath && is_dir($fullPath)) {
                                 $fileIndex->indexFolder($destStorageId, $destBasePath, $newPath);
-                            } elseif (is_file($fullPath)) {
+                            } elseif ($destBasePath && is_file($fullPath)) {
                                 $fileIndex->addFile($destStorageId, $newPath, [
-                                    'name' => basename($item['path']),
+                                    'name' => $_placedName,
                                     'size' => filesize($fullPath) ?: 0,
                                     'modified' => filemtime($fullPath) ?: time(),
                                     'is_dir' => false
+                                ]);
+                            } elseif (!$destBasePath) {
+                                // ★ (2026-10-29 23:57, 24차 점검) 원격 대상(FTP 등, 로컬 경로 없음)도 놓인 항목 한 행은 넣음 — 종전엔 아무것도 안 넣어(이동이면 원본 행만 지움)
+                                //   화면 붙여넣기로 원격에 옮긴·복사한 항목이 다음 동기화 전까지 검색·인덱스 목록에서 빠졌음(5회차 재검토). 폴더 하위는 다음 동기화
+                                $fileIndex->addFile($destStorageId, $newPath, [
+                                    'name' => $_placedName,
+                                    'size' => !empty($item['isDir']) ? 0 : max(0, (int)($item['size'] ?? 0)),
+                                    'modified' => time(),
+                                    'is_dir' => !empty($item['isDir']) ? 1 : 0
                                 ]);
                             }
                             
@@ -355,7 +368,19 @@ class JobManager {
             $progressFile = $this->jobsDir . '/restore_progress_' . md5($jobId . '_' . $i) . '.tmp';
             
             try {
+                // ★ (2026-10-29 23:57, 24차 점검) 원격 복원 인덱스용으로 휴지통 기록을 먼저 읽어 둠(복원하면 기록이 지워짐)
+                $_rsRec = null;
+                try { foreach ((JsonDB::getInstance()->load('trash') ?: []) as $_t) { if (($_t['id'] ?? null) === ($item['id'] ?? '')) { $_rsRec = $_t; break; } } } catch (\Throwable $e) {}
                 $result = $this->fileManager->restoreFromTrash($item['id'], $progressFile);
+                // ★ (2026-10-29 23:57, 24차 점검) 원격으로 복원하면 실제 놓인 이름(같은 이름 있으면 'X (1)')으로 한 행 넣음 — 로컬은 restoreFromTrash 안의 reindexPath 가 처리, 원격은 종전엔 아무것도 안 넣었음(5회차 재검토)
+                if (($result['success'] ?? false) && !empty($result['remote']) && $_rsRec && !empty($result['restored_path'])) {
+                    try {
+                        $_rsDir = dirname(str_replace('\\', '/', (string)($_rsRec['original_path'] ?? '')));
+                        $_rsPath = (($_rsDir === '.' || $_rsDir === '/' || $_rsDir === '') ? '' : $_rsDir . '/') . $result['restored_path'];
+                        $_rsIx = FileIndex::getInstance();
+                        if ($_rsIx->isAvailable()) $_rsIx->addFile((int)($_rsRec['storage_id'] ?? 0), $_rsPath, ['name' => basename($_rsPath), 'size' => !empty($_rsRec['is_dir']) ? 0 : max(0, (int)($_rsRec['size'] ?? 0)), 'modified' => time(), 'is_dir' => !empty($_rsRec['is_dir']) ? 1 : 0]);
+                    } catch (\Throwable $e) {}
+                }
                 
                 $job = $this->loadJob($jobId);
                 if (!$job) return;
@@ -627,6 +652,12 @@ class JobManager {
         $cleaned = 0;
         $files = @glob($this->jobsDir . '/job_*.json');
         if (!$files) return 0;
+        // ★ (2026-10-29 15:35, 21차 재점검) 실행 중(running) 작업이 있는 사용자 — 그 사용자의 대기 작업은 차례를 기다리는 중이라 오래 둠(아래)
+        $runningUsers = [];
+        foreach ($files as $rf) {
+            $rj = @json_decode(@file_get_contents($rf), true);
+            if (is_array($rj) && ($rj['status'] ?? '') === 'running') $runningUsers[(int)($rj['user_id'] ?? 0)] = true;
+        }
         
         foreach ($files as $file) {
             $job = @json_decode(@file_get_contents($file), true);
@@ -641,11 +672,25 @@ class JobManager {
                 }
             }
             
-            // pending 상태로 5분 이상 방치된 작업 (실행 안 됨) 삭제
+            // pending 상태로 오래 방치된 작업 (실행 안 됨)
+            // ★ (2026-10-29 10:10, 20차 점검) 5분 → 12시간, 지우지 않고 '실패' 로 — pending 은 동시 실행 한도(max_running_jobs) 때문에 차례를 기다리는
+            //   정상 상태이기도 해서, 종전엔 앞 작업이 5분 넘게 걸리면 기다리던 복사·이동이 지워지고 화면엔 '완료' 로 보였음(재현).
+            //   창을 닫았다 열면 pending 작업은 다시 실행되므로(_restoreActiveJobs) 오래 둬도 됨. 실패로 바꾼 것은 위의 완료 작업 정리 규칙으로 지워짐
+            // ★ (2026-10-29 15:35, 21차 재점검) 같은 사용자의 실행 중 작업이 없는데 5분 넘게 대기면 버려진 작업(만든 뒤 실행 요청이 안 옴)으로 보고 종전처럼 정리 —
+            //   20차엔 모두 12시간 남겨, 창을 다시 열 때(_restoreActiveJobs 가 대기 작업을 실행) 몇 시간 전 삭제·이동이 저절로 실행될 수 있었음(재현)
             if (($job['status'] ?? '') === 'pending') {
                 $createdAt = strtotime($job['created_at'] ?? '');
-                if ($createdAt && (time() - $createdAt) > 300) {
-                    @unlink($file);
+                $pendQueued = !empty($runningUsers[(int)($job['user_id'] ?? 0)]);
+                if (!$pendQueued && $createdAt && (time() - $createdAt) > 300) {
+                    @unlink($file);   // 버려진 대기 작업 — 종전(20차 전)과 같이 지움
+                    $cleaned++;
+                    continue;
+                }
+                if ($createdAt && (time() - $createdAt) > 43200) {
+                    $job['status'] = 'failed';
+                    $job['completed_at'] = date('Y-m-d H:i:s');
+                    $job['progress']['errors'][] = 'Job not started (12h)';
+                    $this->saveJob($job);
                     $cleaned++;
                 }
             }
@@ -692,6 +737,14 @@ class JobManager {
     
     private function saveJob(array $job): void {
         $file = $this->getJobFile($job['id']);
+        // ★ (2026-10-29 11:14, 20차 점검) 실행 중 진행 저장이 그사이 들어온 '취소' 를 덮지 않게 — 종전엔 다시 읽고 저장하는 사이에 취소가 오면 사라져 작업이 계속됐음
+        if (in_array($job['status'] ?? '', ['running', 'pending'], true) && is_file($file)) {
+            $cur = @json_decode((string)@file_get_contents($file), true);
+            if (is_array($cur) && ($cur['status'] ?? '') === 'cancelled') {
+                $job['status'] = 'cancelled';
+                $job['completed_at'] = $cur['completed_at'] ?? date('Y-m-d H:i:s');
+            }
+        }
         $tmp = $file . '.tmp';
         @file_put_contents($tmp, json_encode($job, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
         @rename($tmp, $file);

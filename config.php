@@ -4,7 +4,7 @@
  * 시놀로지 파일스테이션 대체용 셀프호스팅 파일 관리 시스템
  *
  * @author   펜닐 (Pennil)
- * @version  5.8.11
+ * @version  5.8.12
  * @license  All rights reserved
  */
 
@@ -13,7 +13,7 @@
 // ini_set('error_log', __DIR__ . '/data/php_error.log');
 
 // 버전 (수정 시 상단 @version 주석도 함께 업데이트할 것!)
-define('APP_VERSION', '5.8.11');
+define('APP_VERSION', '5.8.12');
 
 // 압축 해제/목록 디버그 로그 스위치 (진단 시에만 true)
 // true로 바꾸면 <DATA_PATH>/extract_debug.log 에 압축 처리 과정이 기록됨.
@@ -32,6 +32,82 @@ define('DANGEROUS_EXTS', ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phar'
 
 // 게시판 전용 추가 차단 확장자 (XSS 벡터)
 define('BOARD_DANGEROUS_EXTS', ['html', 'htm', 'shtml', 'xhtml', 'svg']);
+
+/**
+ * ★ (2026-10-28 18:22, 소스 점검 5단계) OnlyOffice 문서 키 등록부 — onlyoffice.php 가 편집기를 열 때 발급한 키만 인정.
+ *   키 → {storage_id, path, mode(edit|view), exp}. 다운로드(onlyoffice_download)·저장 콜백(onlyoffice_callback)이 이 기록으로
+ *   '그 파일에 대해 실제로 발급한 키인지' 확인(종전엔 형식만 맞으면 통과했고, 콜백은 서명만 보고 대상 파일과 묶지 않았음).
+ *   저장은 edit 로 발급한 키만. 24시간 지나면 지움.
+ */
+function fsOoKeyFile(): string { return (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data')) . '/onlyoffice_keys.json'; }
+function fsOoKeyRegister(string $key, int $storageId, string $path, string $mode): void {
+    $f = fsOoKeyFile();
+    $fp = @fopen($f, 'c+');
+    if (!$fp) return;
+    if (flock($fp, LOCK_EX)) {
+        $raw = stream_get_contents($fp);
+        $all = json_decode($raw ?: '[]', true) ?: [];
+        $now = time();
+        foreach ($all as $k => $v) { if (($v['exp'] ?? 0) < $now) unset($all[$k]); }
+        $prev = $all[$key] ?? null;
+        // 같은 키를 보기·편집 둘 다로 열었으면 편집 권한 기록을 유지
+        $all[$key] = ['storage_id' => $storageId, 'path' => $path,
+            'mode' => ($mode === 'edit' || (($prev['mode'] ?? '') === 'edit' && ($prev['storage_id'] ?? 0) === $storageId && ($prev['path'] ?? '') === $path)) ? 'edit' : 'view',
+            'exp' => $now + 86400];
+        ftruncate($fp, 0); rewind($fp);
+        fwrite($fp, json_encode($all, JSON_UNESCAPED_UNICODE));
+        fflush($fp);
+        flock($fp, LOCK_UN);
+    }
+    fclose($fp);
+}
+function fsOoKeyCheck(string $key, int $storageId, string $path, bool $needEdit = false): bool {
+    if ($key === '' || !preg_match('/^[a-f0-9]{32}$/i', $key)) return false;
+    // ★ (2026-10-28 19:55, 6차 점검) 등록(ftruncate→fwrite) 도중에 읽으면 빈 파일로 보여 저장 콜백이 거부될 수 있었음 → 공유 잠금으로 읽기
+    $raw = '';
+    $fp = @fopen(fsOoKeyFile(), 'r');
+    if ($fp) { if (flock($fp, LOCK_SH)) { $raw = (string)stream_get_contents($fp); flock($fp, LOCK_UN); } fclose($fp); }
+    $all = json_decode($raw ?: '[]', true) ?: [];
+    $r = $all[$key] ?? null;
+    if (!$r || ($r['exp'] ?? 0) < time()) return false;
+    if ((int)($r['storage_id'] ?? 0) !== $storageId || (string)($r['path'] ?? '') !== $path) return false;
+    if ($needEdit && ($r['mode'] ?? '') !== 'edit') return false;
+    return true;
+}
+
+/**
+ * ★ (2026-10-28 17:42, 소스 점검 3단계) 서버에서 실행될 수 있는 파일 이름인지 — 업로드·이름 바꾸기·내부 공유·파일 드롭·WebDAV 공통.
+ *   실제로 저장될 이름 기준(FileManager::sanitizeFilename 과 같은 정리: 위험 문자 제거 + 앞뒤 점·공백 제거)으로
+ *   마지막 확장자와 중간 확장자('x.php.jpg') 를 SERVER_EXEC_EXTS 와 비교. 막아야 하면 사유, 괜찮으면 null.
+ *   (종전엔 경로마다 정리 전 이름으로 검사하거나 아예 검사가 없어 'x.p:hp' → 'x.php' 저장, 'a.txt' → 'a.php' 이름 바꾸기가 됐음)
+ *   ★ (2026-10-28 19:55, 6차 점검) 종전엔 ':' 를 지운 이름만 봐서 'x.php::$DATA'(NTFS 에선 x.php 로 저장)가 'x.php$data' 로 읽혀 통과했고,
+ *   앞 점을 지운 뒤 비교해 '.htaccess'·'.user.ini' 도 통과했음(받은 이름 그대로 쓰는 내부 공유·파일 드롭·WebDAV 에서 만들어짐).
+ *   → ':' 를 지운 이름과 ':' 앞까지 자른 이름 둘 다 검사하고, .htaccess/.htpasswd/.user.ini 는 이름으로 막음
+ */
+function fsServerExecReason(string $name): ?string {
+    $name = basename(str_replace('\\', '/', $name));
+    $variants = [preg_replace('/[<>:"\/\\|?*\x00-\x1f]/', '', $name)];                       // 위험 문자를 지운 이름(일반 업로드·이름 바꾸기에 저장되는 이름)
+    if (strpos($name, ':') !== false) {
+        $variants[] = preg_replace('/[<>"\/\\|?*\x00-\x1f]/', '', explode(':', $name, 2)[0]); // ':' 앞까지(NTFS 스트림 'x.php::$DATA' → x.php)
+    }
+    $tr = function ($k, $d) { return function_exists('__') ? __($k, $d) : $d; };
+    foreach ($variants as $v) {
+        $low = strtolower($v);
+        // ★ (2026-10-29 18:30, 22차 점검) IIS 의 같은 역할 파일 web.config 도 — 종전엔 빠져, IIS 에 설치하고 users/ 를 웹 루트 안에 두면 사용자가 올린 web.config 로 그 폴더의 차단 규칙을 풀 수 있었음
+        if (in_array(rtrim(ltrim($low, ' '), '. '), ['.htaccess', '.htpasswd', '.user.ini', 'web.config'], true)) {
+            return $tr('api_err_dangerous_filename', '보안상 허용되지 않는 파일명입니다');
+        }
+        $n = trim($low, '. ');
+        if ($n === '') continue;
+        $ext = pathinfo($n, PATHINFO_EXTENSION);
+        if (in_array($ext, SERVER_EXEC_EXTS, true)) return $tr('api_err_dangerous_ext', '보안상 허용되지 않는 파일 형식입니다') . ": .$ext";
+        $parts = explode('.', $n);
+        for ($i = 1; $i < count($parts) - 1; $i++) {
+            if (in_array($parts[$i], SERVER_EXEC_EXTS, true)) return $tr('api_err_dangerous_filename', '보안상 허용되지 않는 파일명입니다');
+        }
+    }
+    return null;
+}
 
 // 에러 리포팅 (운영 모드)
 error_reporting(0);
@@ -80,6 +156,16 @@ if (session_status() === PHP_SESSION_NONE) {
     ini_set('session.use_strict_mode', 1);
     ini_set('session.cookie_samesite', 'Lax'); // Lax: 외부 네비게이션(홈 화면 바로가기, 앱 전환) 시에도 세션 쿠키 전송
     ini_set('session.gc_maxlifetime', 86400); // 24시간 (실제 타임아웃은 Auth에서 처리)
+    // ★ (2026-10-30 00:44, 25차 — 펜닐 선택 '설정값에 맞춰 수명 늘림') 세션 유지 '제한 없음'(0)이면 PHP 세션 수명(redis TTL·파일 정리 기준)도 30일로 —
+    //   종전엔 늘 24시간이라 '로그인 유지'를 안 고른 사용자는 '제한 없음'이어도 24시간 무활동이면 로그아웃됐음. 24시간 넘는 값이면 그 값으로(지금 화면 선택지는 최대 24시간).
+    //   요청마다 JSON 전체를 풀지 않게 settings.json 에서 이 키만 읽음(못 읽으면 종전 24시간)
+    $_fsSessSet = @file_get_contents(__DIR__ . '/data/settings.json');
+    if (is_string($_fsSessSet) && preg_match('/"session_timeout"\s*:\s*"?(\d+)"?/', $_fsSessSet, $_fsSessM)) {
+        $_fsSessMin = (int)$_fsSessM[1];
+        if ($_fsSessMin === 0) ini_set('session.gc_maxlifetime', 2592000);
+        elseif ($_fsSessMin * 60 > 86400) ini_set('session.gc_maxlifetime', min($_fsSessMin * 60, 31536000));
+    }
+    unset($_fsSessSet, $_fsSessM, $_fsSessMin);
     
     // HTTPS 자동 감지 (직접 HTTPS 또는 프록시 뒤 HTTPS)
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
