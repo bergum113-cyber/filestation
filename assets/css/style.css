@@ -11937,6 +11937,13 @@ tr:hover,
         max-height: 100% !important;
         max-width: 100% !important;
     }
+    /* ★ (2026-11-17 16:34, 340차 펜닐 제보 — iPhone 가로에서 동영상 위아래가 잘림, 사진 실측 위아래 약 35px씩) Safari 는 '부모 높이의 100%' 를 못 잡을 때가 있어
+       동영상이 폭에 맞춘 16:9 높이(422px)로 커지고 가운데 맞춤이라 위아래가 화면(약 342px) 밖으로 나갔음 — Chromium 에서 같은 상태를 흉내 내 재현.
+       몰입 모드 틀은 늘 화면 전체이므로 동영상 최대 높이를 '보이는 화면 높이'로 직접 제한(dvh = 주소창을 뺀 높이, 모르는 브라우저는 vh). 비율은 그대로(contain) */
+    .modal-preview.preview-immersive #preview-content video {
+        max-height: 100vh !important;
+        max-height: 100dvh !important;
+    }
     
     /* 가로모드: 자막 컨트롤 축소 + 위치 조정 */
     /* ★ v5.8.1j: 펜닐님 개발자도구 조정값 (가로모드 자막 top:90px, right 제거) */
