@@ -143,7 +143,45 @@
         let menuPage = 'main';
         let eqPanel = null;   // ★ (2026-10-11) ⚙ › 이퀄라이저 화면(fs-eq.js) — 다시 그리거나 닫을 때 설정 변경 알림을 해제
         const dropEqPanel = () => { if (eqPanel) { try { eqPanel.destroy(); } catch (e) {} eqPanel = null; } };
-        const setMenuOpen = (open) => { menu.hidden = !open; menu.style.display = open ? '' : 'none'; wrap.classList.toggle('fsvs-menu-open', !!open); if (!open) { menuPage = 'main'; dropEqPanel(); } };
+        // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) 공유 페이지(ctx.menuSheet)에서 설정 창이 플레이어 안에 다 안 들어가면 '아래에서 올라오는 시트'(시안 A) —
+        //   뒤를 어둡게 덮는 판(sheetBg)을 함께 띄우고, 한 번 시트가 되면 닫을 때까지 시트로 둔다(asheet — 하위 목록을 오갈 때 모양이 바뀌지 않게).
+        //   종전엔 플레이어 위 빈 곳까지 넘치거나(PC) 휴대폰은 조작 줄 위로 떠 플레이어 밖까지 덮었다(재현: iPhone 13 세로 판 283~524 / 플레이어 411~591).
+        const sheetBg = el('div', 'fsvs-sheetbg');
+        let asheet = false;
+        // ★ (2026-11-12 11:34, 97차 재검토 RGR16-1) 시트로 열린 동안만 뒤 페이지가 끌리지 않게(touchmove·wheel, passive:false) — 종전엔 시트 내용이
+        //   화면 85% 안에 들어가면 시트가 스크롤 영역이 아니라 overscroll-behavior 가 안 듣고, 어두운 판도 끌기를 안 막아 뒤 페이지만 움직였다
+        //   (재현: iPhone 13 가로 시트 위 끌기 scrollY 190→0, PC 640 휠 1480→1880). 시트 안은 실제로 넘칠 때만 그 안에서 넘기고 끝에 닿으면 막는다.
+        //   시트를 닫거나 시트가 아닌 배치로 바뀌면 리스너를 걷어 낸다(탐색기 미리보기·큰 플레이어 판은 붙지 않음).
+        let sheetLockOn = false, sheetTouchY = 0;
+        let sheetTouchX = 0;   // ★ (2026-11-12 19:58, 103차 개선 X4) 막대 위 끌기의 가로·세로를 가르려고 X 도 기억
+        const sheetBlock = (e) => { if (e.cancelable) e.preventDefault(); };
+        const sheetCanScroll = (dy) => {   // dy > 0: 위로 끌기·휠 아래(내용을 아래로 넘김), dy < 0: 반대
+            const max = menu.scrollHeight - menu.clientHeight;
+            if (max <= 1) return false;
+            return dy > 0 ? menu.scrollTop < max - 1 : menu.scrollTop > 0;
+        };
+        const sheetWheel = (e) => { if (!sheetCanScroll(e.deltaY)) sheetBlock(e); };
+        const sheetTouchStart = (e) => { const t = e.touches && e.touches[0]; sheetTouchY = t ? t.clientY : 0; sheetTouchX = t ? t.clientX : 0; };   // ★ (2026-11-12 19:58, 103차 개선 X4) X 도 기억
+        const sheetTouchMove = (e) => {
+            const t = e.touches && e.touches[0]; if (!t) return;
+            if (e.target && e.target.closest && e.target.closest('input[type="range"]')) {   // 이퀄라이저 등 막대 끌기는 그대로
+                // ★ (2026-11-12 19:58, 103차 개선 X4) 막대 위에서도 세로 이동이 가로보다 크면 시트 규칙(시트가 넘칠 때만 그 안을 넘기고, 아니면 막음)을 씀 — 종전엔 막대 위 세로 끌기를
+                //   무조건 통과시켜 시트 뒤 페이지가 스크롤됐음(안드로이드 세로 384×780, 첫 막대 위로 150px: scrollY 1297 → 1473, 재현). 가로 끌기(값 바꾸기)는 종전처럼 그대로 둠
+                const ddx = t.clientX - sheetTouchX, ddy = sheetTouchY - t.clientY; sheetTouchX = t.clientX; sheetTouchY = t.clientY;
+                if (Math.abs(ddy) > Math.abs(ddx) && !sheetCanScroll(ddy)) sheetBlock(e);
+                return;
+            }
+            const dy = sheetTouchY - t.clientY; sheetTouchY = t.clientY;
+            if (!sheetCanScroll(dy)) sheetBlock(e);
+        };
+        function sheetLock(onOff) {
+            if (onOff === sheetLockOn) return;
+            sheetLockOn = onOff;
+            const f = onOff ? 'addEventListener' : 'removeEventListener';
+            sheetBg[f]('touchmove', sheetBlock, { passive: false }); sheetBg[f]('wheel', sheetBlock, { passive: false });
+            menu[f]('touchstart', sheetTouchStart, { passive: true }); menu[f]('touchmove', sheetTouchMove, { passive: false }); menu[f]('wheel', sheetWheel, { passive: false });
+        }
+        const setMenuOpen = (open) => { menu.hidden = !open; menu.style.display = open ? '' : 'none'; wrap.classList.toggle('fsvs-menu-open', !!open); if (!open) { menuPage = 'main'; dropEqPanel(); asheet = false; sheetBg.classList.remove('is-on'); sheetLock(false); } };   // ★ (2026-11-12 11:34, 97차 재검토 RGR16-1) sheetLock(false) 덧붙임
         menu.classList.add('fsvs-lst');
         setMenuOpen(false);
         const bar = el('div', 'fsvs-bar');
@@ -187,7 +225,7 @@
         bar.append(prog, row);
         // ★ (2026-09-23) 가운데 재생 버튼은 만들지 않는다 — 기존 플레이어의 가운데 버튼으로 충분하고
         //   겹침이 생겼다(펜닐 확인). 재생/일시정지는 조작 줄의 버튼과 기존 가운데 버튼으로 한다.
-        root.append(menu, bar);
+        root.append(sheetBg, menu, bar);   // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) 시트 뒤 어둡게 덮는 판(평소 숨김) — 플레이어 안이라 전체 화면에서도 함께 보인다
         wrap.appendChild(root);
         // ★ (2026-10-25) Tab 키로 플레이어 안 버튼이 하나씩 선택되지 않게(펜닐 요청 — Tab 을 누르면 버튼에 흰 테두리가 생김).
         //   플레이어(wrap) 안 버튼·재생 막대·음량 막대·입력칸을 tabindex=-1 — 마우스·터치·단축키(스페이스·방향키 등, 문서 전체에서 받음)와
@@ -220,7 +258,8 @@
             const v = video.muted ? 0 : (Number(video.volume) || 0);
             volOsd.innerHTML = v > 0 ? ICON.vol : ICON.mute;
             const pct = document.createElement('span');
-            pct.textContent = Math.round(v * 100) + '%';
+            // ★ (2026-10-31 09:31, 펜닐 요청) 음소거면 '0%' 대신 '음소거' — 스피커 단추로 음소거를 켜고 끌 때도 이 표시를 띄움(아래 bVol). 음량을 0 까지 내린 건 그대로 '0%'
+            pct.textContent = video.muted ? T('fsvs_muted', '음소거') : Math.round(v * 100) + '%';   // ★ (2026-10-31 11:23, 재검토) 상태라 영어는 'Muted'(단추 이름 'Mute' 와 따로)
             volOsd.appendChild(pct);
             volOsd.classList.add('on');
             if (volOsdTimer) clearTimeout(volOsdTimer);
@@ -271,6 +310,10 @@
 
         // 조작부 안의 클릭이 기존 wrap/video 핸들러(탭으로 재생 토글 등)로 새지 않게 한다
         [bar, menu].forEach((n) => { on(n, 'click', stop); on(n, 'touchstart', stop, { passive: true }); });
+        // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) 시트 바깥(어두운 판)을 누르면 닫는다 — 누름 시작(pointerdown)에서 닫으면 판이 먼저 사라져
+        //   손을 뗄 때의 click 이 아래 영상·페이지로 새므로, 누름 시작은 여기서 멈추고(문서의 '바깥 누르면 닫기'까지 안 가게) click 에서 닫는다
+        on(sheetBg, 'pointerdown', stop); on(sheetBg, 'touchstart', stop, { passive: true });
+        on(sheetBg, 'click', (e) => { stop(e); setMenuOpen(false); render(); });
 
         // ── 재생·음량 ────────────────────────────────────────────────────────
         const togglePlay = () => { if (video.paused || video.ended) { const p = video.play(); if (p && p.catch) p.catch(() => {}); } else video.pause(); };
@@ -292,7 +335,7 @@
             if (typeof p0.r === 'number' && isFinite(p0.r) && p0.r >= 0.25 && p0.r <= 4) { video.defaultPlaybackRate = p0.r; video.playbackRate = p0.r; }
         } catch (e) {}
         on(bPlay, 'click', togglePlay);
-        on(bVol, 'click', () => { video.muted = !video.muted; prefSaveVol(); });
+        on(bVol, 'click', () => { video.muted = !video.muted; prefSaveVol(); showVolOsd(); });   // ★ (2026-10-31 09:31, 펜닐 요청) 음소거 켜고 끌 때도 음량 표시처럼(켜면 '음소거', 끄면 지금 음량 %)
         on(vol, 'input', () => { video.volume = parseFloat(vol.value); if (video.volume > 0 && video.muted) video.muted = false; prefSaveVol(); });
         // ★ (2026-10-22) 얇은 음량 막대(CSS)의 채움 길이 — 크롬·엣지·사파리는 막대 칸이 채운 만큼을 따로 그리지 못해 --fsvs-vp(0~100%)로 넘긴다
         //   (파이어폭스는 ::-moz-range-progress 가 스스로 그림). 끄는 중·키보드로 바꿀 때도 바로 맞게 input 때마다, 그 밖엔 render 에서.
@@ -845,9 +888,22 @@
         //   [지금] 한 칸 목록(폭 최대 300px). 플레이어 안 높이(공유는 플레이어 위 빈 곳 ctx.menuRoomAbove 까지)를 넘으면 창 안에서 스크롤
         //   (긴 하위 목록 — 음성 11개 등, 유튜브와 같음 — 펜닐 승인). 휴대폰(창의 짧은 쪽 600px 미만)에서 플레이어가 너무 낮으면(목록이
         //   들어갈 높이 220px 미만) 종전처럼 화면 아래에서 올라오는 판 — 조작 줄이 보이면 그 바로 위에(⚙ 를 덮지 않게).
+        // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) 시트 배치 — 화면 아래 가운데(폭은 CSS 로 최대 420px), 높이는 화면의 85% 까지(넘으면 시트 안 스크롤)
+        function fitSheetA() {
+            menu.classList.remove('fsvs-raised');
+            menu.classList.add('fsvs-sheet', 'fsvs-asheet');
+            sheetBg.classList.add('is-on');
+            sheetLock(true);   // ★ (2026-11-12 11:34, 97차 재검토 RGR16-1) 시트인 동안만 뒤 페이지 끌기·휠 막음
+            menu.style.transform = ''; menu.style.width = ''; menu.style.right = ''; menu.style.bottom = ''; menu.style.maxHeight = ''; menu.style.overflowY = '';
+            const maxH = Math.floor((window.innerHeight || 0) * 0.85);
+            if (maxH > 0 && menu.scrollHeight > maxH) { menu.style.maxHeight = maxH + 'px'; menu.style.overflowY = 'auto'; }
+        }
         function fitMenuInner() {
             if (menu.hidden) return;
-            menu.classList.remove('fsvs-2col', 'fsvs-3col', 'fsvs-compact', 'fsvs-sheet', 'fsvs-raised');
+            if (asheet) { fitSheetA(); return; }   // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) 시트로 열린 동안은 시트 그대로
+            sheetBg.classList.remove('is-on');   // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A)
+            sheetLock(false);   // ★ (2026-11-12 11:34, 97차 재검토 RGR16-1) 시트가 아닌 배치면 리스너를 걷음
+            menu.classList.remove('fsvs-2col', 'fsvs-3col', 'fsvs-compact', 'fsvs-sheet', 'fsvs-raised', 'fsvs-asheet');   // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) fsvs-asheet 도 뗌
             menu.style.transform = ''; menu.style.width = ''; menu.style.maxHeight = ''; menu.style.overflowY = ''; menu.style.right = '';
             const barH = bar.offsetHeight || 0;
             menu.style.bottom = (barH + 8) + 'px';
@@ -855,6 +911,9 @@
             const availW = (wrap.clientWidth || 0) - 24;
             if (availH <= 0 || availW <= 0) return;   // 배치 정보를 못 얻으면(숨김 등) 그대로 둔다
             const phone = Math.min(window.innerWidth || 0, window.innerHeight || 0) < 600;
+            // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) 공유 페이지만(ctx.menuSheet) — 플레이어 안에 다 들어가지 않으면(종전엔 위로 넘치거나 휴대폰 판) 시트.
+            //   들어가면(큰 플레이어·PC 전체 화면 등) 아래 종전 배치 그대로. 탐색기 미리보기는 ctx.menuSheet 를 주지 않아 종전 그대로
+            if (ctx.menuSheet === true && ((phone && availH < 220) || availW < 240 || menu.scrollHeight > availH)) { asheet = true; fitSheetA(); return; }
             if (phone && (availH < 220 || availW < 240)) {
                 menu.style.bottom = '';
                 menu.classList.add('fsvs-sheet');
@@ -1112,7 +1171,7 @@
                 const abIco = '<b class="fsvs-mab">A-B</b>';
                 actRow(abIco, T('video_ab', '구간 반복') + ((a && b) ? ' ' + fmt(ab_.a) + ' ~ ' + fmt(ab_.b) : (a ? ' A ' + fmt(ab_.a) : '')), val.replace(/^.*?:\s*/, ''), () => { if (ctx.clickAb) ctx.clickAb(); announce('ab'); }, true);
             }
-            if (folded.includes(bVol)) toggleRow(ICON.vol, T('mute', '음소거'), video.muted || video.volume === 0, () => { video.muted = !video.muted; prefSaveVol(); });   // ★ (2026-10-22) 음소거 기억
+            if (folded.includes(bVol)) toggleRow(ICON.vol, T('mute', '음소거'), video.muted || video.volume === 0, () => { video.muted = !video.muted; prefSaveVol(); showVolOsd(); });   // ★ (2026-10-22) 음소거 기억
             if (window.FSEQ && FSEQ.supported) navRow(ICON.eq, T('eq_title', '이퀄라이저'), FSEQ.summary('video'), 'eq');   // ★ (2026-10-11) 아이폰 등 지원 안 하면 줄 없음
             if (menu.querySelectorAll('.fsvs-mrow').length > rowsBefore) menu.append(el('div', 'fsvs-msep'));   // 위 묶음이 있을 때만 구분선(아래 묶음은 재생 속도가 늘 있음)
             navRow(ICON.speed, T('playback_speed', '재생 속도'), rateLabel(video.playbackRate).replace(' (1x)', ''), 'speed');

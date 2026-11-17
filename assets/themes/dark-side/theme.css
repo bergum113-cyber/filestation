@@ -725,7 +725,7 @@ body.is-mobile .header {
 .storage-item.active, .menu-list li.active > a, .menu-list li > a.board-sidebar-item.active, #storage-list a.active { background:#cadcff !important; color:#243454 !important; font-weight:600; }
 .quota-bar { background:#d9e6ff !important; }
 .quota-fill { background:#6c9eff !important; }
-.modal-header { background:#6c9eff !important; color:#0d131f !important; --fs-text-2:#0d131f; --fs-text-3:#0d131f; }
+.modal-header { background:#6c9eff !important; color:#0d131f !important; --fs-text-2:#0d131f; --fs-text-3:#0d131f; --fs-fg-err:#0d131f; } /* ★ (2026-11-10 18:52, 67차 점검) 머리줄 위 상태색 아이콘(금지 아이디·닉네임 창 🚫 .fs-ico-err)이 대체값 빨강 #c62828 로 칠해져 강조색 바탕과 대비 3:1 미달 → 머리줄 글자색을 따름 */
 .modal-header h2, .modal-header .modal-close { color:#0d131f !important; }
 .btn.btn-primary, .btn-primary { background:#6c9eff !important; border-color:#6c9eff !important; color:#0d131f !important; }
 .btn.btn-primary:hover, .btn-primary:hover { background:#5f8be0 !important; border-color:#5f8be0 !important; }
@@ -780,7 +780,7 @@ body.is-mobile .header {
 #user-name, .header .user-welcome { background:rgba(255,255,255,0.10) !important; border-color:#36383d !important; color:#e6e8eb !important; }
 .header .user-welcome * { color:#e6e8eb !important; }
 .search-box, .header .search-box { background:#ffffff !important; border-color:#494a4e !important; }
-.sidebar { background:#1b1d22 !important; color:#e6e8eb; border-right:1px solid #2f343c !important; --fs-fg-info:#aeb3bb; --fs-text-2:#ccd0d6; --fs-text-3:#aeb3bb; --fs-text-4:#aeb3bb; }
+.sidebar { background:#1b1d22 !important; color:#e6e8eb; border-right:1px solid #2f343c !important; --fs-fg-info:#aeb3bb; --fs-text:#e6e8eb; --fs-text-2:#ccd0d6; --fs-text-3:#aeb3bb; --fs-text-4:#aeb3bb; }   /* ★ (2026-11-10 16:07, 65차 점검) --fs-text 가 빠져 휴대폰 사이드바 닫기(×)가 대체값 #333 으로 어두운 바탕에 안 보였음(1.33:1) → 머리줄 블록과 같은 값 */
 .sidebar h3, .sidebar-section h3.section-toggle, .quota-text, .storage-item .storage-icon { color:#aeb3bb !important; }
 .sidebar-section h3.section-toggle:hover { background:#262a31 !important; color:#e6e8eb !important; }
 .sidebar-section h3.section-toggle .toggle-icon { background:#262a31 !important; color:#e6e8eb !important; }

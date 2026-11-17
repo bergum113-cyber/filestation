@@ -84,6 +84,20 @@ class TOTP {
     }
     
     /**
+     * ★ (2026-10-31 13:19, 34차 후속 개선) 맞은 시간 칸 번호(counter)를 돌려줌(틀리면 null) — 같은 코드를 약 90초 안에 다시 쓰는 것을 막는 데 씀
+     */
+    public static function verifyCounter(string $secret, string $code, int $window = 1): ?int {
+        if (trim($secret) === '' || strlen(self::base32Decode($secret)) < 10) return null;
+        if (!preg_match('/^\d{' . self::DIGITS . '}$/', $code)) return null;
+        $timestamp = time();
+        for ($i = -$window; $i <= $window; $i++) {
+            $checkTime = $timestamp + ($i * self::PERIOD);
+            if (hash_equals(self::getCode($secret, $checkTime), $code)) return intdiv($checkTime, self::PERIOD);
+        }
+        return null;
+    }
+    
+    /**
      * QR 코드용 otpauth URI 생성
      */
     public static function getUri(string $secret, string $username, string $issuer = 'WebHard'): string {

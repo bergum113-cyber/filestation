@@ -23,6 +23,28 @@ class FileIndex {
             $this->initDatabase();
             // DB 무결성 간단 체크
             $test = @$this->db->querySingle("SELECT COUNT(*) FROM files LIMIT 1");
+            // ★ (2026-11-01 09:45, 38차 점검) SQLite3 은 기본 설정에서 예외 대신 false 를 돌려줘 손상 감지가 안 됐음 — 첫 생성이 테이블 만들기 전에 끊겨
+            //   빈 파일·테이블 없는 DB 가 남으면 available=true 인 채 모든 prepare() 가 false → bindValue() 오류. false 면 테이블을 (IF NOT EXISTS 로) 만들어 보고, 그래도 안 되면 재생성으로 넘김
+            if ($test === false) {
+                // ★ (2026-11-01 10:20, 38차 점검 재검토) 실패 이유를 보고 나눔 — 잠김(5 BUSY·6 LOCKED)·입출력(10) 같은 일시 오류까지 '손상'으로 보고 아래에서
+                //   DB 를 지워 다시 만들 수 있었음(재검토 실측: WAL 이 아닌 상태에서 다른 연결이 쓰는 중이면 code=5). 일시 오류면 이번 요청만 색인을 쓰지 않음
+                $code = (int)$this->db->lastErrorCode();
+                if (!in_array($code, [1, 11, 26], true)) {   // 1 = 테이블 없음 등, 11 = 손상, 26 = DB 아님 — 이때만 만들기·재생성
+                    error_log("FileIndex DB temporarily unavailable (code {$code}): " . $this->db->lastErrorMsg());
+                    $this->available = false;
+                    return;
+                }
+                $this->createTables();
+                if (@$this->db->querySingle("SELECT COUNT(*) FROM files LIMIT 1") === false) {
+                    $code2 = (int)$this->db->lastErrorCode();
+                    if (!in_array($code2, [1, 11, 26], true)) {
+                        error_log("FileIndex DB temporarily unavailable (code {$code2}): " . $this->db->lastErrorMsg());
+                        $this->available = false;
+                        return;
+                    }
+                    throw new RuntimeException('files table unavailable: ' . $this->db->lastErrorMsg());
+                }
+            }
             $this->available = true;
         } catch (Throwable $e) {
             // DB 손상 시 자동 재생성
@@ -127,7 +149,12 @@ class FileIndex {
      */
     public function addFile(int $storageId, string $filepath, array $info = []): bool {
         if (!$this->available) return false;
-        
+        // ★ (2026-11-02 14:38, 44차 점검) 경로 조각 중 점(.)으로 시작하는 것이 있으면 넣지 않음 — 재구축·동기화·원격 색인·indexFolder(38차)는 점 이름을 빼는데
+        //   WebDAV PUT·MKCOL(._a.jpg·.DS_Store)·휴지통 복원(reindexPath)은 여기로 바로 넣어 검색·색인 즉답 목록에 나왔음(G1#9 재현). 한 곳에서 같은 정책으로(넣은 척 true)
+        foreach (explode('/', str_replace('\\', '/', $filepath)) as $ixSeg) {
+            if ($ixSeg !== '' && $ixSeg[0] === '.') return true;
+        }
+
         $stmt = $this->db->prepare('
             INSERT OR REPLACE INTO files (storage_id, filename, filepath, is_dir, size, modified, extension)
             VALUES (:storage_id, :filename, :filepath, :is_dir, :size, :modified, :extension)
@@ -176,6 +203,8 @@ class FileIndex {
         $dm = $this->db->prepare('DELETE FROM meta WHERE key = :key');
         $dm->bindValue(':key', 'last_sync_storage_' . $storageId, SQLITE3_TEXT);
         $dm->execute();
+        $dm->bindValue(':key', 'index_built_storage_' . $storageId, SQLITE3_TEXT);   // ★ (2026-11-02 15:24, 44차 재검토) 검색용 '재구축 끝남' 표시도(아래 getIndexedStorageIds)
+        $dm->execute();
         $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data');
         $cp = $dataDir . DIRECTORY_SEPARATOR . 'index_sync_checkpoint_' . $storageId . '.json';
         if (is_file($cp)) @unlink($cp);
@@ -218,6 +247,16 @@ class FileIndex {
         // ★ (2026-10-29 22:06, 24차 점검) 덮어쓰기 이동이면 대상 자리의 옛 행(폴더면 그 아래까지)을 먼저 지움 — 종전엔 UNIQUE(storage_id, filepath) 충돌로 UPDATE 가 실패해
         //   원본 경로의 유령 항목이 남고 대상은 옛 크기·시각 그대로였음(직접 이동·끌어 놓기)
         //   원본 행이 있을 때만(같은 이동을 두 번 부르는 경로가 있어 — FileManager 와 api.php — 두 번째에 옮겨 놓은 행을 지우지 않게)
+        // ★ (2026-11-02 14:38, 44차 점검) 대상 자리 지우기·폴더 행·하위 행 갱신을 한 SAVEPOINT(바깥 트랜잭션 안에서도 됨) 안에서 — 종전엔 하위 행마다 따로 커밋(10만 행 9초)이라
+        //   시간 제한 등으로 끊기면 반은 옛 경로로 남았고 index_sync 로도 안 고쳐졌음(G1#6 재현). 실패하면 전부 되돌리고 false
+        $this->db->exec('SAVEPOINT fi_move');
+        // ★ (2026-11-11 18:30, 79차 IDX-1) 읽기보다 먼저 쓰기 잠금을 잡음(행을 바꾸지 않는 쓰기 문장) — 종전엔 SAVEPOINT 안 첫 문장이 SELECT 라 읽기 잠금을 쥔 채 UPDATE 로 올리다
+        //   다른 요청이 쓰는 중이면(재구축·index_sync·업로드) SQLite 가 busyTimeout 을 기다리지 않고 바로 실패해, 화면은 '성공'인데 검색에 옛 이름이 남았음(재현). 잠금을 끝내 못 잡으면 종전처럼 false
+        if ($this->db->exec('DELETE FROM files WHERE 0') === false) {
+            $this->db->exec('ROLLBACK TO fi_move');
+            $this->db->exec('RELEASE fi_move');
+            return false;
+        }
         if ($oldPath !== $newPath) {
             $chk = $this->db->prepare('SELECT 1 FROM files WHERE storage_id = :sid AND filepath = :p LIMIT 1');
             $chk->bindValue(':sid', $storageId, SQLITE3_INTEGER);
@@ -244,21 +283,22 @@ class FileIndex {
         //   범위 조건은 와일드카드·대소문자 문제가 없고 인덱스를 탐.
         $oldPrefix = $oldPath . '/';
         $oldLen = strlen($oldPath);
-        
-        $selectStmt = $this->db->prepare('SELECT id, filepath FROM files WHERE storage_id = :storage_id AND filepath >= :rlo AND filepath < :rhi');
-        $selectStmt->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
-        $selectStmt->bindValue(':rlo', $oldPrefix, SQLITE3_TEXT);
-        $selectStmt->bindValue(':rhi', substr($oldPrefix, 0, -1) . '0', SQLITE3_TEXT);
-        $result = $selectStmt->execute();
-        
-        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-            $newFilePath = $newPath . substr($row['filepath'], $oldLen);
-            $updateStmt = $this->db->prepare('UPDATE files SET filepath = :new_path WHERE id = :id');
-            $updateStmt->bindValue(':new_path', $newFilePath, SQLITE3_TEXT);
-            $updateStmt->bindValue(':id', $row['id'], SQLITE3_INTEGER);
-            $updateStmt->execute();
+
+        // ★ (2026-11-02 14:38, 44차 점검) 행마다 SELECT→UPDATE 하던 것을 한 문장으로(같은 범위 조건). 접두사 자르기는 바이트 단위(BLOB substr — PHP substr($fp, $oldLen) 과 같음,
+        //   TEXT substr 는 글자 단위라 한글 경로에서 어긋남). OR REPLACE: 대상 자리에 남은 옛 행(원본 폴더 행이 없어 위 지우기를 안 탄 경우)과 부딪혀도 문장 전체가 실패하지 않게
+        $updateStmt = $this->db->prepare('UPDATE OR REPLACE files SET filepath = :new_path || CAST(substr(CAST(filepath AS BLOB), :cut) AS TEXT) WHERE storage_id = :storage_id AND filepath >= :rlo AND filepath < :rhi');
+        $updateStmt->bindValue(':new_path', $newPath, SQLITE3_TEXT);
+        $updateStmt->bindValue(':cut', $oldLen + 1, SQLITE3_INTEGER);
+        $updateStmt->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
+        $updateStmt->bindValue(':rlo', $oldPrefix, SQLITE3_TEXT);
+        $updateStmt->bindValue(':rhi', substr($oldPrefix, 0, -1) . '0', SQLITE3_TEXT);
+        if ($updateStmt->execute() === false) {
+            $this->db->exec('ROLLBACK TO fi_move');
+            $this->db->exec('RELEASE fi_move');
+            return false;
         }
-        
+        $this->db->exec('RELEASE fi_move');
+
         return true;
     }
     
@@ -271,6 +311,17 @@ class FileIndex {
     public function search(string $query, $storageIds = null, int $limit = 500): array {
         if (!$this->available) return [];
         
+        // ★ (2026-11-02 09:01, 41차 점검) 검색어의 NFC·NFD 두 형태로도 찾음 — 맥에서 올린 이름은 자모가 풀린 NFD 로 색인되는데 키보드 검색어는 NFC 라
+        //   종전엔 '보고서' 로 맥에서 올린 '보고서.hwp' 가 안 찾아졌음(재현). 저장된 이름·색인은 그대로 두고 검색어만 늘림. intl(Normalizer) 이 없으면 종전대로 한 형태만
+        $qForms = [$query];
+        if (class_exists('Normalizer')) {
+            foreach ([\Normalizer::FORM_C, \Normalizer::FORM_D] as $nf) {
+                $nq = \Normalizer::normalize($query, $nf);
+                if (is_string($nq) && $nq !== '' && !in_array($nq, $qForms, true)) $qForms[] = $nq;
+            }
+        }
+        $qLikes = [];
+        foreach ($qForms as $query) {
         // 와일드카드 변환: * → %, ? → _
         // 사용자가 이미 *나 ?를 사용했으면 변환
         if (strpos($query, '*') !== false || strpos($query, '?') !== false) {
@@ -284,6 +335,8 @@ class FileIndex {
             // ★ (2026-10-29 22:08, 24차 점검) 검색어 속 '_'·'%' 는 글자 그대로(와일드카드 검색과 같은 이스케이프) — 종전엔 'a_b' 가 'axb' 도, '%' 하나가 전부를 찾았음
             $query = '%' . str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $query) . '%';
             $useEscape = true;
+        }
+        $qLikes[] = $query;
         }
         
         $escapeSql = $useEscape ? " ESCAPE '\\'" : "";
@@ -303,7 +356,7 @@ class FileIndex {
             $placeholders = implode(',', array_fill(0, count($storageIds), '?'));
             $stmt = $this->db->prepare("
                 SELECT * FROM files 
-                WHERE storage_id IN ($placeholders) AND filename LIKE ? COLLATE NOCASE{$escapeSql}
+                WHERE storage_id IN ($placeholders) AND (" . implode(' OR ', array_fill(0, count($qLikes), "filename LIKE ? COLLATE NOCASE{$escapeSql}")) . ")
                 ORDER BY is_dir DESC, filename ASC
                 {$limitSql}
             ");
@@ -312,19 +365,20 @@ class FileIndex {
             foreach ($storageIds as $id) {
                 $stmt->bindValue($paramIndex++, (int)$id, SQLITE3_INTEGER);
             }
-            $stmt->bindValue($paramIndex, $query, SQLITE3_TEXT);
+            foreach ($qLikes as $ql) $stmt->bindValue($paramIndex++, $ql, SQLITE3_TEXT);   // ★ (41차) 검색어 형태마다
         } else {
             $stmt = $this->db->prepare("
                 SELECT * FROM files 
-                WHERE filename LIKE :query COLLATE NOCASE{$escapeSql}
+                WHERE (" . implode(' OR ', array_map(function ($i) use ($escapeSql) { return "filename LIKE :query{$i} COLLATE NOCASE{$escapeSql}"; }, array_keys($qLikes))) . ")
                 ORDER BY is_dir DESC, filename ASC
                 {$limitSql}
             ");
-            $stmt->bindValue(':query', $query, SQLITE3_TEXT);
+            foreach ($qLikes as $i => $ql) $stmt->bindValue(':query' . $i, $ql, SQLITE3_TEXT);   // ★ (41차) 검색어 형태마다
         }
         
         $result = $stmt->execute();
         $files = [];
+        if ($result === false) return $files;   // ★ (2026-11-02 14:38, 44차 점검) LIKE 패턴 한도(5만 바이트) 초과 등으로 execute()=false 면 빈 결과 — 종전엔 false->fetchArray 로 500(G1#13 재현)
         
         while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
             $files[] = [
@@ -357,7 +411,7 @@ class FileIndex {
         $likePatterns = [];
         foreach ($patterns as $pattern) {
             $pattern = trim($pattern);
-            if (empty($pattern)) continue;
+            if ($pattern === '') continue;   // ★ (2026-11-01 17:18, 40차 점검) empty 가 패턴 '0' 을 빈 값으로 봐 버렸음(조건부 일괄 삭제 패턴 '0' 이 인덱스 경로에서 사라짐)
             
             // ★ (2026-10-29 11:12, 20차 점검) 이름에 든 % _ \ 는 먼저 글자로 이스케이프한 뒤 * ? 만 와일드카드로 — 종전엔 변환 뒤 이스케이프를 다시 풀어
             //   이름의 '_'·'%' 도 와일드카드가 돼, 'pat_20*' 에 'patx20a.txt' 까지 잡혔음(재현. 인덱스 없을 때의 matchPattern 은 글자 그대로)
@@ -373,28 +427,34 @@ class FileIndex {
         $bindings = [];
         
         // 경로 조건
-        $normalizedPath = empty($basePath) ? '' : rtrim(str_replace('\\', '/', $basePath), '/');
+        // ★ (2026-11-01 17:18, 40차 점검) 폴더 '0' 을 empty 가 루트로 봐 조건부 일괄 삭제가 스토리지 전체(재귀)·루트 바로 아래(현재 폴더)를 찾았음 → '' 일 때만 루트
+        $normalizedPath = $basePath === '' ? '' : rtrim(str_replace('\\', '/', $basePath), '/');
         $likePath = addcslashes($normalizedPath, '%_\\');   // ★ 경로 조건도 폴더 이름의 % _ 를 글자로(아래 ESCAPE '\')
         
         if ($scope === 'current') {
             // 현재 폴더만 - 직접 자식만 검색
-            if (empty($normalizedPath)) {
+            if ($normalizedPath === '') {   // ★ (2026-11-01 17:18, 40차 점검) '0' 폴더를 루트로 보지 않게
                 // 루트 폴더: filepath에 /가 없는 것 (직접 자식)
                 $conditions[] = "filepath NOT LIKE '%/%'";
             } else {
                 // 하위 폴더: 정확히 basePath/filename 형태인 것만
                 // filepath가 basePath/로 시작하고, 그 이후에 /가 없는 것
-                $conditions[] = "(filepath LIKE :path_direct ESCAPE '\\' AND filepath NOT LIKE :path_subdir ESCAPE '\\')";
+                // ★ (2026-10-31 12:03, 34차 전체 점검) LIKE 는 대소문자를 무시해 'Docs' 로 찾으면 'docs/…' 도 섞였음 → 다른 곳(removeFolder 등)처럼 범위 조건을 함께
+                //   (윈도우는 파일 시스템이 대소문자를 구분하지 않아 'docs' 로 친 경로도 'Docs' 를 찾아야 하므로 범위 조건은 윈도우 밖에서만)
+                $conditions[] = "(filepath LIKE :path_direct ESCAPE '\\' AND filepath NOT LIKE :path_subdir ESCAPE '\\'" . (DIRECTORY_SEPARATOR === '\\' ? '' : " AND filepath >= :path_rlo AND filepath < :path_rhi") . ")";
                 $bindings[':path_direct'] = $likePath . '/%';
                 $bindings[':path_subdir'] = $likePath . '/%/%';
+                if (DIRECTORY_SEPARATOR !== '\\') { $bindings[':path_rlo'] = $normalizedPath . '/'; $bindings[':path_rhi'] = $normalizedPath . '0'; }
             }
         } else {
             // 재귀 검색
-            if (!empty($normalizedPath)) {
+            if ($normalizedPath !== '') {   // ★ (2026-11-01 17:18, 40차 점검) '0' 폴더를 루트로 보지 않게
                 // basePath 하위 전체
-                $conditions[] = "(filepath LIKE :path_prefix ESCAPE '\\' OR filepath = :path_exact)";
+                // ★ (2026-11-01 01:12, 35차 전체 점검) 기준 폴더 자신은 빼고 하위만(파일 스캔 대체 경로와 같게) — 종전 'OR filepath = 기준' 때문에 조건부 일괄 삭제 결과에
+                //   기준 폴더가 체크된 채 들어가, 그대로 삭제하면 패턴에 안 맞는 파일까지 폴더째 휴지통으로 갔음
+                $conditions[] = "(filepath LIKE :path_prefix ESCAPE '\\'" . (DIRECTORY_SEPARATOR === '\\' ? '' : " AND filepath >= :path_rlo AND filepath < :path_rhi") . ")";   // ★ (2026-10-31 12:03, 34차 전체 점검) 범위 조건(대소문자, 윈도우 밖)
                 $bindings[':path_prefix'] = $likePath . '/%';
-                $bindings[':path_exact'] = $normalizedPath;
+                if (DIRECTORY_SEPARATOR !== '\\') { $bindings[':path_rlo'] = $normalizedPath . '/'; $bindings[':path_rhi'] = $normalizedPath . '0'; }
             }
             // 루트에서 재귀는 조건 없음 (전체 검색)
         }
@@ -428,6 +488,7 @@ class FileIndex {
         
         $result = $stmt->execute();
         $files = [];
+        if ($result === false) return $files;   // ★ (2026-11-02 14:38, 44차 점검) LIKE 패턴 한도(5만 바이트) 초과 등으로 execute()=false 면 빈 결과 — 종전엔 false->fetchArray 로 500(G1#13 재현)
         
         while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
             $files[] = [
@@ -459,6 +520,12 @@ class FileIndex {
             $stmt = $this->db->prepare('DELETE FROM files WHERE storage_id = :storage_id');
             $stmt->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
             $stmt->execute();
+            // ★ (2026-11-02 08:59, 41차 점검) '완전 동기화' 시각도 같은 트랜잭션에서 지움(끝까지 가면 아래에서 다시 씀) — 종전엔 5000건 중간 커밋부터
+            //   반쯤 빈 색인이 보이는데 옛 시각이 남아, 도는 동안·중단 뒤에도 목록 즉답·사용량 합계가 빠진 색인을 믿었음(재현). 실패로 롤백되면 시각도 되돌아감
+            $dm = $this->db->prepare('DELETE FROM meta WHERE key = :key');
+            $dm->bindValue(':key', 'last_sync_storage_' . $storageId, SQLITE3_TEXT);
+            $dm->execute();
+            $dm->bindValue(':key', 'index_built_storage_' . $storageId, SQLITE3_TEXT); $dm->execute();   // ★ (2026-11-02 15:24, 44차 재검토) 검색용 '재구축 끝남' 표시도 시작 때 지움(끝까지 가야 다시 씀)
             
             // 새로 인덱싱
             $count = 0;
@@ -504,10 +571,20 @@ class FileIndex {
                 $relativePath = substr($fullPath, strlen($basePath) + 1);
                 $relativePath = str_replace('\\', '/', $relativePath);
                 
+                // ★ (2026-11-13 15:02, 112차 SRCH-1) 크기·시각을 항목마다 보호 — 종전엔 stat 이 실패하는 항목 하나(끊긴 링크, 목록을 읽은 뒤 이름이 바뀌거나 지워진 항목)의
+                //   RuntimeException 이 아래 catch 로 빠져 그 폴더의 뒤쪽 형제·하위가 통째로 색인에서 빠지고 재구축은 '완료'로 끝났음(재현: 링크 뒤 44개 누락).
+                //   끊긴 링크는 폴더 목록(FileManager 361–362, 크기 0)·증분 동기화(@filemtime→0)처럼 크기 0·시각 0 으로 넣고, 사라진 항목만 건너뜀
+                try {
+                    $ixSize = $file->isDir() ? 0 : $file->getSize();
+                    $ixMtime = $file->getMTime();
+                } catch (\Throwable $e) {
+                    if (!$file->isLink()) continue;
+                    $ixSize = 0; $ixMtime = 0;
+                }
                 $this->addFile($storageId, $relativePath, [
                     'is_dir' => $file->isDir() ? 1 : 0,
-                    'size' => $file->isDir() ? 0 : $file->getSize(),
-                    'modified' => date('Y-m-d H:i:s', $file->getMTime())
+                    'size' => $ixSize,
+                    'modified' => date('Y-m-d H:i:s', $ixMtime)
                 ]);
                 
                 $count++;
@@ -520,6 +597,7 @@ class FileIndex {
                 }
                 
                 if ($file->isDir()) {
+                    if ($this->isLinkLoop($fullPath, $basePath)) continue;   // ★ (2026-11-01 09:45, 38차 점검) 상위를 가리키는 링크 순환은 따라 들어가지 않음(isLinkLoop 참고)
                     $this->indexDirectory($storageId, $fullPath, $basePath, $count);
                 }
             }
@@ -542,21 +620,37 @@ class FileIndex {
         }
         $this->remoteListIncomplete = false;
         
-        $this->db->exec('BEGIN TRANSACTION');
+        // ★ (2026-11-02 08:59, 41차 점검) 원격 재구축을 '쓰기 트랜잭션을 연 채 원격 목록 기다리기'에서 '폴더마다 목록을 먼저 받고(트랜잭션 밖) 그 폴더 행만 짧게 쓰기'로.
+        //   종전엔 시작 때 DELETE 한 트랜잭션을 연 채 원격 list() 를 재귀로 기다려, 목록이 5초(busyTimeout)를 넘기면 그 사이 업로드·삭제·작업 큐의
+        //   addFile/removeFile 이 'database is locked' 로 조용히 빠졌고(재현), 5000건 중간 커밋부터는 반쯤 빈 색인이 옛 '완전 동기화' 시각과 함께 보였음.
+        //   → 시작 때 '완전 동기화' 시각을 먼저 지우고(끝까지 가야 다시 씀), 기존 행은 미리 지우지 않고 INSERT OR REPLACE 로 새로 쓴 뒤(created_at 이 새 시각이 됨)
+        //     끝까지 돌았을 때 이번에 다시 안 쓰인 옛 행(created_at < 시작 시각)만 지움. 도는 동안·중단 뒤에도 색인이 비지 않고, 재구축 중 다른 요청이 넣은 행은 새 시각이라 남음
+        $dm0 = $this->db->prepare('DELETE FROM meta WHERE key = :key');
+        $dm0->bindValue(':key', 'last_sync_storage_' . $storageId, SQLITE3_TEXT);
+        $dm0->execute();
+        $dm0->bindValue(':key', 'index_built_storage_' . $storageId, SQLITE3_TEXT); $dm0->execute();   // ★ (2026-11-02 15:24, 44차 재검토) 검색용 '재구축 끝남' 표시도 시작 때 지움(끝까지 가야 다시 씀)
+        $rebuildStart = (string)$this->db->querySingle('SELECT CURRENT_TIMESTAMP');   // created_at 기본값과 같은 시계(SQLite UTC 'Y-m-d H:i:s')
         
         try {
-            $stmt = $this->db->prepare('DELETE FROM files WHERE storage_id = :storage_id');
-            $stmt->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
-            $stmt->execute();
-            
             $count = 0;
             $this->indexRemoteDirectory($storageId, '', $adapter, $count, $progressCallback);
             
-            $this->db->exec('COMMIT');
+            // 끝까지 돈 경우에만: 이번 재구축에서 다시 쓰이지 않은 옛 행 정리(종전 '시작 때 전부 DELETE' 와 같은 결과)
+            if ($rebuildStart !== '') {
+                $this->db->exec('BEGIN TRANSACTION');
+                $sw = $this->db->prepare('DELETE FROM files WHERE storage_id = :storage_id AND (created_at IS NULL OR created_at < :start)');
+                $sw->bindValue(':storage_id', $storageId, SQLITE3_INTEGER);
+                $sw->bindValue(':start', $rebuildStart, SQLITE3_TEXT);
+                $sw->execute();
+                $this->db->exec('COMMIT');
+            }
             $this->setMeta('last_rebuild', date('Y-m-d H:i:s'));
             $this->setMeta('last_sync', date('Y-m-d H:i:s'));
             // ★ (2026-10-29 18:06, 22차 점검) 하위 폴더 목록이 하나라도 실패했으면 '완전 동기화' 시각을 남기지 않음(사용량 재계산이 빠진 인덱스를 믿지 않게)
             //   예전 시각도 지움 — 남겨 두면 사용량 재계산·인덱스 목록이 그 시각을 보고 빠진 인덱스를 그대로 믿었음(변경 검토에서 발견)
+            // ★ (2026-11-02 15:24, 44차 재검토) 일부 하위 폴더 목록이 실패해도 끝까지 돈 재구축이면 '검색용 색인 있음' 표시를 남김 — 44차에 고급 검색·조건부 일괄 삭제의 판정을 last_sync_storage_ 로 바꾼 뒤,
+            //   폴더 하나가 늘 실패하는 원격 스토리지는 재구축해도 영영 '색인 없음'(고급 검색은 실시간 200건, 일괄 삭제는 '인덱스를 먼저 구축' 거부)이 됐음(R44_fm#1). 목록 즉답·사용량은 종전대로 last_sync_storage_ 만 믿음
+            $this->setMeta('index_built_storage_' . $storageId, date('Y-m-d H:i:s'));
             if (empty($this->remoteListIncomplete)) {
                 $this->setMeta('last_sync_storage_' . $storageId, date('Y-m-d H:i:s'));
             } else {
@@ -572,7 +666,7 @@ class FileIndex {
             
             return $count;
         } catch (Exception $e) {
-            $this->db->exec('ROLLBACK');
+            @$this->db->exec('ROLLBACK');   // ★ (41차) 폴더 단위로 커밋하므로 열린 트랜잭션이 없을 수 있음(그땐 아무 일 없음 — 경고만 숨김)
             throw $e;
         }
     }
@@ -582,9 +676,13 @@ class FileIndex {
      */
     private function indexRemoteDirectory(int $storageId, string $path, $adapter, int &$count, ?callable $progressCallback = null): void {
         
+        $inTx = false;
+        $subDirs = [];
         try {
-            $items = $adapter->list($path);
+            $items = $adapter->list($path);   // ★ (2026-11-02 08:59, 41차 점검) 네트워크 대기는 트랜잭션 밖에서(위 rebuildStorageRemote 주석)
             if (property_exists($adapter, 'listFailed') && $adapter->listFailed) $this->remoteListIncomplete = true;   // ★ (22차) 목록 실패 기록
+            $this->db->exec('BEGIN TRANSACTION');
+            $inTx = true;
             foreach ($items as $item) {
                 $filename = $item['name'] ?? '';
                 if ($filename === '' || substr($filename, 0, 1) === '.') continue;
@@ -612,11 +710,17 @@ class FileIndex {
                 }
                 
                 if ($item['is_dir'] ?? false) {
-                    $this->indexRemoteDirectory($storageId, $relativePath, $adapter, $count, $progressCallback);
+                    $subDirs[] = $relativePath;   // ★ (41차) 하위 폴더는 이 폴더 행을 커밋한 뒤 들어감(하위 목록을 기다리는 동안 잠금을 쥐지 않게)
                 }
             }
+            $this->db->exec('COMMIT');
+            $inTx = false;
         } catch (Exception $e) {
             // 접근 불가 폴더 무시
+            if ($inTx) { $this->db->exec('COMMIT'); $inTx = false; }   // ★ (41차) 쓴 데까지 남기고 트랜잭션을 닫음(열어 둔 채 다음 폴더 목록을 기다리지 않게)
+        }
+        foreach ($subDirs as $sub) {
+            $this->indexRemoteDirectory($storageId, $sub, $adapter, $count, $progressCallback);
         }
     }
     
@@ -737,8 +841,15 @@ class FileIndex {
                 WHERE storage_id = :sid
                   AND filepath LIKE :pre ESCAPE '\\'
                   AND filepath NOT LIKE :deep ESCAPE '\\'
+                  " . (DIRECTORY_SEPARATOR === '\\' ? '' : "AND filepath >= :rlo AND filepath < :rhi") . "
                 ORDER BY is_dir DESC, filename COLLATE NOCASE ASC
             ");
+            // ★ (2026-10-31 12:03, 34차 전체 점검) LIKE 는 대소문자를 무시해 'Docs' 목록에 'docs/…' 항목이 섞였음 → 범위 조건을 함께(removeFolder 등과 같게).
+            //   윈도우는 파일 시스템이 대소문자를 구분하지 않아(같은 폴더) 종전대로 둠
+            if (DIRECTORY_SEPARATOR !== '\\') {
+                $stmt->bindValue(':rlo', $relativePath . '/', SQLITE3_TEXT);
+                $stmt->bindValue(':rhi', $relativePath . '0', SQLITE3_TEXT);
+            }
             $stmt->bindValue(':sid', $storageId, SQLITE3_INTEGER);
             $stmt->bindValue(':pre', $escLike($relativePath) . '/%', SQLITE3_TEXT);
             $stmt->bindValue(':deep', $escLike($relativePath) . '/%/%', SQLITE3_TEXT);
@@ -791,13 +902,19 @@ class FileIndex {
      */
     public function getIndexedStorageIds(): array {
         if (!$this->available) return [];
-        
-        $result = $this->db->query('SELECT DISTINCT storage_id FROM files');
+
+        // ★ (2026-11-02 14:38, 44차 점검) '색인 있음' = 완전 색인(재구축·완전 동기화가 끝까지 돈) 기록 last_sync_storage_<id> 가 있는 스토리지(tryListFromIndex 와 같은 기준) —
+        //   종전엔 행이 하나라도 있으면 색인 있음이라, 재구축을 한 번도 안 한 스토리지도 업로드 1건(addFile 은 auto_index 와 무관)이면 고급 검색·조건부 일괄 삭제(37차 '실제로 색인돼 있을 때만'의 의도)가
+        //   그 1건만 봤고, 원격 재구축이 중간에 실패한 반쪽 색인도 같았음(G1#1 재현). 쓰는 곳: search_advanced·그 unindexed 안내, FileManager::bulkSearch
+        //   ★ (2026-11-02 15:24, 44차 재검토) 일부 폴더 목록이 실패했어도 끝까지 돈 원격 재구축(index_built_storage_)도 인정
+        $result = $this->db->query("SELECT key FROM meta WHERE (key LIKE 'last\\_sync\\_storage\\_%' ESCAPE '\\' OR key LIKE 'index\\_built\\_storage\\_%' ESCAPE '\\') AND value IS NOT NULL AND value <> ''");
         $ids = [];
-        while ($row = $result->fetchArray(SQLITE3_ASSOC)) {
-            $ids[] = (int)$row['storage_id'];
+        while ($result && ($row = $result->fetchArray(SQLITE3_ASSOC))) {
+            $ixKey = (string)$row['key'];
+            $ixSid = substr($ixKey, strpos($ixKey, '_storage_') + 9);
+            if ($ixSid !== '' && ctype_digit($ixSid)) $ids[(int)$ixSid] = (int)$ixSid;
         }
-        return $ids;
+        return array_values($ids);
     }
     
     /**
@@ -977,6 +1094,7 @@ class FileIndex {
                     $res = $stmt->execute();
                     while ($row = $res->fetchArray(SQLITE3_ASSOC)) {
                         $childFullPath = $basePath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $row['filepath']);
+                        if ($this->isLinkLoop($childFullPath, $basePath)) continue;   // ★ (2026-11-01 10:21, 38차 점검 재검토) 변경 없는 폴더의 하위를 DB 에서 꺼내 넣는 빠른 경로에도 순환 링크 검사(링크일 때만 비용)
                         $dirQueue[] = $childFullPath;
                     }
                     $processedCount++;
@@ -1002,7 +1120,7 @@ class FileIndex {
                             'size' => $size,
                             'mtime' => $mtime ?: 0
                         ];
-                        if ($isDir) {
+                        if ($isDir && !$this->isLinkLoop($fullPath, $basePath)) {   // ★ (2026-11-01 09:45, 38차 점검) 상위를 가리키는 링크 순환은 큐에 넣지 않음(isLinkLoop 참고)
                             $dirQueue[] = $fullPath;
                         }
                     }
@@ -1230,6 +1348,33 @@ class FileIndex {
     }
     
     /**
+     * ★ (2026-11-01 09:45, 38차 점검) 심볼릭 링크·정션이 자기 상위 폴더(또는 스토리지 위쪽)를 가리켜 순환이 생기는지 확인.
+     *   종전엔 is_dir() 이 링크를 따라가 OS 한계(리눅스 약 40단계)까지 되풀이 색인 → 같은 파일이 수십 번, 인덱스 합계로 내는 사용량도 부풀었음.
+     *   링크가 아닌 폴더와, 바깥 폴더를 가리키는 정상 링크는 종전대로 따라감(링크일 때만 realpath 를 비교하므로 일반 폴더 순회 비용은 그대로).
+     */
+    private function isLinkLoop(string $dirFull, string $basePath): bool {
+        if (!@is_link($dirFull)) return false;
+        $target = @realpath($dirFull);
+        if ($target === false) return false;
+        $t = rtrim($target, '/\\') . DIRECTORY_SEPARATOR;
+        $base = rtrim($basePath, '/\\');
+        $p = dirname($dirFull);
+        for ($i = 0; $i < 4096; $i++) {
+            $rp = @realpath($p);
+            if ($rp !== false) {
+                $a = rtrim($rp, '/\\') . DIRECTORY_SEPARATOR;
+                // 링크 대상이 조상 폴더 자신이거나 그 위쪽이면 순환
+                if (strncasecmp($a, $t, strlen($t)) === 0 && (DIRECTORY_SEPARATOR === '\\' || strncmp($a, $t, strlen($t)) === 0)) return true;
+            }
+            if (strlen(rtrim($p, '/\\')) <= strlen($base)) break;   // 스토리지 맨 위까지 확인
+            $up = dirname($p);
+            if ($up === $p) break;
+            $p = $up;
+        }
+        return false;
+    }
+    
+    /**
      * 폴더를 재귀적으로 인덱싱
      */
     public function indexFolder(int $storageId, string $basePath, string $relativePath): void {
@@ -1253,11 +1398,16 @@ class FileIndex {
         if (!$items) return;
         
         foreach ($items as $item) {
-            if ($item === '.' || $item === '..') continue;
+            // ★ (2026-11-01 09:45, 38차 점검) 점(.)으로 시작하는 이름도 건너뜀 — 재구축·동기화·원격 색인·폴더 목록은 모두 빼는데 여기만 넣어 숨은 .vault.json 등이 검색에 나왔음
+            if ($item === '.' || $item === '..' || $item[0] === '.') continue;
             $childRelative = $relativePath . '/' . $item;
             $childFull = $fullPath . DIRECTORY_SEPARATOR . $item;
             
             if (is_dir($childFull)) {
+                if ($this->isLinkLoop($childFull, $basePath)) {   // ★ (2026-11-01 09:45, 38차 점검) 상위를 가리키는 링크 순환은 따라 들어가지 않음(isLinkLoop 참고) — 재구축처럼 링크 자체만 폴더로 등록
+                    $this->addFile($storageId, $childRelative, ['name' => $item, 'size' => 0, 'modified' => @filemtime($childFull) ?: time(), 'is_dir' => true]);
+                    continue;
+                }
                 $this->indexFolder($storageId, $basePath, $childRelative);
             } else {
                 $this->addFile($storageId, $childRelative, [

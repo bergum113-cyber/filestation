@@ -27,8 +27,9 @@ if (isset($_GET['download'])) {
     header("Content-Security-Policy: default-src 'self'; script-src 'self' 'nonce-{$cspNonce}' blob: https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; frame-ancestors 'self';");
 }
 
-$token = $_GET['t'] ?? '';
-$password = $_POST['password'] ?? null;
+// ★ (2026-11-01 09:44, 38차 점검) ?t[]=x · password[]=x 처럼 배열로 오면 string 매개변수에서 TypeError(500) → 문자열일 때만 받음(아니면 빈 값/없음)
+$token = is_string($_GET['t'] ?? null) ? $_GET['t'] : '';
+$password = is_string($_POST['password'] ?? null) ? $_POST['password'] : null;
 $download = isset($_GET['download']);
 
 if (empty($token)) {
@@ -42,6 +43,8 @@ if (!$password && !empty($_SESSION['share_authenticated'][$token])) {
 }
 
 $shareManager = new ShareManager();
+// ★ (2026-10-31 13:19, 34차 후속 개선) 비밀번호 공유면 커버·가사의 '없음(204)' 을 캐시하지 않고(권한 실패도 204 라 비밀번호를 다시 넣어도 7~30일 안 나오던 것), 성공 응답도 private 로
+$__shRow = JsonDB::getInstance()->find('shares', ['token' => (string)$token]); $__shPw = !empty($__shRow['password']); $__shPrivPub = $__shPw ? 'private' : 'public';
 
 // 공유 MP3 ID3 커버 요청 — 가벼운 응답이라 우선 처리 (HLS stop 패턴)
 if (isset($_GET['cover']) && $_GET['cover'] === '1') {
@@ -50,6 +53,7 @@ if (isset($_GET['cover']) && $_GET['cover'] === '1') {
     session_write_close();
     
     $coverPassword = $_POST['password'] ?? $_GET['password'] ?? null;
+    if (!is_string($coverPassword)) $coverPassword = null;   // ★ (2026-11-01 09:44, 38차 점검) 배열이면 getShareCover(?string) TypeError(500) — 위 $token·$password 와 같게
     
     // 폴더 stream 공유: ?file=basename 으로 트랙별 커버 요청
     $coverSubFile = isset($_GET['file']) ? (string)$_GET['file'] : null;
@@ -64,7 +68,7 @@ if (isset($_GET['cover']) && $_GET['cover'] === '1') {
     if (!$cover) {
         // 커버 없음 또는 권한 실패 → 204 (콘솔 빨간 에러 방지)
         http_response_code(204);
-        header('Cache-Control: public, max-age=604800');
+        header($__shPw ? 'Cache-Control: no-store' : 'Cache-Control: public, max-age=604800');
         exit;
     }
     
@@ -82,14 +86,14 @@ if (isset($_GET['cover']) && $_GET['cover'] === '1') {
     if (isset($_SERVER['HTTP_IF_NONE_MATCH']) && trim($_SERVER['HTTP_IF_NONE_MATCH']) === $etag) {
         http_response_code(304);
         header('ETag: ' . $etag);
-        header('Cache-Control: public, max-age=2592000, immutable');
+        header('Cache-Control: ' . $__shPrivPub . ', max-age=2592000, immutable');
         exit;
     }
     
     header('Content-Type: ' . $cover['mime']);
     header('Content-Length: ' . strlen($cover['data']));
     header('ETag: ' . $etag, true);
-    header('Cache-Control: public, max-age=2592000, immutable', true);
+    header('Cache-Control: ' . $__shPrivPub . ', max-age=2592000, immutable', true);
     echo $cover['data'];
     exit;
 }
@@ -137,30 +141,24 @@ if (isset($_GET['lyrics']) && $_GET['lyrics'] === '1') {
     //   v 파라미터 없는 단일 파일 케이스는 짧은 캐시 유지 (호환성)
     $hasVersion = isset($_GET['v']) && $_GET['v'] !== '';
     
+    // ★ (2026-11-02 10:28, 42차 점검) v 가 있어도 immutable 30일을 쓰지 않음 — v 는 음악 파일 시각인데 가사는 대부분 옆의 .lrc/.txt 에서 나와,
+    //   짝 파일을 넣거나 고쳐도 주소가 같아 '가사 없음(204)'·옛 가사가 30일 동안 남았음. 탐색기 audio_lyrics 와 같게 204 는 300초, 가사는 3600초(v 없는 경우와 같음)
     if (!$lyrics) {
         // 가사 없음 → 204 (조용히 fallback)
         http_response_code(204);
-        if ($hasVersion) {
-            header('Cache-Control: public, max-age=2592000, immutable', true);
-        } else {
-            header('Cache-Control: public, max-age=300', true);
-        }
+        header($__shPw ? 'Cache-Control: no-store' : 'Cache-Control: public, max-age=300', true);
         exit;
     }
     
     // JSON 응답 (LRC 텍스트 + 메타)
     header('Content-Type: application/json; charset=utf-8', true);
-    if ($hasVersion) {
-        header('Cache-Control: public, max-age=2592000, immutable', true);
-    } else {
-        header('Cache-Control: public, max-age=3600', true);
-    }
+    header('Cache-Control: ' . $__shPrivPub . ', max-age=3600', true);
     echo json_encode([
         'source' => $lyrics['source'],     // 'lrc' | 'uslt' | 'txt'
         'synced' => $lyrics['synced'],     // true = LRC 시간태그 있음, false = 정적
         'text' => $lyrics['text'],
         'language' => $lyrics['language'] ?? null,
-    ], JSON_UNESCAPED_UNICODE);
+    ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);   // ★ (2026-11-02 08:58, 41차 점검) 깨진 바이트(ID3 언어 3바이트 등) 하나면 false → 빈 본문 200 이 30일 immutable 로 캐시됐음. 대체 문자로
     exit;
 }
 
@@ -170,12 +168,29 @@ if ($download && isset($_GET['hls']) && ($_GET['hls_action'] ?? '') === 'stop') 
     if ($sessionId) {
         $dataDir = defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data');
         $sessionDir = $dataDir . '/hls_sessions/' . $sessionId;
-        
-        if (is_dir($sessionDir)) {
+        // ★ (2026-11-01 17:18, 40차 점검) 토큰이 맞는지·세션이 이 공유의 것인지 안 보고 끄고 지워, 39차 hlsShareSessionOwned 확인이 화면 경로에선 안 쓰였고
+        //   다른 공유·탐색기의 변환도 끌 수 있었음 → 있는 공유 토큰이고 meta.json 의 share_path 가 이 공유 경로(폴더면 그 아래)일 때만 처리(FileManager::hlsShareSessionOwned 와 같은 비교)
+        $__stOwned = false;
+        if (is_array($__shRow) && is_dir($sessionDir)) {
+            for ($_w = 0; $_w < 10 && !is_file($sessionDir . '/meta.json'); $_w++) usleep(100000);
+            $__stMeta = null;
+            for ($_r = 0; $_r < 5; $_r++) { $__stMeta = @json_decode((string)@file_get_contents($sessionDir . '/meta.json'), true); if (is_array($__stMeta)) break; usleep(50000); }
+            $__stBase = (new Storage())->getRealPath((int)($__shRow['storage_id'] ?? 0));
+            if (is_array($__stMeta) && is_string($__stMeta['share_path'] ?? null) && $__stMeta['share_path'] !== '' && $__stBase) {
+                $__stRoot0 = $__stBase . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, (string)($__shRow['file_path'] ?? ''));
+                $__stSp = realpath($__stMeta['share_path']) ?: $__stMeta['share_path'];
+                $__stRoot = realpath($__stRoot0) ?: $__stRoot0;
+                if (DIRECTORY_SEPARATOR === '\\') { $__stSp = strtolower(str_replace('/', '\\', $__stSp)); $__stRoot = strtolower(str_replace('/', '\\', $__stRoot)); }
+                $__stOwned = ($__stSp === $__stRoot) || (is_dir($__stRoot0) && strpos($__stSp, rtrim($__stRoot, '/\\') . DIRECTORY_SEPARATOR) === 0);
+            }
+        }
+
+        if ($__stOwned) {
             $pidFile = $sessionDir . '/pid.txt';
             $pid = 0;
             if (file_exists($pidFile)) {
                 $pid = (int)file_get_contents($pidFile);
+                if ($pid > 0 && !FileManager::hlsPidIsOurs($pid, $sessionId)) $pid = 0;   // ★ (2026-11-01 01:29, 35차 전체 점검) 다른 프로세스가 받은 PID 면 죽이지 않음(탐색기 hlsCleanup 과 같게)
             } else {
                 if (PHP_OS_FAMILY === 'Windows') {
                     $wmic = @shell_exec('wmic process where "name=\'ffmpeg.exe\'" get processid,commandline /format:csv 2>NUL');
@@ -186,8 +201,22 @@ if ($download && isset($_GET['hls']) && ($_GET['hls_action'] ?? '') === 'stop') 
                             }
                         }
                     }
+                    // ★ (2026-11-14 21:38, 135차 펜닐 결정 '문제가 없이 개선' — wmic 없는 Windows) wmic 이 없으면 위가 늘 비어 pid.txt 가 없는 공유 세션의 ffmpeg 를 끄지 못했음 →
+                    //   탐색기 HLS(35·36차)와 같은 Get-CimInstance 명령으로 세션 ID 가 명령줄에 있는 ffmpeg 하나. 세션 ID 는 위에서 [a-zA-Z0-9_-] 만 남김
+                    if ($pid <= 0 && $sessionId !== '' && !FileManager::winHasWmic()) {
+                        $psOutS = @shell_exec('powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = \'ffmpeg.exe\'\\" | Where-Object { $_.CommandLine -like \'*' . $sessionId . '*\' } | Select-Object -First 1 -ExpandProperty ProcessId" 2>NUL');
+                        if ($psOutS && preg_match('/^\d+$/', trim($psOutS))) $pid = (int)trim($psOutS);
+                    }
                 } else {
-                    $pid = (int)trim(@shell_exec('pgrep -f "' . $sessionId . '" 2>/dev/null') ?? '');
+                    // ★ (2026-11-01 09:44, 38차 점검) pgrep -f 는 자기를 실행한 sh -c 의 명령줄(세션 ID 포함)도 잡아, ffmpeg 가 없어도 sh PID 를 확인 없이 kill 했음
+                    //   → 결과 중 실행 파일 이름이 ffmpeg 이고 hlsPidIsOurs(35차) 를 통과한 PID 만 씀. /proc 가 없어 확인할 수 없으면 죽이지 않음(세션 폴더 정리는 그대로)
+                    foreach (preg_split('/\s+/', trim((string)@shell_exec('pgrep -f "' . $sessionId . '" 2>/dev/null'))) as $_pgPid) {
+                        $_pgPid = (int)$_pgPid;
+                        if ($_pgPid <= 0 || $_pgPid === getmypid()) continue;
+                        $_pgCl = @file_get_contents('/proc/' . $_pgPid . '/cmdline');
+                        if ($_pgCl === false) continue;
+                        if (stripos(basename((string)strtok($_pgCl, "\0")), 'ffmpeg') !== false && FileManager::hlsPidIsOurs($_pgPid, $sessionId)) { $pid = $_pgPid; break; }
+                    }
                 }
             }
             
@@ -211,9 +240,13 @@ if ($download && isset($_GET['hls']) && ($_GET['hls_action'] ?? '') === 'stop') 
             }
             
             for ($retry = 0; $retry < 3; $retry++) {
-                foreach (new DirectoryIterator($sessionDir) as $f) {
-                    if (!$f->isDot()) @unlink($f->getPathname());
-                }
+                // ★ (2026-11-11 01:12, 70차) 같은 세션 stop 이 동시에 두 번 오면 먼저 온 요청이 폴더를 지운 뒤 늦은 요청의 DirectoryIterator 가 예외 → 500 이었음(정리는 정상) → 이미 없으면 그만
+                if (!is_dir($sessionDir)) break;
+                try {
+                    foreach (new DirectoryIterator($sessionDir) as $f) {
+                        if (!$f->isDot()) @unlink($f->getPathname());
+                    }
+                } catch (\Throwable $e) { if (!is_dir($sessionDir)) break; }
                 if (@rmdir($sessionDir)) break;
                 usleep(500000);
             }
@@ -243,7 +276,8 @@ if (!empty($result['success'])) {
     $_saNow = time();
     if (!empty($_SESSION['share_visit_logged'][$token]) && $_saNow - (int)$_SESSION['share_visit_logged'][$token] < 1800) $_saSkip = true;
     $_saThr = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data')) . '/rate_limits';
-    $_saThrFile = $_saThr . '/share_visit_' . md5((string)($_SERVER['REMOTE_ADDR'] ?? '') . '|' . $token);
+    // ★ (2026-11-01 09:44, 38차 점검) REMOTE_ADDR 기준이라 프록시·CF 뒤에선 모두 같은 주소 → 서로 다른 방문자의 첫 방문이 60초 안에 겹치면 한 건만 남았음. 공유 비밀번호 횟수(34차)와 같은 Auth::getCurrentIP 기준으로
+    $_saThrFile = $_saThr . '/share_visit_' . md5((string)(new Auth())->getCurrentIP() . '|' . $token);
     if (!$_saSkip && is_file($_saThrFile) && $_saNow - (int)@filemtime($_saThrFile) < 60) $_saSkip = true;
     if (!$_saSkip) {
         $_SESSION['share_visit_logged'][$token] = $_saNow;
@@ -265,12 +299,16 @@ if (!empty($result['success']) && !$_saSkip) {
                 'storage_id' => (int)($_saRec['storage_id'] ?? 0),
                 'path' => (string)($_saRec['file_path'] ?? ''),
                 'filename' => basename(str_replace('\\', '/', (string)($_saRec['file_path'] ?? ''))),
-                'details' => 'Token: ' . $token . (isset($_GET['file']) ? ' / ' . basename((string)$_GET['file']) : '')
+                // ★ (2026-11-02 09:01, 41차 점검) 토큰 원문이 활동 기록에 남아 '로그인 기록' 권한 부관리자가 남의 공유 링크(비밀번호 없는 공유는 토큰만으로 열림)를 열 수 있었음 → 앞 6자 + '…' 만(어느 공유인지는 path 로 구분)
+                'details' => 'Token: ' . substr((string)$token, 0, 6) . '…' . (isset($_GET['file']) ? ' / ' . basename((string)$_GET['file']) : '')
             ]);
         }
     } catch (\Throwable $e) {}
 }
 $needsPassword = ($result['error'] ?? '') === 'password_required';
+// ★ (2026-11-03 08:06, 48차 점검) 비밀번호가 틀리면 다시 입력할 칸 없이 '접근 불가'·'홈으로'(로그인 화면)만 나왔음(재현) → 같은 입력 칸을 다시 보여 주고 위에 틀렸다는 안내
+$sharePwWrong = ($password !== null && empty($result['success']) && ($result['error'] ?? '') === __('api_err_share_password_wrong', '비밀번호가 올바르지 않습니다.'));
+if ($sharePwWrong) $needsPassword = true;
 $error = (!$result['success'] && !$needsPassword) ? $result['error'] : null;
 $share = $result['share'] ?? null;
 
@@ -311,7 +349,8 @@ if ($share && !empty($share['is_dir']) && ($share['share_type'] ?? '') === 'stre
                 $_videoTracks = null;
             }
         }
-    } else {
+    }
+    if ($_subFileBasename === null) {   // ★ (2026-11-11 22:29, 86차 SHP-1) ?file= 이 지금 목록의 영상과 맞지 않으면(이름이 바뀌었거나 지워진 영상·옛 링크) '재생 가능한 트랙이 없습니다'로 막히지 않고 아래 케이스 B 처럼 첫 영상을 고름 — 맞는 ?file=·?file= 없음은 종전 그대로
         // 케이스 B: ?file= 없음 — 영상 폴더 stream인 경우 첫 영상 트랙 자동 선택 (URL 변경 없음)
         $_allTracks = $shareManager->getSharedFolderTracks($token, null) ?: [];
         $_videoTracks = array_values(array_filter($_allTracks, fn($t) => ($t['type'] ?? '') === 'video'));
@@ -379,7 +418,14 @@ ob_start('fs_icon_convert_html');
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= __('share_file_sharing') ?> - <?= APP_NAME ?></title>
+    <?php
+    // ★ (2026-11-02 11:49, 43차 점검) 공유 페이지 제목이 고정 APP_NAME 이라 관리자가 '사이트 이름'을 바꿔도 반영 안 됐음 → index.php 와 같게
+    //   site_settings.json 의 site_name(비면 APP_NAME)을 씀. 관리자 입력값이라 글자로(escape) 넣음
+    $_shSiteFile = DATA_PATH . DIRECTORY_SEPARATOR . 'site_settings.json';
+    $_shSiteSet = is_file($_shSiteFile) ? json_decode(preg_replace('/^\xEF\xBB\xBF/', '', (string)@file_get_contents($_shSiteFile)), true) : null;   // ★ (2026-11-04 01:32, 54차 점검) 메모장 등으로 고쳐 BOM 이 붙으면 빈 설정으로 읽혔음(재현) → api.php(43차)와 같이 BOM 제거
+    $_shSiteName = (is_array($_shSiteSet) && trim((string)($_shSiteSet['site_name'] ?? '')) !== '') ? trim((string)$_shSiteSet['site_name']) : APP_NAME;
+    ?>
+    <title><?= __('share_file_sharing') ?> - <?= htmlspecialchars($_shSiteName, ENT_QUOTES, 'UTF-8') ?></title>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -669,8 +715,10 @@ ob_start('fs_icon_convert_html');
         .share-pl-toggle:hover { background: rgba(102,126,234,0.25); }
         .share-pl-toggle.active { background: #667eea; color: #fff; }
 
-        /* 모바일: 1024px 이하 — 영상 아래 세로 표시 (absolute 해제 → 본문 흐름) */
-        @media (max-width: 1024px) {
+        /* 모바일: 1024px 이하 — 영상 아래 세로 표시 (absolute 해제 → 본문 흐름)
+           ★ (2026-11-03 11:49, 50차 점검) 1519px 이하까지 같은 배치 — 가운데 800px 틀 오른쪽에 340px 패널을 붙이면 창이 약 1500px 보다 좁을 때
+             패널 오른쪽(✕·크기)이 창 밖으로 나가고 가로 스크롤이 생겼음(재현: 1280·1366·1440). 영상 위치는 그대로(패널이 아래로 감) */
+        @media (max-width: 1519px) {
             .share-playlist-panel {
                 position: static;
                 width: 100%;
@@ -1040,12 +1088,13 @@ ob_start('fs_icon_convert_html');
             <div class="icon">❌</div>
             <h1><?= __('share_access_denied') ?></h1>
             <div class="error"><?= htmlspecialchars($error) ?></div>
-            <a href="/" class="btn"><?= __('share_go_home') ?></a>
+            <a href="index.php" class="btn"><?= __('share_go_home') ?></a><!-- ★ (2026-11-02 10:28, 42차 점검) '/' 고정이라 하위 폴더(/fs/) 설치에선 사이트 맨 위로 갔음 → share.php 와 같은 폴더 기준 상대 주소 -->
             
         <?php elseif ($needsPassword): ?>
             <div class="icon">🔒</div>
             <h1><?= __('share_password_required') ?></h1>
             <p style="color:#666;margin-bottom:20px;"><?= __('share_password_protected') ?></p>
+            <?php if (!empty($sharePwWrong)): ?><div class="error" style="margin-bottom:12px;"><?= htmlspecialchars(__('api_err_share_password_wrong', '비밀번호가 올바르지 않습니다.')) ?></div><?php endif; ?><!-- ★ (2026-11-03 08:06, 48차 점검) -->
             <form method="post" class="password-form">
                 <input type="password" name="password" placeholder="<?= __('share_enter_password') ?>" required autofocus>
                 <button type="submit" class="btn"><?= __('share_confirm') ?></button>
@@ -1060,7 +1109,7 @@ ob_start('fs_icon_convert_html');
                 <!-- 파일 드롭 (업로드 전용) -->
                 <div class="icon">📤</div>
                 <h1><?= __('filedrop_title', '파일 업로드') ?></h1>
-                <p class="filename"><?= htmlspecialchars($share['filename']) ?></p>
+                <p class="filename fs-noico"><?= htmlspecialchars($share['filename']) ?></p>
                 
                 <?php
                     $fdInfo = [];
@@ -1102,6 +1151,10 @@ ob_start('fs_icon_convert_html');
                 .filedrop-list { margin-top: 15px; text-align: left; max-height: 200px; overflow-y: auto; }
                 .filedrop-item { padding: 8px 12px; background: #f5f5f5; border-radius: 6px; margin-bottom: 5px; font-size: 13px; display: flex; justify-content: space-between; align-items: center; }
                 .filedrop-item .remove { cursor: pointer; color: #e74c3c; font-weight: bold; }
+                /* ★ (2026-11-11 17:29, 77차 SHM-3) 긴 이름(영문 49자)이면 휴대폰 세로에서 ✕ 가 목록 밖으로 밀려 안 보이고, 결과 줄이 화면을 가로로 넘쳤음(재현) — 이름은 줄바꿈, ✕ 는 줄지 않게 */
+                .filedrop-item > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+                .filedrop-item .remove { flex-shrink: 0; }
+                .result-ok, .result-err { overflow-wrap: anywhere; }
                 .fd-progress-track { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; width: 100%; }
                 .fd-progress-fill { height: 100%; background: #667eea; border-radius: 4px; transition: width 0.3s; width: 0%; }
                 .result-ok { color: #27ae60; } .result-err { color: #e74c3c; }
@@ -1123,14 +1176,16 @@ ob_start('fs_icon_convert_html');
                     e.preventDefault(); zone.classList.remove('dragover');
                     addFiles(e.dataTransfer.files);
                 });
-                input.addEventListener('change', () => addFiles(input.files));
+                input.addEventListener('change', () => { addFiles(input.files); input.value = ''; });   // ★ (2026-11-11 17:29, 77차 SHM-2) 고른 뒤 입력칸을 비움 — 종전엔 같은 파일을 다시 고르면(실패 뒤 다시 보내기·✕ 로 뺀 파일 다시 넣기) change 가 안 와 아무 반응이 없었음(재현)
                 
                 function addFiles(files) {
                     for (const f of files) selectedFiles.push(f);
                     renderList();
                 }
                 
+                let fdUploading = false;   // ★ (2026-11-11 17:29, 77차 SHM-1) 올리는 중엔 목록 ✕ 무시 — 종전엔 올리는 중 ✕ 로 번호가 한 칸씩 밀려, 누른 파일은 그대로 올라가고 그다음 파일이 실패 표시 없이 빠졌음(재현)
                 function removeFile(idx) {
+                    if (fdUploading) return;
                     selectedFiles.splice(idx, 1);
                     renderList();
                 }
@@ -1168,11 +1223,13 @@ ob_start('fs_icon_convert_html');
                     
                     progress.style.display = 'block';
                     btn.disabled = true;
+                    fdUploading = true;   // ★ (2026-11-11 17:29, 77차 SHM-1)
                     resultDiv.style.display = 'block';
                     resultDiv.innerHTML = '';
                     
                     let success = 0, fail = 0;
-                    const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB
+                    // ★ (2026-11-03 08:06, 48차 점검) 10MB 고정이라 PHP 업로드 한도(upload_max_filesize·post_max_size)가 그보다 작은 서버에선 2MB 넘는 파일이 413 으로 실패했음(재현) → api.php server_config 와 같은 계산(한도의 80%, 최소 1MB), 위로는 종전 10MB 그대로
+                    const CHUNK_SIZE = <?php $__fdB = function ($v) { $v = trim((string)$v); if ($v === '') return 0; $l = strtolower(substr($v, -1)); $n = (int)$v; if ($l === 'g') $n *= 1073741824; elseif ($l === 'm') $n *= 1048576; elseif ($l === 'k') $n *= 1024; return $n; }; $__fdL = array_filter([$__fdB(ini_get('upload_max_filesize')), $__fdB(ini_get('post_max_size'))], function ($x) { return $x > 0; }); echo (int)max(1048576, min(10485760, $__fdL ? (int)(min($__fdL) * 0.8) : 10485760)); ?>;
                     const PARALLEL = 3;
                     
                     // 파일 1개를 청크로 분할 전송 (검증된 서버 uploadChunk 코어 재사용)
@@ -1180,7 +1237,7 @@ ob_start('fs_icon_convert_html');
                         const totalChunks = Math.max(1, Math.ceil(f.size / CHUNK_SIZE));
                         const uploadId = 'fd_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
                         
-                        const sendChunk = async (chunkIndex) => {
+                        const sendChunk = async (chunkIndex, rl429 = 0) => {   // ★ (2026-11-12 04:12, 92차 개선 RL429-2) rl429: 요청 제한(429) 다시 보내기 횟수
                             const start = chunkIndex * CHUNK_SIZE;
                             const end = Math.min(start + CHUNK_SIZE, f.size);
                             const blob = f.slice(start, end);
@@ -1193,16 +1250,24 @@ ob_start('fs_icon_convert_html');
                             fd.append('totalChunks', totalChunks);
                             fd.append('totalSize', f.size);
                             fd.append('uploadId', uploadId);
-                            fd.append('lastModified', f.lastModified || 0);
+                            fd.append('lastModified', Math.floor((f.lastModified || 0) / 1000));   // ★ (2026-11-03 08:05, 48차 점검) 초 단위(일반 업로드와 같게)
                             fd.append('chunk', blob, f.name);
                             const res = await fetch('api.php?action=filedrop_chunk_upload', { method: 'POST', body: fd });
+                            // ★ (2026-11-12 04:12, 92차 개선 RL429-2) 업로드 요청 제한(IP당 분당 1000건, 서버 한도는 그대로)에 걸리면 잠시 기다렸다 같은 조각을 다시 보냄(90차 RGR9-N2 탐색기 업로드와 같은 5·10·15·20·20·20초, 창을 닫으면 멈춤) — 종전엔 바로 실패로 쳐, 같은 분에 다른 업로드 950건이 있으면 100개 중 50개가 '요청이 너무 많습니다'로 실패했음(재현)
+                            if (res.status === 429 && rl429 < 6) {
+                                await new Promise(r => setTimeout(r, Math.min(5000 * (rl429 + 1), 20000)));
+                                return sendChunk(chunkIndex, rl429 + 1);
+                            }
                             return await res.json();
                         };
                         
                         let doneChunks = 0;
-                        for (let batch = 0; batch < totalChunks; batch += PARALLEL) {
+                        // ★ (2026-11-02 10:29, 42차 점검) 마지막 조각은 다른 조각이 모두 끝난 뒤 따로 보냄 — 서버가 마지막 조각에서 업로드 수를 잠금 안에서 먼저 잡으므로
+                        //   (ShareManager::uploadToFileDropChunk) 마지막 조각이 늘 조립을 끝내는 조각이 되게 함. 종전엔 마지막 묶음 3개가 함께 가 어느 조각이 조립할지 정해지지 않았음
+                        const lastIdx = totalChunks - 1;
+                        for (let batch = 0; batch < totalChunks; batch = (batch + PARALLEL > lastIdx && batch < lastIdx) ? lastIdx : batch + PARALLEL) {
                             const promises = [];
-                            for (let j = 0; j < PARALLEL && batch + j < totalChunks; j++) {
+                            for (let j = 0; j < PARALLEL && batch + j < totalChunks && (batch + j < lastIdx || batch === lastIdx); j++) {
                                 promises.push(sendChunk(batch + j));
                             }
                             const results = await Promise.all(promises);
@@ -1261,6 +1326,7 @@ ob_start('fs_icon_convert_html');
                     bar.style.width = '100%';
                     status.textContent = `<?= __('filedrop_complete', '완료') ?>: ${success}<?= __('filedrop_success_unit', '개 성공') ?>${fail ? `, ${fail}<?= __('filedrop_fail_unit', '개 실패') ?>` : ''}`;
                     btn.disabled = false;
+                    fdUploading = false;   // ★ (2026-11-11 17:29, 77차 SHM-1)
                     selectedFiles = [];
                     document.getElementById('filedrop-list').style.display = 'none';
                     btn.style.display = 'none';
@@ -1278,6 +1344,10 @@ ob_start('fs_icon_convert_html');
                 $audioExts = ['mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wav', 'weba'];   // ★ (2026-10-08) 음악은 웹 플레이어가 여는 형식만(펜닐 결정 — wma·ape·alac·aiff 는 브라우저가 재생 못 함)
                 $isVideo = in_array($ext, $videoExts);
                 $isAudio = in_array($ext, $audioExts);
+                // ★ (2026-10-31 12:03, 34차 전체 점검) .ogg 는 두 목록에 다 있어 음악 플레이어 대신 맨 <video> 로 열렸음 → 탐색기·폴더 공유처럼 음악으로.
+                //   폴더 공유는 이름이 'x.mp4' 여도 단일 파일 플레이어로 가지 않게(재생할 트랙이 없으면 받기 화면)
+                if ($isAudio) $isVideo = false;
+                if (!empty($share['is_dir'])) { $isVideo = false; $isAudio = false; }
                 
                 // 폴더 stream 공유: 폴더 안 미디어 트랙 자동 검색 (직속 파일만, audio + video)
                 $isFolderStream = !empty($share['is_dir']) && $shareType === 'stream';
@@ -1414,11 +1484,18 @@ ob_start('fs_icon_convert_html');
                         if (file_exists($_realFile)) {
                             $fileSize = filesize($_realFile) ?: $fileSize;
                             // ffprobe/ffmpeg 경로
+                            // ★ (2026-11-02 11:49, 43차 점검) 아무도 안 쓰는 settings['thumbnails'] 를 읽어 관리자가 넣은 경로가 늘 빈 값 → PATH 에 없으면 코덱 판정이 빠졌음.
+                            //   화면 저장 위치(data/site_settings.json 최상위 ffprobe_path·ffmpeg_path)를 먼저 읽고, 옛 키에 값이 있으면 대체로 받음
                             $_settings = $_db->load('settings');
                             $_thumbSettings = $_settings['thumbnails'] ?? [];
+                            $_siteSetFile = DATA_PATH . DIRECTORY_SEPARATOR . 'site_settings.json';
+                            $_siteSet = is_file($_siteSetFile) ? (json_decode(preg_replace('/^\xEF\xBB\xBF/', '', (string)@file_get_contents($_siteSetFile)), true) ?: []) : [];   // ★ (2026-11-04 01:32, 54차 점검) 메모장 등으로 고쳐 BOM 이 붙으면 빈 설정으로 읽혔음(재현) → api.php(43차)와 같이 BOM 제거
+                            if (!is_array($_siteSet)) $_siteSet = [];
                             $_probeBin = '';
-                            $_ffprobePath = trim($_thumbSettings['ffprobe_path'] ?? '');
-                            $_ffmpegPath = trim($_thumbSettings['ffmpeg_path'] ?? '');
+                            $_ffprobePath = trim((string)($_siteSet['ffprobe_path'] ?? ''));
+                            if ($_ffprobePath === '') $_ffprobePath = trim((string)($_thumbSettings['ffprobe_path'] ?? ''));
+                            $_ffmpegPath = trim((string)($_siteSet['ffmpeg_path'] ?? ''));
+                            if ($_ffmpegPath === '') $_ffmpegPath = trim((string)($_thumbSettings['ffmpeg_path'] ?? ''));
                             $_codecLog('ffprobe_path 설정: ' . ($_ffprobePath ?: '(빈값)'));
                             $_codecLog('ffmpeg_path 설정: ' . ($_ffmpegPath ?: '(빈값)'));
                             if ($_ffprobePath && @is_executable($_ffprobePath)) $_probeBin = $_ffprobePath;
@@ -1427,7 +1504,30 @@ ob_start('fs_icon_convert_html');
                             $_codecLog('probeBin 선택: ' . ($_probeBin ?: '(없음 → ffprobe 스킵!)'));
                             
                             if ($_probeBin) {
-                                $_probeOut = @shell_exec(escapeshellarg($_probeBin) . ' -i ' . escapeshellarg($_realFile) . ' 2>&1');
+                                // ★ (2026-11-04 01:37, 54차 점검) 탐색기 getMediaInfo(34차 Z17-5 runCmdLimited)와 같게 배열 proc_open(셸 없음) + 300초 제한, '-i' 정보는 stderr 라 out+err 합침 —
+                                //   종전엔 escapeshellarg+shell_exec 라 윈도우에서 % ! " 가 공백으로 바뀌어 '100%.mp4' 등은 다른 경로를 열어 코덱이 비고(정적 확인), 시간 제한도 없었음.
+                                //   proc_open 이 막혔거나 임시 파일을 못 만들 때만 종전 방식 그대로
+                                $_probeOut = null;
+                                $_pDis = array_map('trim', explode(',', (string)@ini_get('disable_functions')));
+                                $_pFo = $_pFe = false;
+                                if (function_exists('proc_open') && function_exists('proc_get_status') && !in_array('proc_open', $_pDis, true)
+                                    && ($_pFo = @tempnam(sys_get_temp_dir(), 'fssp')) && ($_pFe = @tempnam(sys_get_temp_dir(), 'fssp'))) {
+                                    $_pProc = @proc_open([$_probeBin, '-i', $_realFile], [0 => ['pipe', 'r'], 1 => ['file', $_pFo, 'w'], 2 => ['file', $_pFe, 'w']], $_pPipes);
+                                    $_probeOut = '';
+                                    if (is_resource($_pProc)) {
+                                        if (isset($_pPipes[0])) fclose($_pPipes[0]);
+                                        $_pT0 = microtime(true);
+                                        while (($_pSt = @proc_get_status($_pProc)) && !empty($_pSt['running'])) {
+                                            if (microtime(true) - $_pT0 > 300) { @proc_terminate($_pProc, 9); break; }
+                                            usleep(30000);
+                                        }
+                                        @proc_close($_pProc);
+                                        $_probeOut = (string)@file_get_contents($_pFo, false, null, 0, 8 * 1048576) . (string)@file_get_contents($_pFe, false, null, 0, 8 * 1048576);
+                                    }
+                                }
+                                if ($_pFo) @unlink($_pFo);
+                                if ($_pFe) @unlink($_pFe);
+                                if ($_probeOut === null) $_probeOut = @shell_exec(escapeshellarg($_probeBin) . ' -i ' . escapeshellarg($_realFile) . ' 2>&1');
                                 // ★ (2026-09-26) 음성 개수 — 탐색기 getMediaInfo 의 audio_count 와 같은 식(mp4 의 '#0:1[0x2]' 도 셈)
                                 $_shareAudioCount = (int)preg_match_all('/Stream\s+#\d+:\d+.*Audio:/i', (string)$_probeOut);
                                 $_codecLog('probeOut 길이: ' . strlen((string)$_probeOut));
@@ -1534,16 +1634,33 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             $fullDir = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $dir);
                             if (is_dir($fullDir)) {
                                 $subExts = ['srt', 'smi', 'sami', 'vtt', 'ass', 'ssa'];
-                                foreach (scandir($fullDir) as $f) {
+                                // ★ (2026-11-01 09:43, 38차 점검) 찾는 조건에 구분자 검사가 없어 '1.mp4' 에 '10.srt'·'1000_private.srt', 이름이 빈 '.mp4' 엔 폴더 자막 전부가
+                                //   (단일 공유는 공유 범위 밖인 부모 폴더) 페이지 소스로 나갔음 → 아래 $subRank 와 같은 규칙(같은 이름 / 앞부분이 같고 바로 뒤가 구분자)만, 빈 이름·숨김 이름은 제외
+                                $_subSep = function ($c) { return $c === '.' || $c === '-' || $c === '_' || $c === ' ' || $c === '[' || $c === '('; };
+                                $_subHid = class_exists('HiddenItems') ? HiddenItems::mapFor((int)$shareRecord['storage_id']) : null;
+                                // ★ (2026-11-02 08:59, 41차 점검) 맥에서 온 NFD 이름(영상)과 윈도우에서 만든 NFC 이름(자막)은 바이트가 달라 짝을 못 찾았음 →
+                                //   비교할 때만 양쪽을 NFC 로(Normalizer 는 intl — 없거나 UTF-8 이 아니면 종전처럼 바이트 그대로). 파일 이름·$videoBase 값은 그대로
+                                $_subNfc = function ($v) { if (class_exists('Normalizer') && preg_match('/[\x80-\xFF]/', $v)) { $n = \Normalizer::normalize($v, \Normalizer::FORM_C); if (is_string($n)) return $n; } return $v; };
+                                $_vbN = $_subNfc($videoBase);
+                                foreach (($videoBase !== '' ? (scandir($fullDir) ?: []) : []) as $f) {
                                     if ($f === '.' || $f === '..') continue;
+                                    if ($f[0] === '.' || ($_subHid !== null && (HiddenItems::isSystemName($f)
+                                        || HiddenItems::isUserHidden((int)$shareRecord['storage_id'], trim(HiddenItems::norm((string)$dir) . '/' . $f, '/'), $_subHid)))) continue;
                                     $fext = strtolower(pathinfo($f, PATHINFO_EXTENSION));
-                                    $fbase = strtolower(pathinfo($f, PATHINFO_FILENAME));
-                                    if (in_array($fext, $subExts) && (
-                                        $fbase === $videoBase ||
-                                        strpos($fbase, $videoBase) === 0 ||
-                                        strpos($videoBase, $fbase) === 0
+                                    $fbase = $_subNfc(strtolower(pathinfo($f, PATHINFO_FILENAME)));   // ★ (2026-11-02 08:59, 41차 점검) 비교용 NFC(위 $_subNfc)
+                                    if ($fbase !== '' && in_array($fext, $subExts) && (
+                                        $fbase === $_vbN ||
+                                        (strpos($fbase, $_vbN) === 0 && $_subSep(substr($fbase, strlen($_vbN), 1))) ||
+                                        (strpos($_vbN, $fbase) === 0 && $_subSep(substr($_vbN, strlen($fbase), 1)))
                                     )) {
                                         $subFullPath = $fullDir . DIRECTORY_SEPARATOR . $f;
+                                        // ★ (2026-11-04 01:37, 54차 점검) 자막 한 파일 10MB 넘으면 자동 자막에서 빼고 서버 로그만 — 종전엔 상한 없이 읽어 페이지에 (두 번) 넣어
+                                        //   20MB ASS 하나로 페이지가 42.7MB 였음(재현). 글꼴 넣은 큰 ASS(수 MB)는 그대로 나오게 넉넉히 10MB
+                                        $_subSz = @filesize($subFullPath);
+                                        if ($_subSz !== false && $_subSz > 10 * 1048576) {
+                                            if (function_exists('fsLog')) fsLog('공유 페이지 자동 자막 제외(10MB 초과): ' . $f . ' (' . $_subSz . ' bytes)', 'warning');
+                                            continue;
+                                        }
                                         $subContent = @file_get_contents($subFullPath);
                                         if ($subContent !== false) {
                                             // 인코딩 자동 감지: UTF-16 LE/BE, UTF-8 BOM, EUC-KR
@@ -1556,6 +1673,16 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                                 $subContent = substr($b, 3);
                                             } elseif (!mb_check_encoding($b, 'UTF-8')) {
                                                 $subContent = mb_convert_encoding($b, 'UTF-8', 'EUC-KR,CP949,SJIS');
+                                                // ★ (2026-11-12 19:45, 103차 개선 Y1) SJIS 로 읽혔어도 전각 가나가 하나도 없고, 반각 가나 바로 뒤에 영문 글자가 끼어 있으면(확장 한글의 둘째 바이트가
+                                                //   SJIS 에선 영문으로 보이는 흔적) CP949 로 다시 읽어 한글이 90% 이상이고 같은 흔적이 없고 흔한 한글 음절이 하나라도 있을 때만 CP949 로 — 종전엔 '똠방각하 햏자 뷁 쀍' 한 줄 자막이
+                                                //   '慶ｹ豌｢ﾇﾏ ﾁdﾀﾚ 誹 力' 로 깨졌음(재현). 가나가 있는 일본어 SJIS·일반 CP949·UTF-8·BOM·UTF-16 은 이 조건에 들지 않아 종전 그대로
+                                                if (!preg_match('/[\x{3041}-\x{30FF}]/u', $subContent) && preg_match('/[\x{FF61}-\x{FF9F}]([A-Za-z][^\x00-\x7F]|[a-z](?![A-Za-z]))/u', $subContent)
+                                                    && !mb_check_encoding($b, 'EUC-KR') && mb_check_encoding($b, 'CP949') && $subContent === @mb_convert_encoding($b, 'UTF-8', 'SJIS')) {
+                                                    $_subKo = mb_convert_encoding($b, 'UTF-8', 'CP949');
+                                                    if (!preg_match('/[^\x00-\x7F][A-Za-z]/u', $_subKo) && preg_match('/[이다는하고에가지기의를을서자사리로도나어한아요게대니들시수해그내주면라만거정일인우제보전부말여오구원장소동성신경까야것네안모각조두방마비저히미무상계실결문생러유연래국중화할했데잘좋왜뭐너난돼봐와줘습세녕반갑감합죠걸알았있없같됐렇쪽개워빨괜찮걱진짜엄빠형누친학교회집먹싫늘]/u', $_subKo)
+                                                        && preg_match_all('/[\x{AC00}-\x{D7A3}]/u', $_subKo) * 10 >= preg_match_all('/[^\x00-\x7F]/u', $_subKo) * 9) $subContent = $_subKo;
+                                                    unset($_subKo);
+                                                }
                                             }
                                             $autoSubtitles[] = [
                                                 'name' => $f,
@@ -1569,12 +1696,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                 //   폴더 순서대로라 'sub3.webm' 에 'sub3.srt' 가 있어도 'sub.srt'(앞부분만 같음)를 썼다. 찾는 규칙·찾은 목록은 그대로, 순서만.
                                 if (count($autoSubtitles) > 1) {
                                     $isSep = function ($c) { return $c === '.' || $c === '-' || $c === '_' || $c === ' ' || $c === '[' || $c === '('; };
-                                    $vbLen = strlen($videoBase);
-                                    $subRank = function ($name) use ($videoBase, $vbLen, $isSep) {
-                                        $b = strtolower(pathinfo($name, PATHINFO_FILENAME));
-                                        if ($b === $videoBase) return 0;
-                                        if (strpos($b, $videoBase) === 0 && $isSep(substr($b, $vbLen, 1))) return 1;
-                                        if ($b !== '' && strpos($videoBase, $b) === 0 && $isSep(substr($videoBase, strlen($b), 1))) return 2;
+                                    $vbLen = strlen($_vbN);
+                                    // ★ (2026-11-02 08:59, 41차 점검) 찾는 조건과 같게 NFC 로 비교($_vbN·$_subNfc — 위 41차 주석)
+                                    $subRank = function ($name) use ($_vbN, $vbLen, $isSep, $_subNfc) {
+                                        $b = $_subNfc(strtolower(pathinfo($name, PATHINFO_FILENAME)));
+                                        if ($b === $_vbN) return 0;
+                                        if (strpos($b, $_vbN) === 0 && $isSep(substr($b, $vbLen, 1))) return 1;
+                                        if ($b !== '' && strpos($_vbN, $b) === 0 && $isSep(substr($_vbN, strlen($b), 1))) return 2;
                                         return 3;
                                     };
                                     $_subOrd = [];
@@ -1608,7 +1736,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 </svg>
             </div>
             <?php if (!$isFolderAudioPlaylist): ?>
-            <h1><?= htmlspecialchars($share['filename']) ?></h1>
+            <h1 class="fs-noico"><?= htmlspecialchars($share['filename']) ?></h1>
             <?php endif; ?>
             
             <?php if ($pageSubFile !== null && $folderTrackTotal !== null && $folderTrackTotal >= 2): ?>
@@ -1688,8 +1816,11 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         <select id="share-quality-select" style="font-size:12px;max-width:180px;"></select>
                     </label>
                 </div>
-                <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" <?php if (in_array($ext ?? '', ['mp4', 'm4v', 'mov'], true)): ?>data-keys-url="<?= htmlspecialchars($streamUrl . '&vk=1') ?>"<?php endif; ?> data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" data-acodec="<?= htmlspecialchars((string)($audioCodec ?? '')) ?>" style="min-height:220px;background:#111;">
+                <video controls playsinline webkit-playsinline preload="none" id="stream-player" data-transcode-url="<?= htmlspecialchars($streamUrl . '&transcode=1') ?>" data-frame-url="<?= htmlspecialchars($streamUrl . '&vf=') ?>" data-frames-url="<?= htmlspecialchars($streamUrl . '&vfs=') ?>" <?php if (in_array($ext ?? '', ['mp4', 'm4v', 'mov'], true)): ?>data-keys-url="<?= htmlspecialchars($streamUrl . '&vk=1') ?>"<?php endif; ?> data-hls-url="<?= htmlspecialchars($streamUrl . '&hls=1&hls_action=start') ?>" data-acodec="<?= htmlspecialchars((string)($audioCodec ?? '')) ?>" style="min-height:220px;background:#111;aspect-ratio:auto 16/9;">
                 </video>
+                <?php /* ★ (2026-11-13 23:06, 117차 펜닐 제보) aspect-ratio:auto 16/9 — 처음부터 변환하는 영상(MKV 등)은 재생 전에 영상 정보를 읽지 않아(preload none)
+                         브라우저 기본 높이(150px → min-height 220px)로 작게 보였다가 재생하면 영상 비율로 커졌음(PC 720×220 → 720×405).
+                         재생 전엔 16:9 로 잡고, 영상 정보가 오면 'auto' 라 실제 비율(세로 영상 등)을 그대로 따름. min-height·max-height(70vh)는 종전 그대로 */ ?>
                 <div class="play-overlay" id="play-overlay">
                     <svg width="72" height="72" viewBox="0 0 72 72" fill="none">
                         <circle cx="36" cy="36" r="35" fill="rgba(0,0,0,0.6)"/>
@@ -1779,6 +1910,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 //   페이지 렌더링 시점엔 이미 $_SESSION['share_authenticated'][$token] = true 상태이므로
                 //   cover=1 호출 시 accessShare가 세션 플래그로 인증 통과 (메인의 audio_cover 패턴과 동일)
                 $coverUrl = "share.php?t=" . urlencode($token) . "&cover=1&sz=512";   // ★ (2026-09-23) 줄인 커버
+                $coverUrl .= '&cv=' . ShareManager::COVER_VER;   // ★ (2026-11-12 16:10, 100차 CVR-2) 표지 추출 판 — 판이 바뀌면 주소가 바뀌어 방문자 브라우저의 옛 '표지 없음'(204, 7일) 캐시를 피함(서버는 이 값을 읽지 않음) — 종전엔 서버를 고쳐도 최대 7일 🎵(재현)
+                // ★ (2026-11-02 10:28, 42차 점검) 단일 파일 커버 주소에도 v(파일 시각-크기) — 종전엔 v 가 없어 공유한 mp3 를 바꿔도 방문자는 30일 immutable 캐시의 옛 표지(·'표지 없음' 7일)를 봤음
+                if (is_array($__shRow)) {
+                    $__cvBase = (new Storage())->getRealPath((int)($__shRow['storage_id'] ?? 0));
+                    $__cvFile = $__cvBase ? $__cvBase . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, (string)($__shRow['file_path'] ?? '')) : '';
+                    if ($__cvFile !== '' && is_file($__cvFile)) $coverUrl .= '&v=' . (int)@filemtime($__cvFile) . '-' . (int)@filesize($__cvFile);
+                }
             ?>
             <link rel="stylesheet" href="assets/css/fs-audio-player.css?v=<?= substr(md5_file(__DIR__ . '/assets/css/fs-audio-player.css'), 0, 10) ?>">
             <div class="player-wrap audio-wrap">
@@ -1799,7 +1937,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             ?>
             <div class="icon"><?= $share['is_dir'] ? '📁' : '📄' ?></div>
             <h1><?= __('share_file_sharing') ?></h1>
-            <div class="filename" id="filename"><?= htmlspecialchars($share['filename']) ?></div>
+            <div class="filename fs-noico" id="filename"><?= htmlspecialchars($share['filename']) ?></div>
             
             <div class="info">
                 <?php if (!$share['is_dir']): ?>
@@ -1856,7 +1994,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                    data-track-index="<?= $i + 1 ?>"
                    <?= $isCurrent ? 'data-current="1"' : '' ?>>
                     <span class="pl-num"><?= $i + 1 ?>.</span>
-                    <span class="pl-name" title="<?= htmlspecialchars($t['name']) ?>"><span class="pl-name-inner"><?= htmlspecialchars($t['name']) ?></span></span>
+                    <span class="pl-name" title="<?= htmlspecialchars($t['name']) ?>"><span class="pl-name-inner fs-noico"><?= htmlspecialchars($t['name']) ?></span></span>
                     <span class="pl-meta"><?= htmlspecialchars(strtoupper($t['ext'])) ?> · <?= formatFileSize($t['size']) ?></span>
                     <span class="pl-play-icon"><?= $isCurrent ? '▶' : '·' ?></span>
                 </a>
@@ -1866,7 +2004,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         <?php endif; ?>
     </div>
     
-    <div class="toast" id="toast"></div>
+    <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div><?php /* ★ (2026-11-13 01:07, 108차 ARIA-2) 공유 페이지 알림도 화면 낭독기가 읽게 함(index.php 와 같음) — 종전엔 aria-live 없음(재현) */ ?>
 
     <?php /* 사이드 패널은 container 안으로 이동됨 (absolute 기준) */ ?>
     
@@ -1907,7 +2045,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             const downloadUrl = `share.php?t=${encodeURIComponent(token)}&download=1`;
             try {
                 const response = await fetch(downloadUrl, { signal: controller.signal });
-                if (!response.ok) throw new Error(S.failed);
+                // ★ (2026-11-01 09:45, 38차 점검) 서버가 보낸 이유(횟수 초과·만료 등 text/plain 403)를 버리고 '실패'만 보였음 → 짧은 text/plain 본문이면 그 문구를 보여 줌(textContent 로 표시)
+                if (!response.ok) { let _em = ''; try { if ((response.headers.get('Content-Type') || '').indexOf('text/plain') === 0) _em = (await response.text()).trim().slice(0, 300); } catch (_e) {} throw new Error(_em || S.failed); }
                 const contentLength = response.headers.get('Content-Length');
                 const total = parseInt(contentLength, 10) || fileSize || 0;
                 let downloadFilename = isDir ? filename + '.zip' : filename;
@@ -1990,7 +2129,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
     </script>
     <?php endif; ?>
     <?php if (!empty($isStreamable)): ?>
-    <script src="assets/vendor/hls-1.5.7.min.js"></script>
+    <script src="assets/vendor/hls.min.js?v=1.7.4"></script><!-- ★ (2026-10-30 11:30) 따로 쓰던 hls.js 1.5.7 → 탐색기와 같은 1.7.4 -->
     <script nonce="<?= $cspNonce ?>">
     // === hls.js 정리(destroy) 시점 보정 ★ (2026-10-15) ===
     // hls.js 의 오류(ERROR)·기타 알림 처리 '안에서' hls.destroy() 를 부르면, hls.js 가 그 알림을 보낸 함수의 나머지를 이어서 실행하다
@@ -2084,6 +2223,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         'fsvs_ab_set_b' => __('fsvs_ab_set_b', '구간 반복: B 지정'),
         'fsvs_bigger' => __('fsvs_bigger', '크게'),
         'fsvs_default' => __('fsvs_default', '기본'),
+        'fsvs_muted' => __('fsvs_muted', '음소거'),   // ★ (2026-10-31 12:03, 34차 전체 점검) 음소거 표시 번역(탐색기와 같게)
         'fsvs_higher' => __('fsvs_higher', '위로'),
         'fsvs_lower' => __('fsvs_lower', '아래로'),
         'fsvs_more' => __('fsvs_more', '더 보기'),
@@ -2408,7 +2548,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                                             if (_userRequestedPlay) player.play().catch(() => {});
                                                         });
                                                         swHls.on(Hls.Events.ERROR, (e, d) => {
-                                                            if (d.fatal) { swHls.destroy(); _shareHlsInstance = null; _shareHlsSession = null; _fallbackToMMS(transcodeUrl); }
+                                                            if (d.fatal) { swHls.destroy(); _shareHlsInstance = null; _cleanupShareHls(); _fallbackToMMS(transcodeUrl); } // ★ (2026-11-10 16:01, 65차 점검) 세션 값만 비우고 넘어가 서버 HLS 변환이 고아 정리(10분) 때까지 MMS 변환과 함께 돌았음 → 비우기 전에 stop(_cleanupShareHls)
                                                         });
                                                         _shareHlsSession = swData.session;
                                                         _shareHlsInstance = swHls;
@@ -2435,7 +2575,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                 // 그 외 fatal 에러는 MMS fallback (기존 동작)
                                 hls.destroy();
                                 _shareHlsInstance = null;
-                                _shareHlsSession = null; // stop 전송 방지
+                                _cleanupShareHls(); // ★ (2026-11-10 16:01, 65차 점검) 세션 값만 비우고 넘어가 서버 HLS 변환이 고아 정리(10분) 때까지 MMS 변환과 함께 돌았음 → 비우기 전에 stop(_cleanupShareHls)
                                 _fallbackToMMS(transcodeUrl);
                             }
                         });
@@ -2458,29 +2598,44 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         
                         // ★ iOS 네이티브 HLS — video.error → SW fallback (멀티오디오 EAC3 등 회귀 대응)
                         //   PC hls.js의 ERROR 이벤트와 동등 메커니즘
+                        // ★ (2026-11-01 01:50, 36차 전체 점검) 이 리스너들은 <video> 에 붙어 음성·화질·재생방식 변경 뒤에도 남아,
+                        //   새 세션 오류 때 옛 주소(처음 음성·0초)로 SW 재시작·MMS 대체를 했다. 붙일 때의 세션 회차를 기억해 두고 바뀌었으면 손대지 않는다.
+                        const _iosGen0 = player._fsIosHlsGen || 0;
                         player.addEventListener('error', async function _shareIosHlsErrorHandler() {
                             player.removeEventListener('error', _shareIosHlsErrorHandler);
+                            if ((player._fsIosHlsGen || 0) !== _iosGen0) return;   // ★ (2026-11-01 01:50, 36차 전체 점검) 옛 세션의 리스너
                             if (window._shareHlsSwRetried) return;
                             window._shareHlsSwRetried = true;
                             
                             const eb = document.getElementById('stream-badge');
-                            if (eb) eb.textContent = '⚡ HW 실패 — SW 재시도 중...';
-                            
+                            // ★ (2026-11-01 01:03, 35차 전체 점검) 배지 문구가 영어 화면에서도 한국어로 고정돼 있었다 — 탐색기(app.js)와 같은 번역 키로.
+                            if (eb) eb.textContent = '⚡ ' + <?= json_encode(__('vbadge_hw_fail_sw_retry', 'HW 실패 — SW 재시도 중...'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+
                             try { player.pause(); } catch(e) {}
                             player.removeAttribute('src');
                             player.load();
-                            
+
+                            // ★ (2026-11-01 01:03, 35차 전체 점검) 옛 HW 세션에 stop 을 보내지 않고 SW 세션으로 덮어써 서버 HW ffmpeg 가 고아 정리(10분)까지 돌았다.
+                            //   같은 파일 hls.js 경로·음성 변경 뒤 iOS 경로와 같게 stop(keepalive) 을 보내고 비운 뒤 SW 를 시작한다.
+                            try {
+                                if (_shareHlsSession) {
+                                    const _iosStopUrl0 = hlsStartUrl.replace('hls_action=start', 'hls_action=stop') + '&session=' + encodeURIComponent(_shareHlsSession);
+                                    fetch(_iosStopUrl0, { keepalive: true }).catch(() => {});
+                                }
+                            } catch(e) {}
+                            _shareHlsSession = null;
+
                             try {
                                 const swUrl = hlsStartUrl + '&force_sw=1';
                                 const swRes = await fetch(swUrl);
                                 const swCt = swRes.headers.get('content-type') || '';
                                 if (!swCt.includes('json')) {
-                                    if (eb) eb.textContent = '❌ SW 재시작 실패';
+                                    if (eb) eb.textContent = '❌ ' + <?= json_encode(__('vbadge_sw_restart_failed', 'SW 재시작 실패'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;   // ★ (2026-11-01 01:03, 35차 전체 점검) 번역 키로
                                     return;
                                 }
                                 const swData = await swRes.json();
                                 if (!swData.success || !swData.playlist) {
-                                    if (eb) eb.textContent = '❌ SW 재시작 실패';
+                                    if (eb) eb.textContent = '❌ ' + <?= json_encode(__('vbadge_sw_restart_failed', 'SW 재시작 실패'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;   // ★ (2026-11-01 01:03, 35차 전체 점검) 번역 키로
                                     return;
                                 }
                                 
@@ -2493,6 +2648,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                 // ★ SW도 실패 시 MMS fallback (PC와 일관성)
                                 player.addEventListener('error', function _shareIosSwErrorHandler() {
                                     player.removeEventListener('error', _shareIosSwErrorHandler);
+                                    if ((player._fsIosHlsGen || 0) !== _iosGen0) return;   // ★ (2026-11-01 01:50, 36차 전체 점검) 옛 세션의 리스너 — 옛 음성으로 MMS 대체하지 않음
                                     _fallbackToMMS(transcodeUrl);
                                 }, { once: true });
                             } catch(swErr) {
@@ -2502,8 +2658,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         
                         return;
                     }
-                    
-                    
+
+                    // ★ (2026-11-01 09:47, 38차 점검) hls.js·내장 HLS 를 둘 다 못 쓰면 시작한 서버 HLS 세션을 stop 하지 않은 채 MMS 로 가서
+                    //   고아 정리 때까지 변환이 MMS 파이프 변환과 함께 두 개 돌았음 → MMS 로 가기 전에 그 세션을 멈춤(_cleanupShareHls 와 같은 요청)
+                    try { if (startData.session) { const _fd = new FormData(); _fd.append('session', startData.session); navigator.sendBeacon('share.php?t=' + encodeURIComponent(<?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + encodeURIComponent(startData.session), _fd); } } catch (_e) {}
                 } else {
                     console.error('[Share HLS] Start failed:', startData);
                 }
@@ -2529,7 +2687,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                         if (_userRequestedPlay) player.play().catch(() => {});
                                     });
                                     hls.on(Hls.Events.ERROR, (event, data) => {
-                                        if (data.fatal) { hls.destroy(); _shareHlsInstance = null; _shareHlsSession = null; _fallbackToMMS(transcodeUrl); }
+                                        if (data.fatal) { hls.destroy(); _shareHlsInstance = null; _cleanupShareHls(); _fallbackToMMS(transcodeUrl); } // ★ (2026-11-10 16:01, 65차 점검) 세션 값만 비우고 넘어가 서버 HLS 변환이 고아 정리(10분) 때까지 MMS 변환과 함께 돌았음 → 비우기 전에 stop(_cleanupShareHls)
                                     });
                                     _shareHlsSession = swData.session;
                                     _shareHlsInstance = hls;
@@ -2541,6 +2699,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                     _shareHlsSession = swData.session;
                                     return;
                                 }
+                                // ★ (2026-11-01 09:47, 38차 점검) 위와 같은 이유 — 재생 수단이 없으면 방금 시작한 SW 세션도 멈추고 MMS 로
+                                try { if (swData.session) { const _fd = new FormData(); _fd.append('session', swData.session); navigator.sendBeacon('share.php?t=' + encodeURIComponent(<?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + encodeURIComponent(swData.session), _fd); } } catch (_e) {}
                             }
                         }
                     } catch(swErr) {}
@@ -2579,10 +2739,25 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         player.addEventListener('pause', () => { userPaused = true; });
                         player.addEventListener('play', () => { userPaused = false; });
                         
+                        // ★ (2026-11-01 09:47, 38차 점검) appendBuffer 가 실패하면 꺼낸 조각을 버렸음(fMP4 는 이어져 있어 하나만 빠져도 그 뒤가 깨짐) →
+                        //   탐색기 MMS 처럼 QuotaExceededError 면 조각을 되돌려 두고 재생한 앞부분(현재-5초 전)을 지운 뒤 다시 넣음. 닫힌 MediaSource 엔 넣지 않음
                         function appendNext() {
-                            if (appending || queue.length === 0 || sourceBuffer.updating) return;
+                            if (appending || queue.length === 0 || sourceBuffer.updating || mediaSource.readyState !== 'open') return;
                             appending = true;
-                            try { sourceBuffer.appendBuffer(queue.shift()); } catch(e) { appending = false; }
+                            const chunk = queue.shift();
+                            try { sourceBuffer.appendBuffer(chunk); } catch(e) {
+                                appending = false;
+                                if (e && e.name === 'QuotaExceededError') {
+                                    queue.unshift(chunk);
+                                    try {
+                                        if (sourceBuffer.buffered.length > 0) {
+                                            const s = sourceBuffer.buffered.start(0), ct = player.currentTime;
+                                            if (ct - s > 5) { sourceBuffer.remove(s, ct - 5); return; }   // 끝나면 updateend → appendNext
+                                        }
+                                    } catch (_e) {}
+                                    if (!appendNext._retryT) appendNext._retryT = setTimeout(() => { appendNext._retryT = 0; appendNext(); }, 1000);   // 지울 앞부분이 아직 없으면(일시정지 등) 잠시 뒤 다시 — ★ (2026-11-01 10:13, 38차 점검) 재시도 타이머는 하나만(조각마다 쌓였음)
+                                }
+                            }
                         }
                         sourceBuffer.addEventListener('updateend', () => {
                             appending = false;
@@ -2597,11 +2772,15 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             if (!resp.ok || !resp.body) throw new Error('fetch failed');
                             if (status) status.classList.remove('active');
                             const reader = resp.body.getReader();
+                            // ★ (2026-11-01 09:47, 38차 점검) 음성·화질·일반재생으로 소스를 바꿔도 옛 변환 스트림을 끝까지 읽어 서버 ffmpeg 가 파일 끝까지 돌았음 →
+                            //   탐색기 MMS(readyState !== 'open' 이면 멈춤)처럼 닫히면 reader 를 취소. 넣지 못한 조각이 쌓이면(일시정지·한도) 잠시 읽기를 쉼
                             while (true) {
+                                if (mediaSource.readyState !== 'open') { try { reader.cancel().catch(() => {}); } catch (_e) {} break; }
                                 const {done, value} = await reader.read();
                                 if (done) break;
                                 queue.push(value);
                                 appendNext();
+                                while (queue.length > 8 && mediaSource.readyState === 'open') await new Promise(r => setTimeout(r, 250));
                             }
                             const waitUpdate = () => new Promise(r => { if (!sourceBuffer.updating) return r(); sourceBuffer.addEventListener('updateend', r, {once:true}); });
                             await waitUpdate();
@@ -2697,12 +2876,28 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         window.addEventListener('beforeunload', _cleanupShareHls);
         window.addEventListener('pagehide', _cleanupShareHls);
         // 모바일에서만 visibilitychange로 정리 (데스크톱은 beforeunload으로 충분)
+        // ★ (2026-11-01 09:46, 38차 점검) 30초 뒤 정리하고 나서 다시 시작하는 코드가 없어 돌아와도 재생이 안 됐고(loaded 가드),
+        //   화면을 끄고 소리만 듣는 중에도 30초 만에 끊겼음 → 재생 중이면 정리하지 않고, 멈춘 채 정리했으면 보던 위치(절대 시각)를 기억했다가
+        //   화면으로 돌아올 때 loaded 를 풀고 주소에 &seek= 를 붙여 둠(다음 ▶ 에서 startTranscode 가 그 위치부터 새 세션으로 시작)
+        let _visStopAt = null;
         if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
             document.addEventListener('visibilitychange', () => {
                 if (document.visibilityState === 'hidden' && _shareHlsSession) {
                     setTimeout(() => {
-                        if (document.visibilityState === 'hidden') _cleanupShareHls();
+                        if (document.visibilityState === 'hidden' && _shareHlsSession && player.paused) {
+                            _visStopAt = (player.currentTime || 0) + (player._qualitySeekOffset || 0);
+                            _cleanupShareHls();
+                        }
                     }, 30000); // 30초 — 모바일 탭 전환 시 충분한 대기
+                } else if (document.visibilityState === 'visible' && _visStopAt !== null && !_shareHlsSession) {
+                    const at = _visStopAt; _visStopAt = null;
+                    const add = (u) => (u ? String(u).replace(/&seek=[^&]*/g, '') + (at >= 1 ? '&seek=' + at.toFixed(2) : '') : u);
+                    if (player.dataset.hlsUrl) player.dataset.hlsUrl = add(player.dataset.hlsUrl);
+                    if (player.dataset.transcodeUrl) player.dataset.transcodeUrl = add(player.dataset.transcodeUrl);
+                    player._qualitySeekOffset = at >= 1 ? at : 0;
+                    player._fsIosHlsGen = (player._fsIosHlsGen || 0) + 1;   // ★ (2026-11-01 10:13, 38차 점검) 옛 세션의 iOS 내장 HLS 오류 처리기가 새 세션 오류 때 옛 주소(seek 없음)로 다시 시작하지 않게 회차를 올림(음성·화질 전환과 같음)
+                    try { player.pause(); if (player.srcObject) player.srcObject = null; player.removeAttribute('src'); player.querySelectorAll('source').forEach(s => s.remove()); player.load(); } catch (e) {}
+                    loaded = false;
                 }
             });
         }
@@ -2850,6 +3045,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         if (sel) {
                             sel.addEventListener('change', () => {
                             sel.blur();
+                            if (window._shareAutoNextPending) return;   // ★ (2026-11-12 16:42, 100차 RGR19-2) 폴더 자동 다음(1초 뒤 이동)이 예약됐으면 새 변환을 열지 않음 — 종전엔 a 를 처음부터 다시 변환하는 세션이 열린 채 b 로 넘어가 stop 이 안 나가고 ffmpeg 가 남았음(재현, 99차 RGR18-1 뒤). 화면은 종전처럼 b 로 넘어감
                             
                             // ★ audio 변경 시 메인 인덱스와 동일 패턴 적용 (펜닐님 결정 — 일관성)
                             //   1. 기존 HLS 인스턴스 destroy (두 모드 충돌 → bufferAppendError 방지)
@@ -2857,6 +3053,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             //   3. _shareHlsSwRetried 플래그 리셋 (새 트랙은 새 세션)
                             //   4. transcodeUrl에서 기존 audio 파라미터 제거 후 새로 추가
                             
+                            // ★ (2026-11-12 14:14, 98차 SUB-1) 보던 위치를 hls.js 정리(destroy) 전에 읽는다(탐색기 app.js 와 같은 순서) — 종전엔 정리 뒤에 읽어 늘 0초라 음성을 바꾸면 처음(또는 앞 변환 시작 위치)부터 다시 나왔음(재현)
+                            const _audioRelTime = player.ended ? 0 : (player.currentTime || 0);   // ★ (2026-11-12 15:27, 99차 재검토 RGR18-1) 끝까지 본 뒤 바꾸면 끝 위치(seek=60.06)로 새 세션이 열려 0초짜리 재생 목록만 남고 검게 멈췄음(98차 SUB-1 뒤 재현) → 끝난 상태면 종전(98차 전)처럼 처음부터
+                            const _audioOffset = player._qualitySeekOffset || 0;
+                            const _audioAbsTime = player.ended ? 0 : (_audioRelTime + _audioOffset);   // ★ (2026-11-12 15:34, 99차 재검토 RGR18-4) 끝난 상태면 앞 변경 위치(_qualitySeekOffset)도 더하지 않고 처음부터 — 음성을 한 번 바꾸고 끝까지 본 뒤 다시 바꾸면 처음 바꾼 위치(4.6초)부터 나왔음(재현)
                             // 기존 HLS 인스턴스 정리
                             if (_shareHlsInstance) {
                                 try { _shareHlsInstance.destroy(); } catch(e) {}
@@ -2877,6 +3077,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             }
                             // SW retry 플래그 리셋 — 새 트랙도 SW fallback 가능하게
                             window._shareHlsSwRetried = false;
+                            // ★ (2026-11-01 01:50, 36차 전체 점검) 세션 회차를 올려 이전 세션이 <video> 에 남긴 아이폰 오류 리스너를 무력화
+                            player._fsIosHlsGen = (player._fsIosHlsGen || 0) + 1;
+                            const _aGen = player._fsIosHlsGen;   // ★ (2026-11-01 17:19, 40차 점검) 이 음성 변경의 회차(화질 변경과 같은 번호) — 시작 응답 전에 다시 바꾸면 받은 세션을 끄고 끝냄
                             
                             // ★ 멀티오디오 audio 변경: 스트리밍 방식별 분기 (v5.8.1b 결정 일관 적용)
                             //   - 이전: 무조건 force_sw=1 추가 + 배지 강제 SW (PC도 SW로 떨어뜨림)
@@ -2887,9 +3090,6 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             // ★ 절대 원본 시점 계산 (v5.8.1c — audio 변경에 quality offset 누적 보정)
                             //   _qualitySeekOffset이 박혀있으면 currentTime은 상대시간
                             //   audio만 변경하지만 새 세션이므로 새 seek=절대시점으로 빌드
-                            const _audioRelTime = player.currentTime || 0;
-                            const _audioOffset = player._qualitySeekOffset || 0;
-                            const _audioAbsTime = _audioRelTime + _audioOffset;
                             // audio + force_sw + seek 제거 (quality는 유지)
                             const _cleanHlsUrl = _origHlsUrl
                                 .replace(/&audio=\d+/g, '')
@@ -2910,9 +3110,14 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             // dataset 갱신 + offset 갱신 (새 세션의 stream0.ts = 절대시점)
                             player.dataset.hlsUrl = _newHlsStartUrl;
                             player._qualitySeekOffset = _audioAbsTime;
-                            
+                            // ★ (2026-11-01 01:04, 35차 전체 점검) 아래 MMS·직접 src 대체가 처음 잡아 둔 transcodeUrl(옛 음성·seek 없음)을 써
+                            //   고르기 전 음성으로 0초부터 재생됐다(위치 보정값은 이미 바뀌어 자막·이어 보기가 어긋남). 새 HLS 주소와 같은 규칙으로 audio·seek 를 붙인다.
+                            let _audioFbUrl = String(transcodeUrl || '').replace(/&audio=\d+/g, '').replace(/&seek=[^&]*/g, '') + '&audio=' + sel.value;
+                            if (_audioAbsTime > 0) _audioFbUrl += '&seek=' + _audioAbsTime.toFixed(2);
+
                             // 비디오 정리
                             try { player.pause(); } catch(e) {}
+                            if (player.srcObject) player.srcObject = null;   // ★ (2026-11-01 09:47, 38차 점검) MMS 대체(ManagedMediaSource)는 srcObject 로 붙는데, 명세상 srcObject 가 src 보다 먼저라 새 소스가 무시됐음 → 먼저 비움
                             player.removeAttribute('src');
                             player.load();
                             
@@ -2927,6 +3132,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                 try {
                                     const _newRes = await fetch(_newHlsStartUrl);
                                     const _newData = await _newRes.json();
+                                    // ★ (2026-11-01 17:19, 40차 점검) 응답 전에 다시 바꿨으면 옛 세션 — 끄고 끝냄(두 hls.js 가 붙고 변환이 남던 것)
+                                    // ★ (2026-11-01 17:57, 40차 재검토) 아래 4곳 공통: 서버는 같은 조건의 시작 요청에 같은 세션을 다시 주므로(720p→480p→720p 빠르게), 버릴 세션이 지금 붙은 세션과 같으면 stop 안 보냄 — 종전엔 지금 보는 재생이 끊겼음(검토 발견)
+                                    if ((player._fsIosHlsGen || 0) !== _aGen) { if (_newData && _newData.session && _newData.session !== _shareHlsSession) { try { const _sx = 'share.php?t=' + encodeURIComponent(<?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + encodeURIComponent(_newData.session); if (navigator.sendBeacon) navigator.sendBeacon(_sx); else fetch(_sx, { keepalive: true }).catch(() => {}); } catch (_e) {} } return; }
                                     if (_newData.success && _newData.playlist) {
                                         _shareHlsSession = _newData.session;
                                         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
@@ -2982,15 +3190,15 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                                                         player.play().catch(() => {});
                                                                     });
                                                                     _retryHls.on(Hls.Events.ERROR, (e2, d2) => {
-                                                                        if (d2.fatal) { _retryHls.destroy(); _shareHlsInstance = null; _shareHlsSession = null; _fallbackToMMS(transcodeUrl); }
+                                                                        if (d2.fatal) { _retryHls.destroy(); _shareHlsInstance = null; _cleanupShareHls(); _fallbackToMMS(_audioFbUrl); }   // ★ (2026-11-01 01:04, 35차 전체 점검) 지금 고른 음성·위치로 대체
                                                                     });
                                                                     _shareHlsInstance = _retryHls;
                                                                 }
                                                             } else {
-                                                                _fallbackToMMS(transcodeUrl);
+                                                                _fallbackToMMS(_audioFbUrl);   // ★ (2026-11-01 01:04, 35차 전체 점검) 지금 고른 음성·위치로 대체
                                                             }
                                                         } catch(swErr) {
-                                                            _fallbackToMMS(transcodeUrl);
+                                                            _fallbackToMMS(_audioFbUrl);   // ★ (2026-11-01 01:04, 35차 전체 점검) 지금 고른 음성·위치로 대체
                                                         }
                                                     })();
                                                     return;
@@ -2998,8 +3206,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                                 // 그 외 fatal 에러 → MMS fallback (기존 첫 hls 인스턴스와 동일 동작)
                                                 _changeHls.destroy();
                                                 _shareHlsInstance = null;
-                                                _shareHlsSession = null;
-                                                _fallbackToMMS(transcodeUrl);
+                                                _cleanupShareHls(); // ★ (2026-11-10 16:01, 65차 점검) 세션 값만 비우고 넘어가 서버 HLS 변환이 고아 정리(10분) 때까지 MMS 변환과 함께 돌았음 → 비우기 전에 stop(_cleanupShareHls)
+                                                _fallbackToMMS(_audioFbUrl);   // ★ (2026-11-01 01:04, 35차 전체 점검) 지금 고른 음성·위치로 대체
                                             });
                                             _shareHlsInstance = _changeHls;
                                         } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
@@ -3010,8 +3218,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                             //   v5.8.1b 변경으로 audio 변경 시 HW 시도하게 됨 → fallback 안전망 필수
                                             //   HW 시도(_newHlsStartUrl에 force_sw 없음)일 때만 의미 있음
                                             if (!_newHlsStartUrl.includes('force_sw=1')) {
+                                                const _iosGenA = player._fsIosHlsGen || 0;   // ★ (2026-11-01 01:50, 36차 전체 점검) 이 음성 변경 세션의 회차 — 다시 바꾸면 아래 리스너는 손대지 않음
                                                 player.addEventListener('error', async function _shareIosAudioChangeErrorHandler() {
                                                     player.removeEventListener('error', _shareIosAudioChangeErrorHandler);
+                                                    if ((player._fsIosHlsGen || 0) !== _iosGenA) return;   // ★ (2026-11-01 01:50, 36차 전체 점검) 옛 세션의 리스너
                                                     if (window._shareHlsSwRetried) return;
                                                     window._shareHlsSwRetried = true;
                                                     
@@ -3019,6 +3229,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                                     if (_iosRetryBadge) _iosRetryBadge.innerHTML = '⚡ HW <?= __('failed_sw_retry', '실패 — SW 재시도 중...') ?>';
                                                     
                                                     try { player.pause(); } catch(e) {}
+                                                    if (player.srcObject) player.srcObject = null;   // ★ (2026-11-01 09:47, 38차 점검) MMS 대체(ManagedMediaSource)는 srcObject 로 붙는데, 명세상 srcObject 가 src 보다 먼저라 새 소스가 무시됐음 → 먼저 비움
                                                     player.removeAttribute('src');
                                                     player.load();
                                                     
@@ -3036,8 +3247,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                                         const _iosSwRes = await fetch(_iosSwUrl);
                                                         const _iosSwData = await _iosSwRes.json();
                                                         if (!_iosSwData.success || !_iosSwData.playlist) {
-                                                            if (_iosRetryBadge) _iosRetryBadge.textContent = '❌ SW 재시작 실패';
-                                                            _fallbackToMMS(transcodeUrl);
+                                                            if (_iosRetryBadge) _iosRetryBadge.textContent = '❌ ' + <?= json_encode(__('vbadge_sw_restart_failed', 'SW 재시작 실패'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;   // ★ (2026-11-01 01:04, 35차 전체 점검) 한국어 고정 → 번역 키
+                                                            _fallbackToMMS(_audioFbUrl);   // ★ (2026-11-01 01:04, 35차 전체 점검) 지금 고른 음성·위치로 대체
                                                             return;
                                                         }
                                                         
@@ -3050,27 +3261,26 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                                         // SW도 실패 시 MMS fallback (라인 1696 패턴과 동일)
                                                         player.addEventListener('error', function _shareIosAudioChangeSwErrorHandler() {
                                                             player.removeEventListener('error', _shareIosAudioChangeSwErrorHandler);
-                                                            _fallbackToMMS(transcodeUrl);
+                                                            if ((player._fsIosHlsGen || 0) !== _iosGenA) return;   // ★ (2026-11-01 01:50, 36차 전체 점검) 옛 세션의 리스너
+                                                            _fallbackToMMS(_audioFbUrl);   // ★ (2026-11-01 01:04, 35차 전체 점검) 지금 고른 음성·위치로 대체
                                                         }, { once: true });
                                                     } catch(_iosSwErr) {
-                                                        _fallbackToMMS(transcodeUrl);
+                                                        _fallbackToMMS(_audioFbUrl);   // ★ (2026-11-01 01:04, 35차 전체 점검) 지금 고른 음성·위치로 대체
                                                     }
                                                 }, { once: false });
                                             }
                                         }
                                     } else {
                                         // HLS 실패 시 MMS fallback (기존 동작)
-                                        const cleanUrl = transcodeUrl.replace(/&audio=\d+/g, '');
-                                        const newUrl = cleanUrl + '&audio=' + sel.value;
-                                        player.src = newUrl;
+                                        // ★ (2026-11-01 01:04, 35차 전체 점검) seek 가 빠져 0초부터 재생됐다 — 위 _audioFbUrl(audio·seek 포함)로
+                                        player.src = _audioFbUrl;
                                         player.load();
                                         player.play().catch(() => {});
                                     }
                                 } catch(e) {
                                     // 네트워크 실패 시 MMS fallback
-                                    const cleanUrl = transcodeUrl.replace(/&audio=\d+/g, '');
-                                    const newUrl = cleanUrl + '&audio=' + sel.value;
-                                    player.src = newUrl;
+                                    // ★ (2026-11-01 01:04, 35차 전체 점검) seek 가 빠져 0초부터 재생됐다 — 위 _audioFbUrl(audio·seek 포함)로
+                                    player.src = _audioFbUrl;
                                     player.load();
                                     player.play().catch(() => {});
                                 }
@@ -3122,6 +3332,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         let qReady = false;
                         setTimeout(() => { qReady = true; }, 1500);
                         
+                        // ★ (2026-10-31 13:34, 34차 후속 개선) _fetchShareInfo 는 화질 변경·트랜스코딩 재시작 때마다 다시 불려 change 리스너가 누적됐다 → 처음 한 번만 붙인다.
+                        if (!qSel._fsBound) { qSel._fsBound = true;
                         qSel.addEventListener('change', async () => {
                             if (!qReady) return;
                             qSel.blur();
@@ -3139,7 +3351,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                 const _pbSel2 = document.getElementById('share-playback-mode');
                                 if (_pbSel2) _pbSel2.value = 'transcode';
                                 const _badge2 = document.querySelector('.stream-badge');
-                                if (_badge2) { _badge2.className = 'stream-badge transcode'; _badge2.innerHTML = '⚡ <?= __('realtime_converting', '실시간 변환 재생') ?>'; }
+                                if (_badge2) { _badge2.className = 'stream-badge transcode'; _badge2.innerHTML = '⚡ <?= __('realtime_streaming', '실시간 스트리밍') ?>'; }   // ★ (2026-11-01 09:48, 38차 점검) realtime_converting(영어 'Converting in real time...' — 진행 중 표시용)을 재생 중 배지에 썼음 → 같은 상황의 일반재생 분기와 같은 realtime_streaming
                                 // dataset.hlsUrl의 quality를 original로 리셋 → 아래에서 newQuality와 다르게 인식되어 전환 진행
                                 player.dataset.hlsUrl = (player.dataset.hlsUrl || '').replace(/&quality=[^&]*/g, '');
                             }
@@ -3177,6 +3389,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             }
                             // SW retry 플래그 리셋
                             window._shareHlsSwRetried = false;
+                            // ★ (2026-11-01 01:50, 36차 전체 점검) 세션 회차를 올려 이전 세션이 <video> 에 남긴 아이폰 오류 리스너를 무력화
+                            player._fsIosHlsGen = (player._fsIosHlsGen || 0) + 1;
+                            const _qGen = player._fsIosHlsGen;   // ★ (2026-11-01 17:19, 40차 점검) 이 변경의 회차 — 시작 응답 전에 다시 바꾸면(화질·음성·일반재생 전환) 아래에서 받은 세션을 끄고 끝냄
                             
                             // 새 hlsUrl 빌드 (quality + 절대시점 seek)
                             let _newHlsUrl = curUrl
@@ -3195,6 +3410,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             
                             // 비디오 정리
                             try { player.pause(); } catch(e) {}
+                            if (player.srcObject) player.srcObject = null;   // ★ (2026-11-01 09:47, 38차 점검) MMS 대체(ManagedMediaSource)는 srcObject 로 붙는데, 명세상 srcObject 가 src 보다 먼저라 새 소스가 무시됐음 → 먼저 비움
                             player.removeAttribute('src');
                             try { player.load(); } catch(e) {}
                             
@@ -3206,6 +3422,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                     console.error('[ShareQualityChange] start failed:', _qData);
                                     return;
                                 }
+                                // ★ (2026-11-01 17:19, 40차 점검) 응답 전에 다시 바꿨으면 옛 세션 — 회차 비교 없이 붙여, 두 hls.js 가 같은 영상에 붙고 먼저 온 세션은 stop 이 안 가 변환이 계속 돌았음
+                                if ((player._fsIosHlsGen || 0) !== _qGen) { if (_qData.session && _qData.session !== _shareHlsSession) { try { const _sx = 'share.php?t=' + encodeURIComponent(<?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + encodeURIComponent(_qData.session); if (navigator.sendBeacon) navigator.sendBeacon(_sx); else fetch(_sx, { keepalive: true }).catch(() => {}); } catch (_e) {} } return; }
                                 _shareHlsSession = _qData.session;
                                 
                                 if (typeof Hls !== 'undefined' && Hls.isSupported()) {
@@ -3249,6 +3467,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                 console.error('[ShareQualityChange] error:', e);
                             }
                         });
+                        }
                     }
 
                     // ★ 재생방식 셀렉트 (1단계): 트랜스코딩 영상 → '일반재생'(네이티브) 전환
@@ -3256,7 +3475,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     //   '트랜스코딩' 재선택은 페이지 새로고침으로 원복(2단계에서 매끄럽게 개선 예정).
                     {
                         const _pbModeSel = document.getElementById('share-playback-mode');
-                        if (_pbModeSel) {
+                        // ★ (2026-10-31 13:34, 34차 후속 개선) _fetchShareInfo 재호출마다 리스너가 쌓여 '일반재생' 선택 시 destroy·load·play 가 여러 번 돌았다 → 한 번만 붙인다.
+                        if (_pbModeSel && !_pbModeSel._fsBound) {
+                            _pbModeSel._fsBound = true;
                             let _pbReady = false;
                             setTimeout(() => { _pbReady = true; }, 1500);
                             _pbModeSel.addEventListener('change', () => {
@@ -3268,7 +3489,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                     //   ★ 의도적 설계(펜닐님 결정): 이어서 재생(seek 유지)으로 개선 안 함.
                                     //   트랜스코딩은 5MB HLS 세그먼트 방식이라 처음부터 시작이 구조에 맞고,
                                     //   seek 지점부터 변환 세션 맞추는 건 복잡·불안정. reload가 깔끔·안정적.
-                                    try { location.reload(); } catch(e) {}
+                                    // ★ (2026-11-04 01:37, 54차 점검) reload 대신 같은 주소(# 뒤는 뺌 — 남기면 문서 안 이동만 됨)로 GET 이동 — 비밀번호로 들어온 페이지(POST 응답)에선 reload 가 비밀번호를 다시 POST(크롬·사파리는 '양식 다시 제출' 창)했음(재현)
+                                    try { location.replace(location.href.split('#')[0]); } catch(e) {}
                                     return;
                                 }
                                 // === '일반재생'(네이티브) 전환 ===
@@ -3285,12 +3507,15 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                                     _shareHlsSession = null;
                                 }
                                 window._shareHlsSwRetried = false;
+                                // ★ (2026-11-01 01:50, 36차 전체 점검) 일반재생 전환 — 트랜스코딩 세션이 <video> 에 남긴 아이폰 오류 리스너가 원본 재생 오류 때 SW 재시작·MMS 대체를 하지 않게 회차를 올린다
+                                player._fsIosHlsGen = (player._fsIosHlsGen || 0) + 1;
                                 // ★ (2026-10-08) 원본은 처음(0초)부터 실제 시각이므로 스트리밍 위치 보정값을 0 으로(재검토에서 발견) — 화질 CASE 3(아래)과 같게.
                                 //   안 지우면 자막(공유는 늘 보정값을 더함)·아이폰 전체화면 자막·이어 보기 위치 저장·이후 화질 변경이 옛 보정값만큼 어긋났다.
                                 player._qualitySeekOffset = 0;
                                 // 네이티브 src 설정 (source 자식 제거 후)
                                 player._switchingToTranscode = false;
                                 try { player.pause(); } catch(e) {}
+                                if (player.srcObject) player.srcObject = null;   // ★ (2026-11-01 09:47, 38차 점검) MMS 대체(ManagedMediaSource)는 srcObject 로 붙는데, 명세상 srcObject 가 src 보다 먼저라 새 소스가 무시됐음 → 먼저 비움
                                 player.removeAttribute('src');
                                 while (player.firstChild) player.removeChild(player.firstChild);
                                 player.src = _natUrl;
@@ -3319,16 +3544,22 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     };
                     const durText = fmt(realDur);
                     const playerWrap = document.getElementById('player-wrap');
-                    const durEl = document.createElement('div');
+                    // ★ (2026-10-31 13:34, 34차 후속 개선) 재호출마다 길이 div·timeupdate 리스너가 하나씩 더 붙어 겹쳐 그려졌다 → 이미 있으면 그 div 를 다시 쓰고 리스너는 처음 한 번만.
+                    const _oldDurEl = playerWrap ? playerWrap.querySelector('.transcode-duration') : null;
+                    const durEl = _oldDurEl || document.createElement('div');
+                    durEl._fsDurText = durText;
                     durEl.className = 'transcode-duration';
-                    durEl.textContent = `0:00 / ${durText}`;
-                    if (playerWrap) {
+                    durEl.textContent = `${_oldDurEl ? fmt(player.currentTime) : '0:00'} / ${durText}`;
+                    if (playerWrap && !_oldDurEl) {
                         playerWrap.style.position = 'relative';
                         playerWrap.appendChild(durEl);
                     }
-                    player.addEventListener('timeupdate', () => {
-                        durEl.textContent = `${fmt(player.currentTime)} / ${durText}`;
-                    });
+                    if (!player._fsDurBound) {
+                        player._fsDurBound = true;
+                        player.addEventListener('timeupdate', () => {
+                            durEl.textContent = `${fmt(player.currentTime)} / ${durEl._fsDurText}`;
+                        });
+                    }
                 }
             } catch(e) { console.error('share info error:', e); }
         }
@@ -3482,6 +3713,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 if (newQuality === 'original' && !isTranscoding) {
                     return;
                 }
+                const _nqGen = player._fsNatQSeq = (player._fsNatQSeq || 0) + 1;   // ★ (2026-11-01 17:19, 40차 점검) 이 화질 변경의 회차 — 시작 응답 전에 다시 바꾸면 아래 CASE 2·4 에서 받은 세션을 끄고 끝냄
                 
                 // ★ 절대 원본 시점 계산 (v5.8.1c — 누적 오프셋 보정)
                 //   트랜스코딩 모드는 stream0.ts = 새 세션 시작 시점이라 currentTime이 상대시간임
@@ -3539,6 +3771,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                             if (status) status.classList.remove('active');
                             return;
                         }
+                        // ★ (2026-11-01 17:19, 40차 점검) 응답 전에 다시 바꿨으면 옛 세션 — 끄고 끝냄(두 hls.js 가 붙고 변환이 남던 것)
+                        if (player._fsNatQSeq !== _nqGen) { if (_qData.session && _qData.session !== window._shareNativeHlsSession) { try { const _sx = 'share.php?t=' + encodeURIComponent(<?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + encodeURIComponent(_qData.session); if (navigator.sendBeacon) navigator.sendBeacon(_sx); else fetch(_sx, { keepalive: true }).catch(() => {}); } catch (_e) {} } return; }
                         window._shareNativeHlsSession = _qData.session;
                         
                         if (typeof Hls !== 'undefined' && Hls.isSupported()) {
@@ -3682,6 +3916,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     const _qRes2 = await fetch(_newHlsUrl2);
                     const _qData2 = await _qRes2.json();
                     if (!_qData2.success || !_qData2.playlist) return;
+                    if (player._fsNatQSeq !== _nqGen) { if (_qData2.session && _qData2.session !== window._shareNativeHlsSession) { try { const _sx = 'share.php?t=' + encodeURIComponent(<?= json_encode($token, JSON_HEX_TAG | JSON_HEX_AMP) ?>) + '&download=1&stream=1&hls=1&hls_action=stop&session=' + encodeURIComponent(_qData2.session); if (navigator.sendBeacon) navigator.sendBeacon(_sx); else fetch(_sx, { keepalive: true }).catch(() => {}); } catch (_e) {} } return; }   // ★ (2026-11-01 17:19, 40차 점검) 응답 전에 다시 바꿨으면 옛 세션 — 끄고 끝냄
                     window._shareNativeHlsSession = _qData2.session;
                     
                     if (typeof Hls !== 'undefined' && Hls.isSupported()) {
@@ -3836,7 +4071,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 // 자막 재적용
                 <?php if (!empty($autoSubtitles)): ?>
                 setTimeout(() => {
-                    const autoSubs = <?= json_encode($autoSubtitles, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+                    // ★ (2026-11-04 01:37, 54차 점검) 아래 '서버에서 찾은 자막 자동 로드'가 넣은 window._shareAutoSubs 를 같이 씀 — 종전엔 같은 자막 내용을 여기에 한 번 더 찍어 페이지가 자막 크기의 2배였음(재현)
+                    const autoSubs = window._shareAutoSubs || [];
                     if (autoSubs.length > 0) {
                         const _reSub = (_shareSubList && _shareSubList[_shareSubIdx]) || autoSubs[0];   // ★ (2026-10-08) ⚙ 에서 고른 자막을 그대로
                         subCues = parseSubtitle(_reSub.content, _reSub.ext);
@@ -3927,8 +4163,11 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             })();
             
             // 네이티브 비디오 에러 시 전환
+            // ★ (2026-11-01 01:05, 35차 전체 점검) 화질 변경(CASE 2)으로 이미 트랜스코딩 HLS 중인데도 이 대체가 돌아 세션이 하나 더 생기고
+            //   옛 세션은 stop 없이 덮어써졌다(CASE 2 는 _nativeFallbackDone 을 세우지 않음). _shareCodecNet 의 busy() 와 같은 기준으로 거른다.
+            const _shareTcBusy = () => !!player.dataset.qualityTranscoding || !!window._shareNativeHls || !!window._shareNativeHlsSession;
             player.addEventListener('error', (e) => {
-                if (_nativeFallbackDone) return;
+                if (_nativeFallbackDone || _shareTcBusy()) return;   // ★ (2026-11-01 01:05, 35차 전체 점검) 트랜스코딩 중이면 넘기지 않음
                 const err = player.error;
                 // MEDIA_ERR_SRC_NOT_SUPPORTED(4) 또는 MEDIA_ERR_DECODE(3)
                 if (err && (err.code === 4 || err.code === 3)) {
@@ -3943,7 +4182,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             player.addEventListener('play', () => {
                 if (_nativeFallbackDone) return;
                 setTimeout(() => {
-                    if (!_playStarted && !_nativeFallbackDone && player.readyState < 3) {
+                    if (!_playStarted && !_nativeFallbackDone && !_shareTcBusy() && player.readyState < 3) {   // ★ (2026-11-01 01:05, 35차 전체 점검) 트랜스코딩 중이면 넘기지 않음
                         _triggerTranscodeFallback();
                     }
                 }, 10000);
@@ -4281,8 +4520,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 // ★ autoplay=1 추가 — 다음 페이지에서 자동 재생 트리거 (펜닐 v5.8.1e)
                 //   사용자 "다음" 버튼 클릭은 autoplay 없음 (이 핸들러 통하지 않음)
                 const _autoUrl = _folderNextUrl + (_folderNextUrl.indexOf('?') >= 0 ? '&' : '?') + 'autoplay=1';
+                window._shareAutoNextPending = true;   // ★ (2026-11-12 16:42, 100차 RGR19-2) 이동 예약 표시 — 음성 바꾸기가 이걸 보고 새 변환을 열지 않음
                 setTimeout(() => { location.href = _autoUrl; }, 1000);
             });
+            window.addEventListener('pageshow', (ev) => { if (ev.persisted) window._shareAutoNextPending = false; });   // ★ (2026-11-12 16:43, 100차 RGR19-2) 뒤로 가기 캐시로 a 페이지가 되살아나면 예약 표시를 풀어 음성 바꾸기가 다시 되게 함
             <?php endif; ?>
             
             // ★ URL의 autoplay=1 파라미터 처리 (펜닐 v5.8.1e — 폴더 stream 자동 다음 트랙)
@@ -4343,7 +4584,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                         _ae.blur();
                     }
                 } catch (x) {}
-                
+                // ★ (2026-11-01 09:49, 38차 점검) 방향키·Space 가 Alt/Ctrl/Cmd 조합을 가리지 않아 Alt+←·Cmd+←(뒤로 가기)가 5초 되감기로 먹히고 막혔음 → 조합 키는 브라우저 몫(M 키와 같은 규칙)
+                if (e.altKey || e.ctrlKey || e.metaKey) return;
+
                 // ←→: 5초 이동 + 시킹 오버레이 시각 피드백 (메인 패턴 동일)
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
                     const seekAmount = e.key === 'ArrowLeft' ? -5 : 5;
@@ -4373,6 +4616,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     }
                     return;
                 }
+                // ★ (2026-10-31 11:02, 펜닐 요청) M 키: 동영상 음소거 켜기/끄기 — 탐색기와 같음(물리 키 KeyM 이라 한글 입력 상태도, 조합키는 브라우저 몫). 음량 표시·기억은 스킨이
+                if (e.code === 'KeyM' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat) {
+                    player.muted = !player.muted;
+                    try { if (window.FSVideoSkin && typeof window.FSVideoSkin.showVolume === 'function') window.FSVideoSkin.showVolume(player.closest('.fsvs-on')); } catch (x) {}
+                    e.preventDefault();
+                    return;
+                }
                 // Space: 재생/일시정지
                 if (e.key === ' ' || e.code === 'Space') {
                     if (player.paused || player.ended) {
@@ -4385,11 +4635,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 }
             };
             document.addEventListener('keydown', shareVideoKeyHandler);
-            
-            // 페이지 unload 시 정리
-            window.addEventListener('beforeunload', () => {
-                document.removeEventListener('keydown', shareVideoKeyHandler);
-            }, { once: true });
+            // ★ (2026-11-01 09:49, 38차 점검) beforeunload 에서 이 처리기를 떼었는데, 데스크톱 크롬은 페이지를 뒤로 가기 캐시에 넣어 '뒤로' 로 돌아오면
+            //   Space·←→·↑↓·M 이 안 먹었음(36차 음악 쪽과 같은 원인) → 떼는 코드를 뺌(페이지가 내려가면 처리기도 같이 사라져 따로 뗄 필요 없음)
         }
         
         // === FSAudioPlayer 초기화 (audio일 때만) ===
@@ -4423,9 +4670,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 // === 폴더 stream 모드: 다중 트랙 플레이리스트 ===
                 // 서버측 ShareManager::getSharedFolderTracks가 보안 검증 + 음악만 추출
                 // 각 트랙별 streamUrl/coverUrl/lyricsApiUrl는 sub-file 기반 (basename 화이트리스트 검증)
-                const folderTracks = <?= json_encode($folderTracks, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;<?php /* ★ (2026-10-30 01:54, 26차 점검) 파일 이름의 '<!--' 등이 스크립트를 깨지 않게(다른 자리와 같은 옵션) */ ?>
+                const folderTracks = <?= json_encode($folderTracks, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;<?php /* ★ (2026-10-30 01:54, 26차 점검) 파일 이름의 '<!--' 등이 스크립트를 깨지 않게(다른 자리와 같은 옵션) */ ?><?php /* ★ (2026-11-02 08:57, 41차 점검) UTF-8 이 아닌 이름(Linux 옛 CP949) 하나면 json_encode 가 false → 'const folderTracks = ;' 로 이 스크립트 블록 전체가 문법 오류였음. autoSubs 와 같게 INVALID_UTF8_SUBSTITUTE 추가(그 트랙만 '�' 표시·재생 안 됨) */ ?>
                 const folderStreamBase = "share.php?t=<?= urlencode($token) ?>&download=1&stream=1";
-                const folderCoverBase = "share.php?t=<?= urlencode($token) ?>&cover=1&sz=512";   // ★ (2026-09-23) 줄인 커버
+                const folderCoverBase = "share.php?t=<?= urlencode($token) ?>&cover=1&sz=512&cv=<?= (int)ShareManager::COVER_VER ?>";   // ★ (2026-09-23) 줄인 커버   // ★ (2026-11-12 16:10, 100차 CVR-2) &cv= 표지 추출 판(위 단일 파일 주소와 같음)
                 const folderLyricsBase = "share.php?t=<?= urlencode($token) ?>&lyrics=1";
                 
                 _fsDbg('folderTracks parsed', { count: folderTracks.length, first: folderTracks[0] });
@@ -4437,7 +4684,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     path: t.file,
                     url: folderStreamBase + "&file=" + encodeURIComponent(t.file),
                     // ★ HTTP 캐시 무효화: mtime 추가 — 같은 트랙 두 번째 요청 시 브라우저 캐시 적중
-                    coverApiUrl: t.ext === 'mp3' ? (folderCoverBase + "&file=" + encodeURIComponent(t.file) + "&v=" + (t.mtime || 0)) : null,
+                    // ★ (2026-11-02 10:28, 42차 점검) 커버 주소 v 를 '시각-크기'로 — 시각만이라 mp3tag 처럼 시각을 유지한 채 표지를 바꾸면 주소가 그대로여서 30일 immutable 캐시가 옛 표지를 보였음
+                    coverApiUrl: t.ext === 'mp3' ? (folderCoverBase + "&file=" + encodeURIComponent(t.file) + "&v=" + (t.mtime || 0) + "-" + (t.size || 0)) : null,
                     lyricsApiUrl: folderLyricsBase + "&file=" + encodeURIComponent(t.file) + "&v=" + (t.mtime || 0),
                 }));
                 
@@ -4455,7 +4703,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 _fsDbg('FSAudioPlayer 인스턴스화 완료', { instance: !!sharePlayer });
                 
                 // 공유 폴더 stream에서 fileSize는 합산 (메타 정보용)
-                const fileSize = playlist.reduce((sum, t) => sum + (folderTracks.find(ft => ft.file === t.fullName)?.size || 0), 0);
+                // ★ (2026-11-11 07:27, 72차) 곡마다 folderTracks 전체를 find 해 곡 수의 제곱만큼 돌아 2만 곡 폴더가 열 때 1초 넘게 멈췄음 → 한 번만 훑는 표로 같은 합계
+                const _ftSize = new Map(); for (const ft of folderTracks) { if (!_ftSize.has(ft.file)) _ftSize.set(ft.file, ft.size || 0); }
+                const fileSize = playlist.reduce((sum, t) => sum + (_ftSize.get(t.fullName) || 0), 0);
                 <?php else: ?>
                 // === 단일 파일 stream 모드 ===
                 const filename = <?= json_encode($share['filename'], JSON_HEX_TAG | JSON_HEX_AMP) ?>;
@@ -4573,7 +4823,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                     
                     // 가사 모달 열려있으면 다른 키 무시 (Ctrl+L, Esc만 위에서 처리됨)
                     if (_isLyricsOpen) return;
-                    
+                    // ★ (2026-11-01 09:49, 38차 점검) 동영상 쪽과 같은 이유 — Alt/Ctrl/Cmd 조합(뒤로 가기 등)은 가로채지 않음(Ctrl/Cmd+L 가사는 위에서 먼저 처리)
+                    if (e.altKey || e.ctrlKey || e.metaKey) return;
+
                     // ★ (2026-10-08) Shift+← / Shift+→ : 이전·다음 곡(탐색기와 같음 — 버튼 설명에도 적혀 있음). 종전엔 5초 이동으로 처리됐다.
                     if (e.shiftKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
                         if (e.key === 'ArrowLeft') { if (sharePlayer.prev) sharePlayer.prev(); }
@@ -4642,7 +4894,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 document.addEventListener('keydown', shareKeyHandler);
                 
                 // 페이지 unload 시 정리 (Wake Lock 해제 등)
-                window.addEventListener('beforeunload', () => {
+                // ★ (2026-11-01 01:52, 36차 전체 점검) beforeunload → pagehide(뒤로 가기 캐시에 들어가지 않을 때만) — 데스크톱 크롬은 beforeunload 가 있어도 페이지를 캐시에 넣어,
+                //   다른 주소로 갔다가 뒤로 오면 파기된(빈) 플레이어가 그대로 복원됐음. 캐시에 들어가면 브라우저가 재생을 멈추고 Wake Lock 도 풀림
+                window.addEventListener('pagehide', (ev) => {
+                    if (ev && ev.persisted) return;
                     try { sharePlayer.destroy(); } catch(e) {}
                     document.removeEventListener('keydown', shareKeyHandler);
                 });
@@ -4945,9 +5200,23 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         if (subInput) subInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
-            const text = await file.text();
+            // ★ (2026-11-01 09:48, 38차 점검) file.text() 는 늘 UTF-8 이라 EUC-KR SMI 는 글자가 깨지고 UTF-16 은 cue 0개로 기존 자막까지 지웠음 →
+            //   탐색기(_subtitleCuesFromBuffer)와 같은 순서(BOM → UTF-8 fatal → euc-kr)로 풀고, cue 가 0개면 기존 자막을 두고 '읽지 못함'만 표시
+            let text = '';
+            try {
+                const buf = await file.arrayBuffer(), by = new Uint8Array(buf);
+                if (by[0] === 0xFF && by[1] === 0xFE) text = new TextDecoder('utf-16le').decode(buf);
+                else if (by[0] === 0xFE && by[1] === 0xFF) text = new TextDecoder('utf-16be').decode(buf);
+                else if (by[0] === 0xEF && by[1] === 0xBB && by[2] === 0xBF) text = new TextDecoder('utf-8').decode(buf);
+                else { try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch (_e) { text = new TextDecoder('euc-kr').decode(buf); } }
+            } catch (_e) { text = await file.text(); }
             const ext = file.name.split('.').pop().toLowerCase();
-            subCues = parseSubtitle(text, ext);
+            const _newCues = parseSubtitle(text, ext);
+            if (!_newCues || _newCues.length === 0) {
+                if (subOverlay) { subOverlay.textContent = '⚠ ' + <?= json_encode(__('sub_switch_fail', '자막 파일을 읽지 못했습니다.'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?> + ' — ' + file.name; setTimeout(() => { subOverlay.textContent = ''; }, 2500); }
+                return;
+            }
+            subCues = _newCues;
             _subFromUser = true;   // ★ (2026-10-08) 직접 고른 자막 — 이쪽은 원래 '✅ 파일명' 을 띄우므로 '자막 있음' 알림은 생략
             if (subCues.length > 0 && subOverlay) {
                 subOverlay.textContent = '✅ ' + file.name + ' (' + subCues.length + ')';
@@ -4995,7 +5264,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             let track = _shareNativeTrack;
             if (!track || ![...player.textTracks].includes(track)) {
                 try {
-                    track = player.addTextTrack('subtitles', '자막', 'ko');
+                    // ★ (2026-11-01 01:04, 35차 전체 점검) 아이폰 자막 메뉴의 트랙 이름이 영어 화면에서도 '자막' 이었다 — 번역 키(subtitle)로
+                    track = player.addTextTrack('subtitles', <?= json_encode(__('subtitle', '자막'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>, 'ko');
                     _shareNativeTrack = track;
                 } catch(eT) { return; }
             }
@@ -5050,7 +5320,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             //   메뉴엔 표시하지만 cue를 그리지 않는 알려진 이슈 (flowplayer #1151, video.js #7356)
             //   → video.addTextTrack() + track.addCue() 직접 호출이 안정적
             try {
-                if (!_shareNativeTrack) _shareNativeTrack = player.addTextTrack('subtitles', '자막', 'ko');   // ★ (2026-09-28) 남겨 둔 트랙이 있으면 다시 씀
+                // ★ (2026-11-01 01:04, 35차 전체 점검) 트랙 이름을 번역 키(subtitle)로 — 영어 화면에서도 '자막' 이었다
+                if (!_shareNativeTrack) _shareNativeTrack = player.addTextTrack('subtitles', <?= json_encode(__('subtitle', '자막'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP) ?>, 'ko');   // ★ (2026-09-28) 남겨 둔 트랙이 있으면 다시 씀
                 _shareInjectCues(_shareNativeTrack, subCues);
             } catch(eT) {}
             
@@ -5126,13 +5397,18 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             // ★ (2026-10-07) 스트리밍(트랜스코딩)은 서버가 중간(이어 보기·화질/음성 변경 위치)부터 변환해 보내므로 브라우저 시각 0 = 실제 N초
             //   (_qualitySeekOffset — 일반 재생으로 돌아오면 0). 이어 보기 위치 기록(note)과 같은 기준으로 더한다(펜닐 제보: 이어 보기에서 자막 어긋남).
             const t = player.currentTime + (Number(player._qualitySeekOffset) || 0) + subSyncOffset;
-            let found = '';
+            const _hits = [];
             for (const cue of subCues) {
                 if (t >= cue.start && t <= cue.end) {
-                    found = cue.text;
-                    break;
+                    // ★ (2026-11-02 14:34, 44차 점검) 겹친 cue(두 사람 대사·ASS 표지판)는 먼저 것만 보였음(break) → 맞는 cue 를 모두 줄바꿈(<br>)으로 이어 표시(cue.text 는 이미 escape 된 값)
+                    _hits.push(cue);
                 }
             }
+            // ★ (2026-11-02 15:17, 44차 재검토) 이어 표시는 지금 진행 중인 cue 만(여럿 맞으면 바로 지금 끝나는 것은 뺌 — SMI·연속 SRT 는 끝=다음 시작이라 경계에서 두 줄이 겹쳐 보였음) + 같은 글자 줄은 한 번만(ASS 레이어 0·1 에 같은 문장을 두는 팬자막이 두 번 보였음)
+            const _live = _hits.length > 1 ? _hits.filter(c => t < c.end) : _hits;
+            const _txt = [], _seen = new Set();
+            for (const c of (_live.length ? _live : _hits.slice(0, 1))) { const k = String(c.text).replace(/<[^>]*>/g, '').trim(); if (_seen.has(k)) continue; _seen.add(k); _txt.push(c.text); }
+            const found = _txt.join('<br>');
             subOverlay.innerHTML = found;
         });
         
@@ -5164,10 +5440,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             for (const block of blocks) {
                 const lines = block.trim().split('\n');
                 for (let i = 0; i < lines.length; i++) {
-                    const m = lines[i].match(/(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[.,](\d{3})/);
+                    const m = lines[i].match(/(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})[.,](\d{3})/);   // ★ (2026-11-01 09:50, 38차 점검) WebVTT 는 시(時)를 생략할 수 있는데(00:01.000) h:mm:ss.ttt 만 받아 cue 0개였음 → 시는 선택
                     if (m) {
-                        const start = +m[1]*3600 + +m[2]*60 + +m[3] + +m[4]/1000;
-                        const end = +m[5]*3600 + +m[6]*60 + +m[7] + +m[8]/1000;
+                        const start = (+m[1] || 0)*3600 + +m[2]*60 + +m[3] + +m[4]/1000;
+                        const end = (+m[5] || 0)*3600 + +m[6]*60 + +m[7] + +m[8]/1000;
                         // 보안: HTML 태그 제거 후 엔티티 이스케이프 (XSS 방어)
                         let txt = subDecodeEnt(subStripTags(lines.slice(i+1).join('\n'))).trim();
                         if (txt) {
@@ -5191,7 +5467,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             const cues = [];
             // CRLF 정규화 (Windows 자막 파일 대응)
             text = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-            const regex = /<sync\s+start=(\d+)>\s*<p[^>]*>([\s\S]*?)(?=<sync|$)/gi;
+            // ★ (2026-11-01 09:50, 38차 점검) 'Start = 1000'·'Start="1000"'·'Start=1000 End=…'·<P> 없는 SYNC 를 못 읽었음(탐색기는 공백은 읽음) → 공백·따옴표·다른 속성 허용, <p> 는 선택
+            const regex = /<sync\b[^>]*?\bstart\s*=\s*["']?(\d+)["']?[^>]*>\s*(?:<p[^>]*>)?([\s\S]*?)(?=<sync|$)/gi;
             // 1단계: 모든 sync를 (ms, text) 형태로 수집 — 빈 자막도 OFF 신호로 보존
             const syncs = [];
             let m;
@@ -5216,6 +5493,13 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             }
             // 2단계: 시간순 정렬 후 cue 생성 — 빈 자막은 endTime 역할만
             syncs.sort((a, b) => a.ms - b.ms);
+            // ★ (2026-11-02 14:34, 44차 점검) 같은 시각 블록 합치기 — 두 언어 자막(같은 Start 의 KRCC·ENCC 블록)은 앞 블록이 길이 0 이 되어 사라졌음 → 같은 ms 는 <br> 로 이어 한 블록으로
+            for (let i = syncs.length - 1; i > 0; i--) {
+                if (syncs[i].ms === syncs[i - 1].ms) {
+                    syncs[i - 1].text = [syncs[i - 1].text, syncs[i].text].filter(Boolean).join('<br>');
+                    syncs.splice(i, 1);
+                }
+            }
             for (let i = 0; i < syncs.length; i++) {
                 if (!syncs[i].text) continue; // 빈 자막은 cue로 만들지 않음
                 const start = syncs[i].ms / 1000;
@@ -5262,7 +5546,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         // 서버에서 찾은 자막 자동 로드
         <?php if (!empty($autoSubtitles)): ?>
         (function() {
-            const autoSubs = <?= json_encode($autoSubtitles, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
+            // ★ (2026-11-04 01:37, 54차 점검) 자막 데이터는 여기 한 곳만 출력하고 트랜스코딩 전환 때 자막 재적용도 window._shareAutoSubs 로 같이 씀(종전엔 두 곳에 같은 내용 — 재현)
+            const autoSubs = window._shareAutoSubs = <?= json_encode($autoSubtitles, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
             if (autoSubs.length > 0) {
                 // ★ (2026-10-08) 고르는 순서 — 서버 순위(이름 같음 먼저) + 이 브라우저가 기억한 언어(⚙ 에서 고른 것, 잘 맞는 자막 안에서) + 순위가 같으면 한국어 먼저(탐색기와 같음)
                 const _vb = <?= json_encode(isset($videoBase) ? (string)$videoBase : '', JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;
@@ -5277,8 +5562,10 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 _shareSubList = _ord.map((o) => o.x);
                 _shareSubIdx = 0;
                 _shareSubVB = _vb;
-                const sub = _shareSubList[0]; // 첫 번째 자막 사용
+                let sub = _shareSubList[0]; // 첫 번째 자막 사용
                 subCues = parseSubtitle(sub.content, sub.ext);
+                // ★ (2026-11-12 14:21, 98차 SUB-2) 첫 자막이 깨졌거나 비었으면(cue 0개) 다음 자막부터 차례로 — 처음 cue 가 나온 것을 쓰고 그 번호를 기억(탐색기 2026-10-08 과 같은 규칙). 종전엔 정상 자막이 있어도 자막이 없고 ⚙ '자막 파일' 줄도 사라졌음(재현). 모두 깨졌으면 종전처럼 자막 없음
+                for (let _k = 1; subCues.length === 0 && _k < _shareSubList.length; _k++) { const _c = parseSubtitle(_shareSubList[_k].content, _shareSubList[_k].ext); if (_c.length > 0) { sub = _shareSubList[_k]; subCues = _c; _shareSubIdx = _k; } }
                 if (subCues.length > 0 && subOverlay) {
                     _updateTrackElement(); // iOS 전체화면용 track 생성
                 }
@@ -5415,6 +5702,7 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
                 subAct: (name) => { const b = byId(SUB[name]); if (b) b.click(); },
                 subSync: () => { const st = window._shareSubState ? window._shareSubState() : null; return st ? st.sync : 0; },
                 subTracks: () => (window._shareSubTracks ? window._shareSubTracks() : null),   // ★ (2026-10-08) ⚙ 자막 파일 고르기
+                menuSheet: true,   // ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) 설정 창이 플레이어 안에 안 들어가면 '아래에서 올라오는 시트'(fs-video-skin fitSheetA) — 공유 페이지만
                 // ★ (2026-10-08) 설정 창이 플레이어 안에 안 들어가면 플레이어 위 빈 곳(창 위쪽까지 보이는 만큼)까지 펼쳐도 됨 — 전체화면이면 0
                 menuRoomAbove: () => {
                     if (document.fullscreenElement || document.webkitFullscreenElement) return 0;
@@ -5622,7 +5910,9 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
         const autonextBtn = document.getElementById('share-pl-autonext');
         if (autonextBtn) {
             // 초기 상태 — 없으면 ON 기본
-            const _initOn = (sessionStorage.getItem(AUTONEXT_KEY) ?? '1') === '1';
+            // ★ (2026-11-01 09:49, 38차 점검) 이것만 try 밖이라 사이트 데이터를 막은 브라우저에선 SecurityError 로 이 블록 뒤 초기화(자동 다음 버튼·첫 진입 열기·Esc·창 크기)가 모두 멈췄음 → try 안으로, 못 읽으면 기본 ON
+            let _initOn = true;
+            try { _initOn = (sessionStorage.getItem(AUTONEXT_KEY) ?? '1') === '1'; } catch (e) {}
             autonextBtn.classList.toggle('on', _initOn);
             autonextBtn.setAttribute('aria-pressed', _initOn ? 'true' : 'false');
             autonextBtn.addEventListener('click', function(e) {
@@ -5680,7 +5970,11 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
     let ls = null;
     try { ls = window.localStorage; ls.getItem('fs_vp:probe'); } catch (e) { return; }
     let tok = '', sub = '';
-    try { const _q = new URLSearchParams(location.search); tok = _q.get('t') || ''; sub = _q.get('file') || ''; } catch (e) {}
+    // ★ (2026-11-04 01:37, 54차 점검) 주소에 file 이 없으면 서버가 자동으로 고른 첫 영상($pageSubFile)으로 — 종전엔 링크로 바로 연 첫 영상이 'fs_vp:토큰'(단일 공유 이름)에
+    //   기록돼, 목록의 같은 영상(&file=)에서 이어 보기가 안 됐음(재현). 주소에 file 이 있으면·단일 공유($pageSubFile 없음)는 종전 이름 그대로
+    try { const _q = new URLSearchParams(location.search); tok = _q.get('t') || ''; sub = _q.get('file') || <?= json_encode((string)($pageSubFile ?? ''), JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>; } catch (e) {}
+    // ★ (2026-11-11 23:05, 87차 RGR6-N1) 86차 SHP-1 로 주소의 file 이 목록과 맞지 않아 서버가 첫 영상을 고른 경우엔 그 영상($pageSubFile) 이름으로 — 종전엔 주소의 옛 이름으로 읽어, 이름이 바뀐 영상의 이어 보기 위치(0:30)에서 첫 영상이 시작됐음(재현). 그 밖의 경우는 위 줄 그대로
+    <?php if (!empty($folderAutoFirstTrack) && isset($_GET['file']) && (string)$_GET['file'] !== '' && (string)($pageSubFile ?? '') !== ''): ?>sub = <?= json_encode((string)$pageSubFile, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE | JSON_HEX_TAG | JSON_HEX_AMP) ?>;<?php endif; ?>
     if (!tok) return;
     // ★ (2026-10-04) 폴더 공유는 같은 토큰에 &file= 로 여러 영상 — 파일마다 따로(재검토 실측: 같은 길이 영상끼리 다른 영상 위치에서 시작). 단일 파일 공유는 종전 이름 그대로.
     const _id = tok + (sub ? '|' + sub : '');
@@ -5704,7 +5998,8 @@ $fastNative = !empty($isVideo) && empty($needsTranscode) && !empty($canPlayNativ
             ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'touchstart', 'touchend', 'click', 'dblclick'].forEach((ev) => el.addEventListener(ev, stop));
             btn.addEventListener('click', (e) => {
                 e.preventDefault(); el.remove(); diag({ ev: 'restart', mode });
-                if (mode === 'tc') { try { sessionStorage.setItem(SKIP, '1'); } catch (x) {} location.reload(); }
+                // ★ (2026-11-04 01:37, 54차 점검) reload 대신 같은 주소(# 뒤는 뺌 — 남기면 문서 안 이동만 됨)로 GET 이동 — 비밀번호로 들어온 페이지(POST 응답)에선 reload 가 비밀번호를 다시 POST(크롬·사파리는 '양식 다시 제출' 창)했음(재현)
+                if (mode === 'tc') { try { sessionStorage.setItem(SKIP, '1'); } catch (x) {} location.replace(location.href.split('#')[0]); }
                 else { try { player.currentTime = 0; } catch (x) {} }
             });
             el.append(span, btn); wrap.appendChild(el);

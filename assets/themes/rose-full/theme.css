@@ -710,7 +710,7 @@ body.is-mobile .header {
 .storage-item.active, .menu-list li.active > a, .menu-list li > a.board-sidebar-item.active, #storage-list a.active { background:#fdc3cc !important; color:#4e2329 !important; font-weight:600; }
 .quota-bar { background:#fed2d8 !important; }
 .quota-fill { background:#fb7185 !important; }
-.modal-header { background:#fb7185 !important; color:#1c0c0f !important; --fs-text-2:#1c0c0f; --fs-text-3:#1c0c0f; }
+.modal-header { background:#fb7185 !important; color:#1c0c0f !important; --fs-text-2:#1c0c0f; --fs-text-3:#1c0c0f; --fs-fg-err:#1c0c0f; } /* ★ (2026-11-10 18:52, 67차 점검) 머리줄 위 상태색 아이콘(금지 아이디·닉네임 창 🚫 .fs-ico-err)이 대체값 빨강 #c62828 로 칠해져 강조색 바탕과 대비 3:1 미달 → 머리줄 글자색을 따름 */
 .modal-header h2, .modal-header .modal-close { color:#1c0c0f !important; }
 .btn.btn-primary, .btn-primary { background:#fb7185 !important; border-color:#fb7185 !important; color:#1c0c0f !important; }
 .btn.btn-primary:hover, .btn-primary:hover { background:#dd6375 !important; border-color:#dd6375 !important; }
@@ -755,3 +755,6 @@ body.is-mobile .header {
 .header .digital-clock.style-4, .header .digital-clock.style-5, .header .digital-clock.style-6, .header .digital-clock.style-7, .header .digital-clock.style-10 { color:#e6e8eb !important; --fs-text-2:#c9cdd3; --fs-text-3:#b4bac2; }
 .header .digital-clock.style-5 .clock-date, .header .digital-clock.style-6 .clock-date { color:#b4bac2 !important; }
 .header .digital-clock.style-7 .clock-date { color:#c9cdd3 !important; }
+
+/* ★ (2026-11-12 20:02, 103차 개선 X5) Tab 으로 들어온 검색칸 테두리(102차 KBD-6)를 짙은 남색으로 — 이 테마는 머리줄 배경이 강조색(--primary)과 같아 종전 테두리가 안 보였음(대비 1.00:1, 캡처 실측). 머리줄 대비 3.45:1 이상 */
+.search-box.kbd-focus { box-shadow: 0 0 0 2px #0f172a; }

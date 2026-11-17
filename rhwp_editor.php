@@ -3,7 +3,7 @@ require_once __DIR__ . '/php_version_check.php';
 /**
  * rhwp-studio HWP 에디터 래퍼
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.8.7
+ * @rhwp_version 0.9.0
  */
 
 require_once __DIR__ . '/config.php';
@@ -21,11 +21,16 @@ header('Expires: 0');
 $storage = new Storage();
 $auth = new Auth();
 
-if (!$auth->isLoggedIn()) { header('Location: index.php'); exit; }
+// ★ (2026-11-07 11:20, 로그인 유지 풀림 재검토) 세션이 없으면 로그인 유지 토큰으로 복구 시도(index.php·api.php 와 같게) — 종전엔 이 화면이 첫 요청이면(iPhone 이 탭을 정리한 뒤 뷰어 탭을 다시 읽을 때 등) 로그인 유지를 켜도 로그인 화면/401 로 갔음(재현)
+if (!$auth->isLoggedIn() && !$auth->checkRememberToken()) { header('Location: index.php'); exit; }
 
 $storageId = (int)($_GET['storage_id'] ?? 0);
+if (isset($_GET['path']) && !is_string($_GET['path'])) { http_response_code(400); exit('Invalid path'); }   // ★ (2026-11-11 13:21, 74차) path[]= 배열이면 dirname()/basename() TypeError 로 500 이었음(api.php 는 56차에 400 으로 정리, 이 진입점은 앞단을 안 거침) → 400. 문자열 경로는 그대로
 $filePath = $_GET['path'] ?? '';
 $fileName = basename($filePath);
+// ★ (2026-11-03 14:21, 51차 재검토) 로컬 스토리지도 원격처럼 '..'(또는 점·공백만 있는 '.. '·'...') 조각을 거부 — api.php 앞단 차단을 거치지 않는 진입점이라, 루트 위로 넘치는 '..'
+//   ('../<스토리지 폴더>/secret/a.docx')나 Linux 의 '.. '·'...' 폴더를 끼운 경로가 폴더 권한·잠금 비교만 비켜 가 읽기 금지 폴더 읽기·쓰기 금지/잠긴 한글 파일 덮어쓰기가 됐음(재현)
+if (preg_match('#(^|[\\\\/])[. ]*\.\.[. ]*($|[\\\\/])#', (string)$filePath)) { http_response_code(403); exit('Invalid path'); }
 
 if ($storageId && !$storage->checkPermission($storageId, 'can_read')) {
     http_response_code(403); exit('No permission');
@@ -43,12 +48,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'timing_log') {
         if ($raw !== false && strlen($raw) < 20000) {
             $d = json_decode($raw, true);
             if (is_array($d)) {
-                $line = date('Y-m-d H:i:s') . ' | ' . basename((string)($d['file'] ?? '?'))
-                      . ' | result=' . (string)($d['result'] ?? '?')
+                // ★ (2026-11-01 01:11, 35차 전체 점검) 파일 이름·결과·단계 이름의 줄바꿈도 지움(UA 와 같게) — 가짜 로그 줄을 끼워 넣지 못하게
+                $__nl = function ($v) { return preg_replace('/[\r\n]/', ' ', (string)$v); };
+                $line = date('Y-m-d H:i:s') . ' | ' . $__nl(basename((string)($d['file'] ?? '?')))
+                      . ' | result=' . $__nl($d['result'] ?? '?')
                       . ' | total=' . (int)($d['total_ms'] ?? 0) . 'ms';
                 foreach (($d['marks'] ?? []) as $m) {
                     if (!is_array($m)) continue;
-                    $line .= "\n    " . str_pad((string)($m['label'] ?? '?'), 20)
+                    $line .= "\n    " . str_pad($__nl($m['label'] ?? '?'), 20)
                            . ' +' . (int)($m['delta_ms'] ?? 0) . 'ms'
                            . '  (누적 ' . (int)($m['total_ms'] ?? 0) . 'ms)'
                            . (isset($m['extra']) && $m['extra'] !== null ? '  ' . json_encode($m['extra'], JSON_UNESCAPED_UNICODE) : '');
@@ -67,7 +74,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     // 폴더별 권한 체크
     $fileDir = dirname($filePath);
     if ($fileDir === '.') $fileDir = '';
-    if (!$storage->checkFolderPermission($storageId, $fileDir ?: $filePath)) {
+    if (!$storage->checkFolderPermission($storageId, ($fileDir !== '' ? $fileDir : $filePath))) { // ★ (2026-11-01 17:17, 40차 점검) 부모 폴더가 '0' 이면 ?: 가 빈 값으로 봐 항목 자신 규칙으로 검사했음 → '' 일 때만 항목 자신
         http_response_code(403);
         exit('No permission');
     }
@@ -85,7 +92,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     $isRemote = in_array($storageType, ['ftp', 'sftp', 'webdav', 's3', 'smb']);
     
     if ($isRemote) {
-        if (preg_match('/\.\.[\\/\\\\]/', $filePath)) { http_response_code(403); exit; }
+        if (preg_match('#(^|[\\\\/])[. ]*\.\.[. ]*($|[\\\\/])#', $filePath)) { http_response_code(403); exit; } // ★ (2026-11-01 17:17, 40차 점검) 뷰어(38차)와 같은 '..' 조각 검사로 — 종전 식은 '..' 바로 뒤 구분자만 봐 'x/.. /a.hwp'(Windows 쪽 서버는 끝 점·공백을 버려 '..' 가 됨)를 통과시켰음
         require_once __DIR__ . '/api/StorageAdapter.php';
         $adapter = StorageAdapterFactory::create($storageInfo);
         if (!$adapter || !$adapter->connect()) { http_response_code(503); exit; }
@@ -124,6 +131,19 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
 }
 
 // 서버 저장 (rhwp 에디터 → 원본 파일 덮어쓰기)
+// ★ (2026-11-04 01:36, 54차 점검) 저장할 내용 백신 검사(53차 텍스트 저장과 같은 방식·같은 문구 — 'clean' 값만 봄. 백신 꺼짐·Defender 판단 불가는 clean:true 라 종전처럼 통과,
+//   임시 파일을 못 만들면 검사 없이 통과(텍스트 저장과 같음)) — 종전엔 저장·다른 이름으로 저장으로 업로드에서 막히는 EICAR 내용을 그대로 만들 수 있었음(재현). 거부 문구를 돌려주고, 통과면 null
+function rwAvRejectReason(string $rawData, string $name): ?string {
+    $len = strlen($rawData);
+    if ($len <= 0) return null;
+    $tmp = @tempnam(sys_get_temp_dir(), 'fsrw');
+    if ($tmp === false) return null;
+    if (@file_put_contents($tmp, $rawData) !== $len) { @unlink($tmp); return null; }
+    $av = (new FileManager())->scanForVirusPublic($tmp, $name, $len);
+    @unlink($tmp);
+    return empty($av['clean']) ? FileManager::avBlockMessage($av) : null;   // ★ (2026-11-04) 56차 '오류면 차단'은 감염과 다른 문구(FileManager::avBlockMessage, 판정 그대로 — 감염 문구는 종전과 같음)
+}
+
 if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json; charset=utf-8');
     
@@ -133,7 +153,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
     // 확장자 검증: .hwp / .hwpx만 허용
     // (HWPX 저장은 rhwp studio가 0.7.18+ 에서 정식 지원 — 0.7.3 시절 손상 이슈로 두었던 차단 해제)
     if (!preg_match('/\\.(hwp|hwpx)$/i', $filePath)) {
-        echo json_encode(['success' => false, 'error' => '.hwp / .hwpx 파일만 저장할 수 있습니다']); exit;
+        echo json_encode(['success' => false, 'error' => __('rhwp_save_hwp_only', '.hwp / .hwpx 파일만 저장할 수 있습니다')]); exit;   // ★ (2026-11-02 10:29, 42차 점검) 번역 함수 밖 한국어 고정이었음 → __()(한국어 기본 문구 그대로)
     }
     if (!$storage->checkPermission($storageId, 'can_write')) {
         http_response_code(403);
@@ -142,12 +162,12 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
     // 폴더별 쓰기 권한 체크
     $saveDir = dirname($filePath);
     if ($saveDir === '.') $saveDir = '';
-    if (!$storage->checkFolderPermission($storageId, $saveDir ?: $filePath, 'can_write')) {
+    if (!$storage->checkFolderPermission($storageId, ($saveDir !== '' ? $saveDir : $filePath), 'can_write')) { // ★ (2026-11-01 17:17, 40차 점검) 부모 폴더가 '0' 이면 ?: 가 빈 값으로 봐 항목 자신 규칙으로 검사했음 → '' 일 때만 항목 자신
         http_response_code(403);
         echo json_encode(['success' => false, 'error' => 'No folder write permission']); exit;
     }
     // ★ (2026-10-29 10:25, 20차 점검) 잠긴 파일은 저장으로 덮어쓰지 않음(텍스트 저장과 같음) — 종전엔 그대로 덮어썼음(재현)
-    if (JsonDB::getInstance()->find('locked_files', ['storage_id' => $storageId, 'path' => $filePath])) {
+    if ((new FileManager())->isFileLockedPublic((int)$storageId, (string)$filePath)) {   // ★ (2026-10-31 12:03, 34차 전체 점검) 글자 그대로 비교라 'a//b'·'/a'·대소문자(윈도우) 표기로 잠금을 지났음 → 탐색기와 같은 정리 비교
         http_response_code(403);
         echo json_encode(['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')]); exit;
     }
@@ -162,7 +182,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
     if (!$rawData || strlen($rawData) < 16) {
         echo json_encode(['success' => false, 'error' => 'Empty or invalid data']); exit;
     }
-    
+    // ★ (2026-11-01 09:42, 38차 점검) 내용의 머리 바이트가 확장자와 맞는지 확인(.hwp = OLE D0CF11E0A1B11AE1, .hwpx = ZIP 'PK\x03\x04') — 종전엔 16바이트만 넘으면 무엇이든 받아,
+    //   편집기에서 다른 .hwpx 를 열고 Ctrl+S 하면 ZIP 내용이 원본 .hwp 에 저장돼 확장자와 내용이 다른 깨진 파일이 됐음
+    $rwIsHwpx = strtolower(pathinfo($filePath, PATHINFO_EXTENSION)) === 'hwpx';
+    if (strncmp($rawData, $rwIsHwpx ? "PK\x03\x04" : "\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", $rwIsHwpx ? 4 : 8) !== 0) {
+        echo json_encode(['success' => false, 'error' => __('rhwp_save_format_mismatch', '저장할 문서의 형식이 파일 확장자와 맞지 않아 저장하지 않았습니다. 편집기에서 다른 문서를 열었는지 확인하세요.')]); exit;
+    }
+    // ★ (2026-11-04 01:36, 54차 점검) 쓰기 전 백신 검사(로컬·원격 공통, 위 rwAvRejectReason) — 종전엔 '저장'으로 원본을 EICAR 내용으로 바꿀 수 있었음(재현)
+    if (($rwAvErr = rwAvRejectReason($rawData, basename(str_replace('\\', '/', (string)$filePath)))) !== null) {
+        echo json_encode(['success' => false, 'error' => $rwAvErr]); exit;
+    }
+
     $storageInfo = $storage->getStorageById($storageId);
     if (!$storageInfo) {
         echo json_encode(['success' => false, 'error' => 'Storage not found']); exit;
@@ -172,11 +202,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
     $isRemote = in_array($storageType, ['ftp', 'sftp', 'webdav', 's3', 'smb']);
     
     if ($isRemote) {
-        if (preg_match('/\.\.[\\/\\\\]/', $filePath)) {
+        // ★ (2026-11-01 17:17, 40차 점검) 뷰어(38차)와 같은 '..' 조각 검사로 — 종전 식은 '..' 바로 뒤 구분자만 봐 'x/.. /a.hwp'(Windows 쪽 서버는 끝 점·공백을 버려 '..' 가 됨)를 통과시켰음
+        if (preg_match('#(^|[\\\\/])[. ]*\.\.[. ]*($|[\\\\/])#', $filePath)) {
             echo json_encode(['success' => false, 'error' => 'Invalid path']); exit;
         }
         // ★ (2026-10-29 18:47, 22차 점검) 서버 실행 이름 검사(다른 이름으로 저장·텍스트 저장과 같음) — 종전엔 원격 '저장'에만 빠져 'x.php.hwp' 같은 이름을 새로 만들 수 있었음
-        if (!$auth->isAdminOrSubAdmin() && ($rsExec = \fsServerExecReason(basename(str_replace('\\', '/', $filePath)))) !== null) {   // 관리자는 '다른 이름으로 저장'과 같이 예외
+        // ★ (2026-11-02 08:57, 41차 점검) 예외를 실제 관리자만으로 — 종전 isAdminOrSubAdmin() 이라 관리 권한 없는 부관리자도 'x.php.hwp' 를 만들 수 있었음(텍스트 저장 39차와 같은 기준)
+        if (!$auth->isAdmin() && ($rsExec = \fsServerExecReason(basename(str_replace('\\', '/', $filePath)))) !== null) {   // 실제 관리자는 '다른 이름으로 저장'과 같이 예외
             http_response_code(403);
             echo json_encode(['success' => false, 'error' => $rsExec]); exit;
         }
@@ -190,9 +222,23 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
             $adapter->disconnect();
             echo json_encode(['success' => false, 'error' => __('file_not_found', '파일을 찾을 수 없습니다.')]); exit;
         }
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 원격 '저장'에도 용량 확인·사용량 반영(로컬 24차·텍스트 저장 원격 분기와 같은 기준) — 종전엔 원격이면 둘 다 없어 한도를 넘기고 used_size 가 안 맞았음
+        $rwOld = 0;
+        try { $rwOld = max(0, (int)$adapter->getSize($filePath)); } catch (\Throwable $e) { $rwOld = 0; }
+        // ★ (2026-11-03 23:38, 53차 점검) 내용이 있는 파일 덮어쓰기는 대량 덮어쓰기 감지에 셈(텍스트 저장·WebDAV PUT 과 같은 기록·한도)
+        if ($rwOld > 0 && empty(($rwBulk = (new FileManager())->checkBulkOperationPublic('overwrite'))['allowed'])) {
+            $adapter->disconnect(); echo json_encode(['success' => false, 'error' => (string)($rwBulk['reason'] ?? '')]); exit;
+        }
+        $rwNeed = strlen($rawData) - $rwOld;
+        if ($rwNeed > 0) {
+            $rwQ = (new FileManager())->checkQuotaPublic($storageId, $rwNeed);
+            if (empty($rwQ['allowed'])) { $adapter->disconnect(); echo json_encode(['success' => false, 'error' => $rwQ['error'] ?? 'Quota exceeded']); exit; }
+        }
         // ★ office_viewer.php 패턴 통일: write() 직접 호출 (upload() 메서드 없음)
         $ok = $adapter->write($filePath, $rawData);
         $adapter->disconnect();
+        if ($ok && $rwNeed !== 0) $storage->updateUsedSize($storageId, $rwNeed);   // ★ (2026-11-01 07:18, 37차 기능 점검) 위와 같음
+        if ($ok) { try { $rwFi = FileIndex::getInstance(); if ($rwFi->isAvailable()) { $rwFi->addFile((int)$storageId, trim(str_replace('\\', '/', (string)$filePath), '/'), ['is_dir' => 0, 'size' => strlen($rawData), 'modified' => date('Y-m-d H:i:s')]); } } catch (\Throwable $e) {} }   // ★ (2026-11-04) 55차 U4 — '저장' 뒤 색인 크기·날짜가 옛 값이었음(다른 이름으로 저장과 같은 갱신)
         echo json_encode(['success' => (bool)$ok, 'size' => strlen($rawData)]);
     } else {
         $basePath = $storage->getRealPath($storageId);
@@ -208,23 +254,30 @@ if (isset($_GET['action']) && $_GET['action'] === 'save' && $_SERVER['REQUEST_ME
         }
         // ★ (2026-10-29 21:46, 24차 점검) 커지면 용량 확인, 저장 뒤 크기 차이를 사용량에 반영(22차 텍스트 저장 file_text_save 와 같게) — 종전엔 둘 다 없었음(재현)
         $rwOld = (int)@filesize($realTarget);
+        // ★ (2026-11-03 23:38, 53차 점검) 내용이 있는 파일 덮어쓰기는 대량 덮어쓰기 감지에 셈(텍스트 저장·WebDAV PUT 과 같은 기록·한도)
+        if ($rwOld > 0 && empty(($rwBulk = (new FileManager())->checkBulkOperationPublic('overwrite'))['allowed'])) {
+            echo json_encode(['success' => false, 'error' => (string)($rwBulk['reason'] ?? '')]); exit;
+        }
         $rwNeed = strlen($rawData) - $rwOld;
         if ($rwNeed > 0) {
             $rwQ = (new FileManager())->checkQuotaPublic($storageId, $rwNeed);
             if (empty($rwQ['allowed'])) { echo json_encode(['success' => false, 'error' => $rwQ['error'] ?? 'Quota exceeded']); exit; }
         }
         // 원자적 쓰기: 임시파일 → rename
-        $tempFile = $realTarget . '.rhwp_tmp_' . getmypid();
+        $tempFile = $realTarget . '.rhwp_tmp_' . getmypid() . '_' . bin2hex(random_bytes(6));   // ★ (2026-11-01 01:11, 35차 전체 점검) 임의 꼬리 — Windows Apache 는 모든 요청이 같은 PID 라 동시 저장끼리 같은 임시 파일에 썼음
         $written = file_put_contents($tempFile, $rawData);
         if ($written === false) {
             @unlink($tempFile);
             echo json_encode(['success' => false, 'error' => 'Write failed']); exit;
         }
+        // ★ (2026-11-01 09:42, 38차 점검) 덮어쓰기 직전 이전 버전 남기기(웹 덮어쓰기·WebDAV 와 같은 함수 — 버전 설정이 꺼져 있거나 제외 확장자면 안에서 그냥 돌아옴). 종전엔 편집기 저장만 버전이 안 남았음
+        (new FileManager())->saveFileVersionPublic($realTarget, trim(str_replace('\\', '/', (string)$filePath), '/'), (int)$storageId);
         if (!rename($tempFile, $realTarget)) {
             @unlink($tempFile);
             echo json_encode(['success' => false, 'error' => 'Rename failed']); exit;
         }
         if ($written - $rwOld !== 0) $storage->updateUsedSize($storageId, $written - $rwOld);
+        try { $rwFi = FileIndex::getInstance(); if ($rwFi->isAvailable()) { clearstatcache(true, $realTarget); $rwFi->addFile((int)$storageId, trim(str_replace('\\', '/', (string)$filePath), '/'), ['is_dir' => 0, 'size' => (int)$written, 'modified' => date('Y-m-d H:i:s', (int)(@filemtime($realTarget) ?: time()))]); } } catch (\Throwable $e) {}   // ★ (2026-11-04) 55차 U4 — '저장' 뒤 색인 크기·날짜가 옛 값이었음(다른 이름으로 저장과 같은 갱신)
         echo json_encode(['success' => true, 'size' => $written]);
     }
     exit;
@@ -244,23 +297,26 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         echo json_encode(['success' => false, 'error' => 'Missing new_name']); exit;
     }
     // 파일명 검증: 경로 구분자/상대경로 문자 불가
-    if (preg_match('/[\\/\\\\:*?"<>|]|\\.\\./', $newName)) {
-        echo json_encode(['success' => false, 'error' => '파일명에 사용할 수 없는 문자가 있습니다']); exit;
+    if (preg_match('/[\\/\\\\:*?"<>|\x00-\x1f]|\\.\\./', $newName)) {   // ★ (2026-11-01 09:42, 38차 점검) 제어 문자(줄바꿈·탭·\x00 등)도 거부(sanitizeFilename 과 같음) — 종전엔 줄바꿈이 든 파일 이름이 만들어지고, \x00 이면 500 이 났음
+        echo json_encode(['success' => false, 'error' => __('rhwp_name_invalid_chars', '파일명에 사용할 수 없는 문자가 있습니다')]); exit;   // ★ (2026-11-02 10:29, 42차 점검) 번역 함수 밖 한국어 고정이었음 → __()(한국어 기본 문구 그대로)
     }
     if (strlen($newName) > 240) {
-        echo json_encode(['success' => false, 'error' => '파일명이 너무 깁니다']); exit;
+        echo json_encode(['success' => false, 'error' => __('rhwp_name_too_long', '파일명이 너무 깁니다')]); exit;   // ★ (2026-11-02 10:29, 42차 점검) 번역 함수 밖 한국어 고정이었음 → __()(한국어 기본 문구 그대로)
     }
     // 확장자 검증: 원본과 같은 형식만 허용 (.hwp → .hwp, .hwpx → .hwpx)
     // 내용은 원본 형식으로 저장되므로 확장자만 바꾸면 깨진 파일이 된다
     $srcExt = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
     if (!in_array($srcExt, ['hwp', 'hwpx'], true)) {
-        echo json_encode(['success' => false, 'error' => '.hwp / .hwpx 파일만 저장할 수 있습니다']); exit;
+        echo json_encode(['success' => false, 'error' => __('rhwp_save_hwp_only', '.hwp / .hwpx 파일만 저장할 수 있습니다')]); exit;   // ★ (2026-11-02 10:29, 42차 점검) 번역 함수 밖 한국어 고정이었음 → __()(한국어 기본 문구 그대로)
     }
     if (strtolower(pathinfo($newName, PATHINFO_EXTENSION)) !== $srcExt) {
-        echo json_encode(['success' => false, 'error' => '확장자는 .' . $srcExt . ' 여야 합니다']); exit;
+        echo json_encode(['success' => false, 'error' => __f('rhwp_ext_must_be', ['ext' => $srcExt], '확장자는 .{ext} 여야 합니다')]); exit;   // ★ (2026-11-02 10:29, 42차 점검) 번역 함수 밖 한국어 고정이었음 → __()(한국어 기본 문구 그대로)
     }
+    // ★ (2026-11-09 11:56, 57차 Z17-3) 다른 만들기 경로와 같은 이름 정리(FileManager::sanitizeFilename 과 같은 식 — 위험 문자 제거·앞뒤 점·공백 제거·빈 이름 'unnamed'·Windows 장치 이름 앞 '_') 뒤 그 이름으로 저장·응답 — 종전 '.hwp' 가 목록에 안 보이는 점 이름으로 저장됐음(재현). 정리로 확장자가 빠지면 새 문서 만들기(api.php)처럼 확장자를 붙임
+    $newName = trim(preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', $newName), '. '); if ($newName === '') $newName = 'unnamed'; if (strtolower(pathinfo($newName, PATHINFO_EXTENSION)) !== $srcExt) $newName .= '.' . $srcExt; if (DIRECTORY_SEPARATOR === '\\' && preg_match('/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i', $newName)) $newName = '_' . $newName;
     // ★ (2026-10-29 10:25, 20차 점검) 서버 실행 이름(x.php.hwp 처럼 가운데 확장자 포함) 거부 — 텍스트 저장(file_text_save)과 같은 기준(관리자 제외). 종전엔 그대로 만들어졌음(재현)
-    if (!$auth->isAdminOrSubAdmin() && function_exists('fsServerExecReason') && ($rwExec = fsServerExecReason($newName)) !== null) {
+    // ★ (2026-11-02 08:57, 41차 점검) 예외를 실제 관리자만으로 — 종전 isAdminOrSubAdmin() 이라 세부 권한 없는 부관리자도 실행 이름을 만들 수 있었음(텍스트 저장 39차와 같게)
+    if (!$auth->isAdmin() && function_exists('fsServerExecReason') && ($rwExec = fsServerExecReason($newName)) !== null) {
         echo json_encode(['success' => false, 'error' => $rwExec]); exit;
     }
     
@@ -272,7 +328,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     // 저장 폴더 = 현재 파일의 폴더
     $saveDir = dirname($filePath);
     if ($saveDir === '.') $saveDir = '';
-    if (!$storage->checkFolderPermission($storageId, $saveDir ?: $newName, 'can_write')) {
+    if (!$storage->checkFolderPermission($storageId, ($saveDir !== '' ? $saveDir : $newName), 'can_write')) { // ★ (2026-11-01 17:17, 40차 점검) 부모 폴더가 '0' 이면 ?: 가 빈 값으로 봐 항목 자신 규칙으로 검사했음 → '' 일 때만 항목 자신
         http_response_code(403);
         echo json_encode(['success' => false, 'error' => 'No folder write permission']); exit;
     }
@@ -285,7 +341,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     // 새 파일 경로 조합
     $newFilePath = $saveDir === '' ? $newName : ($saveDir . '/' . $newName);
     // ★ (2026-10-29 10:25, 20차 점검) 덮어쓸 대상이 잠긴 파일이면 거부(덮어쓰기 확인 후 force=1 로 다시 와도)
-    if (JsonDB::getInstance()->find('locked_files', ['storage_id' => $storageId, 'path' => $newFilePath])) {
+    if ((new FileManager())->isFileLockedPublic((int)$storageId, (string)$newFilePath)) {   // ★ (2026-10-31 12:03, 34차 전체 점검) 글자 그대로 비교라 'a//b'·'/a'·대소문자(윈도우) 표기로 잠금을 지났음 → 탐색기와 같은 정리 비교
         http_response_code(403);
         echo json_encode(['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')]); exit;
     }
@@ -295,7 +351,17 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
     if (!$rawData || strlen($rawData) < 16) {
         echo json_encode(['success' => false, 'error' => 'Empty or invalid data']); exit;
     }
-    
+    // ★ (2026-11-01 09:42, 38차 점검) 내용의 머리 바이트가 확장자와 맞는지 확인(.hwp = OLE D0CF11E0A1B11AE1, .hwpx = ZIP 'PK\x03\x04') — 종전엔 16바이트만 넘으면 무엇이든 받아,
+    //   편집기에서 다른 .hwpx 를 열고 Ctrl+S 하면 ZIP 내용이 원본 .hwp 에 저장돼 확장자와 내용이 다른 깨진 파일이 됐음
+    $rwIsHwpx = strtolower(pathinfo($newName, PATHINFO_EXTENSION)) === 'hwpx';
+    if (strncmp($rawData, $rwIsHwpx ? "PK\x03\x04" : "\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1", $rwIsHwpx ? 4 : 8) !== 0) {
+        echo json_encode(['success' => false, 'error' => __('rhwp_save_format_mismatch', '저장할 문서의 형식이 파일 확장자와 맞지 않아 저장하지 않았습니다. 편집기에서 다른 문서를 열었는지 확인하세요.')]); exit;
+    }
+    // ★ (2026-11-04 01:36, 54차 점검) 쓰기 전 백신 검사(로컬·원격 공통, 위 rwAvRejectReason) — 종전엔 '다른 이름으로 저장'으로 EICAR 내용의 새 파일을 만들 수 있었음(재현)
+    if (($rwAvErr = rwAvRejectReason($rawData, $newName)) !== null) {
+        echo json_encode(['success' => false, 'error' => $rwAvErr]); exit;
+    }
+
     $storageInfo = $storage->getStorageById($storageId);
     if (!$storageInfo) {
         echo json_encode(['success' => false, 'error' => 'Storage not found']); exit;
@@ -308,7 +374,8 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         // ★ (2026-09-24) 경로 탈출(..) 검사 정규식 수정 — 역슬래시가 한 번 더 들어가(87·168행 식을 두 번 이스케이프) 가운데 '/' 가
         //   식의 끝으로 읽혀 컴파일 오류 → preg_match 가 false → **검사가 항상 통과**했다. 이 줄은 '다른 이름으로 저장'의
         //   원격 저장소 경로에서 유일한 경로 검사다(로컬은 realpath 로 막음). 87·168행과 같은 식으로 바꾼다.
-        if (preg_match('/\.\.[\\/\\\\]/', $newFilePath)) {
+        // ★ (2026-11-01 17:17, 40차 점검) 뷰어(38차)와 같은 '..' 조각 검사로 — 종전 식은 '..' 바로 뒤 구분자만 봐 'x/.. /a.hwp'(Windows 쪽 서버는 끝 점·공백을 버려 '..' 가 됨)를 통과시켰음
+        if (preg_match('#(^|[\\\\/])[. ]*\.\.[. ]*($|[\\\\/])#', $newFilePath)) {
             echo json_encode(['success' => false, 'error' => 'Invalid path']); exit;
         }
         require_once __DIR__ . '/api/StorageAdapter.php';
@@ -323,12 +390,28 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             try { $exists = $adapter->exists($newFilePath); } catch (Exception $e) { $exists = false; }
             if ($exists) {
                 $adapter->disconnect();
-                echo json_encode(['success' => false, 'error' => '같은 이름의 파일이 이미 있습니다', 'exists' => true]); exit;
+                echo json_encode(['success' => false, 'error' => '같은 이름의 파일이 이미 있습니다', 'exists' => true, 'name' => $newName]); exit;   // ★ (2026-11-09 19:50, 60차 Z17) 정리된 실제 이름도 돌려줌 — 화면 덮어쓰기 확인창이 입력 이름('.보고서.hwp')을 보여 주고 실제로는 '보고서.hwp' 를 덮었음(재현)
             }
+        }
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 원격 '다른 이름으로 저장'에도 용량 확인·사용량·인덱스 반영(로컬 24차와 같은 기준) — 종전엔 반복 저장으로 한도와 상관없이 새 파일이 생기고 used_size·검색 인덱스에 안 잡혔음
+        $rwOld = 0;
+        try { if ($adapter->exists($newFilePath)) $rwOld = max(0, (int)$adapter->getSize($newFilePath)); } catch (\Throwable $e) { $rwOld = 0; }
+        // ★ (2026-11-04 00:19, 53차 재검토) '다른 이름으로 저장'의 덮어쓰기(force)도 대량 덮어쓰기 감지에 셈('저장'과 같음, 검토 발견)
+        if ($rwOld > 0 && empty(($rwBulk = (new FileManager())->checkBulkOperationPublic('overwrite'))['allowed'])) {
+            $adapter->disconnect(); echo json_encode(['success' => false, 'error' => (string)($rwBulk['reason'] ?? '')]); exit;
+        }
+        $rwNeed = strlen($rawData) - $rwOld;
+        if ($rwNeed > 0) {
+            $rwQ = (new FileManager())->checkQuotaPublic($storageId, $rwNeed);
+            if (empty($rwQ['allowed'])) { $adapter->disconnect(); echo json_encode(['success' => false, 'error' => $rwQ['error'] ?? 'Quota exceeded']); exit; }
         }
         // ★ office_viewer.php 패턴 통일: write() 직접 호출 (upload() 메서드 없음)
         $ok = $adapter->write($newFilePath, $rawData);
         $adapter->disconnect();
+        if ($ok) {   // ★ (2026-11-01 07:18, 37차 기능 점검) 위와 같음
+            if ($rwNeed !== 0) $storage->updateUsedSize($storageId, $rwNeed);
+            try { $rwFi = FileIndex::getInstance(); if ($rwFi->isAvailable()) { $rwFi->addFile((int)$storageId, trim(str_replace('\\', '/', (string)$newFilePath), '/'), ['is_dir' => 0, 'size' => strlen($rawData), 'modified' => date('Y-m-d H:i:s')]); } } catch (\Throwable $e) {}
+        }
         echo json_encode(['success' => (bool)$ok, 'size' => strlen($rawData), 'path' => $newFilePath, 'name' => $newName]);
     } else {
         $basePath = $storage->getRealPath($storageId);
@@ -340,7 +423,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
             echo json_encode(['success' => false, 'error' => 'Storage path invalid']); exit;
         }
         // 새 파일 전체 경로 (아직 존재하지 않을 수 있음 → realpath 대신 조합)
-        $newRealFile = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\\\'], DIRECTORY_SEPARATOR, $newFilePath);
+        $newRealFile = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $newFilePath);   // ★ (2026-11-01 09:42, 38차 점검) '\\\\'(역슬래시 두 개) → '\\'(한 개) — 저장·스트림(113·213행 근처)과 같게. 종전엔 Linux 에서 'A\\b.hwp' 를 저장과 다르게 풀었음
         // 경로 탈출 검증: 디렉토리만 realpath 후 base 안에 있는지 확인
         $newDir = dirname($newRealFile);
         $realNewDir = realpath($newDir);
@@ -350,7 +433,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         // 덮어쓰기 방지 (force=1 이면 덮어쓰기 허용)
         $forceOverwrite = !empty($_GET['force']);
         if (!$forceOverwrite && file_exists($newRealFile)) {
-            echo json_encode(['success' => false, 'error' => '같은 이름의 파일이 이미 있습니다', 'exists' => true]); exit;
+            echo json_encode(['success' => false, 'error' => '같은 이름의 파일이 이미 있습니다', 'exists' => true, 'name' => $newName]); exit;   // ★ (2026-11-09 19:50, 60차 Z17) 위 원격과 같음 — 정리된 실제 이름
         }
         // 덮어쓰기 시에도 파일이 base 디렉토리 내부인지 확인
         if ($forceOverwrite && file_exists($newRealFile)) {
@@ -361,18 +444,24 @@ if (isset($_GET['action']) && $_GET['action'] === 'save-as' && $_SERVER['REQUEST
         }
         // ★ (2026-10-29 21:46, 24차 점검) 용량 확인·사용량 반영(위 '저장'과 같음) — 종전엔 '다른 이름으로 저장'을 반복하면 한도와 상관없이 새 파일이 계속 생겼음
         $rwOld = file_exists($newRealFile) ? (int)@filesize($newRealFile) : 0;
+        // ★ (2026-11-04 00:19, 53차 재검토) '다른 이름으로 저장'의 덮어쓰기(force)도 대량 덮어쓰기 감지에 셈('저장'과 같음, 검토 발견)
+        if ($rwOld > 0 && empty(($rwBulk = (new FileManager())->checkBulkOperationPublic('overwrite'))['allowed'])) {
+            echo json_encode(['success' => false, 'error' => (string)($rwBulk['reason'] ?? '')]); exit;
+        }
         $rwNeed = strlen($rawData) - $rwOld;
         if ($rwNeed > 0) {
             $rwQ = (new FileManager())->checkQuotaPublic($storageId, $rwNeed);
             if (empty($rwQ['allowed'])) { echo json_encode(['success' => false, 'error' => $rwQ['error'] ?? 'Quota exceeded']); exit; }
         }
         // 원자적 쓰기
-        $tempFile = $newRealFile . '.rhwp_tmp_' . getmypid();
+        $tempFile = $newRealFile . '.rhwp_tmp_' . getmypid() . '_' . bin2hex(random_bytes(6));   // ★ (2026-11-01 01:11, 35차 전체 점검) 임의 꼬리(위와 같음)
         $written = file_put_contents($tempFile, $rawData);
         if ($written === false) {
             @unlink($tempFile);
             echo json_encode(['success' => false, 'error' => 'Write failed']); exit;
         }
+        // ★ (2026-11-01 09:42, 38차 점검) 덮어쓰기('같은 이름 있음' 확인 후 force)일 때 이전 버전 남기기(위 '저장'과 같음)
+        if ($forceOverwrite && file_exists($newRealFile)) (new FileManager())->saveFileVersionPublic($newRealFile, trim(str_replace('\\', '/', (string)$newFilePath), '/'), (int)$storageId);
         if (!rename($tempFile, $newRealFile)) {
             @unlink($tempFile);
             echo json_encode(['success' => false, 'error' => 'Rename failed']); exit;
@@ -407,6 +496,8 @@ ob_start('fs_icon_convert_html');
         if (arguments[0].indexOf('[WasmBridge] WASM') !== -1) {
           window.__rhwpWasmReady = true;
           // rhwp 버전 표시
+          // ★ (2026-11-10 07:24, 61차 E) 아래 import 는 studio 와 별개 모듈이라 WASM 이 초기화 안 돼 version() 이 던지고 catch 로 묻혀 칸이 늘 비었음 — studio 초기화 로그에 든 '(rhwp X.Y.Z)' 를 먼저 씀(없으면 종전대로 아래 시도)
+          try { const _rv = /\(rhwp ([^)\s]+)\)/.exec(arguments[0]); const _re = document.getElementById('rhwp-editor-version'); if (_rv && _re) _re.textContent = 'rhwp v' + _rv[1]; } catch(e) {}
           try {
             import('../rhwp.js').then(m => {
               const el = document.getElementById('rhwp-editor-version');
@@ -417,6 +508,16 @@ ob_start('fs_icon_convert_html');
         // 문서 로드 완료 감지
         if (arguments[0].indexOf('[CanvasView]') !== -1 && arguments[0].indexOf('페이지 로드') !== -1) window.__rhwpDocLoaded = true;
         if (arguments[0].indexOf('[initDoc]') !== -1 && arguments[0].indexOf('완료') !== -1) window.__rhwpDocLoaded = true;
+        // ★ (2026-11-04 01:55, 54차 점검) 실제로 문서를 불러왔다는 표시(studio 가 문서를 읽어 들일 때 찍는 로그, 암호 문서 포함). 아래 rhwpOpenFailedNow 에서 '열기 실패 신호'보다 우선함
+        // ★ (2026-11-04 02:02, 54차 점검 재수정) 이 로그만으로 저장을 허용하던 것을 바꿈 — 로그 글자가 다음 rhwp 판에서 바뀌면 정상 저장이 전부 막힐 수 있어서, 이제는 확실한 실패 신호가 있을 때만 막음(판단 못 하면 저장)
+        if (arguments[0].indexOf('[WasmBridge] 문서 로드') !== -1) window.__rhwpServerDocOpened = true;
+        // ★ (2026-11-09 09:16, rhwp 0.9.0 업그레이드) 0.9.0 은 위 '[WasmBridge] 문서 로드' 로그를 없앰(문서 교체 함수에서 삭제) — 그대로 두면 '열기 실패 신호 뒤에 실제로 열린' 경우
+        //   (암호를 늦게 넣어 재시도로 암호창이 2개 → 위 창에서 열고 남은 창을 닫음 등) 문서가 열려 있어도 저장이 막혔음(시험 사본 재현: 0.8.7 저장 진행 / 0.9.0 '문서가 열리지 않아…' 차단).
+        //   같은 뜻의 신호로 '문서 초기화 마지막 단계([initDoc] … 완료, 폰트 단계 제외)'를 씀 — 초기화는 '열기'와 '새 문서'에서만 돌고, 새 문서는 바로 앞에 '[WasmBridge] 새 문서 생성'을 찍으므로 그때는 열림으로 치지 않음(0.8.7 판정과 같게)
+        if (arguments[0].indexOf('[WasmBridge] 새 문서 생성') !== -1) window.__rhwpNewDocInit = true;
+        if (arguments[0].indexOf('[initDoc]') !== -1 && arguments[0].indexOf('완료') !== -1 && arguments[0].indexOf('폰트') === -1) {
+          if (window.__rhwpNewDocInit) window.__rhwpNewDocInit = false; else window.__rhwpServerDocOpened = true;
+        }
         // 우리 커스텀 로그는 통과시키고, studio 내부 [태그] 로그만 억제
         if (arguments[0].indexOf('[rhwp_editor]') === 0) {
           _origLog.apply(console, arguments);
@@ -488,8 +589,8 @@ ob_start('fs_icon_convert_html');
   window.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   document.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   </script>
-  <script type="module" crossorigin src="index-D5MYs9RT.js?v=<?php echo APP_VERSION; ?>"></script>
-  <link rel="stylesheet" crossorigin href="index-Dy0DTkWY.css?v=<?php echo APP_VERSION; ?>">
+  <script type="module" crossorigin src="index-DuRuHnoY.js?v=<?php echo APP_VERSION; ?>"></script>
+  <link rel="stylesheet" crossorigin href="index-Cty5qsgm.css?v=<?php echo APP_VERSION; ?>">
 <style>/* ★ (2026-10-26) 선 그림 아이콘(이모지 대신, 원본 api/FsIcons.php) — 글자색을 따름 */ .fs-ico{width:1.2em;height:1.2em;vertical-align:-0.2em;flex-shrink:0} .fs-ico-ok{color:#157347} .fs-ico-err{color:#c62828} .fs-ico-warn{color:#b45309} .tb-icon-text .fs-ico{display:block;width:18px;height:18px} .sb-highlight-icon .fs-ico{width:1em;height:1em}</style>
 </head>
 <body>
@@ -575,6 +676,7 @@ ob_start('fs_icon_convert_html');
               <div class="md-item" role="menuitemradio" data-cmd="view:skin-flat" data-theme-skin-choice="flat"><span class="md-icon"></span><span class="md-label">모던</span></div>
             </div>
           </div>
+          <div class="md-sep"></div>
           <div class="md-item" data-cmd="view:ctrl-mark"><span class="md-icon icon-ctrl-mark"></span><span class="md-label">조판 부호</span><span class="md-shortcut">Ctrl+G+C</span></div>
           <div class="md-item" data-cmd="view:para-mark"><span class="md-icon icon-para-mark"></span><span class="md-label">문단 부호</span></div>
           <div class="md-item" data-cmd="view:border-transparent"><span class="md-icon"></span><span class="md-label">투명 선</span></div>
@@ -645,6 +747,7 @@ ob_start('fs_icon_convert_html');
       <div class="menu-item" data-menu="format">
         <span class="menu-title">서식</span>
         <div class="menu-dropdown"><div class="md-item" data-cmd="format:bold"><span class="md-icon"></span><span class="md-label">진하게</span><span class="md-shortcut">Ctrl+B</span></div><div class="md-item" data-cmd="format:italic"><span class="md-icon"></span><span class="md-label">기울임</span><span class="md-shortcut">Ctrl+I</span></div><div class="md-item" data-cmd="format:underline"><span class="md-icon"></span><span class="md-label">밑줄</span><span class="md-shortcut">Ctrl+U</span></div>
+          <div class="md-sep"></div>
           <div class="md-item disabled" data-cmd="format:char-shape"><span class="md-icon icon-char-shape"></span><span class="md-label">글자 모양</span><span class="md-shortcut">Alt+L</span></div>
           <div class="md-item disabled" data-cmd="format:para-shape"><span class="md-icon icon-para-shape"></span><span class="md-label">문단 모양</span><span class="md-shortcut">Alt+T</span></div>
           <div class="md-sep"></div>
@@ -652,8 +755,21 @@ ob_start('fs_icon_convert_html');
           <div class="md-item disabled" data-cmd="format:bullet-shape"><span class="md-icon"></span><span class="md-label">글머리표 모양</span></div>
           <div class="md-sep"></div>
           <div class="md-item" data-cmd="format:level-increase"><span class="md-icon"></span><span class="md-label">한 수준 증가</span><span class="md-shortcut">Ctrl+Num -</span></div>
-          <div class="md-item" data-cmd="format:level-decrease"><span class="md-icon"></span><span class="md-label">한 수준 감소</span><span class="md-shortcut">Ctrl+Num +</span></div><div class="md-item" data-cmd="format:font-size-decrease"><span class="md-icon"></span><span class="md-label">글자 크기 작게</span><span class="md-shortcut">Alt+Shift+R</span></div><div class="md-item" data-cmd="format:align-center"><span class="md-icon"></span><span class="md-label">가운데 정렬</span><span class="md-shortcut">Alt+Shift+C</span></div><div class="md-item" data-cmd="format:align-right"><span class="md-icon"></span><span class="md-label">오른쪽 정렬</span><span class="md-shortcut">Alt+Shift+H</span></div><div class="md-item" data-cmd="format:align-justify"><span class="md-icon"></span><span class="md-label">양쪽 정렬</span><span class="md-shortcut">Ctrl+Shift+M</span></div><div class="md-item" data-cmd="format:align-distribute"><span class="md-icon"></span><span class="md-label">배분 정렬</span><span class="md-shortcut">Alt+Shift+D</span></div><div class="md-item" data-cmd="format:line-spacing-decrease"><span class="md-icon"></span><span class="md-label">줄 간격 줄임</span><span class="md-shortcut">Alt+Shift+A</span></div>
-          <div class="md-sep"></div><div class="md-item" data-cmd="format:font-size-increase"><span class="md-icon"></span><span class="md-label">글자 크기 크게</span><span class="md-shortcut">Alt+Shift+E</span></div><div class="md-item" data-cmd="format:align-left"><span class="md-icon"></span><span class="md-label">왼쪽 정렬</span><span class="md-shortcut">Ctrl+Shift+L</span></div><div class="md-item" data-cmd="format:line-spacing-increase"><span class="md-icon"></span><span class="md-label">줄 간격 늘림</span><span class="md-shortcut">Alt+Shift+Z</span></div>
+          <div class="md-item" data-cmd="format:level-decrease"><span class="md-icon"></span><span class="md-label">한 수준 감소</span><span class="md-shortcut">Ctrl+Num +</span></div>
+          <!-- ★ (2026-11-15 03:58, 160차) 원본 0.9.0 index.html 순서·구분선대로 — 글자 크기 크게·왼쪽 정렬·줄 간격 늘림이 맨 아래로 밀리고 구분선 4개가 빠져 있었음(재현) -->
+          <div class="md-sep"></div>
+          <div class="md-item" data-cmd="format:font-size-increase"><span class="md-icon"></span><span class="md-label">글자 크기 크게</span><span class="md-shortcut">Alt+Shift+E</span></div>
+          <div class="md-item" data-cmd="format:font-size-decrease"><span class="md-icon"></span><span class="md-label">글자 크기 작게</span><span class="md-shortcut">Alt+Shift+R</span></div>
+          <div class="md-sep"></div>
+          <div class="md-item" data-cmd="format:align-left"><span class="md-icon"></span><span class="md-label">왼쪽 정렬</span><span class="md-shortcut">Ctrl+Shift+L</span></div>
+          <div class="md-item" data-cmd="format:align-center"><span class="md-icon"></span><span class="md-label">가운데 정렬</span><span class="md-shortcut">Alt+Shift+C</span></div>
+          <div class="md-item" data-cmd="format:align-right"><span class="md-icon"></span><span class="md-label">오른쪽 정렬</span><span class="md-shortcut">Alt+Shift+H</span></div>
+          <div class="md-item" data-cmd="format:align-justify"><span class="md-icon"></span><span class="md-label">양쪽 정렬</span><span class="md-shortcut">Ctrl+Shift+M</span></div>
+          <div class="md-item" data-cmd="format:align-distribute"><span class="md-icon"></span><span class="md-label">배분 정렬</span><span class="md-shortcut">Alt+Shift+D</span></div>
+          <div class="md-sep"></div>
+          <div class="md-item" data-cmd="format:line-spacing-increase"><span class="md-icon"></span><span class="md-label">줄 간격 늘림</span><span class="md-shortcut">Alt+Shift+Z</span></div>
+          <div class="md-item" data-cmd="format:line-spacing-decrease"><span class="md-icon"></span><span class="md-label">줄 간격 줄임</span><span class="md-shortcut">Alt+Shift+A</span></div>
+          <div class="md-sep"></div>
           <div class="md-item disabled" data-cmd="format:style-dialog"><span class="md-icon"></span><span class="md-label">스타일</span><span class="md-shortcut">F6</span></div>
           <div class="md-sep"></div>
           <div class="md-item" data-cmd="format:object-properties"><span class="md-icon icon-obj-props"></span><span class="md-label">개체 속성</span><span class="md-shortcut">P</span></div>
@@ -830,8 +946,10 @@ ob_start('fs_icon_convert_html');
               <div class="md-item disabled" data-cmd="table:border-each"><span class="md-icon"></span><span class="md-label">각 셀마다 적용</span></div>
               <div class="md-item disabled" data-cmd="table:border-one"><span class="md-icon"></span><span class="md-label">하나의 셀처럼 적용</span></div>
             </div>
-          </div><div class="md-item disabled" data-cmd="table:delete-row-col"><span class="md-icon"></span><span class="md-label">줄/칸 지우기(E)...</span><span class="md-shortcut">Alt+Delete</span></div>
+          </div>
           <div class="md-sep"></div><div class="md-item disabled" data-cmd="table:insert-row-col"><span class="md-icon"></span><span class="md-label">줄/칸 추가하기(I)...</span><span class="md-shortcut">Alt+Enter</span></div>
+          <!-- ★ (2026-11-15 03:58, 160차) 원본 0.9.0 처럼 줄/칸 추가하기 바로 다음 — 각 셀마다/하나의 셀처럼 적용 옆에 잘못 들어가 있었음(재현) -->
+          <div class="md-item disabled" data-cmd="table:delete-row-col"><span class="md-icon"></span><span class="md-label">줄/칸 지우기(E)...</span><span class="md-shortcut">Alt+Delete</span></div>
           <div class="md-item disabled" data-cmd="table:insert-row-above"><span class="md-icon"></span><span class="md-label">위쪽에 줄 추가하기</span></div>
           <div class="md-item disabled" data-cmd="table:insert-row-below"><span class="md-icon"></span><span class="md-label">아래쪽에 줄 추가하기</span></div>
           <div class="md-sep"></div>
@@ -932,8 +1050,9 @@ ob_start('fs_icon_convert_html');
             <button class="tb-btn" data-cmd="insert:rotate-cw" title="오른쪽 90° 회전"><span class="tb-icon-text">&#x21B7;</span><span class="tb-label">오른쪽<br/>회전</span></button>
             <button class="tb-btn" data-cmd="insert:flip-horz" title="좌우 대칭"><span class="tb-icon-text">&#x21C4;</span><span class="tb-label">좌우<br/>대칭</span></button>
             <button class="tb-btn" data-cmd="insert:flip-vert" title="상하 대칭"><span class="tb-icon-text">&#x21C5;</span><span class="tb-label">상하<br/>대칭</span></button>
+            <!-- ★ (2026-11-15 03:46, 160차) 원본 rhwp-studio(0.9.0 index.html)처럼 이 구분선은 회전 묶음 안 — 밖에 있어 그림을 안 골랐을 때(묶음 숨김) 하이퍼링크와 머리말 사이에 구분선이 두 줄 보였음(재현) -->
+            <span class="tb-sep"></span>
           </div>
-          <span class="tb-sep"></span>
           <div class="tb-group">
             <button class="tb-btn" data-cmd="page:header-create" title="머리말"><span class="tb-sprite icon-header"></span><span class="tb-label">머리말</span></button>
             <button class="tb-btn" data-cmd="page:footer-create" title="꼬리말"><span class="tb-sprite icon-footer"></span><span class="tb-label">꼬리말</span></button>
@@ -1163,7 +1282,8 @@ ob_start('fs_icon_convert_html');
          [참고] 옛 .stb-zoom-val 클래스는 0.8.6 CSS 에서 규칙 자체가 삭제됐고,
          대신 #sb-zoom-val **id 규칙**이 스타일을 제공하므로 표시에는 영향이 없다. -->
     <div id="status-bar">
-      <span id="sb-page" class="stb-item">1 / 1 쪽</span>
+      <!-- ★ (2026-11-15 03:58, 160차) 원본 0.9.0 처럼 누를 수 있는 버튼(눌러 찾아가기·손가락 모양·키보드 초점) — span 이라 눌러지긴 해도 버튼 모양·키보드 이동이 없었음 -->
+      <button id="sb-page" class="stb-item stb-page-button" type="button" title="찾아가기 (Alt+G)">1 / 1 쪽</button>
       <span class="stb-divider"></span>
       <span id="sb-section" class="stb-item">구역: 1 / 1</span>
       <span class="stb-divider"></span>
@@ -1195,7 +1315,13 @@ ob_start('fs_icon_convert_html');
 // FileStation 연동: 파일 자동 로드
 (function() {
     const STREAM_URL = '<?php echo rtrim(dirname($_SERVER["SCRIPT_NAME"]), "/"); ?>/rhwp_editor.php?action=stream&storage_id=<?php echo $storageId; ?>&path=<?php echo rawurlencode($filePath); ?>';
-    const FILE_NAME = <?php echo json_encode($fileName); ?>;
+    const FILE_NAME = <?php echo json_encode($fileName, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    // ★ (2026-11-01 09:42, 38차 점검) 문서 받기 실패 안내 문구(아래 DOMContentLoaded 끝)
+    const LOAD_FAIL_MSG = <?php echo json_encode(__('rhwp_load_failed', '문서를 불러오지 못했습니다'), JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    const LOAD_FAIL_CLOSE = <?php echo json_encode(__('rhwp_load_failed_close', '눌러서 닫기'), JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    // ★ (2026-11-12 19:20, 102차 I18N-1) 로딩 문구도 화면 언어로(LOAD_FAIL_MSG 와 같은 방식, 한국어 값은 종전 문구 그대로) — 종전엔 영어 화면에서도 '문서 로딩 중...'(재현: pc_rhwp_editor.png)
+    const LOADING_MSG_HTML = <?php echo json_encode(htmlspecialchars(__('rhwp_ed_loading', '문서 로딩 중...'), ENT_QUOTES, 'UTF-8'), JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    const LOADING_RETRY_MSG = <?php echo json_encode(__('rhwp_ed_loading_retry', '문서 로딩 중... ({n}/{total})'), JSON_HEX_TAG | JSON_HEX_AMP); ?>;
     
     if (!FILE_NAME) return; // 파일 경로 없으면 빈 에디터
     const TIMING_URL = '<?php echo rtrim(dirname($_SERVER["SCRIPT_NAME"]), "/"); ?>/rhwp_editor.php?action=timing_log';
@@ -1381,9 +1507,13 @@ ob_start('fs_icon_convert_html');
             _mark('fixed_wait_500ms');
             
             // 1차 시도
-            await injectFile(fileInput, 0);
-            _mark('inject_done');
-            let loaded = await checkFileLoaded();
+            // ★ (2026-11-01 09:42, 38차 점검) 1차 받기 실패(HTTP 403/404/503·네트워크)도 아래 재시도로 보냄 — 종전엔 바깥 catch 로 빠져 재시도 없이 빈 편집기로 끝났음
+            let loaded = false, lastLoadErr = null;
+            try {
+                await injectFile(fileInput, 0);
+                _mark('inject_done');
+                loaded = await checkFileLoaded();
+            } catch (e) { lastLoadErr = e; }
             _mark('doc_rendered', { loaded: loaded, retry: 0 });
             if (loaded) _flushMarks('ok_first_try');
             
@@ -1392,27 +1522,37 @@ ob_start('fs_icon_convert_html');
                 const loadingDiv = document.createElement('div');
                 loadingDiv.id = 'rhwp-loading-overlay';
                 loadingDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(255,255,255,0.85);display:flex;align-items:center;justify-content:center;z-index:99999;flex-direction:column;gap:12px;';
-                loadingDiv.innerHTML = '<div style="font-size:32px;">📄</div><div id="rhwp-loading-msg" style="font-size:14px;color:#666;">문서 로딩 중...</div>';
+                loadingDiv.innerHTML = '<div style="font-size:32px;">📄</div><div id="rhwp-loading-msg" style="font-size:14px;color:#666;">' + LOADING_MSG_HTML + '</div>';   // ★ (2026-11-12 19:20, 102차 I18N-1)
                 document.body.appendChild(loadingDiv);
                 
                 // 재시도 (2~4차) — 간격을 점점 늘림
                 for (let retry = 1; retry < maxRetries; retry++) {
                     const msgEl = document.getElementById('rhwp-loading-msg');
-                    if (msgEl) msgEl.textContent = `문서 로딩 중... (${retry + 1}/${maxRetries})`;
+                    if (msgEl) msgEl.textContent = LOADING_RETRY_MSG.replace('{n}', retry + 1).replace('{total}', maxRetries);   // ★ (2026-11-12 19:20, 102차 I18N-1)
                     await new Promise(r => setTimeout(r, 1000 + retry * 500));
                     try {
                         await injectFile(fileInput, retry);
+                        lastLoadErr = null;   // ★ (2026-11-01 09:42, 38차 점검) 받기는 됐으면 앞선 오류는 지움(렌더 확인만 실패한 경우는 종전처럼 안내 없이 닫음)
                         _mark('inject_done', { retry: retry });
                         loaded = await checkFileLoaded();
                         _mark('doc_rendered', { loaded: loaded, retry: retry });
                         if (loaded) { _flushMarks('ok_retry_' + retry); break; }
                     } catch (e) {
                         // 재시도 실패
+                        lastLoadErr = e;   // ★ (2026-11-01 09:42, 38차 점검) 마지막 오류를 아래 안내에 씀
                     }
                 }
                 
-                loadingDiv.remove();
+                if (loaded || !lastLoadErr) loadingDiv.remove();
                 if (!loaded) _flushMarks('failed_all_retries');
+                if (!loaded && lastLoadErr) {
+                    window.__rhwpOpenFailSeen = true;   // ★ (2026-11-04 02:02, 54차 점검 재수정) 파일을 끝내 못 받음(HTTP 오류·네트워크) = 확실한 열기 실패 — 빈 편집기에서 저장해 원래 파일을 덮어쓰지 않게(렌더 확인만 실패한 경우는 판단 불가라 표시 안 함)
+                    // ★ (2026-11-01 09:42, 38차 점검) 끝내 파일을 못 받으면 오버레이에 이유를 남김(눌러서 닫기) — 종전엔 오버레이만 지워 빈 문서처럼 보이고 이유(403 권한·404·503 연결)를 알 수 없었음
+                    const msgEl = document.getElementById('rhwp-loading-msg');
+                    if (msgEl) msgEl.textContent = LOAD_FAIL_MSG + (lastLoadErr && lastLoadErr.message ? ' (' + lastLoadErr.message + ')' : '') + ' — ' + LOAD_FAIL_CLOSE;
+                    loadingDiv.style.cursor = 'pointer';
+                    loadingDiv.addEventListener('click', () => loadingDiv.remove(), { once: true });
+                }
             }
         } catch (e) {
             // 파일 로드 실패
@@ -1425,8 +1565,34 @@ ob_start('fs_icon_convert_html');
 // FileStation 서버 저장: Ctrl+S → WASM exportHwp() 직접 호출 → POST 업로드
 (function() {
     const SAVE_URL = '<?php echo rtrim(dirname($_SERVER["SCRIPT_NAME"]), "/"); ?>/rhwp_editor.php?action=save&storage_id=<?php echo $storageId; ?>&path=<?php echo rawurlencode($filePath); ?>';
-    const FILE_NAME = <?php echo json_encode($fileName); ?>;
+    const FILE_NAME = <?php echo json_encode($fileName, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
     const HAS_FILE = !!(<?php echo $storageId; ?>) && !!FILE_NAME;
+    // ★ (2026-11-12 19:20, 102차 I18N-1) 저장·취소·완료·실패·'다른 이름으로 저장' 창·덮어쓰기 확인 문구를 화면 언어로 — 종전엔 영어 화면에서도 한국어 고정(재현). 한국어 값은 종전 문구와 같음, *_html 은 innerHTML 용으로 이스케이프
+    const SV_TXT = <?php echo json_encode([
+        'save_failed' => __('err_save_failed', '저장 실패'),
+        'save_failed_prefix' => __('rhwp_ed_save_failed_prefix', '저장 실패: '),
+        'unknown' => __('unknown_error', '알 수 없는 오류'),
+        'not_opened' => __('rhwp_ed_not_opened', '문서가 열리지 않아 서버에 저장하지 않았습니다.'),
+        'saving_server' => __('rhwp_ed_saving_server', '서버에 저장 중...'),
+        'saving_server_name' => __('rhwp_ed_saving_server_name', '서버에 저장 중... ({name})'),
+        'cancelled' => __('rhwp_ed_cancelled', '취소되었습니다'),
+        'server_saved' => __('rhwp_ed_server_saved', '{name} 서버 저장 완료 ({size}KB)'),
+        'saved' => __('rhwp_ed_saved', '{name} 저장 완료 ({size}KB)'),
+        'overwritten' => __('rhwp_ed_overwritten', '{name} 덮어쓰기 완료 ({size}KB)'),
+        'blob_failed' => __('rhwp_ed_blob_failed', 'exportHwp 데이터 캡처 실패 (Blob 미생성)'),
+        'extracting' => __('rhwp_ed_extracting', '문서 추출 중...'),
+        'extract_failed' => __('rhwp_ed_extract_failed', '문서 데이터 추출 실패'),
+        'saveas_title_html' => htmlspecialchars(__('rhwp_ed_saveas_title', '다른 이름으로 저장'), ENT_QUOTES, 'UTF-8'),
+        'saveas_desc_html' => htmlspecialchars(__('rhwp_ed_saveas_desc', '저장할 파일명을 입력하세요. 같은 폴더에 저장됩니다.'), ENT_QUOTES, 'UTF-8'),
+        'cancel_html' => htmlspecialchars(__('cancel', '취소'), ENT_QUOTES, 'UTF-8'),
+        'save_html' => htmlspecialchars(__('save', '저장'), ENT_QUOTES, 'UTF-8'),
+        'name_required' => __('rhwp_ed_name_required', '파일명을 입력하세요'),
+        'name_bad_chars' => __('rhwp_ed_name_bad_chars', '사용할 수 없는 문자가 있습니다 (/ \\ : * ? " < > | ..)'),
+        'name_too_long' => __('rhwp_name_too_long', '파일명이 너무 깁니다'),
+        'ext_must_be' => __('rhwp_ext_must_be', '확장자는 .{ext} 여야 합니다'),
+        'overwrite_confirm' => __('rhwp_ed_overwrite_confirm', "\"{name}\" 파일이 이미 있습니다.\n덮어쓰시겠습니까?"),
+    ], JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    function svFmt(str, vars) { return String(str).replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m)); }   // ★ (2026-11-12 19:20, 102차 I18N-1) 자리 표시자 채우기(__f 와 같은 {이름} 모양, 파일 이름의 $ 등이 바뀌지 않게 함수로 바꿈)
     
     if (!HAS_FILE) {
         // 파일 컨텍스트가 없어도 Ctrl+S 무한 대기 방지를 위해 no-op 핸들러 등록
@@ -1450,7 +1616,7 @@ ob_start('fs_icon_convert_html');
             throw new Error(_msg);
         }
         const result = await resp.json();
-        if (!result.success) throw new Error(result.error || '저장 실패');
+        if (!result.success) throw new Error(result.error || SV_TXT.save_failed);   // ★ (2026-11-12 19:20, 102차 I18N-1)
         return result;
     }
     
@@ -1480,15 +1646,68 @@ ob_start('fs_icon_convert_html');
     };
     window.Blob.prototype = OrigBlob.prototype;
     Object.setPrototypeOf(window.Blob, OrigBlob);
-    
+    // ★ (2026-11-04 01:38, 54차 점검) studio 의 '문서 암호 설정' 창(암호로 연 문서는 저장할 때마다 먼저 뜸)이 열려 있는지 — 창이 닫히면 studio 가 overlay 를 DOM 에서 지움
+    //   아래 두 Blob 대기 루프가 창이 열린 동안은 2초 상한을 세지 않게 씀. 종전엔 2초 뒤 'Blob 미생성' 실패 + 가로채기가 풀려, 암호를 넣으면 PC 저장 창(진짜 showSaveFilePicker)이 떴음(재현)
+    function rhwpPwDialogOpen() {
+        return !!document.getElementById('hwp-save-password-input');
+    }
+    // ★ (2026-11-04 02:02, 54차 점검 재수정) 문서 열기가 실패·취소됐다는 '확실한 신호'가 있을 때만 true(그때만 서버 저장을 막음). 판단이 안 서면 false = 종전처럼 저장(fail-open).
+    //   신호(실제 재현으로 확인): 상태줄 '문서 열기를 취소했습니다.'(암호 창 취소·틀린 암호 뒤 취소), '파일 로드 실패: …'(studio 열기 오류),
+    //   열기 암호 창(#hwp-password-input)이 아직 떠 있음(아직 안 열림), FileStation 이 파일을 끝내 못 받음(위 로더가 __rhwpOpenFailSeen 표시).
+    //   신호가 있었어도 '[WasmBridge] 문서 로드'(위 콘솔 감지)를 한 번이라도 봤으면 문서가 열린 것이므로 허용.
+    //   종전엔 열기를 취소한 빈 편집기에서 Ctrl+S 하면 빈 문서가 서버의 원래 파일을 덮어썼음(재현: pw.hwp 7680 → 12800바이트 빈 문서)
+    const RHWP_OPEN_FAIL_RE = /문서 열기를 취소했습니다|^\s*파일 로드 실패/;
+    (function () {   // 상태줄 글자는 곧 다른 글자로 바뀔 수 있어, 신호가 나타나면 기억해 둠
+        const sb = document.getElementById('sb-message');
+        if (!sb || typeof MutationObserver === 'undefined') return;
+        new MutationObserver(() => { if (RHWP_OPEN_FAIL_RE.test(sb.textContent || '')) window.__rhwpOpenFailSeen = true; })
+            .observe(sb, { childList: true, characterData: true, subtree: true });
+    })();
+    function rhwpOpenFailedNow() {
+        if (window.__rhwpServerDocOpened) return false;
+        if (window.__rhwpOpenFailSeen) return true;
+        if (document.getElementById('hwp-password-input')) return true;
+        const sb = document.getElementById('sb-message');
+        return !!(sb && RHWP_OPEN_FAIL_RE.test(sb.textContent || ''));
+    }
+
+    // ★ (2026-11-12 17:35, 101차 EDT-1) studio 의 변경 횟수(documentEpoch:changeSeq — 편집마다 1씩 늘어남)를 같은 창 요청 getSelectionContext 로 읽음(getDocumentState 는 문서 전체 해시를 만들어 2.9MB 문서에서 6초 넘게 걸려 쓰지 않음) — 못 읽으면 null(그때는 종전처럼 저장 뒤 수정 표시를 지움)
+    function readStudioChangeSeq() {
+        return new Promise(resolve => {
+            const id = '__fsSeq' + Date.now() + '_' + Math.random();
+            let done = false, tm = null;
+            const finish = v => { if (done) return; done = true; window.removeEventListener('message', onMsg); clearTimeout(tm); resolve(v); };
+            const onMsg = e => {
+                const d = e.data;
+                if (e.source !== window || !d || d.type !== 'rhwp-response' || d.id !== id) return;
+                const r = d.result;
+                finish(r && typeof r.changeSeq === 'number' ? r.documentEpoch + ':' + r.changeSeq : null);
+            };
+            window.addEventListener('message', onMsg);
+            tm = setTimeout(() => finish(null), 1500);
+            try { window.postMessage({ type: 'rhwp-request', id: id, method: 'getSelectionContext', params: {} }, window.location.origin); } catch (e) { finish(null); }
+        });
+    }
+    // ★ (2026-11-12 17:35, 101차 EDT-1) 내보내기 전에 읽은 값과 지금 값이 같거나 둘 중 하나라도 못 읽었을 때만 수정 표시·초안을 지움 — 종전엔 서버 응답을 기다리는 동안 친 글자도 '저장됨'이 되어 닫을 때 경고 없이 사라지고 초안도 버려졌음(재현)
+    async function markStudioSavedIfUnchanged(seqAtStart, fileName) {
+        const seqNow = seqAtStart === null ? null : await readStudioChangeSeq();
+        if (seqAtStart !== null && seqNow !== null && seqNow !== seqAtStart) return;
+        await markStudioSaved(fileName);
+    }
+
     async function exportAndSave() {
         if (saving) return; // 이미 저장 중이면 skip (중복 저장 방지)
+        if (rhwpOpenFailedNow()) {   // ★ (2026-11-04 01:55, 54차 점검) 문서가 열리지 않은 상태(열기 취소·받기 실패)면 서버에 저장하지 않음 — 종전엔 빈 문서로 원래 파일을 덮어썼음(재현). ★ (2026-11-04 02:02, 54차 점검 재수정) 확실한 실패 신호일 때만(위 rhwpOpenFailedNow)
+            const sbEl = document.getElementById('sb-message');
+            if (sbEl) sbEl.textContent = SV_TXT.not_opened;   // ★ (2026-11-12 19:20, 102차 I18N-1)
+            return;
+        }
         saving = true;
         lastExportData = null;
         if (window.__rhwpSyncSuspend) window.__rhwpSyncSuspend();
         
         const statusEl = document.getElementById('sb-message');
-        if (statusEl) statusEl.textContent = '서버에 저장 중...';
+        if (statusEl) statusEl.textContent = SV_TXT.saving_server;   // ★ (2026-11-12 19:20, 102차 I18N-1)
         // console.log('[rhwp_editor] exportAndSave 시작');
         
         // 프로토타입 훅은 try 밖에서 선언 + finally에서 반드시 복원
@@ -1498,6 +1717,7 @@ ob_start('fs_icon_convert_html');
         const hadPicker = 'showSaveFilePicker' in window;
         
         try {
+            const seqAtStart = await readStudioChangeSeq();   // ★ (2026-11-12 17:35, 101차 EDT-1) 내보내기 전 변경 횟수(아래 저장 완료 때 비교)
             // <a>.click() 가로채서 로컬 다운로드 차단
             HTMLAnchorElement.prototype.click = function() {
                 if (this.download && this.href && this.href.startsWith('blob:')) {
@@ -1548,14 +1768,21 @@ ob_start('fs_icon_convert_html');
             
             // Blob 캡처 대기 (최대 2초)
             // console.log('[rhwp_editor] Blob 캡처 대기 시작');
+            let pwDialogSeen = false;   // ★ (2026-11-04 01:38, 54차 점검) 암호 창이 열린 동안은 대기 횟수를 세지 않음(위 rhwpPwDialogOpen) — 종전엔 암호 문서 저장이 늘 2초 뒤 실패했음(재현)
             for (let wait = 0; wait < 20; wait++) {
                 await new Promise(r => setTimeout(r, 100));
                 if (lastExportData && lastExportData.length > 16) {
                     // console.log('[rhwp_editor] Blob 캡처 성공 (' + (wait*100) + 'ms):', lastExportData.length, 'bytes');
                     break;
                 }
+                if (rhwpPwDialogOpen()) { pwDialogSeen = true; wait = -1; }   // ★ (2026-11-04 01:38, 54차 점검) 창이 닫힌 뒤부터 다시 2초
             }
-            
+            // ★ (2026-11-04 01:38, 54차 점검) 암호 창에서 '취소'하면 studio 가 내보내지 않으므로 실패 문구 대신 취소로 끝냄(암호 없는 문서는 창이 안 떠 종전과 같음)
+            if (pwDialogSeen && !(lastExportData && lastExportData.length > 16)) {
+                if (statusEl) statusEl.textContent = SV_TXT.cancelled;   // ★ (2026-11-12 19:20, 102차 I18N-1)
+                return;
+            }
+
             // 참고: studio는 원본 형식대로 저장한다 (HWP → x-hwp, HWPX → hwp+zip Blob).
             //       두 MIME 모두 위 Blob 훅에서 캡처된다.
             
@@ -1563,19 +1790,19 @@ ob_start('fs_icon_convert_html');
                 // console.log('[rhwp_editor] serverSave 호출, 크기:', lastExportData.length);
                 const result = await serverSave(lastExportData);
                 const sizeKB = (result.size / 1024).toFixed(1);
-                if (statusEl) statusEl.textContent = FILE_NAME + ' 서버 저장 완료 (' + sizeKB + 'KB)';
+                if (statusEl) statusEl.textContent = svFmt(SV_TXT.server_saved, { name: FILE_NAME, size: sizeKB });   // ★ (2026-11-12 19:20, 102차 I18N-1)
                 // console.log('[rhwp_editor] 서버 저장 완료:', FILE_NAME, result.size, 'bytes');
                 // 부모 창(웹하드)에 파일 변경 알림 (목록 갱신용)
                 notifyParentFileChanged(FILE_NAME, 'save');
                 // 원본 파일에 덮어썼으므로 studio의 dirty 표시 해제
-                await markStudioSaved(FILE_NAME);
+                await markStudioSavedIfUnchanged(seqAtStart, FILE_NAME);   // ★ (2026-11-12 17:35, 101차 EDT-1) 저장 중 고친 게 있으면 수정 표시·초안을 남김
             } else {
                 console.error('[rhwp_editor] Blob 캡처 실패 - lastExportData:', lastExportData);
-                throw new Error('exportHwp 데이터 캡처 실패 (Blob 미생성)');
+                throw new Error(SV_TXT.blob_failed);   // ★ (2026-11-12 19:20, 102차 I18N-1)
             }
         } catch (e) {
             console.error('[rhwp_editor] 서버 저장 실패:', e);
-            if (statusEl) statusEl.textContent = '저장 실패: ' + ((e && e.message) || (typeof e === 'string' && e) || '알 수 없는 오류');   // ★ (2026-10-26) WASM 이 문자열을 던지면 'undefined' 가 나왔음
+            if (statusEl) statusEl.textContent = SV_TXT.save_failed_prefix + ((e && e.message) || (typeof e === 'string' && e) || SV_TXT.unknown);   // ★ (2026-10-26) WASM 이 문자열을 던지면 'undefined' 가 나왔음. ★ (2026-11-12 19:20, 102차 I18N-1) 문구를 화면 언어로
         } finally {
             // 프로토타입/전역 함수 반드시 복원 (try 중 예외 발생해도 실행됨)
             HTMLAnchorElement.prototype.click = origClick;
@@ -1722,13 +1949,13 @@ ob_start('fs_icon_convert_html');
             const box = document.createElement('div');
             box.style.cssText = 'background:#fff;border-radius:8px;padding:20px 24px;min-width:360px;max-width:90vw;box-shadow:0 10px 40px rgba(0,0,0,0.2);font-family:sans-serif;';
             box.innerHTML = 
-                '<div style="font-size:15px;font-weight:600;margin-bottom:12px;color:#222;">다른 이름으로 저장</div>' +
-                '<div style="font-size:13px;color:#555;margin-bottom:10px;">저장할 파일명을 입력하세요. 같은 폴더에 저장됩니다.</div>' +
+                '<div style="font-size:15px;font-weight:600;margin-bottom:12px;color:#222;">' + SV_TXT.saveas_title_html + '</div>' +   // ★ (2026-11-12 19:20, 102차 I18N-1)
+                '<div style="font-size:13px;color:#555;margin-bottom:10px;">' + SV_TXT.saveas_desc_html + '</div>' +
                 '<input type="text" id="__rhwpSaveAsInput" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #ccc;border-radius:4px;font-size:14px;" />' +
                 '<div id="__rhwpSaveAsErr" style="font-size:12px;color:#d33;margin-top:6px;min-height:16px;"></div>' +
                 '<div style="text-align:right;margin-top:14px;">' +
-                '<button id="__rhwpSaveAsCancel" style="padding:6px 16px;margin-right:8px;background:#eee;border:1px solid #ccc;border-radius:4px;cursor:pointer;">취소</button>' +
-                '<button id="__rhwpSaveAsOk" style="padding:6px 16px;background:#0066cc;color:#fff;border:1px solid #0066cc;border-radius:4px;cursor:pointer;">저장</button>' +
+                '<button id="__rhwpSaveAsCancel" style="padding:6px 16px;margin-right:8px;background:#eee;border:1px solid #ccc;border-radius:4px;cursor:pointer;">' + SV_TXT.cancel_html + '</button>' +
+                '<button id="__rhwpSaveAsOk" style="padding:6px 16px;background:#0066cc;color:#fff;border:1px solid #0066cc;border-radius:4px;cursor:pointer;">' + SV_TXT.save_html + '</button>' +
                 '</div>';
             mask.appendChild(box);
             document.body.appendChild(mask);
@@ -1746,13 +1973,13 @@ ob_start('fs_icon_convert_html');
             
             const cleanup = () => { try { document.body.removeChild(mask); } catch(e){} };
             const validate = (name) => {
-                if (!name) return '파일명을 입력하세요';
-                if (/[\/\\:*?"<>|]|\.\./.test(name)) return '사용할 수 없는 문자가 있습니다 (/ \\ : * ? " < > | ..)';
-                if (name.length > 240) return '파일명이 너무 깁니다';
+                if (!name) return SV_TXT.name_required;   // ★ (2026-11-12 19:20, 102차 I18N-1) 아래 검사 문구 4개도 화면 언어로
+                if (/[\/\\:*?"<>|\x00-\x1f]|\.\./.test(name)) return SV_TXT.name_bad_chars;   // ★ (2026-11-01 09:42, 38차 점검) 제어 문자도 거부(서버 save-as 검사와 같게)
+                if (name.length > 240) return SV_TXT.name_too_long;
                 // 원본 형식과 같은 확장자만 허용 — 내용은 원본 형식 그대로 저장되므로
                 // 확장자만 바꾸면 내용과 어긋난 깨진 파일이 된다
                 const wantExt = IS_HWPX_DOC ? '.hwpx' : '.hwp';
-                if (!name.toLowerCase().endsWith(wantExt)) return '확장자는 ' + wantExt + ' 여야 합니다';
+                if (!name.toLowerCase().endsWith(wantExt)) return svFmt(SV_TXT.ext_must_be, { ext: wantExt.slice(1) });
                 return null;
             };
             
@@ -1792,8 +2019,9 @@ ob_start('fs_icon_convert_html');
         }
         const result = await resp.json();
         if (!result.success) {
-            const err = new Error(result.error || '저장 실패');
+            const err = new Error(result.error || SV_TXT.save_failed);   // ★ (2026-11-12 19:20, 102차 I18N-1)
             err.exists = !!result.exists;
+            err.savedName = (typeof result.name === 'string' && result.name) ? result.name : '';   // ★ (2026-11-09 19:50, 60차 Z17) 서버가 정리한 실제 이름(아래 덮어쓰기 확인창 문구용)
             throw err;
         }
         return result;
@@ -1801,6 +2029,11 @@ ob_start('fs_icon_convert_html');
     
     async function exportAndSaveAs() {
         if (saving) return;
+        if (rhwpOpenFailedNow()) {   // ★ (2026-11-04 02:02, 54차 점검 재수정) 확실한 실패 신호일 때만 막음(위 rhwpOpenFailedNow). ★ (2026-11-04 01:55, 54차 점검) 위 '저장'과 같음 — 열리지 않은 빈 문서를 다른 이름(덮어쓰기 포함)으로 서버에 쓰지 않음
+            const sbEl = document.getElementById('sb-message');
+            if (sbEl) sbEl.textContent = SV_TXT.not_opened;   // ★ (2026-11-12 19:20, 102차 I18N-1)
+            return;
+        }
         saving = true;
         lastExportData = null;
         if (window.__rhwpSyncSuspend) window.__rhwpSyncSuspend();
@@ -1826,8 +2059,9 @@ ob_start('fs_icon_convert_html');
                 throw new DOMException('Blocked for server save', 'AbortError');
             };
             
-            if (statusEl) statusEl.textContent = '문서 추출 중...';
+            if (statusEl) statusEl.textContent = SV_TXT.extracting;   // ★ (2026-11-12 19:20, 102차 I18N-1)
             
+            const seqAtStart = await readStudioChangeSeq();   // ★ (2026-11-12 17:35, 101차 EDT-1) 위 '저장'과 같음 — 추출 전 변경 횟수(이름 입력·서버 저장 동안 고친 게 있으면 수정 표시를 남김)
             const saveItem = document.querySelector('.md-item[data-cmd="file:save"]');
             // console.log('[rhwp_editor] (save-as) file:save 메뉴 요소:', saveItem ? 'found' : 'NOT FOUND');
             if (saveItem) {
@@ -1846,14 +2080,16 @@ ob_start('fs_icon_convert_html');
                 }
             }
             // console.log('[rhwp_editor] (save-as) Blob 캡처 대기 시작');
+            let pwDialogSeen = false;   // ★ (2026-11-04 01:38, 54차 점검) 위 '저장'과 같음 — 암호 창이 열린 동안은 대기 횟수를 세지 않음(종전엔 2초 뒤 '문서 데이터 추출 실패', 재현)
             for (let wait = 0; wait < 20; wait++) {
                 await new Promise(r => setTimeout(r, 100));
                 if (lastExportData && lastExportData.length > 16) {
                     // console.log('[rhwp_editor] (save-as) Blob 캡처 성공 (' + (wait*100) + 'ms):', lastExportData.length, 'bytes');
                     break;
                 }
+                if (rhwpPwDialogOpen()) { pwDialogSeen = true; wait = -1; }   // ★ (2026-11-04 01:38, 54차 점검) 창이 닫힌 뒤부터 다시 2초
             }
-            
+
             // 이 시점부터는 프로토타입/picker 훅이 필요 없으므로 조기 복원
             // (아래 파일명 다이얼로그와 서버 업로드는 일반적인 <a>.click()을 사용할 수 있음)
             HTMLAnchorElement.prototype.click = origClick;
@@ -1863,8 +2099,12 @@ ob_start('fs_icon_convert_html');
                 try { delete window.showSaveFilePicker; } catch (_) { window.showSaveFilePicker = undefined; }
             }
             
+            if (pwDialogSeen && (!lastExportData || lastExportData.length < 16)) {   // ★ (2026-11-04 01:38, 54차 점검) 암호 창 '취소'는 실패 문구 대신 취소로(위 '저장'과 같음)
+                if (statusEl) statusEl.textContent = SV_TXT.cancelled;   // ★ (2026-11-12 19:20, 102차 I18N-1)
+                return;
+            }
             if (!lastExportData || lastExportData.length < 16) {
-                throw new Error('문서 데이터 추출 실패');
+                throw new Error(SV_TXT.extract_failed);   // ★ (2026-11-12 19:20, 102차 I18N-1)
             }
             
             const extractedData = lastExportData; // 프롬프트 중 상태 변경 대비
@@ -1883,18 +2123,19 @@ ob_start('fs_icon_convert_html');
             }
             
             // 3) 서버 저장 (중복 시 사용자에게 확인)
-            if (statusEl) statusEl.textContent = '서버에 저장 중... (' + newName + ')';
+            if (statusEl) statusEl.textContent = svFmt(SV_TXT.saving_server_name, { name: newName });   // ★ (2026-11-12 19:20, 102차 I18N-1)
             try {
                 const result = await serverSaveAs(extractedData, newName);
                 const sizeKB = (result.size / 1024).toFixed(1);
-                if (statusEl) statusEl.textContent = newName + ' 저장 완료 (' + sizeKB + 'KB)';
+                const savedName = (typeof result.name === 'string' && result.name) ? result.name : newName;   // ★ (2026-11-09 13:58, 58차 FIXD 결정) 서버가 이름을 정리하면('.hwp' → 'hwp.hwp') 실제 저장된 이름으로 표시·알림
+                if (statusEl) statusEl.textContent = svFmt(SV_TXT.saved, { name: savedName, size: sizeKB });   // ★ (2026-11-12 19:20, 102차 I18N-1)
                 // 부모 창(웹하드)에 파일 목록 갱신 신호 전송
-                notifyParentFileChanged(newName, 'save-as');
-                await markStudioSaved();
+                notifyParentFileChanged(savedName, 'save-as');
+                await markStudioSavedIfUnchanged(seqAtStart);   // ★ (2026-11-12 17:35, 101차 EDT-1) 저장 중 고친 게 있으면 수정 표시·초안을 남김
             } catch (e) {
                 if (e.exists) {
                     // 같은 이름 파일이 이미 있음 — 덮어쓰기 확인
-                    if (confirm('"' + newName + '" 파일이 이미 있습니다.\n덮어쓰시겠습니까?')) {
+                    if (confirm(svFmt(SV_TXT.overwrite_confirm, { name: (e.savedName || newName) }))) {   // ★ (2026-11-09 19:50, 60차 Z17) 실제로 덮어쓸 이름(서버 응답 name, 없으면 입력 이름). ★ (2026-11-12 19:20, 102차 I18N-1) 확인 문구를 화면 언어로
                         // overwrite 파라미터로 재시도 (서버는 기본 덮어쓰기 금지지만, 
                         // 사용자 확인 후에는 save 엔드포인트로 덮어쓰는 게 더 안전함)
                         // 단, save 엔드포인트는 현재 편집 중인 원본에만 덮어쓰므로
@@ -1908,17 +2149,18 @@ ob_start('fs_icon_convert_html');
                         const j = await resp.json();
                         if (j.success) {
                             const sizeKB = (j.size / 1024).toFixed(1);
-                            if (statusEl) statusEl.textContent = newName + ' 덮어쓰기 완료 (' + sizeKB + 'KB)';
+                            const savedName = (typeof j.name === 'string' && j.name) ? j.name : newName;   // ★ (2026-11-09 13:58, 58차 FIXD 결정) 위와 같음 — 실제 저장된 이름
+                            if (statusEl) statusEl.textContent = svFmt(SV_TXT.overwritten, { name: savedName, size: sizeKB });   // ★ (2026-11-12 19:20, 102차 I18N-1)
                             // 부모 창에 파일 목록 갱신 신호 (덮어쓰기도 갱신 필요)
-                            notifyParentFileChanged(newName, 'save-as-overwrite');
+                            notifyParentFileChanged(savedName, 'save-as-overwrite');
                             // 사본에 저장했을 뿐 원본 파일은 그대로이나, studio 자체 save-as와
                             // 동일하게 clean 처리한다 (파일명 인자는 넘기지 않아 편집 대상은 원본 유지)
-                            await markStudioSaved();
+                            await markStudioSavedIfUnchanged(seqAtStart);   // ★ (2026-11-12 17:35, 101차 EDT-1) 위와 같음
                         } else {
-                            throw new Error(j.error || '저장 실패');
+                            throw new Error(j.error || SV_TXT.save_failed);   // ★ (2026-11-12 19:20, 102차 I18N-1)
                         }
                     } else {
-                        if (statusEl) statusEl.textContent = '취소되었습니다';
+                        if (statusEl) statusEl.textContent = SV_TXT.cancelled;   // ★ (2026-11-12 19:20, 102차 I18N-1)
                     }
                 } else {
                     throw e;
@@ -1926,7 +2168,7 @@ ob_start('fs_icon_convert_html');
             }
         } catch (e) {
             console.error('[rhwp_editor] 다른 이름으로 저장 실패:', e);
-            if (statusEl) statusEl.textContent = '저장 실패: ' + ((e && e.message) || (typeof e === 'string' && e) || '알 수 없는 오류');   // ★ (2026-10-26) WASM 이 문자열을 던지면 'undefined' 가 나왔음
+            if (statusEl) statusEl.textContent = SV_TXT.save_failed_prefix + ((e && e.message) || (typeof e === 'string' && e) || SV_TXT.unknown);   // ★ (2026-10-26) WASM 이 문자열을 던지면 'undefined' 가 나왔음. ★ (2026-11-12 19:20, 102차 I18N-1) 문구를 화면 언어로
         } finally {
             // 안전장치: 조기 복원 전 예외 발생 가능성에 대비해 최종 한 번 더 복원
             // (이미 복원된 상태면 같은 값을 덮어쓰는 것이라 멱등적, no-op에 가까움)

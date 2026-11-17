@@ -102,6 +102,8 @@
     color: #fff;
     text-align: left;
 }
+/* ★ (2026-11-15 18:44, 206차) 긴 곡 이름이 '…' 없이 글자 중간에서 잘렸음(재현: 908px 이름을 258px 칸에) — 재생 목록·창 제목처럼 말줄임 */
+.fap-now-title { text-overflow: ellipsis; }
 .fap-now-meta {
     font-size: 11px;
     color: rgba(255, 255, 255, 0.55);
@@ -1277,6 +1279,7 @@
 .fap-skin-pixel .fap-pl-item { color: #0f380f !important; font-family: inherit; border-bottom: 2px solid rgba(15,56,15,0.2); }
 .fap-skin-pixel .fap-pl-item:hover { background: rgba(15,56,15,0.1) !important; }
 .fap-skin-pixel .fap-pl-item.playing { background: #0f380f !important; color: #9bbc0f !important; }
+.fap-skin-pixel .fap-pl-dur { color: inherit !important; }   /* ★ (2026-11-10 10:52, 62차) 재생시간이 기본 플레이어용 흰색 35%라 연두 바탕에서 1.33:1 — SoundCloud(893)처럼 줄 글자색을 따름 */
 /* ★ 재생중 넘버링도 제목과 같은 색 (게임보이 연두) */
 /*    재생중(playing)일 때만 강조 — 멈춤(active만)일 땐 일반색 */
 .fap-skin-pixel .fap-pl-item.playing .fap-pl-num {
@@ -1656,7 +1659,9 @@
     }
     /* ★ iOS: 볼륨 영역 숨김 시 playlist를 row 5 자리로 이동 (빈 공간 방지) */
     .fap.fap-skin-ap-fixed.fap-ios {
-        grid-template-rows: 240px 0 auto auto auto 1fr !important;
+        /* ★ (2026-10-31 13:36, 34차 후속 개선) 탐색기(style.css 같은 블록)와 달리 6행(2행 0)이라 동기화 가사가 0 높이로 접히고
+           재생목록(5행 auto) 아래 빈 6행(1fr)이 남았다 → 탐색기와 같은 5행(가사 auto, 재생목록 5행=1fr)으로 맞춤 */
+        grid-template-rows: 240px auto auto auto 1fr !important;
     }
     .fap.fap-skin-ap-fixed.fap-ios .fap-playlist {
         grid-row: 5;
@@ -1924,6 +1929,12 @@
 }
 @media (max-width: 1023px) {
     /* 모바일: row 1=커버(240px) / row 2=가사(0) / row 3=시킹바 / row 4=컨트롤 / row 5=볼륨 / row 6=플레이리스트(1fr) */
+    /* ★ (2026-10-31 12:03, 34차 전체 점검) 모바일은 가사가 2행 — 뒤쪽 PC 규칙(grid-row:3)이 이겨 시킹바 칸에 겹쳤음.
+       비주얼라이저 OFF 도 PC 행(340px 0 …)이 남아 커버 아래가 비고 가사가 0 높이였음 → 모바일 기본 행으로 */
+    .fap-skin-ap-fixed .fap-lyrics-wrap { grid-row: 2; }
+    .fap.fap-skin-ap-fixed.fap-vis-off:not(.fap-ios):not(.fap-no-inline-lyrics) {
+        grid-template-rows: 240px auto auto auto auto 1fr !important;
+    }
     .fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
         grid-template-rows: 240px 0 auto auto auto 1fr !important;
     }
@@ -2291,3 +2302,78 @@
 .fap.fap .fap-controls > .fap-btn-ab { display: none !important; }
 .fap .fap-controls > .fap-btn-lyrics { order: -3 !important; }
 .fap.fap-lyrics-na .fap-controls > .fap-btn-lyrics { display: inline-flex !important; visibility: hidden !important; pointer-events: none !important; }
+
+/* ★ (2026-11-04 07:50, 54차 결정 — 펜닐 '알아서') 공유 페이지 음악을 휴대폰 가로로 볼 때 재생목록이 거의 0px(카세트·APlayer Fixed 1곡분)이던 것 —
+   플레이어가 min-height 480px 로 화면(약 390px)보다 커서 목록 자리가 없었음(재현). 탐색기(style.css 2026-08-15 가로 2열)와 같은 방식으로
+   왼쪽 열 = 재생부, 오른쪽 열 = 재생목록. 공유 페이지(.player-wrap.audio-wrap)에서 가로·낮은 화면(높이 500px 이하)일 때만 — 세로·태블릿은 그대로 */
+@media (orientation: landscape) and (max-width: 1024px) and (max-height: 500px) {
+    .player-wrap.audio-wrap {
+        height: calc(100vh - 16px) !important;
+        max-height: none !important;
+        min-height: 260px !important;
+    }
+    .player-wrap.audio-wrap > #fs-audio-player,
+    .player-wrap.audio-wrap .fap { height: 100% !important; min-height: 0 !important; width: 100%; }
+    .player-wrap.audio-wrap .fap-playlist-list { max-height: none !important; }
+    /* 오른쪽 위 ⚙(스킨 단추, absolute) 자리만큼 목록 머리줄 오른쪽을 비움 — 안 그러면 검색칸 끝을 덮음 */
+    .player-wrap.audio-wrap .fap-playlist-header { padding-right: 52px !important; box-sizing: border-box; }
+
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) {
+        display: grid !important;
+        grid-template-columns: 55% 45%;
+        grid-template-rows: auto auto auto auto auto auto auto 1fr auto;
+        column-gap: 12px;
+        align-content: stretch;
+    }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-now          { grid-column: 1; grid-row: 2; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-visualizer,
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-vu-canvas-wrap { grid-column: 1; grid-row: 3; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-lyrics-wrap  { grid-column: 1; grid-row: 4; min-height: 0; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-seek         { grid-column: 1; grid-row: 5; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-controls     { grid-column: 1; grid-row: 6; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-volume       { grid-column: 1; grid-row: 7; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-playlist     { grid-column: 2; grid-row: 2 / 9; min-height: 0; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed).fap-skin-cassette > .fap-playlist { grid-row: 1 / 9; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-skin-decoration { grid-column: 1 / -1; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-term-titlebar { grid-column: 1 / -1; grid-row: 1; }
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-term-prompt   { grid-column: 1 / -1; grid-row: 9; }
+    /* 낮은 화면에선 넣을 자리가 없는 장식·큰 커버는 줄이거나 숨김(탐색기 가로와 같음) */
+    .player-wrap.audio-wrap .fap:not(.fap-skin-ap-fixed) > .fap-cass-window { display: none !important; }
+    .player-wrap.audio-wrap .fap.fap-skin-cassette { padding: 16px 16px !important; }
+    .player-wrap.audio-wrap .fap-skin-pixel .fap-now-cover {
+        width: min(100px, calc(100vh - 300px)) !important;
+        height: min(100px, calc(100vh - 300px)) !important;
+    }
+    .player-wrap.audio-wrap .fap-skin-terminal .fap-term-titlebar,
+    .player-wrap.audio-wrap .fap-skin-terminal .fap-term-prompt { padding: 5px 12px !important; }
+
+    /* APlayer Fixed: 이미 grid — 열만 2열, 커버는 화면 높이에 맞춰 줄어듦 */
+    .player-wrap.audio-wrap .fap.fap-skin-ap-fixed {
+        --fap-ap-cover-h: min(240px, calc(100vh - 170px));
+        grid-template-columns: 55% 45% !important;
+        grid-template-rows: var(--fap-ap-cover-h) auto auto auto auto 1fr !important;
+    }
+    .player-wrap.audio-wrap .fap.fap-skin-ap-fixed.fap-ios {
+        --fap-ap-cover-h: min(240px, calc(100vh - 130px));
+        grid-template-rows: var(--fap-ap-cover-h) auto auto auto 1fr !important;
+    }
+    .player-wrap.audio-wrap .fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
+        grid-template-rows: var(--fap-ap-cover-h) 0 auto auto auto 1fr !important;
+    }
+    .player-wrap.audio-wrap .fap.fap-skin-ap-fixed.fap-no-inline-lyrics.fap-ios {
+        --fap-ap-cover-h: min(240px, calc(100vh - 130px));
+        grid-template-rows: var(--fap-ap-cover-h) 0 auto auto 1fr !important;
+    }
+    .player-wrap.audio-wrap .fap-skin-ap-fixed .fap-ap-cover-big {
+        height: var(--fap-ap-cover-h) !important;
+        max-height: var(--fap-ap-cover-h) !important;
+    }
+    .player-wrap.audio-wrap .fap-skin-ap-fixed .fap-now { width: 55% !important; }
+    .player-wrap.audio-wrap .fap-skin-ap-fixed .fap-playlist {
+        grid-column: 2 !important;
+        grid-row: 1 / -1 !important;
+        max-height: none !important;
+        border-top: none !important;
+        border-left: 1px solid rgba(128,128,128,0.25) !important;
+    }
+}

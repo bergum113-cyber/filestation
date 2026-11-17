@@ -294,10 +294,10 @@ body {
     color: var(--theme-text) !important;
 }
 
-/* select 요소 강화 */
-select,
-.modal select,
-.modal-body select,
+/* select 요소 강화 */   /* ★ (2026-11-10 07:24, 61차 E) 아래 세 줄에 플레이어 안쪽 제외(위 10-24 입력칸과 같은 방식, 우선순위 그대로) — 이퀄라이저 프리셋 선택칸이 어두운 판 안에 테마 바탕 칸으로 나왔음 */
+select:not(:where(.fsvs-root *, .fap *)),
+.modal select:not(:where(.fsvs-root *, .fap *)),
+.modal-body select:not(:where(.fsvs-root *, .fap *)),
 #storage-type,
 #bulk-quota-target,
 #bulk-quota-unit,
@@ -650,7 +650,7 @@ select,
 }
 
 .badge-warning {
-    background: #f57c00;
+    background: #b45309;   /* ★ (2026-11-01 01:07, 35차 전체 점검) #f57c00 위 흰 글자 2.7:1 → 짙은 주황(5.0:1) */
     color: #ffffff;
 }
 
@@ -1378,7 +1378,7 @@ a:hover {
 }
 
 .status-pending {
-    background: #f57c00;
+    background: #b45309;   /* ★ (2026-11-01 01:07, 35차 전체 점검) #f57c00 위 흰 글자 2.7:1 → 짙은 주황(5.0:1) */
     color: #ffffff;
 }
 

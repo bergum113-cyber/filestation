@@ -223,19 +223,28 @@ if (!function_exists('fs_icon_convert_html')) {
         if ($parts === false) return $html;
         $skip = null;      // 지금 안에 있는 건너뛸 태그 이름
         $inOption = false;
+        // ★ (2026-11-15 21:50, 215차) class 에 fs-noico 가 붙은 요소 안 글자(파일 이름 등 사용자가 쓴 글자)는 건너뜀 — 브라우저 쪽 fs-icons.js 의 '.fs-noico' 와 같은 뜻.
+        //   종전엔 서버 출력에는 건너뛸 표시가 없어 공유 페이지·문서 보기 머리줄의 '🎵노래.mp3' 같은 이름 속 이모지가 선 그림으로 바뀌었음(재현). 같은 이름 태그가 안에 겹쳐도 짝을 셈
+        $noTag = null; $noDepth = 0;
         foreach ($parts as $i => $p) {
             if ($p === '') continue;
             if ($p[0] === '<') {
                 if (preg_match('/^<\s*(\/?)\s*([a-zA-Z][a-zA-Z0-9-]*)/', $p, $m)) {
                     $tag = strtolower($m[2]); $close = $m[1] === '/';
                     if ($skip !== null) { if ($close && $tag === $skip) $skip = null; continue; }
+                    if ($noTag !== null) {
+                        if ($tag === $noTag && substr(rtrim($p), -2) !== '/>') { $noDepth += $close ? -1 : 1; if ($noDepth <= 0) { $noTag = null; $noDepth = 0; } }
+                        continue;
+                    }
+                    if (!$close && preg_match('/\sclass\s*=\s*("[^"]*(?<![\w-])fs-noico(?![\w-])[^"]*"|\'[^\']*(?<![\w-])fs-noico(?![\w-])[^\']*\')/i', $p) && substr(rtrim($p), -2) !== '/>'
+                        && !in_array($tag, ['br', 'img', 'input', 'hr', 'meta', 'link', 'source', 'wbr'], true)) { $noTag = $tag; $noDepth = 1; continue; }
                     if (!$close && in_array($tag, ['script', 'style', 'textarea', 'title'], true) && substr(rtrim($p), -2) !== '/>') { $skip = $tag; continue; }
                     if ($tag === 'option') $inOption = !$close;
                     elseif ($tag === 'select' || $tag === 'optgroup' && $close) $inOption = false;
                 }
                 continue;
             }
-            if ($skip !== null) continue;
+            if ($skip !== null || $noTag !== null) continue;
             if (strpos($p, "\xF0") === false && !preg_match('/[\x{2139}\x{2190}-\x{2BFF}]/u', $p)) continue;   // 이모지 없음 — 빠르게 건너뜀
             if ($inOption) { $parts[$i] = fs_icon_strip($p); continue; }
             $parts[$i] = preg_replace_callback($re, function ($mm) use ($map) {

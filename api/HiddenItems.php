@@ -115,7 +115,8 @@ class HiddenItems {
      *                           밖에서 지워진 항목의 옛 표시가 남아 있을 때, 옮긴 항목이 그 표시를 물려받지 않게(윈도우: 덮어쓴 파일은 원본 속성)
      *   ※ (2026-10-28) 옮길 표시를 먼저 떼어 낸 뒤 대상 쪽을 지우므로, 새 경로가 원래 경로의 상위여도 옮길 표시는 안 사라짐
      */
-    public static function movePath(int $srcStorageId, string $oldPath, int $dstStorageId, string $newPath, bool $replaceDest = false): void {
+    // ★ (2026-11-01 17:53, 40차 재검토) $keepSource: 원본 표시를 지우지 않고 대상에 복사만 함(이동이 원본 일부를 남기고 끝난 경우). 기본 false = 종전 그대로
+    public static function movePath(int $srcStorageId, string $oldPath, int $dstStorageId, string $newPath, bool $replaceDest = false, bool $keepSource = false): void {
         $old = self::norm($oldPath); $new = self::norm($newPath);
         if ($old === '' || $new === '' || ($old === $new && $srcStorageId === $dstStorageId)) return;
         $under = function (string $p, string $base): bool { return $p === $base || strpos($p, $base . '/') === 0; };
@@ -125,7 +126,7 @@ class HiddenItems {
             foreach (self::mapFor($dstStorageId) as $p => $_) { if ($under((string)$p, $new)) { $hit = true; break; } }
         }
         if (!$hit) return;   // 옮기거나 지울 표시가 없으면 파일을 건드리지 않음
-        JsonDB::getInstance()->atomicUpdate(self::DB_NAME, function ($all) use ($srcStorageId, $dstStorageId, $old, $new, $replaceDest, $under) {
+        JsonDB::getInstance()->atomicUpdate(self::DB_NAME, function ($all) use ($srcStorageId, $dstStorageId, $old, $new, $replaceDest, $keepSource, $under) {
             if (!is_array($all)) $all = [];
             $sk = (string)$srcStorageId; $dk = (string)$dstStorageId;
             // 1) 옮길 표시를 떼어 냄
@@ -133,7 +134,7 @@ class HiddenItems {
             $moved = [];
             foreach ($sm as $p => $v) {
                 $p = (string)$p;
-                if ($under($p, $old)) { $moved[$new . substr($p, strlen($old))] = 1; unset($sm[$p]); }
+                if ($under($p, $old)) { $moved[$new . substr($p, strlen($old))] = 1; if (!$keepSource) unset($sm[$p]); }
             }
             if ($sm) $all[$sk] = $sm; else unset($all[$sk]);
             // 2) 대상 경로에 남아 있던 표시 지움(덮어쓰기·옛 표시)

@@ -32,7 +32,9 @@ if ($isCLI) {
     session_start();
     
     // Auth 체크 (관리자만)
-    if (!isset($_SESSION['user_id']) || empty($_SESSION['is_admin'])) {
+    // ★ (2026-11-02 10:35, 42차 점검) FileStation 이 만든 세션인지(fs_instance)도 확인 — 같은 세션 저장소를 쓰는 다른 PHP 앱이 user_id·is_admin 을 넣은 세션이면 통과했음.
+    //   (FileStation 은 is_admin 을 넣지 않아 웹 실행은 종전처럼 늘 403 — README 결정 항목 그대로, CLI 는 영향 없음)
+    if (!isset($_SESSION['user_id']) || empty($_SESSION['is_admin']) || !defined('FS_INSTANCE_ID') || ($_SESSION['fs_instance'] ?? '') !== FS_INSTANCE_ID . ':' . (int)$_SESSION['user_id']) {   // ★ (2026-11-02 11:00, 42차 재검토) 사용자 번호와 묶은 표시(Auth 와 같음)
         http_response_code(403);
         header('Content-Type: text/html; charset=utf-8');
         echo '<h1>403 접근 권한 없음</h1><p>관리자로 로그인해주세요.</p>';

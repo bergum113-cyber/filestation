@@ -178,7 +178,7 @@ class SSOAuth {
             'prompt' => 'none', // 핵심: 이미 로그인된 경우만 자동 인증
         ];
         
-        return $authEndpoint . '?' . http_build_query($params);
+        return $authEndpoint . (strpos($authEndpoint, '?') === false ? '?' : '&') . http_build_query($params);   // ★ (2026-11-12 14:12, 98차 ADMX-2) 주소에 이미 '?' 가 있으면 '&' 로 이음 — 종전엔 '?' 를 또 붙여 Azure AD B2C(?p=…)·Google SAML(?idpid=…) 주소에서 첫 변수(response_type·SAMLRequest)가 앞 값에 붙어 사라졌음(재현). '?' 없는 주소는 결과 같음
     }
     
     /**
@@ -279,8 +279,9 @@ class SSOAuth {
         // 서비스 계정으로 바인드 (검색용)
         if ($bindDn) {
             if (!@ldap_bind($conn, $bindDn, $bindPw)) {
+                $err = ldap_error($conn);   // ★ (2026-11-01 01:13, 35차 전체 점검) 닫기 전에 오류 문구를 받음 — PHP 8.1+ 는 닫은 연결에 ldap_error 를 부르면 Error 를 던져 정해 둔 메시지 대신 500 이 났음
                 @ldap_close($conn);
-                throw new Exception('LDAP 바인드 실패: ' . ldap_error($conn));
+                throw new Exception('LDAP 바인드 실패: ' . $err);
             }
         }
         
@@ -288,8 +289,9 @@ class SSOAuth {
         $filter = str_replace('{username}', ldap_escape($username, '', LDAP_ESCAPE_FILTER), $userFilter);
         $search = @ldap_search($conn, $baseDn, $filter, [$usernameAttr, $emailAttr, $displayNameAttr]);
         if (!$search) {
+            $err = ldap_error($conn);   // ★ (2026-11-01 01:13, 35차 전체 점검) 닫기 전에 오류 문구를 받음 — PHP 8.1+ 는 닫은 연결에 ldap_error 를 부르면 Error 를 던져 정해 둔 메시지 대신 500 이 났음
             @ldap_close($conn);
-            throw new Exception('LDAP 검색 실패: ' . ldap_error($conn));
+            throw new Exception('LDAP 검색 실패: ' . $err);
         }
         
         $entries = ldap_get_entries($conn, $search);
@@ -332,7 +334,7 @@ class SSOAuth {
      */
     public function ldapTest(array $config): array {
         if (!function_exists('ldap_connect')) {
-            return ['success' => false, 'error' => 'PHP LDAP 확장이 설치되지 않았습니다.'];
+            return ['success' => false, 'error' => __('ldap_test_ext_missing', 'PHP LDAP 확장이 설치되지 않았습니다.')];   // ★ (2026-11-02 10:30, 42차 점검) 관리자 LDAP 연결 시험 결과 문구가 번역 없이 한국어 고정이었음(E3 목록 B) → 번역 키(한국어 기본 문구는 그대로)
         }
         
         $host = $config['host'] ?? '';
@@ -345,7 +347,7 @@ class SSOAuth {
         
         $uri = ($useTls ? 'ldaps://' : 'ldap://') . $host . ':' . $port;
         $conn = @ldap_connect($uri);
-        if (!$conn) return ['success' => false, 'error' => 'LDAP 연결 실패'];
+        if (!$conn) return ['success' => false, 'error' => __('ldap_test_connect_failed', 'LDAP 연결 실패')];   // ★ (2026-11-02 10:30, 42차 점검) 위와 같음
         
         ldap_set_option($conn, LDAP_OPT_PROTOCOL_VERSION, 3);
         ldap_set_option($conn, LDAP_OPT_REFERRALS, 0);
@@ -353,8 +355,9 @@ class SSOAuth {
         
         if ($useStartTls) {
             if (!@ldap_start_tls($conn)) {
+                $err = ldap_error($conn);   // ★ (2026-11-01 01:13, 35차 전체 점검) 닫기 전에 오류 문구를 받음 — PHP 8.1+ 는 닫은 연결에 ldap_error 를 부르면 Error 를 던져 정해 둔 메시지 대신 500 이 났음
                 @ldap_close($conn);
-                return ['success' => false, 'error' => 'STARTTLS 실패: ' . ldap_error($conn)];
+                return ['success' => false, 'error' => __('ldap_test_starttls_failed', 'STARTTLS 실패: ') . $err];   // ★ (2026-11-02 10:30, 42차 점검) 위와 같음
             }
         }
         
@@ -362,7 +365,7 @@ class SSOAuth {
             if (!@ldap_bind($conn, $bindDn, $bindPw)) {
                 $err = ldap_error($conn);
                 @ldap_close($conn);
-                return ['success' => false, 'error' => "바인드 실패: $err"];
+                return ['success' => false, 'error' => __('ldap_test_bind_failed', '바인드 실패: ') . $err];   // ★ (2026-11-02 10:30, 42차 점검) 위와 같음
             }
         }
         
@@ -371,7 +374,7 @@ class SSOAuth {
         $count = $search ? ldap_count_entries($conn, $search) : 0;
         
         @ldap_close($conn);
-        return ['success' => true, 'message' => "연결 성공! 사용자 약 {$count}명 검색됨"];
+        return ['success' => true, 'message' => __f('ldap_test_success', ['count' => $count], '연결 성공! 사용자 약 {count}명 검색됨')];   // ★ (2026-11-02 10:30, 42차 점검) 위와 같음
     }
     
     // ===== OIDC (OpenID Connect) =====
@@ -381,7 +384,7 @@ class SSOAuth {
      */
     public function oidcGetAuthUrl(): string {
         $config = $this->getConfig()['oidc'];
-        if (empty($config['enabled'])) throw new Exception('OIDC가 비활성화되어 있습니다.');
+        if (empty($config['enabled'])) throw new Exception(__('sso_oidc_disabled', 'OIDC가 비활성화되어 있습니다.'));   // ★ (2026-11-09 16:00, 59차 E) 영어 화면에서도 번역(한국어 문구는 그대로)
         
         $authEndpoint = $config['authorization_endpoint'] ?? '';
         $clientId = $config['client_id'] ?? '';
@@ -389,7 +392,7 @@ class SSOAuth {
         $scope = $config['scope'] ?? 'openid profile email';
         
         if (empty($authEndpoint) || empty($clientId) || empty($redirectUri)) {
-            throw new Exception('OIDC 설정이 불완전합니다.');
+            throw new Exception(__('sso_oidc_incomplete', 'OIDC 설정이 불완전합니다.'));   // ★ (2026-11-09 16:00, 59차 E) 영어 화면에서도 번역(한국어 문구는 그대로)
         }
         
         // state 생성 (CSRF 방지)
@@ -409,7 +412,7 @@ class SSOAuth {
         $_SESSION['oidc_nonce'] = $nonce;
         $params['nonce'] = $nonce;
         
-        return $authEndpoint . '?' . http_build_query($params);
+        return $authEndpoint . (strpos($authEndpoint, '?') === false ? '?' : '&') . http_build_query($params);   // ★ (2026-11-12 14:12, 98차 ADMX-2) 주소에 이미 '?' 가 있으면 '&' 로 이음 — 종전엔 '?' 를 또 붙여 Azure AD B2C(?p=…)·Google SAML(?idpid=…) 주소에서 첫 변수(response_type·SAMLRequest)가 앞 값에 붙어 사라졌음(재현). '?' 없는 주소는 결과 같음
     }
     
     /**
@@ -471,9 +474,17 @@ class SSOAuth {
         $emailAttr = $config['email_attr'] ?? 'email';
         $displayNameAttr = $config['display_name_attr'] ?? 'name';
         
+        // ★ (2026-10-31 13:19, 34차 후속 개선) IdP 가 '확인 안 된 메일'(email_verified=false)이라고 알려 주면 메일을 쓰지 않음 — 메일을 확인 없이 바꿀 수 있는 IdP 에서
+        //   남의 메일로 바꿔 로그인하면 메일이 같은 기존 계정에 연결됐음. 이 값을 보내지 않는 IdP(Azure AD 등)는 종전대로
+        $oidcEmail = $userInfo[$emailAttr] ?? '';
+        if (array_key_exists('email_verified', $userInfo)) {
+            $ev = $userInfo['email_verified'];
+            if ($ev === false || $ev === 0 || (is_string($ev) && in_array(strtolower(trim($ev)), ['false', '0', 'no'], true))) $oidcEmail = '';
+        }
+        
         return [
             'username' => $userInfo[$usernameAttr] ?? $userInfo['sub'] ?? '',
-            'email' => $userInfo[$emailAttr] ?? '',
+            'email' => $oidcEmail,
             'display_name' => $userInfo[$displayNameAttr] ?? $userInfo[$usernameAttr] ?? '',
             'sub' => $userInfo['sub'] ?? '',
         ];
@@ -485,7 +496,7 @@ class SSOAuth {
     public function oidcDiscover(string $wellKnownUrl): array {
         $data = $this->httpGet($wellKnownUrl);
         if (empty($data['authorization_endpoint'])) {
-            throw new Exception('Well-known URL에서 설정을 가져올 수 없습니다.');
+            throw new Exception(__('sso_oidc_wellknown_failed', 'Well-known URL에서 설정을 가져올 수 없습니다.'));   // ★ (2026-11-09 16:00, 59차 E) 영어 화면에서도 번역(한국어 문구는 그대로)
         }
         return [
             'authorization_endpoint' => $data['authorization_endpoint'] ?? '',
@@ -502,14 +513,14 @@ class SSOAuth {
      */
     public function samlGetAuthUrl(): string {
         $config = $this->getConfig()['saml'];
-        if (empty($config['enabled'])) throw new Exception('SAML이 비활성화되어 있습니다.');
+        if (empty($config['enabled'])) throw new Exception(__('sso_saml_disabled', 'SAML이 비활성화되어 있습니다.'));   // ★ (2026-11-09 16:00, 59차 E) 영어 화면에서도 번역(한국어 문구는 그대로)
         
         $ssoUrl = $config['idp_sso_url'] ?? '';
         $entityId = $config['sp_entity_id'] ?? '';
         $acsUrl = $config['sp_acs_url'] ?? '';
         
         if (empty($ssoUrl) || empty($entityId) || empty($acsUrl)) {
-            throw new Exception('SAML 설정이 불완전합니다.');
+            throw new Exception(__('sso_saml_incomplete', 'SAML 설정이 불완전합니다.'));   // ★ (2026-11-09 16:00, 59차 E) 영어 화면에서도 번역(한국어 문구는 그대로)
         }
         
         $id = '_' . bin2hex(random_bytes(16));
@@ -538,7 +549,7 @@ XML;
             'RelayState' => $acsUrl,
         ];
         
-        return $ssoUrl . '?' . http_build_query($params);
+        return $ssoUrl . (strpos($ssoUrl, '?') === false ? '?' : '&') . http_build_query($params);   // ★ (2026-11-12 14:12, 98차 ADMX-2) 주소에 이미 '?' 가 있으면 '&' 로 이음 — 종전엔 '?' 를 또 붙여 Azure AD B2C(?p=…)·Google SAML(?idpid=…) 주소에서 첫 변수(response_type·SAMLRequest)가 앞 값에 붙어 사라졌음(재현). '?' 없는 주소는 결과 같음
     }
     
     /**
@@ -790,6 +801,7 @@ XML;
             'email' => $email,
             'display_name' => $displayName,
             'name_id' => $nameId,
+            'name_id_format' => $nameIdNode ? (string)$nameIdNode->getAttribute('Format') : '',   // ★ (2026-11-01 10:14, 38차 점검 재검토) transient(로그인마다 바뀌는 값)이면 식별값으로 쓰지 않게
         ];
     }
     
@@ -906,10 +918,38 @@ XML;
     public function mapOrCreateUser(array $ssoUser, string $provider): array {
         $username = $this->sanitizeUsername($ssoUser['username'] ?? '');
         $email = is_string($ssoUser['email'] ?? null) ? trim($ssoUser['email']) : '';   // ★ (2026-10-29 08:26, 19차) 문자열만(아래 '' 비교용)
-        $displayName = $ssoUser['display_name'] ?? $username;
-        
+        // ★ (2026-11-17 14:00, 326차 — 307차 기록) IdP·LDAP 가 준 이름도 방향 뒤집기 문자를 뺌(가입·관리자·내 정보와 같은 fsStripBidi — 303·307차)
+        if (is_string($ssoUser['display_name'] ?? null) && function_exists('fsStripBidi')) $ssoUser['display_name'] = fsStripBidi($ssoUser['display_name']);
+        $ssoIdpName = (is_string($ssoUser['display_name'] ?? null) && trim($ssoUser['display_name']) !== '');   // ★ (2026-11-12 04:33, 92차 RGR11-N1) IdP 가 실제 이름을 보냈는지(아래 기존 사용자 갱신에서 씀)
+        $displayName = $ssoIdpName ? $ssoUser['display_name'] : $username;   // ★ (2026-11-12 03:33, 91차 RGR10-N1b) IdP 가 이름을 비워 보내면 아이디로(90차 관리 화면·회원가입과 같은 규칙) — 종전엔 빈 이름으로 저장됐음(재현)
+
+        // ★ (2026-11-01 09:43, 38차 점검) 아이디 정리(sanitizeUsername)가 허용 안 되는 글자를 '지워서' 서로 다른 IdP 사용자가 같은 로컬 아이디가 됐음
+        //   ('김철수1'·'이영희1' → '1', 'jöhn'·'jõhn' → 'jhn') — 처음 사람이 만든 계정에 두 번째 사람이 '아이디 같음'으로 연결돼 남의 계정·파일에 들어갔음.
+        //   이제 정리로 글자가 지워졌으면(소문자화·@ 뒤 떼기는 종전대로 손실로 보지 않음) 아이디로는 '이 제공자에서 같은 사용자(sub/NameID/원래 아이디)로
+        //   이미 연결된 계정'에만 연결. 이번 수정 전에 만들어진 계정(기록 없음 + 같은 제공자로 쓰던 계정)은 다음 로그인 때 그 사용자로 기록하고 그대로 들여보냄.
+        //   정리 결과가 빈 아이디('홍길동' → '')면 메일 앞부분·sub 중 글자가 지워지지 않는 값을 대신 쓰고(이 경우는 기록된 같은 사용자에게만 아이디 연결), 없으면 종전대로 오류
+        $rawName = (isset($ssoUser['username']) && is_scalar($ssoUser['username']) && !is_bool($ssoUser['username'])) ? (string)$ssoUser['username'] : '';   // ★ (2026-11-01 10:14, 38차 점검 재검토) OIDC 아이디가 JSON 숫자여도 문자열로(종전 is_string 이라 '글자 지워짐'으로 잘못 봐 미리 만든 계정에 연결 안 됐음)
+        $nameLossy = ($username !== $this->usernameBase($rawName));
+        $nameFallback = false;
+        if ($username === '') {
+            foreach ([$email, is_string($ssoUser['sub'] ?? null) ? $ssoUser['sub'] : ''] as $cand) {
+                $c = $this->sanitizeUsername($cand);
+                if ($c !== '' && $c === $this->usernameBase($cand)) { $username = $c; $nameFallback = true; break; }
+            }
+            if ($displayName === '' || $displayName === null) $displayName = $rawName !== '' ? $rawName : $username;
+        }
+        $subjectVal = '';
+        $_nidTransient = stripos((string)($ssoUser['name_id_format'] ?? ''), ':transient') !== false;   // ★ (2026-11-01 10:14, 38차 점검 재검토) SAML transient NameID 는 로그인마다 달라 두 번째부터 '다른 사람'으로 거부됐음 → 원래 아이디를 식별값으로
+        foreach (['sub', 'name_id'] as $sk) {
+            if ($sk === 'name_id' && $_nidTransient) continue;
+            if (isset($ssoUser[$sk]) && is_scalar($ssoUser[$sk]) && !is_bool($ssoUser[$sk]) && trim((string)$ssoUser[$sk]) !== '') { $subjectVal = trim((string)$ssoUser[$sk]); break; }
+        }
+        if ($subjectVal === '') $subjectVal = $rawName;
+        $nameBlocked = false;
+
         if (empty($username)) {
-            throw new Exception('SSO에서 유효한 사용자 이름을 가져올 수 없습니다.');
+            // ★ (2026-11-02 10:30, 42차 점검) 로그인 화면(sso_error)에 그대로 나가는 문구인데 번역 없이 한국어 고정이었음(E3#8) → 번역 키(한국어 기본 문구는 그대로)
+            throw new Exception(__('sso_no_valid_username', 'SSO에서 유효한 사용자 이름을 가져올 수 없습니다.'));
         }
         
         $users = $this->db->load('users') ?: [];
@@ -923,7 +963,30 @@ XML;
         $existingUser = null;
         if ($matchBy !== 'email') {
             foreach ($users as &$u) {
-                if (($u['username'] ?? '') === $username) { $existingUser = &$u; break; }
+                if (($u['username'] ?? '') === $username) {
+                    // ★ (2026-11-01 09:43, 38차 점검) 정리로 글자가 지워진(또는 대체한) 아이디는 같은 사용자로 기록된 계정에만 연결(위 설명)
+                    if (!$nameLossy && !$nameFallback) { $existingUser = &$u; }
+                    else {
+                        $_subsAll = (array)($u['sso_subjects'] ?? []);
+                        $stored = (string)($_subsAll[$provider] ?? '');
+                        // ★ (2026-11-01 10:14, 38차 점검 재검토) 같은 디렉터리(LDAP·Kerberos)끼리는 기록된 원래 아이디가 같으면 허용(sso_provider 는 마지막 제공자로 덮어써져
+                        //   Kerberos↔LDAP 을 섞어 쓰던 사용자가 막혔음). 기록 없는 이전 계정 규칙은 아래(39차에 다시 좁힘)
+                        $_dirOk = false;
+                        if ($stored === '' && in_array($provider, ['ldap', 'kerberos'], true)) {
+                            foreach (['ldap', 'kerberos'] as $_dp) {
+                                $_dv = (string)($_subsAll[$_dp] ?? '');
+                                if ($_dp !== $provider && $_dv !== '' && strcasecmp($this->usernameBase(preg_replace('/^.*\\\\/', '', $_dv)), $this->usernameBase(preg_replace('/^.*\\\\/', '', $subjectVal))) === 0) { $_dirOk = true; break; }
+                            }
+                        }
+                        if ($stored !== '' ? hash_equals($stored, $subjectVal)
+                            : (!$nameFallback && ($_dirOk || (empty($_subsAll) && (($u['sso_provider'] ?? '') === $provider
+                                || (in_array($provider, ['ldap', 'kerberos'], true) && in_array((string)($u['sso_provider'] ?? ''), ['ldap', 'kerberos'], true))))))) { $existingUser = &$u; }
+                        // ★ (2026-11-01 11:31, 39차 점검) 기록 없는 이전 계정은 같은 제공자(또는 같은 디렉터리인 LDAP·Kerberos 끼리)만 — 38차 재검토에서 '아무 제공자나'로
+                        //   넓혔더니 다른 IdP 에서 이름이 깎여 같은 아이디가 된 사람이 업데이트 전 계정에 붙을 수 있었음(재검토 실측). OIDC↔SAML 섞어 쓰기는 관리자가 연결
+                        else $nameBlocked = true;
+                    }
+                    break;
+                }
             }
             unset($u);
         }
@@ -946,14 +1009,17 @@ XML;
                 }
             }
         }
-        
+        // ★ (2026-11-01 09:43, 38차 점검) 정리한 아이디가 다른 사람의 계정과 같아 연결하지 않았고 메일로도 못 찾았으면 거부(새로 만들면 아이디가 겹침)
+        if ($existingUser === null && $nameBlocked) {
+            throw new Exception(__('sso_username_link_denied', 'SSO 아이디에서 쓸 수 없는 글자를 뺀 결과가 다른 계정의 아이디와 같아 연결하지 않았습니다. 관리자에게 문의하세요.'));
+        }
+
         if ($existingUser) {
             // ★ (2026-10-29 03:11, 16차) 로컬 로그인과 같은 상태 검사 — 종전엔 SSO 로 들어오면 정지·비활성 계정도 그냥 로그인됐음.
             //   정지(기간 지난 건 제외)·비활성이면 거부. 호출부(try/catch)가 오류로 돌려줌
             $st = $existingUser['status'] ?? 'active';
             if ($st === 'suspended') {
-                $until = $existingUser['suspend_until'] ?? null;
-                if (!($until && strtotime($until) < strtotime('today'))) {
+                if (fsUserSuspendedNow($existingUser)) {   // ★ (2026-11-02 11:50, 43차 점검) 공통 판정 — 시작일 전(예약된 정지)은 허용(F5#3). 종전엔 종료일만 봤음
                     throw new Exception(__('account_suspended', '정지된 계정입니다.'));
                 }
             } elseif ($st !== 'active') {
@@ -971,9 +1037,16 @@ XML;
             $existingUser['sso_provider'] = $provider;
             $existingUser['sso_last_login'] = date('Y-m-d H:i:s');
             $ssoUpd = [];
-            if ($displayName && empty($existingUser['display_name'])) {
+            if ($displayName && ((is_string($ssoUser['display_name'] ?? null) && !$ssoIdpName) ? trim((string)($existingUser['display_name'] ?? '')) === '' : empty($existingUser['display_name']))) {   // ★ (2026-11-12 04:33, 92차 RGR11-N1) IdP 가 빈 문자열·공백 이름을 보내 아이디로 대신한 경우엔 정말 빈 이름만 채움 — 91차 뒤 이름이 '0' 인 사용자가 빈 이름 로그인에 아이디로 바뀌었음(재현). IdP 가 이름을 보내거나 null·칸 없음이면 종전 empty() 그대로(04:35 보완 — 원본과 다른 조합을 줄임)
                 $existingUser['display_name'] = $displayName;
                 $ssoUpd['display_name'] = $displayName;
+            }
+            // ★ (2026-11-01 09:43, 38차 점검) 이 제공자의 사용자 식별값(sub/NameID/원래 아이디)이 아직 기록 안 됐으면 기록 — 위 '글자가 지워진 아이디' 연결 판단에 씀(이미 있으면 바꾸지 않음)
+            $subs = is_array($existingUser['sso_subjects'] ?? null) ? $existingUser['sso_subjects'] : [];
+            if ($subjectVal !== '' && (string)($subs[$provider] ?? '') === '') {
+                $subs[$provider] = $subjectVal;
+                $existingUser['sso_subjects'] = $subs;
+                $ssoUpd['sso_subjects'] = $subs;
             }
             // ★ (2026-10-29 17:46, 22차 점검) 바뀐 칸만 잠금 안에서 저장(update) — 종전엔 미리 읽어 둔 전체 목록을 save 해서, 그 사이 관리자가 바꾼 비밀번호·권한·정지를 되돌릴 수 있었음
             $this->db->update('users', ['id' => $existingUser['id']], $ssoUpd + [
@@ -987,28 +1060,44 @@ XML;
         $ssoConfig = $this->getConfig();
         $providerConfig = $ssoConfig[$provider] ?? [];
         // Kerberos는 LDAP 설정을 fallback으로 사용
-        if ($provider === 'kerberos' && empty($providerConfig['auto_create'])) {
+        // ★ (2026-11-02 11:51, 43차 점검) 대체는 Kerberos 에 auto_create 값 자체가 없을 때만 — 화면은 끄면 false 를 저장하는데, 종전 empty() 판정은 그때 LDAP 설정으로 바꿔
+        //   관리자가 끈 Kerberos 자동 생성이 LDAP 쪽이 켜져 있으면 진행됐음(F2#4)
+        if ($provider === 'kerberos' && !array_key_exists('auto_create', $providerConfig)) {
             $providerConfig = $ssoConfig['ldap'] ?? $ssoConfig['kerberos'] ?? [];
         }
         if (empty($providerConfig['auto_create'])) {
-            throw new Exception('SSO 계정 자동 생성이 비활성화되어 있습니다. 관리자에게 문의하세요.');
+            throw new Exception(__('sso_auto_create_disabled', 'SSO 계정 자동 생성이 비활성화되어 있습니다. 관리자에게 문의하세요.'));   // ★ (2026-11-02 10:30, 42차 점검) 위와 같음(E3#8)
         }
         
         // ★ (2026-10-29 17:46, 22차 점검) 새로 만들 아이디가 예약어('_deleted', '.', '..')이거나 대소문자만 다른 기존 계정이 있으면 거부 —
         //   홈 폴더가 USER_FILES_ROOT/아이디 라서 종전엔 '_deleted' 는 삭제된 사용자 보관 폴더, '..' 는 그 상위 폴더가 홈이 됐고,
         //   로컬 'Alice' 가 있으면 SSO 'alice' 가 새 계정으로 만들어져 Windows 에서 같은 홈 폴더를 함께 썼음
         $unProblem = Auth::usernameProblem($this->db, $username);
+        // ★ (2026-11-01 17:18, 40차 점검) '-' 로 시작하는 새 아이디는 만들지 않음 — 정리식이 '-' 를 허용해 IdP 아이디 '-a' 가 그대로 계정이 됐고,
+        //   Samba 사용자 동기화 등 외부 명령에서 옵션으로 읽힐 수 있었음(로컬 가입은 '-' 자체를 막음). 이미 있는 계정 연결은 위에서 끝나 영향 없음
+        if ($unProblem === null && strncmp($username, '-', 1) === 0) $unProblem = 'reserved';
         if ($unProblem !== null) {
             throw new Exception($unProblem === 'reserved'
                 ? __('api_err_username_chars', '아이디는 영문, 숫자, 밑줄만 사용 가능합니다.')
                 : __('sso_username_case_conflict', '대소문자만 다른 같은 아이디의 계정이 이미 있어 새 계정을 만들지 않았습니다. 관리자에게 문의하세요.'));
         }
+        // ★ (2026-11-02 11:51, 43차 점검) 탈퇴·삭제된 아이디는 자동 생성하지 않음(가입·관리자 만들기와 같은 기준, F5#5) — 종전엔 관리자가 지운 SSO 사용자가 다음 SSO 로그인에서
+        //   새 계정으로 바로 되살아났고, 그 뒤 '삭제된 사용자 복원'은 '이미 사용 중인 아이디'로 실패했음. 관리자가 복원하거나 삭제 기록을 지우면 다시 들어올 수 있음
+        foreach (($this->db->load('deleted_users') ?: []) as $du) {
+            if (is_array($du) && strtolower(trim((string)($du['username'] ?? ''))) === strtolower(trim($username))) {
+                throw new Exception(__('sso_username_deleted', '탈퇴 또는 삭제된 아이디라 새 계정을 만들지 않았습니다. 관리자에게 계정 복원을 요청하세요.'));
+            }
+        }
         
         // 새 사용자 생성
         
         $defaultRole = $providerConfig['default_role'] ?? 'user';
-        $defaultQuota = (int)($providerConfig['default_quota'] ?? 0);
-        
+        // ★ (2026-11-04 01:37, 54차 점검) 제공자 설정에 default_quota 가 없으면 관리 화면 '신규회원 기본 용량'(settings.default_quota)을 씀(회원가입·관리자 만들기와 같은 기준) —
+        //   종전엔 화면에 입력 칸이 없는 제공자 키만 읽어 늘 0(무제한)이었음(재현: default_quota=1GB 인데 SSO 새 계정 quota=0). 제공자 키를 직접 넣어 둔 경우는 종전대로 그 값
+        $defaultQuota = array_key_exists('default_quota', $providerConfig)
+            ? (int)$providerConfig['default_quota']
+            : (int)((($this->db->load('settings') ?: [])['default_quota'] ?? 0));
+
         $newUser = [
             'username' => $username,
             'password' => '!SSO_NO_PASSWORD', // SSO 사용자는 비밀번호 로그인 불가 (password_verify 항상 false)
@@ -1022,11 +1111,33 @@ XML;
             'sso_last_login' => date('Y-m-d H:i:s'),
             'created_at' => date('Y-m-d H:i:s'),
         ];
+        if ($subjectVal !== '') $newUser['sso_subjects'] = [$provider => $subjectVal];   // ★ (2026-11-01 09:43, 38차 점검) 만든 사용자 식별값 기록(위 연결 판단용)
         
         // ★ (2026-10-29 17:46, 22차 점검) 번호 발급·저장을 잠금 안에서(insert) — 종전엔 잠금 없이 load→maxId+1→save 라, 처음 로그인하는 두 사람이 동시에 들어오면
         //   같은 번호를 받고 뒤에 저장한 쪽이 앞 사람 계정을 지웠음(그 사이 관리자의 사용자 수정도 덮어씀)
         $newUser['id'] = $this->db->insert('users', $newUser);
-        
+        // ★ (2026-11-04 01:37, 54차 점검) 스토리지별 '신규회원 기본' 권한(default_permissions)을 새 계정에 넣음(관리자 만들기·회원가입과 같은 반복) —
+        //   종전엔 권한 줄을 하나도 만들지 않아, 신규회원에게 기본으로 보이게 한 스토리지가 SSO 로 처음 들어온 사람에게는 안 보였음(재현: 권한 줄 0개). 기존 계정·연결은 이 아래로 오지 않음
+        if ((int)$newUser['id'] > 0) {
+            foreach (($this->db->load('storages') ?: []) as $s) {
+                $sid = $s['id'] ?? 0;
+                if (!$sid) continue;
+                $defPerms = $s['default_permissions'] ?? [];
+                if (empty($defPerms) || !is_array($defPerms)) continue;
+                $this->db->insert('permissions', [
+                    'storage_id' => $sid,
+                    'user_id' => $newUser['id'],
+                    'can_visible' => (int)($defPerms['can_visible'] ?? 0),
+                    'can_visible_webdav' => (int)($defPerms['can_visible_webdav'] ?? 0),
+                    'can_read' => (int)($defPerms['can_read'] ?? 0),
+                    'can_download' => (int)($defPerms['can_download'] ?? 0),
+                    'can_write' => (int)($defPerms['can_write'] ?? 0),
+                    'can_delete' => (int)($defPerms['can_delete'] ?? 0),
+                    'can_share' => (int)($defPerms['can_share'] ?? 0),
+                ]);
+            }
+        }
+
         // 홈 폴더 생성
         if (defined('USER_FILES_ROOT')) {
             $homeDir = USER_FILES_ROOT . '/' . $username;
@@ -1059,6 +1170,16 @@ XML;
         $name = preg_replace('/[^a-zA-Z0-9_\-.]/', '', $name);
         return strtolower($name);
     }
+
+    /**
+     * ★ (2026-11-01 09:43, 38차 점검) 정리에서 '글자 지우기'만 뺀 값(@ 앞부분 + 소문자) — sanitizeUsername 결과와 다르면 글자가 지워진 것
+     */
+    private function usernameBase(string $name): string {
+        if (strpos($name, '@') !== false) {
+            $name = substr($name, 0, strpos($name, '@'));
+        }
+        return strtolower($name);
+    }
     
     // ===== HTTP 헬퍼 =====
     
@@ -1073,7 +1194,7 @@ XML;
             CURLOPT_SSL_VERIFYPEER => true,
         ]);
         $response = curl_exec($ch);
-        if (curl_errno($ch)) throw new Exception('HTTP 요청 실패: ' . curl_error($ch));
+        if (curl_errno($ch)) throw new Exception(__('sso_http_request_failed', 'HTTP 요청 실패: ') . curl_error($ch));   // ★ (2026-11-09 16:00, 59차 E) 영어 화면에서도 번역(한국어 문구는 그대로)
         curl_close($ch);
         return json_decode($response, true) ?: [];
     }
@@ -1089,7 +1210,7 @@ XML;
             CURLOPT_SSL_VERIFYPEER => true,
         ]);
         $response = curl_exec($ch);
-        if (curl_errno($ch)) throw new Exception('HTTP 요청 실패: ' . curl_error($ch));
+        if (curl_errno($ch)) throw new Exception(__('sso_http_request_failed', 'HTTP 요청 실패: ') . curl_error($ch));   // ★ (2026-11-09 16:00, 59차 E) 영어 화면에서도 번역(한국어 문구는 그대로)
         curl_close($ch);
         return json_decode($response, true) ?: [];
     }

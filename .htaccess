@@ -1,6 +1,61 @@
 # FileStation — PHP 업로드/실행 제한 해제
-php_value upload_max_filesize 10G
-php_value post_max_size 10G
-php_value memory_limit -1
-php_value max_execution_time 0
-php_value max_input_time -1
+# ★ (2026-11-01 09:42, 38차 점검) php_value 를 mod_php 일 때만 읽게 감쌈 — php_value 는 mod_php 전용 지시어라 PHP-FPM(proxy_fcgi)·mod_fcgid·CGI 로 돌리는
+#   Apache 에서는 "Invalid command 'php_value'" 로 사이트 전체가 500 이었음. 모듈 이름: PHP 8 = php_module, PHP 7 = php7_module
+#   FPM·FastCGI 에서는 이 값들을 PHP 쪽에서 정함 — php.ini 또는 이 폴더의 .user.ini 에 아래처럼 적음(.user.ini 는 PHP 가 읽음, '=' 형식):
+#     upload_max_filesize = 10G
+#     post_max_size = 10G
+#     memory_limit = -1
+#     max_execution_time = 0
+#     max_input_time = -1
+<IfModule php_module>
+    php_value upload_max_filesize 10G
+    php_value post_max_size 10G
+    php_value memory_limit -1
+    php_value max_execution_time 0
+    php_value max_input_time -1
+</IfModule>
+<IfModule php7_module>
+    php_value upload_max_filesize 10G
+    php_value post_max_size 10G
+    php_value memory_limit -1
+    php_value max_execution_time 0
+    php_value max_input_time -1
+</IfModule>
+
+# ★ (2026-11-01 10:18, 38차 점검 재검토) 아래는 '선택' 설정 — 기본은 꺼 둠(주석).
+#   이 파일에 Require·Header·CGIPassAuth 를 넣으면 Apache 설정의 AllowOverride 가 All(또는 AuthConfig·FileInfo 포함)이 아닐 때
+#   사이트 전체가 500 이 됨(실측: AllowOverride Options / Options FileInfo). 이 파일은 지금까지 php_value(Options)만 썼으므로 그 범위를 넘지 않게 함.
+#   서버의 FileStation 폴더가 'AllowOverride All' 이면 필요한 블록의 주석(#)을 풀어 쓰면 됨. IIS(web.config)·nginx(예제)는 이미 적용돼 있음.
+#
+# [선택 1] 문서·예제 파일 직접 받기 차단(README.md·ONLYOFFICE_SETUP.md·LICENSE·nginx.conf.example) — 필요: AuthConfig
+#   (README 에 버전·내부 경로·'그대로 둔 것' 목록이 있음. 화면은 이 파일들을 읽지 않음. 이 파일들을 웹 폴더에 두지 않는 것도 방법)
+#<FilesMatch "(?i)(\.md|\.example)$|^LICENSE$">
+#    Require all denied
+#</FilesMatch>
+#
+# [선택 2] 진입 파일이 아닌 루트 PHP 직접 실행 차단(config.php·lang.php·php_version_check.php·sync_cron.php) — 필요: AuthConfig
+#   (IIS·nginx 는 진입 PHP 만 허용. sync_cron.php 는 CLI 전용이라 웹에서 열 일이 없음)
+#<FilesMatch "(?i)^(config|lang|php_version_check|sync_cron)\.php$">
+#    Require all denied
+#</FilesMatch>
+#
+# [선택 3] 정적 파일(js·css·svg 등)에도 보안 헤더 — 필요: FileInfo, mod_headers (PHP 응답에는 index·api·share 가 이미 붙임)
+#<IfModule mod_headers.c>
+#    Header set X-Content-Type-Options "nosniff"
+#    Header set X-Frame-Options "SAMEORIGIN"
+#    Header set X-XSS-Protection "1; mode=block"
+#</IfModule>
+#
+# [선택 4] 화면 파일(js·css) 압축 전송 — 필요: FileInfo, mod_deflate  ★ (2026-11-13 16:54, 113차 DEF-6)
+#   (첫 화면이 압축 없이 약 6.4MB — app.js 만 3.4MB. 압축하면 몇 분의 일로 줄어 느린 회선·휴대폰 첫 열기가 빨라짐.
+#    서버 설정(httpd.conf)에서 이미 압축하고 있으면 필요 없음 — 개발자 도구 네트워크에서 app.js 응답의 Content-Encoding: gzip 으로 확인.
+#    js·css 파일만 대상으로 함: API(JSON)·파일 내려받기·진행 상황을 이어 보내는 응답은 압축하면 끝날 때까지 모아 보내게 되므로 넣지 않음)
+#<IfModule mod_deflate.c>
+#    <FilesMatch "\.(js|css)$">
+#        SetOutputFilter DEFLATE
+#    </FilesMatch>
+#</IfModule>
+#
+# [참고] PHP-FPM·FastCGI 로 돌리면 WebDAV 로그인(Authorization 헤더)이 PHP 에 안 닿음 → Apache 서버 설정(이 파일이 아니라 httpd.conf 의
+#   <Directory>)에 'CGIPassAuth On'(2.4.13+)을 넣음. mod_php 에선 넣지 말 것 — mod_php 에서도 Authorization 헤더가 생겨 OnlyOffice
+#   내려받기·콜백이 다른 인증 경로를 타게 됨(실측)

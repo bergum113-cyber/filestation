@@ -121,6 +121,8 @@
         STATE.pending.forEach((info, id) => {
             // URL 축약 (쿼리스트링 길이 제한)
             let url = info.url;
+            // ★ (2026-11-02 08:59, 41차 점검) 진단을 켜면 이 url 이 session_debug.log 에 그대로 남아 압축 암호(&password=) 등이 원문으로 쌓였음 → 보내기 전에 비밀 값만 *** 로 가림(서버 ENTRY 기록 쪽은 api.php 몫)
+            url = String(url).replace(/([?&](?:password|pass|token|key|csrf_token)=)[^&#]*/gi, '$1***');
             if (url.length > 200) url = url.substring(0, 200) + '...';
             arr.push({
                 id: id,
@@ -1819,6 +1821,10 @@ class FSAudioPlayer {
                 if (evName === 'canplay') {
                     if (this._trkReadyLogged) return;
                     this._trkReadyLogged = true;
+                    // ★ (2026-11-10 23:01, 68차, 펜닐 제보 — 아이폰에서 다른 탭으로 가 있으면 잠금화면·제어센터 썸네일이 빔) 로그: 다른 탭(화면 숨김)에서 시작한 곡 중
+                    //   표지를 미리 받아 두지 않은 곡만 비었고(18:42 영감탱), 미리 받아 둔 곡은 나왔음(18:46). 09-23 부터 숨김 중엔 재생목록 표지를 받지 않아
+                    //   다음 곡 표지가 준비돼 있지 않았음 → 지금 곡이 재생 가능해진 뒤(대역폭 다툼 없음) 다음 곡 표지 한 장만 미리 받아 둠
+                    this._prefetchNextCover();
                 }
                 // ★ (2026-09-04) 실제 소리가 나기 시작한 시점 표시 — 아래 waiting/stalled 게이트용.
                 if (evName === 'playing') this._trkPlayingSeen = true;
@@ -2019,7 +2025,7 @@ class FSAudioPlayer {
                     const _nm = String((_tr && (_tr.fullName || _tr.path || _tr.name)) || '');
                     const _dot = _nm.lastIndexOf('.');
                     const _ex = String((_tr && _tr.ext) || ((_dot > 0 && _dot < _nm.length - 1) ? _nm.slice(_dot + 1) : '')).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
-                    const _ko = (document.documentElement.lang || '').indexOf('ko') === 0 || String(navigator.language || '').indexOf('ko') === 0;
+                    const _ko = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
                     const _code = a.error ? a.error.code : 0;   // 3 = 디코딩 실패, 4 = 형식 미지원
                     this.$.meta.textContent = '⚠ ' + (_code === 2
                         ? (_ko ? '네트워크 오류로 재생하지 못했습니다' : 'Network error — could not play')
@@ -2038,18 +2044,25 @@ class FSAudioPlayer {
             // 플레이리스트에 다른 곡이 있으면 다음으로 (없으면 그냥 정지)
             // 에러로 인한 자동 스킵이므로 다음 곡은 자동 재생
             if (this.playlist.length > 1) {
+                const _errSeq = this._loadTrackSeq;   // ★ (2026-11-01 09:44, 38차 점검) 0.5초 안에 사용자가 다른 곡(또는 같은 곡)을 고르면 타이머가 그 곡을 건너뛰었음 —
+                //   오류 때의 곡 불러오기 순번을 잡아 두고, 그 사이 새로 불러왔으면 넘기지 않음(fs-audio-player.js 와 같음)
                 setTimeout(() => {
                     if (this._destroyed) return;
+                    if (this._loadTrackSeq !== _errSeq) return;
                     // next 내부는 audio.paused로 autoplay 판단하는데
                     // 에러 상태는 paused=true이므로 수동으로 재생 시도
+                    // ★ (2026-11-03 21:37, 52차 점검) ⏮ 로 온 곡이 재생 불가면 앞쪽으로 넘김 — 종전엔 늘 다음 곡이라 ⏮ 를 눌러도 그 곡을 지나 앞으로 못 갔음(03 → ⏮ → 02 오류 → 다시 03, 재현)
+                    const _dir = this._loadDir === -1 ? -1 : 1;
                     let idx;
                     if (this.shuffle) {
                         const pos = this._shuffleOrder.indexOf(this.currentIndex);
-                        idx = this._shuffleOrder[(pos + 1) % this._shuffleOrder.length];
+                        const _sl = this._shuffleOrder.length;
+                        idx = this._shuffleOrder[(pos + _dir + _sl) % _sl];
                     } else {
-                        idx = (this.currentIndex + 1) % this.playlist.length;
+                        idx = (this.currentIndex + _dir + this.playlist.length) % this.playlist.length;
                     }
                     // autoplay=true로 강제 재생 시도 (에러 시엔 항상 다음 곡 재생)
+                    this._skipDir = _dir;   // ★ 52차 — 연속으로 재생 못 하면 같은 방향 유지
                     this._loadTrack(idx, true);
                 }, 500);  // 짧은 지연 후 다음 곡 (UX 고려)
             }
@@ -2058,6 +2071,7 @@ class FSAudioPlayer {
         // 재생 성공적으로 시작되면 에러 카운터 리셋
         a.addEventListener('playing', () => {
             this._errorSkipCount = 0;
+            this._skipDir = 0;   // ★ 52차 — 재생이 시작되면 넘김 방향 초기화
             // ★ 미디어 세션 재획득은 '재생이 확립된 뒤'에만 한다 (트랙당 1회).
             //   곡 전환 시점에 하면 세션을 비운 순간에 play 이벤트가 끼어들어
             //   metadata 없는 상태로 재생이 시작된다(로그에서 meta=false/art=0 확인).
@@ -2094,20 +2108,23 @@ class FSAudioPlayer {
             //   (펜닐의 "움직이는데 취소된다" 증상, 09-18 로그의 ms_seekto 0건과 일치).
             //   이제 하나가 실패해도 나머지는 살아남는다.
             const _msHandlers = {
-                play: () => this.togglePlay(),
-                pause: () => this.togglePlay(),
+                play: () => { if (this.audio.paused) this.togglePlay(); }, // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-1) 잠금화면 '재생'·'일시정지'를 요청대로 — 종전엔 둘 다 togglePlay(뒤집기)라 이미 멈춘 상태에서 '일시정지'가 오면 다시 재생, 재생 중 '재생'이 오면 멈췄음(재현, 원본부터). 지금 맞게 되는 경우는 결과 같음
+                pause: () => { if (!this.audio.paused) this.togglePlay(); },
                 previoustrack: () => this.prev(),
                 nexttrack: () => this.next(),
                 seekbackward: (details) => {
+                    if (this._trkSwitching) return;   // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-2) 곡을 넘기는 중(새 곡 길이를 받기 전)에 늦게 온 잠금화면 탐색은 버림 — 앞 곡 위치가 새 곡에 적용돼 다음 곡이 30초쯤부터 '이어 듣기'처럼 시작했음(재현, 원본부터). 음악은 늘 처음부터
                     this.audio.currentTime = Math.max(0, this.audio.currentTime - ((details && details.seekOffset) || 10));
                 },
                 seekforward: (details) => {
+                    if (this._trkSwitching) return;   // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-2) 곡을 넘기는 중(새 곡 길이를 받기 전)에 늦게 온 잠금화면 탐색은 버림 — 앞 곡 위치가 새 곡에 적용돼 다음 곡이 30초쯤부터 '이어 듣기'처럼 시작했음(재현, 원본부터). 음악은 늘 처음부터
                     // ★ (2026-10-12) 길이를 아직 모를 때(NaN) '|| 0' 이 상한 0 이 되어 처음으로 튀었다 — 길이가 유한할 때만 상한(동영상 방향키와 같게)
                     const _adur = this.audio.duration;
                     const _atgt = this.audio.currentTime + ((details && details.seekOffset) || 10);
                     this.audio.currentTime = (isFinite(_adur) && _adur > 0) ? Math.min(_adur, _atgt) : _atgt;
                 },
                 seekto: (details) => {
+                    if (this._trkSwitching) return;   // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-2) 곡을 넘기는 중(새 곡 길이를 받기 전)에 늦게 온 잠금화면 탐색은 버림 — 앞 곡 위치가 새 곡에 적용돼 다음 곡이 30초쯤부터 '이어 듣기'처럼 시작했음(재현, 원본부터). 음악은 늘 처음부터
                     if (!details || details.seekTime == null) return;
                     // ★ (2026-09-23) 끝까지 끌면 '곡이 끝난 것'으로 처리한다.
                     //   [원인] iOS 가 곡 길이를 처음에 틀리게 계산하고 재생 중에 바로잡는 경우가 있다
@@ -2399,7 +2416,10 @@ class FSAudioPlayer {
 
     // ── Track loading ──
     _loadTrack(idx, autoplay) {
+        // ★ (2026-11-03 22:06, 52차 재검토) 넘김 방향을 이 곡의 값으로 옮기고 바로 비움 — 종전엔 재생이 시작돼야만 지워져, 멈춘 채 ⏮ 를 누른 뒤 목록에서 재생 못 하는 곡을 고르면 앞 곡으로 넘어갔음(검토 재현)
+        this._loadDir = this._skipDir === -1 ? -1 : 1; this._skipDir = 0;
         if (idx < 0 || idx >= this.playlist.length) return;
+        this._loadTrackSeq = (this._loadTrackSeq || 0) + 1;   // ★ (2026-11-01 09:44, 38차 점검) 곡 불러오기 순번(오류 뒤 자동 넘김이 사용자가 고른 곡을 건너뛰지 않게)
         // ★ (2026-08-17) 연속 스킵 계측 — 잠금화면에서 빠르게 곡을 넘길 때 썸네일이 안 뜨는
         //   증상(펜닐님 보고)의 재현 조건을 남긴다. 직전 전환과의 간격·연속 횟수를 기록해
         //   "얼마나 빨리 넘겼을 때 깨지는가"를 로그만으로 판별할 수 있게 한다.
@@ -2452,7 +2472,9 @@ class FSAudioPlayer {
             netType: (navigator.connection && navigator.connection.effectiveType) || null,
             downlink: (navigator.connection && navigator.connection.downlink) || null
         });
-        this._selfPause = true;
+        // ★ (2026-11-01 01:49, 36차 전체 점검) 이미 멈춘 요소는 src 를 바꿔도 pause 이벤트가 안 나서
+        //   _selfPause 가 true 로 남아 다음 외부 정지를 '자체 정지'로 잘못 분류했다 → 재생 중일 때만 세운다.
+        if (!this.audio.paused) this._selfPause = true;
         // ★ (2026-09-04) 곡 전환 지연 원인 규명용 계측 — 시각을 지역 변수에 모으기만 한다.
         //   [배경] 실측상 곡 전환마다 loadstart 까지 약 670ms 가 붙는다(125곡 중 93곡이
         //   600~800ms 한 봉우리 = 회선 변동이 아니라 고정 지연). 다운로드 구간은 200~1300ms 로
@@ -2464,6 +2486,8 @@ class FSAudioPlayer {
         //   그래서 여기서는 **모으기만** 하고 전송은 아래 임계 구간이 끝난 뒤 1회만 한다.
         const _phT0 = this._trkStartAt || Date.now();
         const _ph = { srcBefore: Date.now() - _phT0 };
+        this._trkSwitching = true;   // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-2) 위 탐색 버림 표시 — 새 곡 길이를 받으면(또는 3초 뒤) 풂
+        { const _au = this.audio; const _clr = () => { this._trkSwitching = false; }; _au.addEventListener('loadedmetadata', _clr, { once: true }); clearTimeout(this._trkSwitchT); this._trkSwitchT = setTimeout(_clr, 3000); }
         this.audio.src = track.url;
         _ph.srcAfter = Date.now() - _phT0;
         // 재생 중이면 마퀴, 아니면 일반 텍스트
@@ -2606,6 +2630,9 @@ class FSAudioPlayer {
         const lines = text.split(/\r?\n/);
         const result = [];
         const timeTagRe = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+        // ★ (2026-11-02 14:34, 44차 점검) LRC 표준 [offset:±ms] 를 메타 줄로 건너뛰어 그런 파일은 가사가 고정으로 어긋났음 → 읽어서 모든 시각에서 ms/1000 을 뺌(양수면 가사를 앞당김, 0 아래는 0)
+        const _offM = text.match(/^\s*\[offset:\s*([+-]?\d+)\s*\]/im);
+        const _off = _offM ? parseInt(_offM[1], 10) / 1000 : 0;
         
         for (const line of lines) {
             // 메타데이터 라인 (시간 태그 없는 [ti:], [ar:] 등) 건너뜀
@@ -2627,7 +2654,7 @@ class FSAudioPlayer {
                 const ms = m[3] ? parseInt(m[3].padEnd(3, '0').substring(0, 3), 10) : 0;
                 const time = min * 60 + sec + ms / 1000;
                 if (time >= 0 && time < 36000) {  // 10시간 미만
-                    result.push({ time, text: lyricText });
+                    result.push({ time: _off ? Math.max(0, time - _off) : time, text: lyricText });   // ★ (2026-11-02 14:34, 44차 점검) offset 반영
                 }
             }
         }
@@ -3056,12 +3083,44 @@ class FSAudioPlayer {
         return undefined;
     }
     
+    // ★ (2026-11-02 10:26, 42차 점검) 커버 메모리 캐시(_coverBlobCache)에 상한이 없어 곡·재생목록을 넘길수록 원본 크기 커버 Blob 이
+    //   플레이어를 닫을 때까지 쌓였음(곡 1000개 ≈ 300MB) → 최근 사용 순 200개 상한, 밀려나는 항목은 revokeObjectURL.
+    //   단 폴더 커버(this.cover)·지금 곡 커버(_activeCoverUrl)·화면(플레이어 틀 안 img·onerror 글자)에 쓰이는 주소는 남김.
+    _coverCacheTouch(originalUrl) {
+        const v = this._coverBlobCache.get(originalUrl);
+        if (v === undefined) return v;
+        this._coverBlobCache.delete(originalUrl);
+        this._coverBlobCache.set(originalUrl, v);
+        return v;
+    }
+
+    _coverCachePut(originalUrl, blobUrl) {
+        const cache = this._coverBlobCache;
+        const MAX = 200;
+        if (cache.has(originalUrl)) {
+            const old = cache.get(originalUrl);
+            cache.delete(originalUrl);
+            if (old && old !== blobUrl) { try { URL.revokeObjectURL(old); } catch (e) {} }
+        }
+        cache.set(originalUrl, blobUrl);
+        if (cache.size <= MAX) return;
+        let html = null;
+        try { html = this.container ? this.container.innerHTML : ''; } catch (e) { html = ''; }
+        for (const [k, v] of cache) {
+            if (cache.size <= MAX) break;
+            if (k === originalUrl || k === this.cover || v === this._activeCoverUrl) continue;
+            if (html && v && html.indexOf(v) !== -1) continue;
+            cache.delete(k);
+            try { URL.revokeObjectURL(v); } catch (e) {}
+        }
+    }
+
     async _getCachedCoverUrl(originalUrl) {
         if (!originalUrl) return null;
         if (this._destroyed) return originalUrl;
         // 1. 메모리 캐시 hit
         if (this._coverBlobCache.has(originalUrl)) {
-            return this._coverBlobCache.get(originalUrl);
+            return this._coverCacheTouch(originalUrl);   // ★ (2026-11-02 10:26, 42차 점검) 최근 사용 순 갱신 — _coverCachePut 주석
         }
         // 2. 진행 중인 fetch 있으면 그 결과 기다림
         if (this._coverBlobPending.has(originalUrl)) {
@@ -3096,21 +3155,29 @@ class FSAudioPlayer {
                             ms: Date.now() - _cvAt,
                             ios: !!this._isIOS,
                             sinceTrackMs: this._trkStartAt ? (Date.now() - this._trkStartAt) : null,
-                            ok: !!(res && res.ok)
+                            ok: !!(res && res.ok),
+                            // ★ (2026-11-10 23:01, 68차) 진단 — 그림 형식·크기, 다음 곡 미리 받기였는지, 화면 숨김 중이었는지
+                            ct: (res && res.headers) ? (res.headers.get('content-type') || null) : null,
+                            len: (res && res.headers) ? (parseInt(res.headers.get('content-length') || '0', 10) || null) : null,
+                            pre: originalUrl === this._coverPrefetchUrl,   // (68차) 아래에서 한 번 쓰면 지움 — 같은 주소를 나중에 다시 받을 때 잘못 표시되지 않게
+                            hid: (typeof document !== 'undefined' && document.visibilityState === 'hidden')
                         }, 0);
+                        if (originalUrl === this._coverPrefetchUrl) this._coverPrefetchUrl = null;
                     } catch (e) {}
-                    if (!res.ok) {
+                    if (!res.ok || res.status === 204) {   // ★ (2026-11-01 09:44, 38차 점검) fetch 의 ok 는 204 도 참이라 '커버 없음·권한 실패(204)'를 빈 그림으로
+                        //   메모리·IndexedDB(30일)에 캐시해, 비밀번호를 다시 넣거나 커버가 생겨도 안 나왔음 — 204 는 캐시하지 않음
                         // 404/204 등 — 원본 URL 그대로 반환 (브라우저가 onerror 처리하도록)
                         return originalUrl;
                     }
                     blob = await res.blob();
+                    if (!blob || blob.size === 0) return originalUrl;   // ★ (2026-11-01 09:44, 38차 점검) 빈 응답도 캐시하지 않음
                     // IDB 저장 (비동기, 결과 안 기다림 — 응답 지연 방지)
                     try { FSCoverCacheDB.set(originalUrl, blob); } catch (e) {}
                 }
                 
                 if (this._destroyed) return originalUrl;
                 const blobUrl = URL.createObjectURL(blob);
-                this._coverBlobCache.set(originalUrl, blobUrl);
+                this._coverCachePut(originalUrl, blobUrl);   // ★ (2026-11-02 10:26, 42차 점검) 상한 있는 넣기 — _coverCachePut 주석
                 return blobUrl;
             } catch (e) {
                 // 네트워크 에러 등 - 원본 URL 그대로 반환 (fallback)
@@ -3275,10 +3342,53 @@ class FSAudioPlayer {
         } else {
             idx = (this.currentIndex - 1 + this.playlist.length) % this.playlist.length;
         }
+        this._skipDir = -1;   // ★ (2026-11-03 21:37, 52차 점검) 재생 못 하는 곡이면 같은 방향(앞)으로 넘김 — 아래 오류 처리 참고
         this._loadTrack(idx, !this.audio.paused);
+    }
+    // ★ (2026-11-10 23:01, 68차) 다음 곡 표지 한 장 미리 받기 — 위 canplay ★ 참고. 곡이 넘어갈 때와 같은 순서로 다음 곡을 고름
+    //   (셔플: 셔플 순서에서 아직 안 들은 다음 곡, 없으면 바로 다음 / 아니면 다음 번호). 이미 메모리에 있거나 표지 주소가 없으면 아무것도 안 함
+    _prefetchNextCover() {
+        try {
+            if (this._destroyed || !this.playlist || this.playlist.length < 2) return;
+            if (this.loop === 'one') return;   // ★ (2026-11-10 23:19, 68차 확인 반영) 한 곡 반복이면 다음 곡으로 안 넘어감
+            let idx = -1;
+            if (this.shuffle && this._shuffleOrder && this._shuffleOrder.length) {
+                const n = this._shuffleOrder.length;
+                const pos = this._shuffleOrder.indexOf(this.currentIndex);
+                if (pos !== -1) {
+                    idx = this._shuffleOrder[(pos + 1) % n];
+                    // ★ (2026-11-10 23:19, 68차 확인 반영) '안 들은 곡' 고르기는 반복 끔(_onEnded 'none')일 때만 — next()·반복 'all' 은 순서[pos+1] 로 넘어감
+                    if (this.loop !== 'all' && this._shufflePlayed && this._shufflePlayed.size) {
+                        let _pfFound = false;
+                        for (let k = 1; k <= n; k++) {
+                            const cand = this._shuffleOrder[(pos + k) % n];
+                            if (cand !== this.currentIndex && !this._shufflePlayed.has(cand)) { idx = cand; _pfFound = true; break; }
+                        }
+                        // ★ (2026-11-11 01:12, 70차) 반복 끔 셔플에서 안 들은 곡이 없으면(마지막 곡) 다음 곡이 없음 — 쓰지 않을 표지를 받던 것(68차 기록)
+                        if (!_pfFound && this._shufflePlayed.size >= this.playlist.length - 1) return;
+                    }
+                }
+            } else {
+                if (this.loop !== 'all' && this.currentIndex >= this.playlist.length - 1) return;   // ★ (2026-11-10 23:19, 68차 확인 반영) 반복 끔의 마지막 곡이면 다음 곡 없음
+                idx = (this.currentIndex + 1) % this.playlist.length;
+            }
+            const t = this.playlist[idx];
+            if (!t || !t.coverApiUrl || idx === this.currentIndex) return;
+            if (this._coverBlobCache.has(t.coverApiUrl) || this._coverBlobPending.has(t.coverApiUrl)) return;
+            // ★ (2026-11-10 23:19, 68차 확인 반영) 표지가 없던 주소(204 등)는 이 플레이어에서 다시 미리 받지 않음(곡마다 헛요청 방지 — 곡이 실제로 시작되면 종전대로 받음)
+            if (!this._coverPrefetchNo) this._coverPrefetchNo = new Set();
+            if (this._coverPrefetchNo.has(t.coverApiUrl)) return;
+            const url = t.coverApiUrl;
+            this._coverPrefetchUrl = url;
+            this._getCachedCoverUrl(url).then((r) => {
+                if (r === url && this._coverPrefetchNo) this._coverPrefetchNo.add(url);
+                if (this._coverPrefetchUrl === url) this._coverPrefetchUrl = null;   // ★ (2026-11-11 01:12, 70차) 네트워크 오류로 로그 없이 끝나도 표시를 지움 — 다음 요청 로그의 pre 가 잘못 찍히던 것(68차 기록)
+            }).catch(() => { if (this._coverPrefetchUrl === url) this._coverPrefetchUrl = null; });
+        } catch (e) {}
     }
     next() {
         if (!this.playlist.length) return;
+        this._skipDir = 1;
         let idx;
         if (this.shuffle) {
             const pos = this._shuffleOrder.indexOf(this.currentIndex);
@@ -3309,10 +3419,18 @@ class FSAudioPlayer {
         } else {
             // 'none': play next unless last
             if (this.shuffle) {
+                // ★ (2026-11-01 11:34, 39차 점검) 셔플 순서에서의 위치(pos < 끝)로만 판단해, 순서 중간에서 시작하면
+                //   앞쪽 곡을 안 듣고 멈췄음(첫 곡이 순서 끝이면 1곡만). → '들은 곡' 기록으로 판단: 아직 안 들은 곡이
+                //   있으면 순서를 돌아가며 그 곡으로, 전부 들었으면 멈춤.
+                if (!this._shufflePlayed) this._shufflePlayed = new Set();
+                this._shufflePlayed.add(this.currentIndex);
+                const n = this._shuffleOrder.length;
                 const pos = this._shuffleOrder.indexOf(this.currentIndex);
-                if (pos < this._shuffleOrder.length - 1) {
-                    const nextIdx = this._shuffleOrder[pos + 1];
-                    this._loadTrack(nextIdx, true);
+                if (this._shufflePlayed.size < this.playlist.length) {
+                    for (let k = 1; k <= n; k++) {
+                        const cand = this._shuffleOrder[(pos + k + n) % n];
+                        if (!this._shufflePlayed.has(cand)) { this._loadTrack(cand, true); break; }
+                    }
                 }
             } else {
                 if (this.currentIndex < this.playlist.length - 1) {
@@ -3567,7 +3685,12 @@ class FSAudioPlayer {
         // 재생 경로(next/prev/onEnded)는 그대로 두고 여기서만 재셔플 → 저위험.
         if (!this.shuffle) return;
         if (!this._shufflePlayed) this._shufflePlayed = new Set();
+        // ★ (2026-11-01 11:34, 39차 점검) 반복 끔이면 마지막 곡을 불러오는 순간 다시 섞여 곡 끝에서 멈추지 않고
+        //   계속 재생됐음 → 반복 끔에서는 이번 추가로 한 바퀴가 찬 경우 다시 섞지 않음(곡 끝 _onEnded 가 멈춤).
+        //   이미 다 찬 상태에서 새로 고른 곡이면 새 바퀴로 시작.
+        const _wasFull = this.playlist.length > 0 && this._shufflePlayed.size >= this.playlist.length;
         this._shufflePlayed.add(idx);
+        if (this.loop === 'none' && !_wasFull) { this._saveShuffleOrder(); return; }
         if (this.playlist.length > 0 && this._shufflePlayed.size >= this.playlist.length) {
             // 한 바퀴 완주 → 새로 섞기 (현재 곡은 새 사이클의 '이미 들은 곡'으로 표시해 즉시반복 방지)
             this._buildShuffleOrder();
@@ -4695,7 +4818,10 @@ class FSAudioPlayer {
     
     _showVisModeLabel() {
         if (!this.$ || !this.$.visualizer) return;
-        const labels = { bars: '막대', mirror: '미러', wave: '파형', ripple: '물결', peak: '피크', vu: 'VU', vuled: 'VU LED' };
+        // ★ (2026-10-31 12:03, 34차 전체 점검) 영어 화면에서도 한국어였음 → 페이지 언어로
+        const _visKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');
+        const labels = _visKo ? { bars: '막대', mirror: '미러', wave: '파형', ripple: '물결', peak: '피크', vu: 'VU', vuled: 'VU LED' }
+                              : { bars: 'Bars', mirror: 'Mirror', wave: 'Wave', ripple: 'Ripple', peak: 'Peak', vu: 'VU', vuled: 'VU LED' };
         const mode = this._visModes[this._visModeIdx];
         const label = labels[mode] || mode;
         // 기존 라벨 제거
@@ -4749,19 +4875,20 @@ class FSAudioPlayer {
         if (!('wakeLock' in navigator)) return;  // 미지원 브라우저 (iOS 16 미만 등)
         try {
             if (this._wakeLock) return;  // 이미 획득됨
-            this._wakeLock = await navigator.wakeLock.request('screen');
-            // Wake Lock이 시스템에 의해 풀릴 수 있음 (탭 숨김, 최소화 등)
-            this._wakeLock.addEventListener('release', () => {
-                this._wakeLock = null;
-            });
             // 탭 복귀 시 재획득
-            if (!this._wakeLockVisHandler) {
+            // ★ (2026-11-01 01:10, 35차 전체 점검) 종전엔 request 가 성공한 뒤에만 등록해, 화면이 꺼진(문서 숨김) 동안 곡이 넘어가면
+            //   pause/ended 의 _releaseWakeLock 이 핸들러를 떼고 다음 play 의 request 는 거절돼 다시 등록되지 않아 그 뒤로 잠금이 안 잡혔음 →
+            //   요청 결과와 상관없이 첫 시도 때 등록(재생 중일 때만 동작, 정지·파기 상태면 등록 안 함)
+            if (!this._wakeLockVisHandler && !this._destroyed && !this.audio.paused) {
                 this._wakeLockVisHandler = async () => {
                     if (document.visibilityState === 'visible' && 
                         !this.audio.paused && 
                         !this._wakeLock) {
                         try {
-                            this._wakeLock = await navigator.wakeLock.request('screen');
+                            // ★ (2026-10-31 14:09, 34차 후속 개선) 탭 복귀 재획득도 기다리는 사이 정지·파기되면 받은 잠금을 바로 풂(첫 획득과 같게)
+                            const _wl2 = await navigator.wakeLock.request('screen');
+                            if (this._destroyed || this.audio.paused || this._wakeLock) { try { _wl2.release(); } catch(e) {} return; }
+                            this._wakeLock = _wl2;
                             this._wakeLock.addEventListener('release', () => {
                                 this._wakeLock = null;
                             });
@@ -4770,6 +4897,18 @@ class FSAudioPlayer {
                 };
                 document.addEventListener('visibilitychange', this._wakeLockVisHandler);
             }
+            // ★ (2026-10-31 13:34, 34차 후속 개선) request 를 기다리는 동안 정지·오류·destroy 가 오면 _releaseWakeLock 이
+            //   풀 것이 없어 잠금이 남고 리스너도 새로 붙던 문제 — await 뒤 정지/파기 상태면 받은 잠금을 바로 풀고 끝냄
+            const _wl = await navigator.wakeLock.request('screen');
+            if (this._destroyed || this.audio.paused || this._wakeLock) {
+                try { _wl.release(); } catch(e) {}
+                return;
+            }
+            this._wakeLock = _wl;
+            // Wake Lock이 시스템에 의해 풀릴 수 있음 (탭 숨김, 최소화 등)
+            this._wakeLock.addEventListener('release', () => {
+                this._wakeLock = null;
+            });
         } catch(e) {
             // Wake Lock 요청 실패 (배터리 세이버 모드, 권한 거부 등) - 조용히 무시
         }
@@ -5030,7 +5169,7 @@ class FSAudioPlayer {
     //   현재 곡 커버(플레이어·잠금화면)는 이 대기열을 거치지 않는다 — 종전 그대로 즉시.
     _plCoverLoad(imgEl, origUrl) {
         if (!imgEl || !origUrl) return;
-        if (this._coverBlobCache.has(origUrl)) { imgEl.src = this._coverBlobCache.get(origUrl); return; }
+        if (this._coverBlobCache.has(origUrl)) { imgEl.src = this._coverCacheTouch(origUrl); return; }   // ★ (2026-11-02 10:26, 42차 점검) 최근 사용 순 갱신
         if (!this._plCoverQ) {
             this._plCoverQ = [];
             this._plCoverActive = 0;
@@ -5138,6 +5277,8 @@ class FSAudioPlayer {
             const t = this.playlist[i];
             const li = document.createElement('li');
             li.className = 'fap-pl-item' + (i === this.currentIndex ? ' active' : '') + (i === this.currentIndex && !this.audio.paused ? ' playing' : '');
+            // ★ (2026-10-31 13:46, 34차 후속 개선) 범위가 바뀌면 li 를 새로 만드는데 검색 강조를 다시 붙이지 않아 한 칸만 굴려도 강조가 사라졌음 — 지금 검색 일치 곡이면 붙임
+            if (this._plSearchPos >= 0 && this._plSearchMatches && i === this._plSearchMatches[this._plSearchPos]) li.classList.add('fap-pl-search-hit');
             li.dataset.index = i;
             li.style.position = 'absolute';
             li.style.top = (i * this._VS_ITEM_H) + 'px';
@@ -5205,10 +5346,15 @@ class FSAudioPlayer {
         if (!list) return;
         
         // 레이아웃이 아직 계산 안 됐으면 다음 프레임에 재시도 (초기 로드 대응)
+        // ★ (2026-11-04 01:42, 54차 점검) 대기 중 재시도는 하나만(가장 최근 idx) 두고, 플레이어가 파기됐거나 목록이 문서에서 빠졌으면 멈춤 — 종전엔 높이 0 인 동안
+        //   곡을 넘길 때마다 매 프레임 반복이 하나씩 늘었고(재현: 휴대폰 가로 공유 음악 60→120→…→300회/초), 닫힌 플레이어도 끝없이 붙잡았음. 높이가 생기면 바로 스크롤하는 동작은 그대로
         if (!list.clientHeight) {
-            requestAnimationFrame(() => this._vsScrollToIndex(idx));
+            if (this._destroyed || !list.isConnected) return;
+            this._vsScrollWant = idx;
+            if (!this._vsScrollRaf) this._vsScrollRaf = requestAnimationFrame(() => { this._vsScrollRaf = 0; this._vsScrollToIndex(this._vsScrollWant); });
             return;
         }
+        if (this._vsScrollRaf) { cancelAnimationFrame(this._vsScrollRaf); this._vsScrollRaf = 0; }   // ★ (2026-11-04 01:42, 54차 점검) 바로 스크롤했으면 남은 재시도(옛 idx)는 버림
         
         const itemTop = idx * this._VS_ITEM_H;
         const viewH = list.clientHeight;
@@ -6467,7 +6613,7 @@ const App = {
                     if (this.currentStorage && !this.isSearchMode) {
                         const _visFl = document.getElementById('file-list');
                         const _visScroll = _visFl ? _visFl.scrollTop : 0;
-                        const _visP = this.loadFiles && this.loadFiles(false);
+                        const _visP = this.loadFiles && this.loadFiles(false, { keepOnFail: true });   // ★ (2026-11-13 01:31, 108차 SLOW-4) 자동 갱신만 — 연결 실패·시간 초과면 지금 목록을 그대로 둠(loadFiles)
                         if (_visScroll > 0) {
                             Promise.resolve(_visP).then(() => {
                                 requestAnimationFrame(() => {
@@ -6481,6 +6627,29 @@ const App = {
                     this._debugLog('visibility_auto_refresh_loadFiles_error', String(e));
                 }
                 this._lastRefresh = Date.now();
+            }
+        });
+        // ★ (2026-11-13 01:31, 108차 SLOW-1) 회선이 돌아오면(online) 끊김으로 다 못 받은 스토리지 목록을 한 번 더 — 종전엔 회선이 돌아와도 '로딩 중...' 그대로였음(재현)
+        window.addEventListener('online', () => {
+            if (this.user && this._storagesLoadFailed) { this._storagesLoadFailed = false; this.loadStorages(); }
+        });
+        // ★ (2026-11-13 01:31, 108차 SLOW-4) 회선이 돌아오면(online) 연결 실패로 끝난 탭 복귀 자동 갱신을 한 번 더 — 종전엔 회선이 돌아와도 갱신하지 않았음(재현)
+        window.addEventListener('online', () => {
+            if (!this._visRefreshFailed) return;
+            this._visRefreshFailed = false;
+            if (this.user && this.currentStorage && !this.isSearchMode && !this.boardInlineMode) {
+                // ★ (2026-11-13 07:59, 109차 재검토 RGR25-2) 탭 복귀 갱신(위)과 같게 스크롤 위치를 잡아 두었다가 되돌림 — 종전(108차)엔 online 재갱신이 목록을 맨 위로 올렸음(재현: 300 → 0)
+                const _onFl = document.getElementById('file-list');
+                const _onScroll = _onFl ? _onFl.scrollTop : 0;
+                const _onP = this.loadFiles(false, { keepOnFail: true });
+                if (_onScroll > 0) {
+                    Promise.resolve(_onP).then(() => {
+                        requestAnimationFrame(() => {
+                            const _onFl2 = document.getElementById('file-list');
+                            if (_onFl2) _onFl2.scrollTop = _onScroll;
+                        });
+                    });
+                }
             }
         });
         
@@ -6511,11 +6680,12 @@ const App = {
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('sso_login') === 'success') {
             window.history.replaceState({}, '', window.location.pathname);
-            await this.checkAuth();
+            if (!this.user) await this.checkAuth();   // ★ (2026-11-04 01:39, 54차 점검) 위 checkAuth 로 이미 로그인됐으면 다시 안 부름 — 종전엔 SSO 복귀 때 showMain·공지·설정 불러오기가 통째로 두 번 돌아 첫 화면 요청이 두 배였음(재현: me 2·storages 2·notice_active 2)
         }
         if (urlParams.get('sso_error')) {
             // ★ (2026-10-29 10:40, 20차 점검) get() 이 이미 풀어 준 값 — 한 번 더 풀다 '%' 가 있으면 URIError 로 초기화 전체가 멈췄음(재현). 두 번 인코딩된 옛 형식만 더 풂
-            let _ssoErr = urlParams.get('sso_error'); try { _ssoErr = decodeURIComponent(_ssoErr); } catch (e) {}
+            // ★ (2026-11-17 14:00, 326차) 주소의 글은 보이지 않고 서버가 세션으로 넘긴 문구(window.FS_SSO_ERROR)만 — 없으면 정해진 문구(남이 만든 링크로 가짜 안내를 못 띄우게)
+            const _ssoErr = (typeof window.FS_SSO_ERROR === 'string' && window.FS_SSO_ERROR !== '') ? window.FS_SSO_ERROR : t('sso_auth_failed', 'SSO 인증에 실패했습니다.');
             this.toast(_ssoErr, 'error');
             window.history.replaceState({}, '', window.location.pathname);
         }
@@ -6554,6 +6724,7 @@ const App = {
         
         // 브라우저 뒤로가기/앞으로가기 처리
         window.addEventListener('popstate', (e) => {
+            try { this.hideContextMenu(); } catch (_) {}   // ★ (2026-11-12 01:52, 90차 MOB-2) 길게 누르기 메뉴를 연 채 '뒤로' 하면 메뉴가 남아, 앞 폴더 파일에 삭제·공유가 되고 '이름 바꾸기'는 반응이 없었음(재현) — 메뉴만 닫음(모달·사이드바는 README 1486 결정 그대로)
             // ★ 디버그: popstate 발생 시점 + state 내용
             this._debugLog && this._debugLog('popstate', {
                 hasUser: !!this.user,
@@ -6578,9 +6749,23 @@ const App = {
                         this.openBoard(e.state.board, false);
                     }
                 } else if (e.state.storageId) {
+                    // ★ (2026-11-13 08:10, 109차 NAV2-4) 지금 사용자 목록에 없는 스토리지 기록(같은 탭의 앞 사람 기록 등)이면 이동하지 않고 지금 화면 주소로 바꿈 — 종전엔 로그아웃 뒤 같은 탭에서
+                    //   다른 계정으로 로그인해 '뒤로' 하면 앞 사람 홈(#storage=3&path=일반)으로 files 를 요청하고(서버는 '권한이 없습니다') 주소창에 앞 사람 폴더 이름이 남았음(재현). 브라우저 기록 자체는 지울 수 없음
+                    if (this.storages && this.storages.length && !this.storages.some(s => String(s.id) === String(e.state.storageId))) {
+                        try {
+                            const _pd = document.getElementById('board-inline-detail');
+                            const _pp = (this.boardInlineMode && _pd && _pd.style.display !== 'none' && this._boardCommentPostId) ? this._boardCommentPostId : null;
+                            if (this.boardInlineMode && this.currentBoardId) history.replaceState(_pp ? { board: this.currentBoardId, post: _pp } : { board: this.currentBoardId }, '', `#board=${this.currentBoardId}` + (_pp ? `&post=${_pp}` : ''));
+                            else if (this.currentStorage) history.replaceState({ storageId: this.currentStorage, path: this.currentPath || '' }, '', `#storage=${this.currentStorage}&path=${encodeURIComponent(this.currentPath || '')}`);
+                        } catch (_) {}
+                        return;
+                    }
                     if (this.boardInlineMode) {
                         this.exitBoardView(false);
                     }
+                    // ★ (2026-11-01 01:49, 36차 전체 점검) 검색 결과에서 브라우저 '뒤로' 하면 폴더 목록 위에 검색 띠·검색 상태가 남았다
+                    //   → 검색 상태만 정리(_clearSearchStateForNav 는 목록을 불러오지도 기록을 쌓지도 않음). 목록은 아래 loadFiles(false) 한 번만.
+                    if (this.isSearchMode) this._clearSearchStateForNav();
                     if (e.state.storageId !== this.currentStorage) {
                         this.currentStorage = e.state.storageId;
                         $('#storage-list a').removeClass('active');
@@ -6640,6 +6825,39 @@ const App = {
         return undefined;
     },
     
+    /** ★ (2026-11-11 22:04, 85차 RGR4-1) 토큰을 새로 받은 뒤 다시 보내기 전에 — 지금 세션 사용자가 이 화면을 연 사용자와 다르면(다른 탭에서 다른 계정 로그인) 안내 한 번 뒤 새로 고치고 true.
+     *  84차 AUT-1 은 api() 만 막아 업로드(uploadApi·조각 업로드 3곳)는 새 계정 권한으로 다시 보내졌음(재검토 재현). 확인 실패·같은 계정·로그인 전이면 false(종전처럼 다시 보냄) */
+    async _acctSwitchGuard() {
+        if (this._acctSwitchShown) return true;
+        try {
+            const r = await fetch('api.php?action=me', { method: 'GET', credentials: 'same-origin', signal: this._timeoutSignal(15000) });
+            const j = await r.json();
+            const nu = (j && j.success && j.user) ? parseInt(j.user.id) || 0 : 0;
+            const cu = this.user ? parseInt(this.user.id) || 0 : 0;
+            if (nu && cu && nu !== cu) {
+                if (this._acctSwitchShown) return true;   // ★ (2026-11-11 22:11, 85차 RGR4-1 보완) 동시에 기다리던 다른 호출이 먼저 안내했으면 안내를 또 띄우지 않음(조각 3개 동시 업로드에서 3번 뜸 — 재현)
+                this._acctSwitchShown = true;
+                try { alert(t('account_switched_reload', '다른 탭에서 다른 계정으로 로그인되었습니다. 이 화면은 이전 계정으로 열려 있어 새로 고칩니다.')); } catch (e) {}
+                location.reload();
+                return true;
+            }
+        } catch (e) {}
+        return false;
+    },
+
+    /** ★ (2026-11-13 08:02, 109차 개선 TABS-4) api() 를 거치지 않는 직접 fetch 용 — 응답이 보안 토큰 오류(403·csrf_error)면 토큰을 새로 받아(다른 계정이면 _acctSwitchGuard 안내) 한 번만 다시 보냄(api() 와 같은 방식).
+     *  make 는 지금 this.csrfToken 으로 요청을 만들어 fetch 하는 함수. 종전엔 다른 탭에서 다시 로그인해 토큰이 바뀌면 몇 번을 눌러도 같은 '보안 토큰' 오류였음(재현). 토큰이 맞으면 요청 하나 그대로 */
+    async _csrfFetch(make) {
+        const resp = await make();
+        if (resp.status !== 403) return resp;
+        let j = null;
+        try { j = await resp.clone().json(); } catch (e) {}
+        if (!j || !j.csrf_error) return resp;
+        if (!await this.refreshCsrfToken()) return resp;
+        if (await this._acctSwitchGuard()) return resp;
+        return make();
+    },
+
     async refreshCsrfToken() {
         // ★ (2026-08-17) 이 함수는 checkAuth가 showMain() 직전에 await하므로
         //   여기서 멈추면 화면이 "로딩 중..."으로 굳는다. 시작/끝을 반드시 남긴다.
@@ -6706,7 +6924,7 @@ const App = {
     //   그 자리에서 멈춰 화면이 "로딩 중..." 상태로 굳었다(새로고침하면 새 연결로 복구).
     //   전 호출에 일괄 적용하면 move·copy·delete·index_rebuild_storage·index_sync·bulk_search 같이
     //   정상적으로 수 분 걸리는 작업이 끊기므로, **호출부가 명시할 때만** 적용한다.
-    async api(action, data = {}, method = 'POST', signal = null, _retryCount = 0, timeoutMs = 0) {
+    async api(action, data = {}, method = 'POST', signal = null, _retryCount = 0, timeoutMs = 0, _csrfRetried = false) {
         // 세션 만료 상태면 요청 차단 (인증 불필요 액션 제외)
         // ★ (2026-10-28 21:19, 8차 점검) SSO(LDAP·OIDC·SAML) 로그인·설정 조회도 로그아웃 상태에서 보낼 수 있게 — 종전엔 로그아웃 직후 같은 화면에서
         //   LDAP 로그인 등을 누르면 여기서 '세션이 만료되었습니다' 로 막혔음(일반 로그인만 됐음). 서버는 이 액션들을 로그인 없이 받음(CSRF 제외 목록)
@@ -6763,19 +6981,26 @@ const App = {
             }
         }
         
+        let _httpStatus = 0;   // ★ (2026-11-13 17:03, 113차 DEF-4) 응답은 왔는데 JSON 이 아니면(500·502 HTML 등) 그 상태 번호를 아래 오류에 http_status 로 붙임 — 문구는 그대로. 종전엔 끊김과 구분할 수 없었음(공유 확인이 '서버 연결 실패'로 안내 — 재현)
         try {
             const _perfT0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
             const res = await fetch(url, options);
+            _httpStatus = res.status;   // ★ (2026-11-13 17:03, 113차 DEF-4)
             const json = await res.json();
             // [클라 계측] 왕복시간(rtt) + 네트워크 상태 기록 (느린 요청만) — 서버시간(files_perf)과 대조해 네트워크/서버 구분
             try { this._logClientPerf && this._logClientPerf(action, ((typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now()) - _perfT0); } catch (e) {}
             
             // CSRF 토큰 오류 시 토큰 갱신 후 재시도 (최대 1회)
-            if (json.csrf_error && _retryCount < 1) {
+            // ★ (2026-11-04 01:39, 54차 점검) CSRF 재시도는 _csrfRetried 로 따로 셈(401 복구 횟수 _retryCount 는 그대로 둠) — 종전엔 CSRF 재시도가 _retryCount 를 올려,
+            //   다른 탭에서 로그아웃된 뒤 POST(403 csrf → 토큰 → 401) 때 401 복구·'다시 로그인' 안내를 건너뛰고 오류만 남았음(재현: mkdir → 403·csrf_token·401, sessionExpired=false, 안내 없음)
+            if (json.csrf_error && _retryCount < 1 && !_csrfRetried) {
                 const refreshed = await this.refreshCsrfToken();
                 // 재시도 (FormData가 아닌 경우만, 갱신 성공 시에만)
                 if (refreshed && !(data instanceof FormData)) {
-                    return this.api(action, data, method, signal, _retryCount + 1, timeoutMs);
+                    // ★ (2026-11-11 21:36, 84차 AUT-1) 다시 보내기 전에 지금 세션의 사용자가 화면을 연 사용자와 같은지 확인 — 종전엔 같은 브라우저 다른 탭에서 로그아웃 뒤 다른 계정으로
+                    //   로그인하면 이 탭은 옛 계정 화면인 채 토큰만 새로 받아 새 계정 권한으로 요청을 다시 보냈음(재현: viewer 화면에서 tester 권한으로 폴더 만들기 성공). 같은 계정이면 종전 그대로
+                    if (await this._acctSwitchGuard()) return { success: false, error: t('account_switched_reload', '다른 탭에서 다른 계정으로 로그인되었습니다. 이 화면은 이전 계정으로 열려 있어 새로 고칩니다.') };   // ★ (2026-11-11 22:04, 85차 RGR4-1) 확인을 _acctSwitchGuard 로 모음(업로드 재전송 3곳도 같이 씀, 안내 창 한 번만)
+                    return this.api(action, data, method, signal, _retryCount, timeoutMs, true);
                 }
                 return json;
             }
@@ -6794,12 +7019,16 @@ const App = {
                     
                     if (meJson.success && meJson.user) {
                         // Remember Token으로 세션 복구 성공 - 원래 요청 재시도
-                        return this.api(action, data, method, signal, _retryCount + 1);
+                        // ★ (2026-10-31 13:35, 34차 후속 개선) 재시도에 timeoutMs 를 넘기지 않아 이 분기만 타임아웃 없이 무한 대기할 수 있었음 — CSRF 재시도와 같게 전달
+                        return this.api(action, data, method, signal, _retryCount + 1, timeoutMs);
                     }
                 } catch (e) {
                 }
                 
                 // 복구 실패 - 로그아웃 처리
+                // ★ (2026-11-03 12:17, 50차 점검) 동시에 401 을 받은 다른 요청이 이미 안내 중이면 조용히 끝냄 — 둘 다 안내 창을 열면 뒤 창이 앞 창을 닫아(42차 확인 창 처리)
+                //   앞 요청의 location.reload() 가 바로 실행돼 '세션 만료' 안내가 순식간에 사라졌음(재현: 세션 끊고 폴더 이동 → files·locked_files_get 둘 다 401)
+                if (this.sessionExpired) return { error: t('session_expired', '세션이 만료되었습니다.'), session_expired: true };
                 this.sessionExpired = true;
                 await this.alert(t('session_expired_relogin', '세션이 만료되었습니다. 다시 로그인해주세요.'), t('session_expired', '세션 만료'));
                 location.reload();
@@ -6826,7 +7055,7 @@ const App = {
                 return null;
             }
             this._debugLog && this._debugLog('api_error', { action: action, name: (e && e.name) || null, msg: String((e && e.message) || e).substring(0, 120) });
-            return { error: t('err_server_connection', '서버 연결 실패') };
+            return _httpStatus ? { error: t('err_server_connection', '서버 연결 실패'), http_status: _httpStatus } : { error: t('err_server_connection', '서버 연결 실패') };   // ★ (2026-11-13 17:03, 113차 DEF-4)
         } finally {
             // ★ 타임아웃 타이머 정리 (성공/실패/재귀 재시도 모두 통과)
             if (_timeoutId) clearTimeout(_timeoutId);
@@ -6871,11 +7100,16 @@ const App = {
     uploadApi(action, formData, onProgress, abortController) {
         return new Promise((resolve) => {
             const xhr = new XMLHttpRequest();
-            
+            // ★ (2026-10-31 13:35, 34차 후속 개선) CSRF 재시도용 xhr2 는 취소 리스너가 처음 xhr 만 끊어 취소해도 계속 올라가고 진행률도 멈췄음 —
+            //   지금 보내는 요청을 _curXhr 로 따라가 취소 때 그것을 끊고, 취소 뒤에는 재시도를 보내지 않으며, xhr2 에도 진행률을 연결
+            let _curXhr = xhr;
+            let _uplAborted = false;
+
             // 취소 처리
             if (abortController) {
                 abortController.signal.addEventListener('abort', () => {
-                    xhr.abort();
+                    _uplAborted = true;
+                    _curXhr.abort();
                     resolve(null);
                 });
             }
@@ -6892,9 +7126,15 @@ const App = {
                     const json = JSON.parse(xhr.responseText);
                     // CSRF 에러 시 토큰 갱신 후 재시도
                     if (json.csrf_error) {
-                        this.refreshCsrfToken().then(() => {
+                        this.refreshCsrfToken().then(async () => {
+                            if (_uplAborted) { resolve(null); return; }
+                            if (await this._acctSwitchGuard()) { resolve({ success: false, error: t('account_switched_reload', '다른 탭에서 다른 계정으로 로그인되었습니다. 이 화면은 이전 계정으로 열려 있어 새로 고칩니다.') }); return; }   // ★ (2026-11-11 22:04, 85차 RGR4-1)
+                            if (_uplAborted) { resolve(null); return; }   // ★ (2026-11-11 22:36, 86차 RGR5-1) 계정 확인(me)을 기다리는 사이 취소했으면 다시 보내지 않음 — 85차가 넣은 기다림 틈으로 34차 '취소 뒤 재시도 전송'이 되살아나 파일이 올라갔음(재현)
                             formData.set('csrf_token', this.csrfToken);
                             const xhr2 = new XMLHttpRequest();
+                            _curXhr = xhr2;
+                            xhr2.upload.onprogress = xhr.upload.onprogress;
+                            xhr2.onabort = () => resolve(null);
                             xhr2.onload = () => {
                                 try { resolve(JSON.parse(xhr2.responseText)); }
                                 catch(e) { resolve({ error: t('err_response_parse', '응답 파싱 실패') }); }
@@ -7032,6 +7272,8 @@ const App = {
         $('#show-backup-code').on('click', e => {
             e.preventDefault();
             $('#twofa-otp-section').hide();
+            // ★ (2026-11-03 12:13, 50차 점검) 숨긴 OTP 칸의 required 가 남아 브라우저가 제출 자체를 막았음 — 백업 코드로 로그인이 아무 반응 없음(재현). 빈 값은 verify2FA 가 검사
+            $('#twofa-code').prop('required', false);
             $('#twofa-backup-section').show();
             $('#twofa-backup-code').val('').focus();
             $('#login-error').text('');
@@ -7041,6 +7283,7 @@ const App = {
             e.preventDefault();
             $('#twofa-backup-section').hide();
             $('#twofa-otp-section').show();
+            $('#twofa-code').prop('required', true);
             $('#twofa-code').val('').focus();
             $('#login-error').text('');
         });
@@ -7154,6 +7397,13 @@ const App = {
                 $icon.text('−');
             }
         });
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 접혀 있는 동안 보기·받기로 기록이 늘었으면 '최근 파일'을 펼칠 때 다시 불러옴(위 토글 뒤에 실행됨)
+        $('.section-toggle[data-target="recent-files-list"]').on('click', () => {
+            if (this._recentFilesStale && $('#recent-files-list').is(':visible')) {
+                this._recentFilesStale = false;
+                this.loadRecentFiles();
+            }
+        });
         
         // 전송 취소 버튼 (단일 전송용 - 멀티 세션은 각 UI에서 별도 처리)
         document.getElementById('transfer-cancel')?.addEventListener('click', () => {
@@ -7211,8 +7461,11 @@ const App = {
                 return style.display !== 'none' && style.visibility !== 'hidden';
             });
             if (hasVisibleModal) return;
+            // ★ (2026-11-01 11:34, 39차 점검) 게시판 화면에서도 Ctrl+C/X/V 가 숨은 파일 목록의 선택·폴더에 작동했음 → 건너뜀
+            if (this.boardInlineMode) return;
             
             if (e.ctrlKey || e.metaKey) {
+                this._flushNavSelection();   // ★ (2026-11-11 23:06, 87차 DND-2) Shift+↓ 바로 뒤 Ctrl+X 가 강조된 4개 중 1개만 잘라냈음(재현) — 위 목록 키와 같음
                 // 체크박스 또는 클릭 선택된 항목 확인
                 const hasSelection = this.getSelectedOrCheckedItems().length > 0;
                 
@@ -7228,6 +7481,12 @@ const App = {
                     this.clipboardCopy();
                 } else if (isX && hasSelection) {
                     e.preventDefault();
+                    // ★ (2026-11-15 22:00, 216차) 삭제 권한 없는 폴더(읽기 전용 공유 폴더 등)에서 Ctrl+X 가 '1개 항목을 잘라냈습니다'로 잘라 두고, 붙여넣을 때에야 '권한이 없습니다'(서버가 막음, 재현)
+                    //   → 오른쪽 메뉴(잘라내기·이동이 안 보임)와 같게 바로 안내. 검색 결과(다른 스토리지 항목이 섞일 수 있음)·금고는 종전대로
+                    if (!this.isSearchMode && !(this.vault && this.vault.isVaultView) && this.currentPermissions && !this.currentPermissions.can_delete) {
+                        this.toast(t('no_delete_permission', '삭제 권한이 없습니다'), 'error');
+                        return;
+                    }
                     this.clipboardCut();
                 } else if (isV && this.clipboard.items.length > 0) {
                     e.preventDefault();
@@ -7266,11 +7525,24 @@ const App = {
         $('#btn-create-app-password').on('click', () => this.createAppPassword());
         $('#btn-copy-app-password').on('click', () => {
             const val = $('#app-password-value').text();
-            navigator.clipboard.writeText(val).then(() => {
+            // ★ (2026-11-01 11:40, 39차 점검) navigator.clipboard 는 HTTPS·localhost 에서만 있어 내부망 HTTP 접속에선 TypeError 로 복사도 안내도 없었고,
+            //   _appPwCopied 가 안 켜져 '아직 복사하지 않았습니다' 경고가 계속 떴음 → copyToClipboard 와 같은 execCommand 대체, 성공했을 때만 표시
+            const _done = () => {
                 this._appPwCopied = true;
                 this.toast(t('nt_copied', '복사되었습니다.'), 'success');
                 $('#btn-copy-app-password').html('✅ ' + t('copied', '복사됨')).css('background', 'var(--fs-tint-ok, #d4edda)');
-            });
+            };
+            const _fallback = () => {
+                let ok = false;
+                const ta = document.createElement('textarea');
+                ta.value = val; ta.style.position = 'fixed'; ta.style.opacity = '0';
+                document.body.appendChild(ta); ta.select();
+                try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+                document.body.removeChild(ta);
+                if (ok) _done(); else this.toast(t('copy_failed_select', '복사 실패: 직접 선택해서 복사하세요.'), 'error');
+            };
+            if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(val).then(_done).catch(_fallback);
+            else _fallback();
         });
         
         $('#btn-save-system-settings').on('click', () => this.saveSystemSettings());
@@ -7363,6 +7635,27 @@ const App = {
             const path = $(this).data('path') || '';
             App.navigate(path);
         });
+        // ★ (2026-10-30 14:10, 펜닐 요청 — 주소창 강화) › 하위 폴더 목록 · 경로 입력 · 복사 · 주소창 빈 곳 누르면 경로 입력
+        $('#breadcrumb').on('click', '[data-bc-children]', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            App._bcShowChildren(this);
+        });
+        $('#breadcrumb').on('click', '[data-bc-tool]', function(e) {
+            e.preventDefault(); e.stopPropagation();
+            if (this.getAttribute('data-bc-tool') === 'edit') App._bcStartEdit(); else App._bcShowCopyMenu(this);
+        });
+        $('#breadcrumb').on('click', function(e) {
+            if (e.target === this && !document.body.classList.contains('is-mobile')) App._bcStartEdit();
+        });
+        // ★ (2026-10-30 14:10, 펜닐 요청) 세부 정보 창 켜고 끄기 · 빈 폴더 안내 단추
+        $('#btn-details-pane').on('click', (e) => { e.preventDefault(); this.toggleDetailsPane(); });
+        $('#file-list').on('click', '[data-empty-act]', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            const b = e.target && e.target.closest ? e.target.closest('[data-empty-act]') : null;
+            const act = b && b.getAttribute('data-empty-act');
+            if (act === 'upload-file' || act === 'upload-folder' || act === 'new-folder') this.handleContextAction(act);
+        });
+        { let _dpRT = null; window.addEventListener('resize', () => { clearTimeout(_dpRT); _dpRT = setTimeout(() => { this._detailsRefresh(); this._bcFitTools(); }, 150); }); }
         
         // 모바일 감지 (화면 크기 또는 터치 지원)
         const isMobile = () => window.innerWidth <= 1024 || 'ontouchstart' in window;
@@ -7382,7 +7675,8 @@ const App = {
             
             if (e.ctrlKey || e.metaKey) {
                 // Ctrl+클릭: 다중 선택 토글
-                item.toggleClass('selected');
+                // ★ (2026-11-01 01:02, 35차 전체 점검) 검색 결과 항목은 자체 click 리스너(renderSearchResults)가 이미 토글해서 여기서 또 뒤집으면 원래대로 돌아가 Ctrl 다중 선택이 안 됐음 → 검색 결과는 토글을 건너뜀(앵커·선택 갱신은 그대로)
+                if (!item.hasClass('search-result-item')) item.toggleClass('selected');
                 // 앵커 업데이트 (Shift+Click 기준점)
                 const items = document.querySelectorAll('#file-list .file-item');
                 const idx = Array.from(items).indexOf(item[0]);
@@ -7390,7 +7684,10 @@ const App = {
                 App.selectionFocus = idx;
                 App.prevRangeStart = -1;
                 App.prevRangeEnd = -1;
-                App.updateSelection();
+                { const _ps = App._saPendSel; App.updateSelection(); App._saPendSel = _ps; }   // ★ (2026-11-13 15:37, 112차 RGR28-2) Ctrl+클릭은 하나만 뒤집으므로 '뒤 묶음도 선택' 표시를 남김(다 그린 뒤 Ctrl+A → Ctrl+클릭 = 20,002개와 같게)
+            } else if (e.shiftKey) {
+                // ★ (2026-11-04 01:39, 54차 점검) Shift+클릭 범위 선택을 모바일 판정보다 먼저 — 종전엔 창 폭 1024px 이하 PC·터치 지원 PC 에서 모바일 '한 번 탭' 갈래로 가 한 항목만 선택됐음(재현). 휴대폰 탭에는 shiftKey 가 없어 모바일 동작은 그대로
+                App.handleFileClick(item, true);
             } else if (isMobile()) {
                 const isDir = item.data('is-dir');
                 const path = item.data('path');
@@ -7503,14 +7800,13 @@ const App = {
                 // 단일 탭 → 선택 + 기존 스크롤 해제
                 App._clearFileNameScroll();
                 App._mobileTapInfo = { path, time: now };
+                // ★ (2026-11-04 01:39, 54차 점검) 탭한 항목을 Shift 범위 선택 기준점으로(Ctrl 분기와 같게) — 종전엔 이 갈래가 기준점을 안 바꿔, 좁은 창·터치 PC 에서 클릭 뒤 Shift+클릭이 그 항목 하나만 골랐음(재현: 1000px·hasTouch 1400px 에서 0→Shift+3 = 1개)
+                { const _tapIdx = Array.from(document.querySelectorAll('#file-list .file-item')).indexOf(item[0]); App.selectionAnchor = _tapIdx; App.selectionFocus = _tapIdx; App.prevRangeStart = -1; App.prevRangeEnd = -1; }
                 if (!item.hasClass('selected')) {
                     $('.file-item').removeClass('selected');
                     item.addClass('selected');
                     App.updateSelection();
                 }
-            } else if (e.shiftKey) {
-                // Shift+클릭: 범위 선택
-                App.handleFileClick(item, true);
             } else {
                 // PC: 일반 클릭은 선택만
                 App.handleFileClick(item);
@@ -7541,6 +7837,7 @@ const App = {
                 cb.checked = isChecked;
             });
             App.updateCheckboxSelection();
+            if (isChecked && App._renderRAF) App._saPending = true;   // ★ (2026-11-13 11:22, 111차 RGR27-1) 그리는 도중 '전체'를 켰다는 표시(다 그린 뒤 나머지도 고를 때 씀 — renderFiles 끝 처리 설명)
             this.blur();
             document.getElementById('file-list')?.focus({ preventScroll: true });
         });
@@ -7661,6 +7958,7 @@ const App = {
             e.stopPropagation();
             
             const item = $(this);
+            App._ctxDropChecksIfOutside(this);   // ★ (2026-11-11 22:33, 86차 CTX-1) 체크한 묶음 밖의 항목을 누르면 체크를 풀어 누른 항목이 대상이 되게 — 종전엔 화면엔 누른 파일만 강조되고 열기·이름 바꾸기·이동·정보가 체크한 파일에 실행됐음(재현). 체크한 것 중 하나를 누르면 종전처럼 체크 묶음 전체
             if (!item.hasClass('selected')) {
                 $('.file-item').removeClass('selected');
                 item.addClass('selected');
@@ -7748,6 +8046,7 @@ const App = {
                         }
                         App._showVaultContextMenu({ clientX: longPressPos.x, clientY: longPressPos.y }, vaultItem);
                     } else {
+                        App._ctxDropChecksIfOutside(longPressItem[0]);   // ★ (2026-11-11 22:33, 86차 CTX-1) 위 우클릭과 같음
                         App.showContextMenu(longPressPos.x, longPressPos.y, false);
                     }
                 } else {
@@ -8124,6 +8423,17 @@ const App = {
                     });
                     
                     document.body.appendChild(menu);
+                    // ★ (2026-11-01 11:40, 39차 점검) 단추 왼쪽 끝에 그대로 놓아 좁은 창·휴대폰에서 오른쪽·아래가 잘렸음 → 일반 작업 메뉴처럼 화면 안으로 당기고 높이 제한
+                    try {
+                        const _vw = window.innerWidth, _vh = window.innerHeight;
+                        const _mw = menu.offsetWidth;
+                        let _left = rect.left;
+                        if (_left + _mw > _vw - 5) _left = _vw - _mw - 5;
+                        if (_left < 5) _left = 5;
+                        menu.style.left = _left + 'px';
+                        menu.style.maxHeight = Math.max(120, _vh - rect.bottom - 14) + 'px';
+                        menu.style.overflowY = 'auto';
+                    } catch (e) {}
                     const closeMenu = (ev) => {
                         if (ev && menu.contains(ev.target)) return;
                         menu.remove();
@@ -8265,7 +8575,7 @@ const App = {
                             const data = JSON.parse(e.data);
                             if (data.type === 'progress') {
                                 lastCount = data.count || 0;
-                                btn.html(`${_syncIco} ${lastCount.toLocaleString()}${t('count_items','개')}`);
+                                btn.html(`${_syncIco} ${lastCount.toLocaleString()}${t('count_unit','개')}`);   // ★ (2026-11-02 10:32, 42차 점검) count_items 값이 '개 항목'/' items' 라 동기화 단추가 '123개 항목'으로 길어졌음 → 이미 있는 count_unit('개' / en 빈 값)
                             } else if (data.type === 'complete') {
                                 evtSource.close();
                                 resolve({ success: true, count: data.count || lastCount });
@@ -8321,6 +8631,48 @@ const App = {
         // ★ (2026-10-28 11:49 → 13:22, 펜닐) 검색창 안 ✕ 는 뺌 — 검색 종료는 검색 결과 띠의 ✕
         $('#search-input').on('keypress', e => {
             if (e.key === 'Enter') this.doSearch();
+        });
+        // ★ (2026-11-12 19:22, 102차 KBD-6) Tab 으로 검색칸에 들어왔을 때만 상자 둘레 표시(style.css .search-box.kbd-focus) — 종전엔 키보드 포커스 표시가 전혀 없었음(재현).
+        //   글 입력칸은 마우스로 눌러도 :focus-visible 이 참이라(크롬 실측) CSS 만으로는 마우스와 못 나눠 Tab 키로 들어온 경우만 표시. 마우스로 누를 때는 종전과 같음
+        {
+            const _si = document.getElementById('search-input'), _sb = _si && _si.closest('.search-box');
+            if (_sb) {
+                document.addEventListener('keyup', (e) => { if (e.key === 'Tab' && document.activeElement === _si) _sb.classList.add('kbd-focus'); });
+                _si.addEventListener('blur', () => _sb.classList.remove('kbd-focus'));
+            }
+        }
+        // ★ (2026-11-15 21:41, 213차 KBD) 창(.modal)이 떠 있을 때 Tab·Shift+Tab 이 창 밖 뒤 화면(#main-screen)으로 나가던 것 — 설정 창에서 Tab 60번 중 45번이 뒤쪽
+        //   검색칸·업로드 단추 등에 가 있었음(재현, 휴지통·스토리지 창도 같음). 그 상태에서 Enter 를 누르면 가려진 뒤 단추가 눌림. → 창의 마지막 칸에서 Tab 은 처음 칸으로,
+        //   처음 칸(또는 창 틀)에서 Shift+Tab 은 마지막 칸으로 돌림. 포커스가 이미 뒤 화면·body 에 있으면 맨 위 창의 처음(마지막) 칸으로 옮김.
+        //   창이 아닌 다른 덧창(폴더 권한·아이콘 관리 등) 안의 포커스, 글 편집기처럼 Tab 을 먼저 쓰는 곳(defaultPrevented)은 건드리지 않음. 창이 없으면 종전과 같음
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab' || e.defaultPrevented || e.ctrlKey || e.altKey || e.metaKey) return;
+            const _shown = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+            const vis = Array.from(document.querySelectorAll('.modal')).filter(m => getComputedStyle(m).display !== 'none' && _shown(m));
+            if (!vis.length) return;
+            const a = document.activeElement;
+            // ★ (2026-11-16 01:29, 213차 재검토) 맨 위에 떠 있는 것을 화면 가운데 점으로 가림 — 종전(213차)엔 '.modal 이 아닌 덧창'(알림 창 showAlert·내려받기 선택 등)이
+            //   .modal 위에 떠 있을 때 그 덧창 글자를 눌러 포커스가 body 가 된 뒤 Tab 을 누르면 아래 .modal 로 들어갔음(재현: 설정 창 위 알림 창 — 213차 전엔 알림 창 ×·확인으로 감).
+            //   → 가운데 점이 들어 있는 .modal(또는 그 .modal 을 품은 바탕)만 맨 위로 보고, 맨 위가 .modal 이 아니면 손대지 않음(종전 브라우저 기본). 포커스가 아래쪽 .modal 에 있어도 손대지 않음
+            const ce = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+            const top = ce ? (vis.find(x => x.contains(ce)) || vis.filter(x => ce.contains(x)).pop()) : null;
+            if (!top) return;
+            let m = vis.find(x => x.contains(a));
+            if (m && m !== top) return;
+            if (!m) {
+                const ms = document.getElementById('main-screen');
+                if (!(a === document.body || !a || (ms && ms.contains(a)))) return;
+                m = top;
+            }
+            const f = Array.from(m.querySelectorAll('a[href],button,input,select,textarea,summary,iframe,video[controls],audio[controls],[contenteditable="true"],[tabindex]'))
+                .filter(el => el.tabIndex >= 0 && !el.disabled && !(el.tagName === 'INPUT' && el.type === 'hidden') && _shown(el) && !el.closest('[inert]'));
+            if (!f.length) return;
+            const first = f[0], last = f[f.length - 1];
+            let to = null;
+            if (!m.contains(a)) to = e.shiftKey ? last : first;
+            else if (!e.shiftKey && a === last) to = first;
+            else if (e.shiftKey && (a === first || a === m)) to = last;
+            if (to) { e.preventDefault(); try { to.focus(); } catch (x) {} }
         });
         
         // ★ (2026-10-28 13:22, 펜닐) 검색창 옆 필터 단추·필터 창(적용·초기화) 제거 — 조건은 검색 결과 띠의 칩으로(_srPopOpen). 필터 창 입력칸은 칩의 값 보관용으로 숨긴 채 둠(index.php)
@@ -8668,10 +9020,13 @@ const App = {
                 resultSpan.text(t('testing', '테스트 중...')).css('color', 'var(--fs-text-2, #666)');
                 
                 const res = await this.api('antivirus_test', {}, 'GET');
+                // ★ (2026-11-12 20:05, 103차 개선 X6) 결과 뒤에 '설정이 저장되었습니다.'를 덧붙임(기존 키 setting_saved) — 이 단추는 저장한 뒤 시험하는 방식(의도된 동작, 그대로)이라 창을 '취소'로 닫아도
+                //   시험한 설정이 남는데, 종전엔 결과 글에 그 안내가 없어 몰랐음(경로 틀림 시험 → 취소 → 다시 열면 그 값, 재현). 시험·저장·판정은 그대로
+                const _avSaved = ' · ' + t('setting_saved', '설정이 저장되었습니다.');
                 if (res.success) {
-                    resultSpan.text('✅ ' + res.message).css('color', '#4caf50');
+                    resultSpan.text('✅ ' + res.message + _avSaved).css('color', '#4caf50');
                 } else {
-                    resultSpan.text('❌ ' + (res.error || t('test_failed', '테스트 실패'))).css('color', '#f44336');
+                    resultSpan.text('❌ ' + (res.error || t('test_failed', '테스트 실패')) + _avSaved).css('color', '#f44336');
                 }
             } catch (e) {
                 resultSpan.text('❌ ' + t('error_prefix', '오류') + ': ' + e.message).css('color', '#f44336');
@@ -8728,11 +9083,15 @@ const App = {
             }
             
             // 입력창 업데이트
-            App.syncCountryInput(mode);
+            App.syncCountryInput(mode, code, this.classList.contains(mode === 'allowed' ? 'selected' : 'blocked'));   // ★ (2026-11-01 09:42, 38차 점검) 누른 코드 하나만 넣고 빼기
         });
         
         // 선택 모드 변경 시 버튼 상태 업데이트 - 이벤트 위임
         $(document).on('change', 'input[name="country-select-mode"]', function() {
+            App.updateCountryButtonsState();
+        });
+        // ★ (2026-11-01 09:42, 38차 점검) 입력칸에 직접 친 코드가 버튼 표시에 반영되지 않아, 버튼을 누르면 손으로 넣은 코드가 지워졌음 — 입력 때 버튼 표시를 맞춤
+        $(document).on('input', '#security-allowed-countries, #security-blocked-countries', function() {
             App.updateCountryButtonsState();
         });
         
@@ -8824,7 +9183,9 @@ const App = {
         $('#popup-edit-image-file').on('change', (e) => this.uploadPopupEditImage(e.target));
         
         // 배너 미리보기 실시간 업데이트
-        $('#banner-content, #banner-bg-color, #banner-text-color').on('input change', () => this.updateBannerPreview());
+        // ★ (2026-11-01 11:40, 39차 점검) 이 파일의 $().on() 은 이벤트 이름을 나누지 않아 'input change' 가 이벤트 하나로 등록돼 미리보기가 갱신되지 않았음 → 둘로 나눠 등록
+        $('#banner-content, #banner-bg-color, #banner-text-color').on('input', () => this.updateBannerPreview());
+        $('#banner-content, #banner-bg-color, #banner-text-color').on('change', () => this.updateBannerPreview());
         
         // 휴지통 비우기
         $('#btn-trash-empty').on('click', () => this.emptyTrash(true));
@@ -8883,6 +9244,15 @@ const App = {
         $('#btn-add-user').on('click', () => this.showUserForm());
         $('#btn-save-user').on('click', () => this.saveUser());
         $('#btn-bulk-quota').on('click', () => this.showBulkQuotaModal());
+        // ★ (2026-11-03 10:25, 금지 아이디·닉네임 관리 — 펜닐 요청)
+        $('#btn-signup-block').on('click', () => this.showSignupBlockModal());
+        //   이 앱의 $ 는 자체 구현 — 위임 이벤트의 대상은 e.matchedTarget, append 는 HTML 문자열만 받음
+        $(document).on('click', '#modal-signup-block .sb-add', (e) => this.addSignupBlock(e.matchedTarget.closest('.sb-section').getAttribute('data-type')));
+        $(document).on('click', '#modal-signup-block .sb-del', (e) => {
+            const b = e.matchedTarget, type = b.closest('.sb-section').getAttribute('data-type');
+            const v = ((this._sbLists || {})[type] || [])[parseInt(b.getAttribute('data-i'), 10)];
+            if (v !== undefined) this.removeSignupBlock(type, v);
+        });
         $('#btn-apply-bulk-quota').on('click', () => this.applyBulkQuota());
         $('#btn-save-default-quota').on('click', () => this.saveDefaultQuota());
         
@@ -8975,8 +9345,12 @@ const App = {
         // 드래그 앤 드롭
         const fileArea = $('.file-area')[0];
         if (fileArea) {
+            // ★ (2026-11-01 11:34, 39차 점검) 게시판 목록·글 보기 화면(글쓰기 폼 닫힘)에 파일을 놓으면 일반 업로드로 넘어가
+            //   게시판에 들어오기 전 열어 둔(숨은) 폴더에 조용히 올라갔음 → 그 화면에서는 강조도 업로드도 하지 않음.
+            const _boardNoDrop = () => this.boardInlineMode && document.getElementById('board-inline-form')?.style.display === 'none';
             fileArea.addEventListener('dragover', e => {
                 e.preventDefault();
+                if (_boardNoDrop()) return;
                 if (!this.currentPermissions?.can_write) return;
                 $('.file-area').addClass('dragover');
             });
@@ -8998,6 +9372,7 @@ const App = {
                     }
                     return;
                 }
+                if (this.boardInlineMode) return;  // ★ (2026-11-01 11:34, 39차 점검) 위 _boardNoDrop 참고 — 게시판 화면은 숨은 폴더로 올리지 않음
                 
                 // 쓰기 권한 체크
                 if (!this.currentPermissions?.can_write) {
@@ -9134,7 +9509,10 @@ const App = {
             if (e.key === 'Enter' && e.target.closest && e.target.closest('.modal')) {
                 const tag = e.target.tagName;
                 // 새 폴더, 이름변경 등 Enter로 확인해야 하는 input은 허용
-                const allowEnterIds = ['new-folder-name', 'rename-input', 'share-name', 'vault-unlock-password', 'vault-create-password', 'vault-create-password2', 'vault-create-name'];
+                const allowEnterIds = ['new-folder-name', 'rename-input', 'share-name', 'vault-unlock-password', 'vault-create-password', 'vault-create-password2', 'vault-create-name',
+                    'ishare-mkdir-input', 'ishare-rename-input', // ★ (2026-11-04) 받은 공유 새 폴더·이름 변경 칸 Enter 허용(자기 처리기가 preventDefault)
+                    'compress-zip-name', 'compress-password', 'compress-password-confirm', // ★ (2026-11-09 12:03, 57차 Z02-1) ZIP 압축 창 세 칸 Enter 허용(자기 처리기가 preventDefault·stopPropagation) — 종전엔 여기서 막혀 Enter 가 안 먹었음(재현)
+                    'np-find-input', 'np-replace-input']; // ★ (2026-11-12 19:13, 102차 KBD-2) 텍스트 편집기 찾기·바꾸기 칸 Enter 허용(자기 처리기가 preventDefault·stopPropagation) — 종전엔 여기서 막혀 Enter 로 다음 찾기·바꾸기가 안 됐음(재현)
                 if (allowEnterIds.includes(e.target.id)) {
                     return; // 차단하지 않음 — 개별 핸들러가 처리
                 }
@@ -9191,6 +9569,14 @@ const App = {
                     if (navKeys.includes(e.key)) {
                         e.preventDefault();
                         e.stopPropagation();
+                        // ★ (2026-11-12 19:15, 102차 KBD-3) 텍스트·코드 미리보기(읽기)면 위아래 키로 글을 직접 스크롤 — 종전엔 위 preventDefault 로 ↓·PageDown·Home·End 가 모두 무반응(휠만 됨, 재현).
+                        //   포커스가 뒤 목록에 남아 있어 기본 스크롤로는 안 되므로 직접 움직임. 목록으로 키가 가지 않게 막는 것은 그대로, ←·→ 와 다른 미리보기는 종전과 같음
+                        const _tp = document.querySelector('#preview-content .preview-text, #preview-content .preview-code');
+                        if (_tp && e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') {
+                            if (e.key === 'Home') _tp.scrollTop = 0;
+                            else if (e.key === 'End') _tp.scrollTop = _tp.scrollHeight;
+                            else _tp.scrollTop += ({ ArrowUp: -40, ArrowDown: 40, PageUp: -0.9, PageDown: 0.9 })[e.key] * (e.key.startsWith('Page') ? _tp.clientHeight : 1);
+                        }
                         return;
                     }
                 }
@@ -9244,7 +9630,9 @@ const App = {
                         // 동적 생성 모달은 자체 ESC 핸들러가 있으므로 여기선 기존 모달만 처리
                         const parentOverlay = openModal.closest('.modal-overlay');
                         if (!parentOverlay || parentOverlay.id === 'modal-overlay') {
-                            if (openModal.id) {
+                            if (openModal.id === 'modal-popup-edit') {
+                                this.closePopupEditModal();   // ★ (2026-11-09 12:03, 57차 Z04-1) 공지 팝업 편집 창은 취소·X 와 같게 닫음 — 종전 hideModal 은 '새로 추가'한 빈 팝업을 남겼음(재현)
+                            } else if (openModal.id) {
                                 this.hideModal(openModal.id);
                             }
                         }
@@ -9277,6 +9665,9 @@ const App = {
             // ★ (2026-10-28 12:35) 검색 표시줄(칩·✕·모바일 검색어 칸)과 칩 고르기 창은 자체 키 처리 — 아래 파일 목록 키(Enter 열기·Space 선택·방향키·Backspace 위로)를 건너뜀.
             //   종전엔 칩에서 Enter → 고르기 창과 함께 선택한 파일 미리보기도 열리고, 고르기 창 항목에서 Enter 가 막혀 키보드로 못 골랐음(재검토 발견)
             if (e.target && e.target.closest && e.target.closest('#sr-pop, #search-result-header')) return;
+            // ★ (2026-10-30 16:42, 재검토) 새 주소창(› ·연필·복사)·› 목록·세부 정보 창·상태줄·세부 정보 단추도 자체 키 처리 — 종전엔 파일을 고른 채 › 에서 Enter 를 누르면
+            //   하위 폴더 목록 대신 고른 파일 미리보기가 열렸고, Space 는 파일 선택을 바꿨음(재현 확인)
+            if (e.target && e.target.closest && e.target.closest('#breadcrumb, .bc-menu, #fs-details-pane, #status-bar, #btn-details-pane')) return;
 
             // 입력 필드에서는 키보드 네비게이션 비활성화 (모달 외부, 체크박스 제외)
             if (e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) {
@@ -9321,6 +9712,13 @@ const App = {
                     handled = true;
                 }
                 
+                // ★ (2026-11-03 21:41, 52차 점검) 정렬 메뉴(⇅) — 이 목록에 빠져 Esc 로 안 닫히고 대신 고른 파일 선택만 풀렸음
+                const sortMenuEsc = document.getElementById('sort-menu');
+                if (sortMenuEsc && sortMenuEsc.style.display === 'block') {
+                    sortMenuEsc.style.display = 'none';
+                    handled = true;
+                }
+                
                 // 작업 드롭다운
                 const actionMenu = document.getElementById('toolbar-action-menu');
                 if (actionMenu && actionMenu.classList.contains('show')) {
@@ -9348,13 +9746,24 @@ const App = {
                 }
             }
             
+            // ★ (2026-11-01 11:34, 39차 점검) 게시판 화면은 #file-list 를 숨기기만 해 항목이 남아 있어, 글을 읽는 중
+            //   방향키·Space·Home·End 가 막히고 Backspace·Enter·Delete·F2 가 숨은 폴더에 작동했음 → 게시판 화면에서는 파일 목록 키를 건너뜀
+            //   (visibilitychange 자동 갱신과 같은 방식).
+            if (this.boardInlineMode) return;
+
             // 파일 목록이 없으면 무시
             const fileItems = $('#file-list .file-item');
-            if (fileItems.length === 0) return;
+            if (fileItems.length === 0) {
+                // ★ (2026-11-16 07:17, 218차) 빈 폴더에서는 여기서 끝나 Backspace(위 폴더로)가 안 됐음(재현: 빈 폴더 Backspace → 그대로) — 다른 키는 고를 항목이 없어 종전대로 무시
+                //   입력칸·게시판·검색 표시줄 등은 위에서 이미 걸러짐. 아래 switch 의 Backspace 와 같은 동작
+                if (e.key === 'Backspace' && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); this.goUp(); }
+                return;
+            }
             
             // 텍스트 입력 중이면 키보드 네비게이션 비활성화
             if (e.target.tagName === 'TEXTAREA' || e.target.tagName === 'INPUT' || e.target.isContentEditable) return;
             
+            if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'Shift', 'Control', 'Meta', 'Alt'].includes(e.key)) this._flushNavSelection();   // ★ (2026-11-11 23:06, 87차 DND-2) 방향키·Home/End 바로 뒤(0.1~0.2초 안) Enter·Delete·F2 가 바로 앞 선택에 작동했음(A 클릭 → ↓ → Enter 가 A 를 엶, 재현) — 기다리는 선택 갱신을 먼저 끝냄
             switch (e.key) {
                 case 'Delete':
                     // 체크박스 또는 클릭 선택된 항목이 있으면 삭제
@@ -9371,6 +9780,12 @@ const App = {
                 case 'F2':
                     // 체크박스 또는 클릭 선택 — 1개면 이름 변경, 여러 개면 일괄 이름 변경(★ 2026-10-27, 탐색기처럼)
                     if (this.getSelectedOrCheckedItems().length >= 1) {
+                        // ★ (2026-11-15 22:00, 216차) 쓰기 권한 없는 폴더에서 F2 가 이름 바꾸기 창을 열고, 새 이름을 쳐 넣은 뒤에야 '쓰기 권한이 없습니다'(서버가 막음, 재현)
+                        //   → 오른쪽 메뉴(이름 변경이 안 보임)·위 Delete 와 같게 바로 안내
+                        if (this.currentPermissions && !this.currentPermissions.can_write) {
+                            this.toast(t('no_write_permission', '쓰기 권한이 없습니다.'), 'error');
+                            break;
+                        }
                         this.showRenameModal();
                     }
                     break;
@@ -9599,14 +10014,27 @@ const App = {
             var sortMenu = document.getElementById('sort-menu');
             
             // 정렬 버튼 클릭
-            if (e.target === sortBtn || e.target.parentNode === sortBtn) {
+            // ★ (2026-10-31 12:03, 34차 전체 점검) 아이콘(svg)의 선(path) 위를 누르면 부모가 svg 라 버튼으로 안 봐서 메뉴가 안 열렸음 → closest 로
+            if (sortBtn && e.target.closest && e.target.closest('#btn-sort') === sortBtn) {
                 e.preventDefault();
                 e.stopPropagation();
                 if (sortMenu.style.display === 'block') {
                     sortMenu.style.display = 'none';
                 } else {
                     App._syncShowHiddenUI();   // ★ (2026-10-28) 열 때 '숨긴 항목 표시' 체크 상태 맞춤
+                    sortMenu.style.maxHeight = '';
                     sortMenu.style.display = 'block';
+                    // ★ (2026-11-17 00:01, 280차 점검) 메뉴 아래가 보이는 영역(화면·잘라내는 상위 칸) 밖이면 남은 높이만큼으로 줄여 메뉴 안에서 스크롤 — 종전엔 휴대폰 가로(390 높이 이하)에서
+                    //   CSS 상한(100vh-120px)보다 메뉴가 아래에서 시작해 마지막 '숨긴 항목 표시' 줄이 잘려 누를 수 없었음(재현: iPhone 13·SE 가로). 안에 들어가면 종전과 같음
+                    try {
+                        var _smR = sortMenu.getBoundingClientRect(), _smBot = window.innerHeight;
+                        for (var _smP = sortMenu.parentElement; _smP && _smP !== document.body; _smP = _smP.parentElement) {
+                            if (getComputedStyle(_smP).overflowY !== 'visible') _smBot = Math.min(_smBot, _smP.getBoundingClientRect().bottom);
+                        }
+                        var _smSb = document.getElementById('status-bar');   // 아래 상태 줄(fixed)이 메뉴를 덮으므로 그 위까지만
+                        if (_smSb && _smSb.getClientRects().length && getComputedStyle(_smSb).position === 'fixed') { var _smSbT = _smSb.getBoundingClientRect().top; if (_smSbT > _smR.top) _smBot = Math.min(_smBot, _smSbT); }
+                        if (_smR.bottom > _smBot - 4) sortMenu.style.maxHeight = Math.max(60, Math.floor(_smBot - _smR.top - 8)) + 'px';
+                    } catch (_smE) {}
                 }
                 return;
             }
@@ -9691,7 +10119,8 @@ const App = {
         $('#language-select').on('change', function() {
             const lang = $(this).val();
             // 페이지 새로고침하여 언어 변경 적용
-            window.location.href = window.location.pathname + '?lang=' + lang;
+            // ★ (2026-11-11 02:26, 71차 점검) 주소의 #storage=…&path=… 를 버려 언어를 바꾸면 보던 폴더를 잃고 홈으로 갔음 → 그대로 붙임
+            window.location.href = window.location.pathname + '?lang=' + lang + (window.location.hash || '');
         });
         
         $('.theme-item').on('click', function() {
@@ -9718,6 +10147,13 @@ const App = {
         // currentPreviewStorageId를 명시적으로 전달 → 모달 열린 상태로 사이드바에서 다른 스토리지 클릭해도 안전
         // MP3 플레이어의 경우 onTrackChange에서 currentPreviewPath가 업데이트되어 재생 중인 파일이 다운로드됨
         $('#btn-preview-download').on('click', () => {
+            // ★ (2026-11-01 07:18, 37차 기능 점검) 압축 안 항목이면 스토리지의 같은 경로 파일을 받던 것 → 막고 안내
+            if (this._previewArchiveEntry) { this.toast(t('archive_entry_not_supported', '압축 파일 안의 항목에서는 사용할 수 없습니다.'), 'warning'); return; }
+            // ★ (2026-11-04 01:39, 54차 점검) 보관함 미리보기면 암호화 파일 받기(목록 우클릭 '다운로드'와 같은 vaultDownloadFile)로 — 종전엔 '보관함/uuid' 경로로 일반 download 를 불러 늘 404 '파일을 찾을 수 없습니다'였음(재현)
+            if (this.currentPreviewPath && this.vault && this.vault.isVaultView) {
+                const _vItem = (this.files || []).find(f => f && f._uuid && !f._plain && f.path === this.currentPreviewPath);
+                if (_vItem) { this.vaultDownloadFile(_vItem); return; }
+            }
             if (this.currentPreviewPath) {
                 const _dlStorageId = this.currentPreviewStorageId || this.currentStorage;
                 this.downloadFile(this.currentPreviewPath, true, true, _dlStorageId);  // 강제 진행률 + 스토리지 ID 명시
@@ -9802,9 +10238,12 @@ const App = {
             const sso = res.sso;
             const container = document.getElementById('sso-buttons');
             let hasSSO = false;
-            if (sso.ldap?.enabled) { document.getElementById('sso-ldap-btn').style.display = ''; hasSSO = true; }
-            if (sso.oidc?.enabled) { document.getElementById('sso-oidc-btn').style.display = ''; document.getElementById('sso-oidc-label').textContent = sso.oidc.label || 'SSO 로그인'; hasSSO = true; }
-            if (sso.saml?.enabled) { document.getElementById('sso-saml-btn').style.display = ''; document.getElementById('sso-saml-label').textContent = sso.saml.label || 'SAML 로그인'; hasSSO = true; }
+            // ★ (2026-10-31 13:48, 34차 후속 개선) 버튼 문구: 관리자가 바꾼 문구면 그대로, 비었거나 설정 창 기본값(한국어)이면 화면 언어의 기본 문구 —
+            //   종전엔 영어 화면에도 'SSO 로그인' 이 나왔고, LDAP 는 설정한 문구가 아예 반영되지 않았음(OIDC·SAML 과 맞춤)
+            const _ssoLbl = (v, defs, key, ko) => { v = String(v || '').trim(); return (v && !defs.includes(v)) ? v : t(key, ko); };
+            if (sso.ldap?.enabled) { document.getElementById('sso-ldap-btn').style.display = ''; const _lb = document.getElementById('sso-ldap-btn-label'); if (_lb) _lb.textContent = _ssoLbl(sso.ldap.label, ['LDAP/AD 로그인', 'LDAP / AD 로그인'], 'sso_ldap_login_btn', 'LDAP / AD 로그인'); hasSSO = true; }
+            if (sso.oidc?.enabled) { document.getElementById('sso-oidc-btn').style.display = ''; document.getElementById('sso-oidc-label').textContent = _ssoLbl(sso.oidc.label, ['SSO 로그인'], 'sso_login_btn', 'SSO 로그인'); hasSSO = true; }
+            if (sso.saml?.enabled) { document.getElementById('sso-saml-btn').style.display = ''; document.getElementById('sso-saml-label').textContent = _ssoLbl(sso.saml.label, ['SAML 로그인'], 'saml_login_btn', 'SAML 로그인'); hasSSO = true; }
             if (hasSSO) container.style.display = '';
             
             // OIDC 자동 로그인: IdP에 이미 로그인되어 있으면 자동 리다이렉트
@@ -9886,7 +10325,8 @@ const App = {
         
         try {
             const res = await this.api('sso_settings_get', {}, 'GET');
-            if (!res.success) return;
+            if (!res || !res.success) { this._admLoadMark('sso', false); return; }   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark) — 종전 !res.success 와 같은 판정(null 은 종전에도 여기서 끝남)
+            this._admLoadMark('sso', true);   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark)
             const sso = res.sso || {};
             
             // 환경 감지 정보 표시
@@ -9987,6 +10427,7 @@ const App = {
     },
     
     async saveSSOSettings() {
+        if (!await this._admLoadFailConfirm('sso')) return;   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 실패 표시가 있을 때만 확인(취소면 저장 안 함)
         // ★ (2026-10-29 03:19, 16차) 각 저장 결과를 확인 — 종전엔 결과를 안 봐 서버가 거부해도 '저장되었습니다' 가 떴음. 하나라도 실패하면 알림
         const _ssoResults = [];
         // Kerberos
@@ -10063,7 +10504,8 @@ const App = {
     
     async testLDAPConnection() {
         const resultEl = document.getElementById('sso-ldap-test-result');
-        resultEl.textContent = '테스트 중...';
+        // ★ (2026-11-01 01:02, 35차 전체 점검) 진행 문구가 한국어로 고정돼 영어 화면에서도 '테스트 중...' 이 보였음 → t() 로 감쌈
+        resultEl.textContent = t('testing', '테스트 중...');
         resultEl.style.color = 'var(--fs-text-2, #666)';
         try {
             const res = await this.api('sso_ldap_test', {
@@ -10105,7 +10547,10 @@ const App = {
         const password = $('#login-password').val();
         const remember = $('#login-remember').prop('checked') || false;
         
-        const res = await this.api('login', { username, password, remember });
+        if (this._loginBusy) return;   // ★ (2026-11-12 07:48, 95차 LGN-1) 응답 전 두 번째 제출(두 번 누르기·Enter 두 번)은 무시 — 종전엔 요청이 2건 가 틀리면 실패가 2회로 세어 세 번 틀려도 5회 잠금, 맞으면 세션·로그인 유지 토큰이 2개 생겨 유령 세션이 남았음(재현). 서버 잠금 규칙은 그대로
+        this._loginBusy = true;
+        let res;
+        try { res = await this.api('login', { username, password, remember }, 'POST', null, 0, 30000); } finally { this._loginBusy = false; }   // ★ (2026-11-12 09:23, 96차 RGR15-2) 30초 넘게 답이 없으면 끝내 다시 시도할 수 있게 — 95차 두 번 제출 막기 뒤 응답이 끝내 오지 않으면 새로 고침 전까지 다시 로그인할 수 없었음(재검토 재현)
         
         if (res.success) {
             // 2FA 필요한 경우
@@ -10125,6 +10570,7 @@ const App = {
             this.showMain();
             this.loadNotices(); // 공지 로드
             this.loadUserPreferences(); // 사용자 설정 불러오기
+            if (res.user && res.user.password_reset_required) this._pwResetNotice();   // ★ (2026-11-12 00:02, 88차 개선 G3-5) 임시 비밀번호로 로그인했으면 안내(막지 않음)
         } else {
             $('#login-error').text(res.error);
         }
@@ -10143,7 +10589,10 @@ const App = {
             return;
         }
         
-        const res = await this.api('2fa_verify', { code });
+        if (this._twofaBusy) return;   // ★ (2026-11-12 07:48, 95차 LGN-1) 위 로그인과 같음(2FA 틀린 코드가 2회로 셌음)
+        this._twofaBusy = true;
+        let res;
+        try { res = await this.api('2fa_verify', { code }, 'POST', null, 0, 30000); } finally { this._twofaBusy = false; }   // ★ (2026-11-12 09:23, 96차 RGR15-2) 위와 같음
         
         if (res.success) {
             // CSRF 토큰 업데이트
@@ -10166,9 +10615,26 @@ const App = {
             this.showMain();
             this.loadNotices(); // 공지 로드
             this.loadUserPreferences(); // 사용자 설정 불러오기
+            if (res.user && res.user.password_reset_required) this._pwResetNotice();   // ★ (2026-11-12 00:02, 88차 개선 G3-5) 임시 비밀번호로 로그인했으면 안내(막지 않음)
         } else {
             $('#login-error').text(res.error);
         }
+    },
+    
+    // ★ (2026-11-12 00:02, 88차 개선 G3-5) 임시 비밀번호(비밀번호 찾기) 로그인 직후 한 번 — '비밀번호 변경' 을 누르면 기존 설정 창의 비밀번호 변경 칸을 엶. 종전엔 password_reset_required 를 읽는 곳이 없어 안내가 없었음(재현)
+    async _pwResetNotice() {
+        const ok = await this.showConfirmModal({
+            title: t('change_password', '비밀번호 변경'),
+            content: `<div style="font-size:14px;">${t('pw_reset_required_notice', '임시 비밀번호로 로그인했습니다. 비밀번호를 바꿔 주세요.')}</div>`,
+            buttons: [
+                { text: t('close', '닫기'), value: false, class: 'btn-secondary' },
+                { text: t('change_password', '비밀번호 변경'), value: true, class: 'btn-primary' }
+            ]
+        }).catch(() => false);
+        if (!ok) return;
+        this.showSettingsModal();
+        document.querySelector('#modal-settings .tab-btn[data-tab="tab-profile"]')?.click();
+        setTimeout(() => document.getElementById('current-password')?.focus(), 300);
     },
     
     // ★ (2026-10-29 03:51, 17차) 2FA 코드 입력 화면 — 일반 로그인·LDAP 로그인·SSO(OIDC/SAML/Kerberos) 복귀에서 같이 씀
@@ -10196,6 +10662,11 @@ const App = {
         $('#twofa-otp-section').show();
         $('#twofa-backup-section').hide();
         $('#login-error').text('');
+        // ★ (2026-10-31 13:35, 34차 후속 개선) LDAP 로그인→2FA→뒤로 오면 showLdapLoginForm 이 숨긴 SSO 버튼 영역이 그대로 숨겨져 있던 문제 —
+        //   LDAP 폼은 숨기고, 보이는 SSO 버튼이 하나라도 있으면 영역을 다시 보임
+        $('#ldap-login-form').hide();
+        const _ssoBox = document.getElementById('sso-buttons');
+        if (_ssoBox && Array.from(_ssoBox.querySelectorAll('button')).some(b => b.style.display !== 'none')) _ssoBox.style.display = '';
         $('#login-password').val('').focus();
     },
     
@@ -10339,6 +10810,7 @@ const App = {
             ]
         })) return;
         
+        try { if (this.multiUpload && this.multiUpload.sessions && this.multiUpload.sessions.size) this._cancelUploadSessions(); } catch (e) {}   // ★ (2026-11-12 03:33, 91차 RGR10-N4) 진행 중 업로드를 먼저 멈춤 — 종전엔 남은 파일이 계속 올라가, 같은 탭에서 다른 계정으로 로그인하면 그 계정 이름으로 올라갔음(재현, 원본부터 — 90차 요청 제한 기다림으로 틈이 커짐)
         await this.api('logout');
         this.user = null;
         this.sessionExpired = true; // 로그아웃 후 API 호출 차단
@@ -10351,7 +10823,15 @@ const App = {
         try { if (this.vault && this.vault.keys) this.vault.keys.clear(); sessionStorage.removeItem('vault_keys'); } catch (e) {}
         // ★ (2026-10-29 10:39, 20차 점검) 폴더 목록 캐시도 비움 — 종전엔 남아서 같은 탭에서 다음 사람이 같은 폴더로 가면 앞 사람이 본 목록이 먼저(권한 오류면 그대로) 보였음
         try { this._fileListCache.clear(); } catch (e) {}
-        
+        // ★ (2026-11-01 01:49, 36차 전체 점검) ←/→ 탐색 기록(검색어 포함)·알림 닫기 기록이 남아 같은 탭의 다음 사용자에게 앞 사람 경로·검색어로 이동을 시도했다 → 비움
+        this._navHistory = [];
+        this._navHistoryIndex = -1;
+        this._updateNavButtons();
+        this._dismissedNotifications = undefined;
+        // ★ (2026-11-01 11:40, 39차 점검) 복사/잘라내기 클립보드도 남아 다음 사용자의 붙여넣기가 앞 사람 스토리지·경로로 갔음 → 비우고 붙여넣기 단추도 갱신
+        this.clipboard = { items: [], mode: null, storageId: null };
+        try { this.updatePasteButton(); } catch (e) {}
+
         // 검색어 초기화
         sessionStorage.removeItem('webhard_search');
         $('#search-input').val('');
@@ -10425,11 +10905,14 @@ const App = {
         // 2FA 폼 초기화
         $('#twofa-form').hide();
         $('#login-form').show();
+        // ★ (2026-10-31 13:35, 34차 후속 개선) LDAP 로 로그인했다가 로그아웃하면 LDAP 폼이 일반 폼·SSO 버튼과 함께 보이던 문제 — LDAP 폼을 숨김
+        //   (SSO 버튼 영역은 아래 loadSSOConfig 가 설정에 따라 다시 보임)
+        $('#ldap-login-form').hide();
         $('#twofa-code').val('');
         $('#twofa-backup-code').val('');
         $('#twofa-otp-section').show();
         $('#twofa-backup-section').hide();
-        
+
         // 알림 초기화
         this._notifications = {};
         this.renderNotifications();
@@ -10505,6 +10988,9 @@ const App = {
     
     showMain() {
         this._debugLog && this._debugLog('showMain', { hasUser: !!this.user });
+        // ★ (2026-11-02 19:16, 47차 점검) 서버 설정(조각 크기 max_chunk_size)은 로그인한 요청에만 오는데 loadServerConfig 는 로그인 전 한 번만 불려, 로그인 폼으로 들어오면 새로 고침 전까지 조각이 기본 10MB 였음
+        //   → PHP 업로드 한도가 작은 서버(기본 2M)에선 2MB 넘는 파일이 모두 '청크 저장 실패'(시험 서버 재현). 로그인 뒤 화면에 들어올 때 한 번 더 받음(실패해도 종전 값 유지)
+        this.loadServerConfig();
         // 클래스 기반 화면 전환
         document.getElementById('login-screen').classList.add('hidden');
         document.getElementById('login-screen').classList.remove('active');
@@ -10560,6 +11046,21 @@ const App = {
             $('#menu-webdav-item').hide();
         }
         
+        // ★ (2026-11-12 18:53, 102차 개선 CFG-2) 이 브라우저의 보기·정렬·시계 값을 마지막에 쓴 계정 번호(fs_settings_owner)와 다르면 그 값을 버리고 이 계정 값(서버, 없으면 기본)으로 —
+        //   종전엔 공용 PC 에서 앞 계정의 값이 다음 계정 화면에 쓰이고, 다음 계정이 한 번 바꾸면 그 값이 그 계정 서버 설정에도 저장됐음(재현). 번호가 없으면(업그레이드 직후 옛 값) 지금 계정 것으로 보고 그대로 둠
+        try {
+            const _uid = this.user && this.user.id != null ? String(this.user.id) : null;
+            if (_uid !== null) {
+                const _own = localStorage.getItem('fs_settings_owner');
+                if (_own !== null && _own !== _uid) {
+                    ['fs_view_settings', 'fs_sort_settings', 'clock_style'].forEach(k => localStorage.removeItem(k));
+                    $('.clock-style-item').removeClass('active');
+                    $('.clock-style-item[data-clock="0"]').addClass('active');
+                    if (typeof updateClock === 'function') updateClock();
+                }
+                localStorage.setItem('fs_settings_owner', _uid);
+            }
+        } catch (e) {}
         this.loadStorages();
         this.updateShareBadges(); // 공유 카운트 뱃지
         this.updateSharedWithMeBadge(); // 내부 공유 배지
@@ -10571,6 +11072,8 @@ const App = {
             if (boardMatch) {
                 const boardId = parseInt(boardMatch[1]);
                 const postMatch = hash.match(/&post=(\d+)/);
+                // ★ (2026-11-11 07:11, 72차) 게시판 주소(#board=…)로 연 탭은 첫 기록에 state 가 없어, 글·목록으로 갔다가 '뒤로' 하면 popstate 가 아무것도 안 해 주소만 바뀌고 화면은 그대로였음(재현) → 71차 저장소 주소 복원과 같게 첫 기록 state 를 넣음(주소는 그대로). 그사이 다른 곳으로 옮겼으면(state 있음·주소 바뀜) 안 넣음
+                try { if (!history.state && window.location.hash === hash) history.replaceState(postMatch ? { board: boardId, post: parseInt(postMatch[1]) } : { board: boardId }, '', window.location.href); } catch (e) {}
                 if (postMatch) {
                     this.openBoard(boardId, false).then(() => this.viewBoardPost(parseInt(postMatch[1]), false));
                 } else {
@@ -10676,7 +11179,7 @@ const App = {
                 e.stopPropagation();
                 App._dismissedNotifications = App._dismissedNotifications || {};
                 App._dismissedNotifications[id] = Date.now();
-                App.api('user_preferences_save', { dismissed_notifications: App._dismissedNotifications }).catch(() => {});
+                App.api('user_preferences_save', { dismiss_notification: { id: String(id), ts: App._dismissedNotifications[id] } }).catch(() => {});   // ★ (2026-11-03 23:38, 53차 점검) 한 항목만 보내 서버가 최신 기록에 합침 — 통째로 보내면 다른 탭에서 닫은 기록을 덮어썼음
                 // 알림별 닫기 콜백 (예: 서버 상태 초기화) — 있을 때만
                 if (n.onDismiss) { try { n.onDismiss(); } catch(_) {} }
                 App.removeHeaderNotification(id);
@@ -10729,7 +11232,27 @@ const App = {
         // 즉시 1회 확인
         this._checkBoardNotifications();
         // 30초마다 폴링
-        this._boardNotifTimer = setInterval(() => this._checkBoardNotifications(), 30000);
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 탭이 숨겨진 동안에도 30초마다 요청해 서버 last_activity 가 늘 갱신돼 '자동 로그아웃'이 안 걸렸다 → 숨겨진 동안 건너뛰고 다시 보이면 한 번 불러옴
+        this._boardNotifTimer = setInterval(() => { if (!document.hidden) this._checkBoardNotifications(); }, 30000);
+        this._installPollResumeOnVisible();
+    },
+    
+    // ★ (2026-11-01 07:18, 37차 기능 점검) 숨겨진 동안 건너뛴 자동 폴링(게시판 알림·공유 업로드 알림·휴지통)을 탭이 다시 보이면 한 번 불러옴(리스너는 한 번만 등록)
+    _installPollResumeOnVisible() {
+        if (this._pollResumeInstalled) return;
+        this._pollResumeInstalled = true;
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden || !this.user) return;
+            try { if (this._boardNotifTimer) this._checkBoardNotifications(); } catch (e) {}
+            try { if (this._shareUploadNotifTimer) this._checkShareUploadNotify(); } catch (e) {}
+            try {
+                if (this._trashPollTimer) {
+                    this.updateTrashIcon();
+                    this.updateShareBadges();
+                    this.updateSharedWithMeBadge();
+                }
+            } catch (e) {}
+        });
     },
     
     _stopBoardNotificationPolling() {
@@ -10742,7 +11265,9 @@ const App = {
     _startShareUploadNotifyPolling() {
         this._stopShareUploadNotifyPolling();
         this._checkShareUploadNotify();
-        this._shareUploadNotifTimer = setInterval(() => this._checkShareUploadNotify(), 30000);
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 숨겨진 탭에서도 돌아 자동 로그아웃을 막던 것 → 숨겨진 동안 건너뜀(다시 보이면 _installPollResumeOnVisible 이 한 번 불러옴)
+        this._shareUploadNotifTimer = setInterval(() => { if (!document.hidden) this._checkShareUploadNotify(); }, 30000);
+        this._installPollResumeOnVisible();
     },
     
     _stopShareUploadNotifyPolling() {
@@ -10840,6 +11365,9 @@ const App = {
                 $(`#storage-list a[data-id="${share.storage_id}"]`).addClass('active');
                 // ★ (2026-10-10) 스토리지가 실제로 바뀌었을 때만 그 스토리지의 보기 방식·정렬 복원(_restoreStorageSettings — 사이드바 클릭·뒤로가기·내 공유 링크 등과 같게). 종전엔 빠져 예전 스토리지 보기로 나왔다
                 if (String(_prevSidShare) !== String(share.storage_id)) this._restoreStorageSettings(share.storage_id);
+                // ★ (2026-11-04 01:42, 54차 점검) 주소·history 도 공유 폴더로(일반 폴더 열기 navigate 의 pushState 와 같게) — 종전엔 안 바꿔 새로 고침·뒤로 가기 때 앞 폴더가 열렸음(재현).
+                //   loadFiles(true) 는 목록 캐시를 먼저 그려 방금 올라온 파일이 늦게 보일 수 있어, 캐시 없는 종전 loadFiles() 는 그대로 두고 주소만 넣음
+                try { history.pushState({ storageId: this.currentStorage, path: this.currentPath }, '', `#storage=${this.currentStorage}&path=${encodeURIComponent(this.currentPath)}`); } catch (e) {}
                 await this.loadFiles();
             }
             // 알림 갱신 (초기화 반영)
@@ -10855,8 +11383,9 @@ const App = {
         this._stopIndexSyncPolling();
         // 로그인 30초 후 첫 동기화, 이후 5분마다
         this._indexSyncTimeout = setTimeout(() => {
-            this._runIndexSync();
-            this._indexSyncTimer = setInterval(() => this._runIndexSync(), 300000);
+            // ★ (2026-11-01 07:18, 37차 기능 점검) 5분 주기 index_sync 도 숨겨진 탭에서 돌면 last_activity 를 갱신해 자동 로그아웃을 막음 → 숨겨진 동안 건너뜀(다음 주기에 다시 함)
+            if (!document.hidden) this._runIndexSync();
+            this._indexSyncTimer = setInterval(() => { if (!document.hidden) this._runIndexSync(); }, 300000);
         }, 30000);
     },
     
@@ -10898,7 +11427,7 @@ const App = {
             
             // lastRebuild를 먼저 확정 (아래 dismiss 비교에서 사용 — TDZ 방지)
             const lastRebuild = indexRes.stats?.last_rebuild;
-            const lastRebuildTime = lastRebuild ? new Date(lastRebuild).getTime() : 0;
+            const lastRebuildTime = lastRebuild ? new Date(typeof lastRebuild === 'string' ? lastRebuild.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : lastRebuild).getTime() : 0;   // ★ (2026-11-10 10:29, 62차 D9) 서버 'Y-m-d H:i:s' 를 옛 Safari(15.3 이하)가 못 읽어 NaN — 61차 E 음악 목록과 같은 방식
             
             // 관리자가 닫은 알림은 "마지막 재구축 이후"에 닫았으면 다시 표시하지 않음.
             //   닫기(X)는 범용 dismiss(_dismissedNotifications['index-rebuild'])에 시각이 저장됨(showHeaderNotification).
@@ -10924,7 +11453,7 @@ const App = {
                 return;
             }
             
-            const lastDate = new Date(lastRebuild);
+            const lastDate = new Date(typeof lastRebuild === 'string' ? lastRebuild.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : lastRebuild);   // ★ (2026-11-10 10:29, 62차 D9) 옛 Safari 에서 NaN → 경과일 알림이 안 떴음
             const now = new Date();
             const elapsed = Math.floor((now - lastDate) / (1000 * 60 * 60 * 24));
             
@@ -10956,12 +11485,14 @@ const App = {
                     const name = this.escapeHtml(n.from_user_name || '');
                     const preview = this.escapeHtml(n.content_preview || '');
                     if (n.reason === 'reply') {
-                        return `<b>${name}</b>: ${preview} (답글)`;
+                        // ★ (2026-10-31 13:36, 34차 후속 개선) '(답글)' 이 영어 화면에도 한국어로 나오던 것 — 기존 키 reply 로
+                        return `<b>${name}</b>: ${preview} (${this.escapeHtml(t('reply', '답글'))})`;
                     }
                     return `<b>${name}</b>: ${preview}`;
                 }).join('<br>');
                 
-                const moreText = unread > 3 ? `<br><small>외 ${unread - 3}건</small>` : '';
+                // ★ (2026-10-31 13:36, 34차 후속 개선) '외 N건' 이 영어 화면에도 한국어로 나오던 것 — 기존 키 transfer_and_more 로
+                const moreText = unread > 3 ? `<br><small>${this.escapeHtml(tf('transfer_and_more', {n: unread - 3}, `외 ${unread - 3}건`))}</small>` : '';
                 
                 this.showHeaderNotification('board_comments', {
                     icon: '💬',
@@ -10986,7 +11517,7 @@ const App = {
                 ${notifs.length === 0 ? `<p style="text-align:center;color:var(--fs-text-3, #888);padding:20px;">${t('no_notifications', '알림이 없습니다.')}</p>` : ''}
                 ${notifs.map(n => {
                     const isUnread = !n.is_read;
-                    const time = n.created_at ? new Date(n.created_at).toLocaleString() : '';
+                    const time = n.created_at ? new Date(typeof n.created_at === 'string' ? n.created_at.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : n.created_at).toLocaleString(t('locale_code', 'ko-KR')) : '';   // ★ (2026-11-10 10:29, 62차 D9) 옛 Safari 에서 'Invalid Date' 로 보였음 / ★ (2026-11-10 19:35, 67차 점검) 날짜 형식도 화면 언어로(다른 날짜 표시와 같게) — 종전엔 브라우저 언어 형식
                     const fromName = this.escapeHtml(n.from_user_name || '');
                     const postTitle = this.escapeHtml(n.post_title || '');
                     const boardName = this.escapeHtml(n.board_name || '');
@@ -11014,6 +11545,7 @@ const App = {
             modal.id = modalId;
             modal.className = 'modal-overlay';
             modal.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:10100;justify-content:center;align-items:center;';
+            // ★ (2026-11-13 01:08, 108차 ARIA-4) 댓글 알림 창 닫기 단추(✕ 그림만)에 이름 — 종전엔 이름이 비었음
             modal.innerHTML = `
                 <div style="background:var(--modal-bg, var(--fs-surface, #fff));border-radius:12px;max-width:440px;width:90%;max-height:80vh;box-shadow:0 8px 32px rgba(0,0,0,0.2);overflow:hidden;">
                     <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border-color, var(--fs-border, #eee));">
@@ -11021,7 +11553,7 @@ const App = {
                         <div style="display:flex;gap:8px;align-items:center;">
                             <button id="board-notif-read-all" style="font-size:12px;padding:4px 10px;border:1px solid var(--border-color, var(--fs-border-2, #ddd));border-radius:6px;background:var(--bg-color, var(--fs-surface-2, #f5f5f5));color:var(--text-color, var(--fs-text, #333));cursor:pointer;">${t('read_all', '모두 읽음')}</button>
                             <button id="board-notif-delete-all" style="font-size:12px;padding:4px 10px;border:1px solid #e74c3c;border-radius:6px;background:transparent;color:var(--fs-fg-err, #e74c3c);cursor:pointer;">${t('delete_all', '전체 삭제')}</button>
-                            <button id="board-notif-close" style="font-size:18px;background:none;border:none;color:var(--text-muted, var(--fs-text-3, #888));cursor:pointer;padding:0 4px;">✕</button>
+                            <button id="board-notif-close" aria-label="${t('close','닫기')}" style="font-size:18px;background:none;border:none;color:var(--text-muted, var(--fs-text-3, #888));cursor:pointer;padding:0 4px;">✕</button>
                         </div>
                     </div>
                     <div id="board-notif-body" style="padding:0;overflow-y:auto;max-height:calc(80vh - 60px);"></div>
@@ -11040,7 +11572,10 @@ const App = {
             
             // 모두 읽음
             document.getElementById('board-notif-read-all').addEventListener('click', async () => {
-                await this.api('board_notification_read', { read_all: true });
+                const _nr = await this.api('board_notification_read', { read_all: true });
+                // ★ (2026-11-02 11:53, 43차 점검) 결과를 안 봐 실패해도 '읽음 처리했습니다'(성공)가 떴음 → 실패면 이유를 알리고 창을 그대로 둠(아래 모두 삭제도 같음)
+                if (!_nr) return;
+                if (!_nr.success) { this.toast(_nr.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error'); return; }
                 this._checkBoardNotifications();
                 modal.style.display = 'none';
                 this.toast(t('all_read', '모든 알림을 읽음 처리했습니다.'), 'success');
@@ -11048,10 +11583,12 @@ const App = {
             
             // 모두 삭제
             document.getElementById('board-notif-delete-all').addEventListener('click', async () => {
-                await this.api('board_notification_delete', { delete_all: true });
+                const _nd = await this.api('board_notification_delete', { delete_all: true });
+                if (!_nd) return;   // ★ (2026-11-02 11:53, 43차 점검) 위 모두 읽음 주석
+                if (!_nd.success) { this.toast(_nd.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error'); return; }
                 this._checkBoardNotifications();
                 modal.style.display = 'none';
-                this.toast(t('all_deleted', '모든 알림을 삭제했습니다.'), 'success');
+                this.toast(t('notif_all_deleted', '모든 알림을 삭제했습니다.'), 'success');   // ★ (2026-11-02 10:32, 42차 점검) all_deleted 값('전체 삭제 완료', 기록 화면용)이 나와 알림 문구가 어긋났음 → 새 키
             });
         }
         
@@ -11075,7 +11612,7 @@ const App = {
                 modal.style.display = 'none';
                 if (boardId && postId) {
                     await this.openBoard(boardId, false);
-                    await this.viewBoardPost(postId, false);
+                    await this.viewBoardPost(postId, true, false, commentId);   // ★ (2026-11-13 10:47, 111차 BRD-1) 글 주소를 한 칸 쌓고(109차 NAV2-3 — 같은 글이면 안 쌓음) 누른 댓글이 있는 쪽을 엶 — 종전엔 addHistory=false 라 주소가 앞 화면 그대로(새로 고침·뒤로 가기 때 엉뚱한 화면), 늘 1쪽이라 2쪽 이후 댓글은 스크롤·강조가 안 됐음(재현)
                     
                     // 해당 댓글로 스크롤
                     if (commentId) {
@@ -11169,7 +11706,27 @@ const App = {
             this.thumbnailSize = 200;
             this.thumbFormats = ['jpg','jpeg','png','gif','webp','bmp'];
         }
-        
+
+        // ★ (2026-11-02 09:00, 41차 점검) Apache 가 .htaccess 를 안 읽으면(AllowOverride None) data/users.json 등이 로그인 없이 URL 로 열리는데 앱이 알려 주지 않았음
+        //   → 실제 관리자 로그인 때 세션당 한 번 같은 출처의 data/users.json 을 요청해 200 + JSON 이면 경고. 실패·404·403·HTML 응답이면 조용히(내용은 쓰지 않고 첫 글자만 봄)
+        if (this.user?.role === 'admin' && !this._dataExposureChecked) {
+            this._dataExposureChecked = true;
+            let _done = false;
+            try { _done = sessionStorage.getItem('fs_data_exposure_checked') === '1'; sessionStorage.setItem('fs_data_exposure_checked', '1'); } catch (e) {}
+            if (!_done) {
+                fetch('data/users.json', { cache: 'no-store', credentials: 'omit' })
+                    .then(r => (r && r.status === 200) ? r.text() : '')
+                    .then(txt => {
+                        const s = String(txt || '').replace(/^﻿/, '').trimStart();
+                        if (s && (s[0] === '[' || s[0] === '{')) {
+                            // ★ (2026-11-02 09:28, 41차 점검) 토스트 칸은 하나라 시작할 때 뒤이어 뜨는 다른 알림이 이 경고를 덮었음(실측) → 세션당 한 번 알림 창으로
+                            this.alert('⚠️ ' + this.escapeHtml(t('data_exposed_warning', '데이터 파일(data/users.json)이 로그인 없이 웹에서 열립니다. 웹 서버가 .htaccess 를 읽지 않는 설정입니다(Apache 는 AllowOverride All 필요). README \'설치\' 를 참고하세요.')), t('warning', '경고'));
+                        }
+                    })
+                    .catch(() => {});
+            }
+        }
+
         // thumbFormats 로드 후 이미 파일 목록이 렌더링되어 있으면 재렌더링
         if (this.thumbFormats.length && this.viewMode === 'grid' && document.querySelectorAll('.file-item').length > 0 && !document.querySelector('.file-thumbnail')) {
             this.loadFiles(false);
@@ -11213,6 +11770,18 @@ const App = {
                 return true;
             }
             this._storageRetryCount = 0; // 소진 → 리셋(다음 트리거에서 재시도 가능)
+            // ★ (2026-11-13 01:31, 108차 SLOW-1) 다 썼는데 첫 화면이 아직 '로딩 중'(스토리지 0개)이면 init 실패 때와 같은 '⚠️ 목록을 불러올 수 없습니다 + 다시 시도'를 그림, 회선이 돌아오면(online) 한 번 더 —
+            //   종전엔 '로딩 중...'·빈 사이드바로 굳고 회선이 돌아와도 다시 시도하지 않았음(재현: storages 만 9초 끊김 → 4회 뒤 멈춤, 복구 8초 뒤에도 그대로)
+            this._storagesLoadFailed = true;
+            const _sfl = document.getElementById('file-list');
+            if (_sfl && !(this.storages || []).length && (/로딩 중|Loading/.test(_sfl.textContent || '') || _sfl.querySelector('[data-stg-fail]'))) {
+                _sfl.innerHTML =
+                    `<div class="empty-msg" data-stg-fail style="padding:40px;text-align:center;opacity:0.8;">` +
+                    `<div style="font-size:32px;margin-bottom:12px;">⚠️</div>` +
+                    `<div style="margin-bottom:14px;">${t('list_load_failed', '목록을 불러올 수 없습니다.')}</div>` +
+                    `<button class="btn" onclick="this.disabled=true;App.loadStorages()">${t('retry', '다시 시도')}</button>` +
+                    `</div>`;
+            }
             return false;
         };
 
@@ -11258,6 +11827,7 @@ const App = {
             return;
         }
         this._storageRetryCount = 0;
+        this._storagesLoadFailed = false;   // ★ (2026-11-13 01:31, 108차 SLOW-1) 받았으면 online 때 다시 부르지 않음
         
         const list = $('#storage-list').empty();
         
@@ -11412,7 +11982,11 @@ const App = {
                 
                 if (exists) {
                     this.currentStorage = hashStorageId;
-                    this.currentPath = pathMatch ? decodeURIComponent(pathMatch[1]) : '';
+                    // ★ (2026-11-01 11:40, 39차 점검) 깨진 % 인코딩(손으로 고친·잘린 링크)이면 decodeURIComponent 가 URIError 를 던져 이후(권한·loadFiles)가 실행되지 않고
+                    //   목록 칸이 빈 채 남았음 → 풀 수 없으면 스토리지 루트로
+                    let _hp = '';
+                    try { _hp = pathMatch ? decodeURIComponent(pathMatch[1]) : ''; } catch (e) { _hp = ''; }
+                    this.currentPath = _hp;
                     $('#storage-list a').removeClass('active');
                     $(`#storage-list a[data-id="${hashStorageId}"]`).addClass('active');
                     
@@ -11459,6 +12033,8 @@ const App = {
                     
                     // vault 폴더인 경우 loadFiles 내부에서 자동 감지 (is_vault_folder)
                     // 별도 vault_info 사전 체크 불필요 — loadFiles가 처리
+                    // ★ (2026-11-11 02:26, 71차 점검) 주소(#…)로 연 탭은 첫 기록에 state 가 없어, 하위로 갔다가 브라우저 '뒤로' 하면 popstate 가 아무것도 안 해 주소만 바뀌고 화면은 그대로였음 → 복원한 위치를 첫 기록 state 로 넣음(주소는 그대로)
+                    try { if (!history.state) history.replaceState({ storageId: hashStorageId, path: this.currentPath || '' }, '', window.location.href); } catch (e) {}
                     this.loadFiles(false);
                     this.loadAllStorageQuotas();
                 } else {
@@ -11554,6 +12130,8 @@ const App = {
         // 보기 모드 복원
         const viewSettings = safeParse('fs_view_settings');
         this.viewMode = viewSettings[storageId] || 'grid';
+        // ★ (2026-11-12 19:50, 103차 개선 X3) 모르는 보기 값은 기본(grid)으로 — 종전엔 서버에 이상한 값({"a":1}·'x"]')이 있으면 새 기기에서 아래 선택자가 오류로 멈추고 정렬 복원도 건너뜀(재현). 서버 판정은 그대로
+        if (this.viewMode !== 'grid' && this.viewMode !== 'list') this.viewMode = 'grid';
         $('#file-list').removeClass('grid-view list-view').addClass(this.viewMode + '-view');
         $('#btn-view-grid, #btn-view-list').removeClass('active');
         $(`#btn-view-${this.viewMode}`).addClass('active');
@@ -11569,6 +12147,9 @@ const App = {
             this.sortBy = 'name';
             this.sortOrder = 'asc';
         }
+        // ★ (2026-11-12 19:50, 103차 개선 X3) 모르는 정렬 값은 기본(name·asc)으로 — 종전엔 'x"]' 면 아래 선택자가 오류로 멈추고, 객체·'zz' 면 그 값으로 목록을 요청했음(재현)
+        if (!['name', 'date', 'size', 'type'].includes(this.sortBy)) this.sortBy = 'name';
+        if (this.sortOrder !== 'asc' && this.sortOrder !== 'desc') this.sortOrder = 'asc';
         // 정렬 UI 업데이트
         document.querySelectorAll('.sort-option').forEach(el => {
             el.classList.remove('active');
@@ -11595,6 +12176,25 @@ const App = {
             $('.upload-dropdown').toggle(!!this.currentPermissions.can_write);
             $('#btn-new-folder').toggle(!!this.currentPermissions.can_write);
         }
+        this._storageChrome(storageId);
+    },
+
+    /** ★ (2026-10-31 01:23, 펜닐 요청 — 재현) 스토리지가 바뀔 때 화면 정리 — selectStorage 의 같은 부분(동기화 단추·정렬 단추·원격 안내 띠)을 그대로 옮겨 _restoreStorageSettings 에서 부름.
+     *   종전엔 selectStorage(사이드바 클릭)에서만 해, 뒤로/앞으로·즐겨찾기·최근 파일·공유 알림·브라우저 뒤로가기·경로 입력으로 FTP↔로컬을 오가면
+     *   'FTP 안내' 띠가 남거나 빠지고 정렬 단추가 반대로 보였음(재현). selectStorage 는 이 뒤에 같은 일을 한 번 더 하지만 결과가 같음 */
+    _storageChrome(id) {
+        const storage = (this.storages || []).find(s => s.id == id);
+        const isExternal = storage && storage.storage_type !== 'home' && storage.storage_type !== 'shared';
+        const isAdmin = this.user && this.user.role === 'admin';
+        $('#btn-index-sync').toggle(!!(isExternal && isAdmin));
+        const isRemote = isExternal && storage.storage_type !== 'local';
+        $('.sort-dropdown').toggle(!isRemote);
+        $('#remote-storage-notice').remove();
+        if (isRemote) {
+            const type = (storage.storage_type || '').toUpperCase();
+            const msg = t('remote_notice', '외부 스토리지 안내({type}): 목록, 업/다운로드, 미리보기 지원 / 동영상은 MP4·WebM 등만 미리보기 가능 / MKV·AVI 등은 다운로드만 가능 / 썸네일·압축·트랜스코딩·공유 링크 미지원').replace('{type}', type);
+            $('#file-list').before(`<div id="remote-storage-notice" style="padding:6px 12px;background:var(--fs-tint-warn, #fff8e1);border:1px solid var(--fs-tint-warn-border, #ffe082);border-radius:6px;font-size:11px;color:var(--fs-fg-err, #795548);margin:0 0 6px;">⚠️ ${this.escapeHtml(msg)}</div>`);
+        }
     },
     
     // 스토리지 선택
@@ -11618,7 +12218,7 @@ const App = {
         
         // 게시판 뷰 닫기
         if (this.boardInlineMode) {
-            this.exitBoardView();
+            this.exitBoardView(false);   // ★ (2026-11-11 11:43, 73차) 종전 exitBoardView() 가 지금(게시판 전) 스토리지를 pushState 하고 아래 loadFiles(true) 가 고른 스토리지를 또 쌓아 '뒤로' 한 번에 게시판이 아닌 그 스토리지가 나왔음(재현) → 기록은 loadFiles 한 번만(다른 호출처와 같게 false)
         }
         
         // 검색 모드 종료
@@ -11756,12 +12356,15 @@ const App = {
     },
     
     // 파일 로드
-    async loadFiles(addHistory = false) {
+    async loadFiles(addHistory = false, opts = null) {   // ★ (2026-11-13 01:31, 108차 SLOW-4) opts.keepOnFail — 탭 복귀 자동 갱신만 씀
         // ★ (2026-10-23) 이동 회차 — 아래 '사이드바에서 파일 클릭 시 자동 선택' 예약(0.05·0.4·0.8초 뒤)이 그사이 다른 곳으로 이동했으면 아무것도 안 하게.
         //   펜닐 제보: 최근 파일을 빠르게 연달아 누르면 앞 파일의 0.8초 확인이 이미 바뀐 폴더에서 돌아 '파일을 찾을 수 없습니다: (앞 파일)' 이 떴다(시험 재현 —
         //   0.15~0.7초 간격에서 1~2개, 1.2초 간격은 0개). 이름이 같은 다른 파일을 잘못 고를 수도 있었다. 폴더를 불러올 때마다(새로 고침 포함) 하나씩 올린다.
+        if (this._dpCache) this._dpCache.clear();   // ★ (2026-10-30 22:36, 재검토) 세부 정보 창 캐시 — 목록을 다시 읽으면 비움(숨김·공유처럼 수정 시각이 안 바뀌는 변화가 옛 값으로 남았음, 재현)
         this._loadSeq = (this._loadSeq || 0) + 1;
         this._searchSeq = (this._searchSeq || 0) + 1;   // ★ (2026-10-28 18:04) 진행 중인 검색 응답은 버림(doSearch 의 번호 비교) — 검색 중에 폴더로 이동하면 늦게 온 검색 결과가 목록을 덮지 않게
+        const _reqSearchSeq = this._searchSeq;   // ★ (2026-11-13 01:31, 108차 SLOW-2) 반대 방향 — 이 응답이 오기 전에 검색을 시작했으면(번호가 바뀜) 아래에서 버림
+        this._visRefreshFailed = false;   // ★ (2026-11-13 01:31, 108차 SLOW-4) 새로 불러오면 앞 자동 갱신 실패는 지난 일(online 때 다시 부르지 않음)
         // [PerfDebug] 성능 측정 (평상시 비활성, 느려질 때 콘솔에서 활성화:  window._perfDebug = true)
         const _perfStart = window._perfDebug ? performance.now() : 0;
         const _perfLog = window._perfDebug
@@ -11829,7 +12432,8 @@ const App = {
                 path: this.currentPath 
             };
             const url = `#storage=${this.currentStorage}&path=${encodeURIComponent(this.currentPath)}`;
-            history.pushState(state, '', url);
+            const _hs = history.state;   // ★ (2026-11-13 08:10, 109차 NAV2-3) 지금 기록과 같은 위치면 쌓지 않음(목록은 종전처럼 다시 그림) — 종전엔 같은 스토리지·루트에서 '홈'·로고를 다시 누르면 같은 기록이 또 쌓여 '뒤로'가 헛돌았음(재현)
+            if (!(_hs && !_hs.board && String(_hs.storageId) === String(state.storageId) && (_hs.path || '') === (state.path || ''))) history.pushState(state, '', url);
         }
         
         // 앱 내부 탐색 히스토리 기록 (← → 버튼용)
@@ -11875,8 +12479,22 @@ const App = {
         if (this.currentStorage !== _reqStorageId || this.currentPath !== _reqPath) {
             return { success: false };
         }
+        // ★ (2026-11-13 01:31, 108차 SLOW-2) 기다리는 사이 검색을 시작했으면 버림 — 종전엔 늦게 온 폴더 목록이 검색 결과를 덮어 '검색 결과 11개' 띠 아래 폴더A 20개가 보였음(재현: files 4초 지연 → 폴더A → 0.3초 뒤 검색)
+        if (this.isSearchMode && this._searchSeq !== _reqSearchSeq) return { success: false };
         
         if (!res.success) {
+            // ★ (2026-11-13 01:31, 108차 SLOW-4) 탭 복귀 자동 갱신이 연결 실패·시간 초과(서버가 답을 못 줌 — checkAuth 와 같은 판정)면 지금 목록을 다시 그려 그대로 두고 online 때 한 번 더 —
+            //   종전엔 잘 보이던 목록이 '⚠️ 서버 연결 실패'로 바뀌고 회선이 돌아와도 그대로였음(재현: 숨김 6분 → 회선 끊김 → 복귀). 사용자가 연 이동·새로 고침은 아래 종전 그대로
+            // ★ (2026-11-13 07:59, 109차 재검토 RGR25-1) 지금 보이는 목록(this.files)이 이 스토리지·경로에서 마지막으로 받은 목록일 때만 다시 그림, 아니면 아래 종전 오류 화면 —
+            //   종전(108차)엔 직접 이동이 실패해 오류 화면인데 복귀 갱신도 실패하면 앞 폴더(루트) 45개가 그려지고 경로·주소는 폴더A 그대로였음(재현: t8b 2단계)
+            if (opts && opts.keepOnFail && !res.session_expired && (res.timeout || res.success === undefined)
+                && this._okList && this._okList.key === _cacheKey && this.files === this._okList.items) {
+                this._visRefreshFailed = true;
+                this.renderFiles(this.files || []);
+                this.selectedItems = [];
+                this.updateSelectionUI();
+                return { success: false, error: res.error };
+            }
             this.toast(res.error, 'error');
             
             // ★ 모래시계 잔존 방지 (v5.8.1b)
@@ -11890,14 +12508,32 @@ const App = {
                 `<div>${this.escapeHtml(res.error || t('unknown_error', '알 수 없는 오류'))}</div>` +
                 `</div>`
             );
+            // ★ (2026-11-15 16:02, 186차) 목록을 못 받으면(없는 폴더 — 지워진 즐겨찾기 폴더 등) 화면은 오류인데 상태줄엔 앞 폴더의 'N개 항목 · 파일 합계'가 그대로 남았음(재현)
+            //   → 앞 폴더 목록(this.files)을 비우고 상태줄을 다시 씀. 선택은 화면 기준이라 종전에도 앞 폴더 파일이 골라지진 않았음(재현 확인)
+            this.files = [];
+            this.selectedItems = [];
+            try { this.updateSelectionUI(); } catch (e) {}
             
             return { success: false, error: res.error };
+        }
+        
+        // ★ (2026-11-16 10:31, 222차) 폴더별 권한으로 쓰기 금지인 폴더(서버 표시 folder_read_only)에서는 업로드·새 폴더 단추를 감춤 — 종전엔 보였고 누르면 '쓰기 권한이 없습니다'(220차 재현).
+        //   그 폴더에 들어갈 때·나올 때만 손댐(나오면 스토리지 쓰기 권한대로 되돌림 — 스토리지 바꿀 때 쓰는 규칙과 같음). 표시가 없는 보통 폴더는 종전과 똑같이 아무것도 안 함
+        if (res.folder_read_only || this._folderReadOnly) {
+            this._folderReadOnly = !!res.folder_read_only;
+            const _frCw = !!(this.currentPermissions && this.currentPermissions.can_write) && !this._folderReadOnly;
+            $('.upload-dropdown').toggle(_frCw);
+            $('#btn-new-folder').toggle(_frCw);
         }
         
         // vault 폴더 자동 감지 — 일반 목록으로 vault에 진입한 경우 vault 뷰로 전환
         if (res.is_vault_folder && this.currentPath) {
             const vaultKey = this.getVaultKey(this.currentStorage, this.currentPath);
-            if (vaultKey) {
+            // ★ (2026-11-01 07:25, 37차 기능 점검) 캐시 키가 이 폴더 비밀번호와 맞을 때만(틀리면 캐시를 지우고 vaultOpenFolder 의 비밀번호 창으로)
+            const _vkOk = vaultKey && await this._vaultKeyMatches(this.currentStorage, this.currentPath, vaultKey);
+            // ★ (2026-11-01 08:02, 37차 기능 점검 재검토) 키 확인을 기다리는 사이 다른 폴더로 갔으면 손대지 않음(새 폴더가 보관함 뷰로 바뀌던 틈)
+            if (this.currentStorage !== _reqStorageId || this.currentPath !== _reqPath) return { success: false, stale: true };
+            if (_vkOk) {
                 // 키가 캐시에 있으면 바로 vault 뷰로
                 this.vault.isVaultView = true;
                 this.vault.currentVaultPath = this.currentPath;
@@ -11910,6 +12546,7 @@ const App = {
         
         _perfLog('before renderFiles');
         this.renderFiles(res.items);
+        this._okList = { key: _cacheKey, items: res.items };   // ★ (2026-11-13 07:59, 109차 재검토 RGR25-1) 마지막으로 받은 목록이 어느 스토리지·경로 것인지(탭 복귀 실패 때 다시 그려도 되는지 판단)
         this.renderBreadcrumb(res.breadcrumb);
         this.selectedItems = [];
         this.updateSelectionUI();
@@ -11933,6 +12570,7 @@ const App = {
         });
         
         // 사이드바에서 파일 클릭 시 해당 파일 자동 선택 + 스크롤
+        if (this._pendingSelectFile && this._pendingSelectFor !== this._loadSeq) this._pendingSelectFile = null;   // 다른 회차(앞서 실패한 이동)의 예약은 버림
         if (this._pendingSelectFile) {
             const fileName = this._pendingSelectFile;
             this._pendingSelectFile = null;
@@ -11948,17 +12586,28 @@ const App = {
                 return fileEl;
             };
             const doScroll = (el, behavior) => { if (el) el.scrollIntoView({ behavior, block: 'center' }); };
-            // 즉시 선택 + 스크롤
-            setTimeout(() => { if (!_selLive()) return; const el = doSelect(); doScroll(el, 'auto'); }, 50);
-            // 레이아웃 안정 후 재스크롤
-            setTimeout(() => { if (!_selLive()) return; const el = document.querySelector(`.file-item[data-name="${CSS.escape(fileName)}"]`); doScroll(el, 'auto'); }, 400);
-            // 썸네일 로드 후 최종 보정 + 파일 못 찾으면 안내
-            setTimeout(() => {
+            // ★ (2026-10-31 01:23, 펜닐 요청 — 재현) 목록은 여러 번에 나눠 그려(처음 30개, 이후 프레임마다) 큰 폴더 뒤쪽 파일은 0.05초엔 아직 화면에 없었음 → 한 번만 고르던 것을
+            //   그려질 때까지 0.1초마다 다시(최대 6초). 종전엔 3천 개 폴더의 2900번째 파일이 골라지지 않고, 0.8초 뒤 아직 안 그려졌다고 실제로 있는 파일에
+            //   '파일을 찾을 수 없습니다' 경고가 떴음(즐겨찾기·최근 파일·경로 입력 공통). 경고는 그 폴더 목록에 그 이름이 아예 없을 때만
+            const inList = () => (Array.isArray(this.files) ? this.files : []).some(f => String(f.name) === String(fileName));
+            let tries = 0;
+            const attempt = () => {
                 if (!_selLive()) return;
-                const el = document.querySelector(`.file-item[data-name="${CSS.escape(fileName)}"]`);
-                if (el) { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
-                else { this.toast(t('file_not_found', '파일을 찾을 수 없습니다.') + ': ' + fileName, 'warning'); }
-            }, 800);
+                // ★ (2026-10-31 01:50, 재검토 — 재현) 기다리는 사이 사용자가 직접 고른 게 있으면 멈춤 — 안 그러면 나중에 그려진 파일까지 함께 강조돼
+                //   두 개가 골라진 것처럼 보이고 실제 선택(selectedItems)은 자동 선택 하나뿐이었음
+                if (tries > 0 && document.querySelector('#file-list .file-item.selected')) return;
+                if (this.isSearchMode) return;   // ★ (2026-10-31 01:54, 재검토 — 재현) 기다리는 사이 검색 결과로 바뀌면 멈춤(같은 이름의 검색 결과를 잘못 고르거나 거짓 경고)
+                const el = doSelect();
+                if (el) {
+                    doScroll(el, 'auto');
+                    // 레이아웃 안정(썸네일 등) 후 한 번 더 맞춤(종전 0.4·0.8초 보정과 같은 뜻)
+                    setTimeout(() => { if (_selLive() && el.isConnected) el.scrollIntoView({ behavior: 'smooth', block: 'center' }); }, 450);
+                    return;
+                }
+                if (!inList()) { if (tries >= 7) this.toast(t('file_not_found', '파일을 찾을 수 없습니다.') + ': ' + fileName, 'warning'); else { tries++; setTimeout(attempt, 100); } return; }
+                if (++tries < 60) setTimeout(attempt, 100);
+            };
+            setTimeout(attempt, 50);
         }
         
         // 공유 업로드 알림이 떠있을 때만, 현재 연 폴더가 내 공유 폴더면 알림 초기화
@@ -11988,6 +12637,7 @@ const App = {
             selectAll.checked = false;
             selectAll.indeterminate = false;
         }
+        this._saPending = false; this._saPendSel = false;   // ★ (2026-11-13 15:37, 112차 RGR28-2) 그리는 도중 전체 선택 표시는 이 목록에만 — 아래 묶음마다 이어 붙이므로 앞 폴더 표시가 남으면 안 됨
         
         // 삭제 권한이 있으면 전체 삭제 버튼 표시
         const btnDeleteAll = document.getElementById('btn-delete-all');
@@ -12006,8 +12656,12 @@ const App = {
         // 상태바 업데이트
         this.updateSelectionUI();
         
+        // ★ (2026-11-02 17:45, 46차 점검) 항목 체크박스는 삭제 권한이 있을 때만 그려지는데(_renderFileItem) '전체' 칸은 늘 보여, 삭제 권한 없는 사용자가 눌러도 아무것도 선택되지 않았음(휴대폰 화면 재현) → 같은 조건으로 보이기/숨기기
+        //   (★ 2026-11-02 17:55, 46차 재검토) 빈 폴더 반환보다 앞에서(빈 폴더에 앞 폴더 상태가 남지 않게). 보관함 보기는 _renderVaultFiles 가 다시 보이게 함(체크박스를 권한과 상관없이 그림)
+        { const _saWrap = document.querySelector('.select-all-wrap'); const _saCan = this.currentPermissions && this.currentPermissions.can_delete; if (_saWrap) { if (_saCan) _saWrap.style.removeProperty('display'); else _saWrap.style.setProperty('display', 'none', 'important'); } }   // 휴대폰 CSS 의 display:flex !important 보다 앞서게 important
+        
         if (!items.length) {
-            list.innerHTML = `<div class="empty-msg">${t('folder_empty','폴더가 비어있습니다')}</div>`;
+            this._renderEmptyFolder(list);   // ★ (2026-10-30 14:10, 펜닐 요청) 빈 폴더 안내(권한별 버튼) — 검색·보관함·게시판은 종전 문구
             return;
         }
         
@@ -12035,6 +12689,9 @@ const App = {
                 html += this._renderFileItem(items[i], canDelete);
             }
             temp.innerHTML = html;
+            // ★ (2026-11-13 15:37, 112차 RGR28-2) 그리는 도중 Ctrl+A·'전체' 칸을 눌렀으면 뒤에 그려지는 묶음에도 그 선택·체크를 이어 붙임 — '다 그린 뒤 같은 조작'과 결과가 같게.
+            //   종전(111차)엔 끝에서 한 번에 골랐는데, Ctrl+A 뒤 클릭 하나·체크 하나 해제·Ctrl+클릭을 하면 표시가 지워져 처음 그려진 30개만 체크(작업 대상 30개, 다 그린 뒤면 20,003개)로 남았음(재현)
+            if (this._saPending || this._saPendSel) { for (const el of temp.children) { if (this._saPendSel) el.classList.add('selected'); if (this._saPending) { const cb = el.querySelector('input.file-checkbox'); if (cb) cb.checked = true; } } }
             while (temp.firstChild) frag.appendChild(temp.firstChild);
             list.appendChild(frag);
             idx = end;
@@ -12044,6 +12701,14 @@ const App = {
             } else {
                 // 모든 렌더링 완료
                 this._renderRAF = null;
+                // ★ (2026-11-13 09:50, 110차 BULK-5) 그리는 도중 '전체' 체크·Ctrl+A 를 눌렀으면(시작할 때 '전체' 칸을 끄므로 켜져 있으면 그 경우뿐) 나중에 그려진 항목도 골라 실제 선택과 칸 표시를 맞춤 —
+                //   종전엔 그때까지 그려진 2만 개 중 1,680개만 골라진 채 '전체' 칸은 모두 고른 것처럼 켜져 있었음(재현). 다 그린 뒤 누른 경우는 이 자리를 지난 뒤라 종전과 같음
+                const _saEnd = document.getElementById('select-all');
+                // ★ (2026-11-13 15:37, 112차 RGR28-2) 고르기는 위 묶음마다 이미 했으므로 여기선 선택 목록·'전체' 칸 표시만 맞춤(체크 칸이 없으면 '전체' 칸은 건드리지 않음 — 다 그린 뒤 Ctrl+A 와 같게).
+                //   종전: if (_saEnd && _saEnd.checked && this._saPending) { 선택 있으면 selectAllFiles(), 없으면 체크 모두 켬 } (111차 RGR27-1)
+                if (this._saPendSel) this.updateSelection();
+                if (this._saPending && _saEnd && list.querySelector('.file-checkbox')) this.updateCheckboxSelection();
+                this._saPending = false; this._saPendSel = false;
                 if (this.viewMode === 'grid') this.loadThumbnails();
                 this._refreshFavBadges();
             }
@@ -12085,8 +12750,8 @@ const App = {
             const _isRemote = _curStorage && !['home', 'shared', 'local'].includes(_curStorage.storage_type);
             const hasThumbnail = this.thumbnailEnabled && !item.is_dir && !_isRemote && this.thumbFormats && this.thumbFormats.includes(ext);
             const iconHtml = hasThumbnail
-                ? `<div class="file-icon file-thumbnail" data-thumb-path="${escapedPath}" data-storage-id="${this.currentStorage}"><div class="thumb-placeholder">${item.icon}</div></div>`
-                : `<div class="file-icon">${item.icon}</div>`;
+                ? `<div class="file-icon file-thumbnail" data-thumb-path="${escapedPath}" data-storage-id="${this.currentStorage}" data-thumb-v="${this.escapeHtml(this._fsMediaVer(item))}"><div class="thumb-placeholder">${item.icon}</div></div>`
+                : `<div class="file-icon">${item.icon}</div>`;   // ★ (2026-11-02 10:33, 42차 점검) data-thumb-v — 썸네일 주소 버전 값(_fsMediaVer 주석)
             const badges = [favIcon, shareIcon, lockIcon, vaultBadge].filter(Boolean).join('');
             const badgeHtml = badges ? `<div class="grid-badges">${badges}</div>` : '';
             return `<div class="file-item ${item.shared ? 'is-shared' : ''}${lockedClass}${vaultClass}${item.hidden ? ' is-hidden-item' : ''}" draggable="true" data-path="${escapedPath}" data-is-dir="${item.is_dir}" data-name="${escapedName}" data-size="${item.size || 0}" data-shared="${item.shared || false}" data-locked="${isLocked}" data-vault="${isVault}">
@@ -12096,14 +12761,16 @@ const App = {
                 <div class="file-name" title="${escapedName}">${escapedName}</div>
            </div>`;
         } else {
-            const _ext = item.is_dir ? '' : (item.name || '').split('.').pop().toLowerCase();
+            // ★ (2026-11-15 14:46, 181차) 점 없는 이름(README·Makefile 등)은 이름 전체가 확장자로 잡혀 'README 파일'로 보였고 세부 정보 창('파일')과 달랐음(재현) → 세부 정보 창처럼 점이 있을 때만 확장자
+            const _ext = (item.is_dir || !(item.name || '').includes('.')) ? '' : (item.name || '').split('.').pop().toLowerCase();
             const _typeLabel = item.is_dir ? t('type_folder','파일 폴더') : (_ext ? _ext.toUpperCase() + ' ' + t('type_file','파일') : t('type_file','파일'));
+            // ★ (2026-11-01 17:16, 40차 점검) 유형 칸이 파일 이름의 확장자를 escape 없이 넣어, WebDAV·원격 등으로 만든 '<' 든 이름이 목록 보기에서 태그로 실행됐음 → 아래 file-type 칸을 세부 정보 창처럼 escapeHtml 로 감쌈
             return `<div class="file-item ${item.shared ? 'is-shared' : ''}${lockedClass}${vaultClass}${item.hidden ? ' is-hidden-item' : ''}" draggable="true" data-path="${escapedPath}" data-is-dir="${item.is_dir}" data-name="${escapedName}" data-size="${item.size || 0}" data-shared="${item.shared || false}" data-locked="${isLocked}" data-vault="${isVault}">
                 ${checkbox ? `<div class="file-check">${checkbox}</div>` : ''}
                 <div class="file-icon">${item.icon}</div>
                 <div class="file-name-wrap"><span class="file-name" title="${escapedName}">${escapedName}</span>${favIcon}${shareIcon}${lockIcon}${vaultBadge}</div>
                 <div class="file-date">${item.modified}</div>
-                <div class="file-type">${_typeLabel}</div>
+                <div class="file-type">${this.escapeHtml(_typeLabel)}</div>
                 <div class="file-size">${item.is_dir ? '' : this.formatSize(item.size)}</div>
            </div>`;
         }
@@ -12112,24 +12779,617 @@ const App = {
     
     // 브레드크럼 렌더링
     renderBreadcrumb(breadcrumb) {
+        breadcrumb = Array.isArray(breadcrumb) ? breadcrumb : [];
+        this._lastBreadcrumb = breadcrumb;
+        const bcEl = document.getElementById('breadcrumb');
+        if (bcEl) bcEl.classList.remove('bc-editing');
         const bc = $('#breadcrumb').empty();
+        // ★ (2026-10-30 14:10, 펜닐 요청 — 주소창 강화) 구분 '/' → '›' 단추(누르면 그 단계의 하위 폴더 목록), 끝에 '경로 입력'·'복사' 단추.
+        //   보관함·검색 화면은 종전처럼 글자 구분(보관함 경로는 따로 열고, 검색은 경로가 없음)
+        // ★ (2026-10-30 22:06, 펜닐 요청) 휴대폰·태블릿(is-mobile)은 종전 주소창 그대로(글자 '/' 구분, › 목록·경로 입력·복사 없음) — PC 전용 기능.
+        //   is-mobile 은 기기·화면이 바뀌면 페이지를 새로 읽어(updateDeviceClass) 그리는 도중 바뀌지 않음
+        const enhanced = !document.body.classList.contains('is-mobile') && !(this.vault && this.vault.isVaultView) && !this.isSearchMode && !!this.currentStorage;
+        const sep = (parentPath) => enhanced
+            ? `<button type="button" class="breadcrumb-sep bc-sep-btn" data-bc-children="${this.escapeHtml(parentPath)}" title="${this.escapeHtml(t('bc_subfolders', '하위 폴더'))}" aria-label="${this.escapeHtml(t('bc_subfolders', '하위 폴더'))}">›</button>`
+            : `<span class="breadcrumb-sep">/</span>`;
         
         bc.append(`<a href="#" data-path="">${t('home','홈')}</a>`);
         
         breadcrumb.forEach((item, i) => {
             const escapedName = this.escapeHtml(item.name);
             const escapedPath = this.escapeHtml(item.path);
+            const parentPath = i > 0 ? String(breadcrumb[i - 1].path || '') : '';
             if (i === breadcrumb.length - 1) {
-                bc.append(`<span class="breadcrumb-sep">/</span><span class="breadcrumb-item current">${escapedName}</span>`);
+                bc.append(`${sep(parentPath)}<span class="breadcrumb-item current">${escapedName}</span>`);
             } else {
-                bc.append(`<span class="breadcrumb-sep">/</span><a href="#" data-path="${escapedPath}">${escapedName}</a>`);
+                bc.append(`${sep(parentPath)}<a href="#" data-path="${escapedPath}">${escapedName}</a>`);
             }
         });
+        if (enhanced) {
+            const curPath = breadcrumb.length ? String(breadcrumb[breadcrumb.length - 1].path || '') : '';
+            // 끝 › · 경로 입력 · 복사는 자리를 차지하지 않게 주소창 바로 뒤에 띄움(CSS .bc-tools) — 자리를 차지하면 항목을 골라 '1개 선택' 칩이 나올 때 주소창이 둘째 줄로 밀렸음(시험에서 잡음)
+            bc.append(`<span class="bc-tools">` + sep(curPath)
+                + `<button type="button" class="bc-tool" data-bc-tool="edit" title="${this.escapeHtml(t('bc_path_input', '경로 입력'))}" aria-label="${this.escapeHtml(t('bc_path_input', '경로 입력'))}">${fsIco('edit')}</button>`
+                + `<button type="button" class="bc-tool" data-bc-tool="copy" title="${this.escapeHtml(t('bc_copy', '경로·주소 복사'))}" aria-label="${this.escapeHtml(t('bc_copy', '경로·주소 복사'))}">${fsIco('copy')}</button></span>`);
+            this._bcFitTools();
+        }
         
         // 이벤트는 bindEvents에서 위임 방식으로 처리
+        // ★ (2026-10-30 22:44, 재검토) 휴대폰 가로 화면은 주소창이 한 줄(가로 스크롤)이라 경로가 길면 현재 폴더가 오른쪽 밖에 숨었음 → 끝(현재 폴더)이 보이게. 세로는 줄바꿈이라 영향 없음
+        if (bcEl && document.body.classList.contains('is-mobile')) { try { bcEl.scrollLeft = bcEl.scrollWidth; } catch (e) {} }
         
         // 모바일 현재 위치 바 갱신
         this.updateMobileLocationBar(breadcrumb);
+    },
+
+    // =====================================================================
+    // ★ (2026-10-30 14:10, 펜닐 요청 — UI 시안 확정분) 탐색기식 보강: 빈 폴더 안내 · 상태줄 · 세부 정보 창 · 주소창
+    //   기존 동작은 그대로 두고 부르는 줄만 끼움(renderFiles 빈 목록, updateSelectionUI, renderBreadcrumb, 게시판 들어가기/나오기 — loadStorageQuotaMini 연결은 22:06 상태줄 오른쪽과 함께 뺌)
+    // =====================================================================
+
+    /** 빈 폴더 안내 — 쓰기 권한이 있으면 올리기·새 폴더 버튼, 없으면 '읽기 전용'. 검색·보관함·게시판은 종전 한 줄 문구 그대로 */
+    _renderEmptyFolder(list) {
+        const special = this.isSearchMode || (this.vault && this.vault.isVaultView) || this.boardInlineMode;
+        if (special) {
+            list.innerHTML = `<div class="empty-msg">${t('folder_empty','폴더가 비어있습니다')}</div>`;
+            return;
+        }
+        const canWrite = !!(this.currentPermissions && this.currentPermissions.can_write);
+        let html = `<div class="fs-empty-state" role="status">`
+            + `<div class="fs-empty-icon" aria-hidden="true">${fsIco('folder-open')}</div>`
+            + `<div class="fs-empty-title">${this.escapeHtml(t('fs_empty_title', '이 폴더는 비어 있습니다'))}</div>`;
+        if (canWrite) {
+            html += `<div class="fs-empty-desc">${this.escapeHtml(t('fs_empty_desc', '파일이나 폴더를 여기로 끌어다 놓거나, 아래 버튼으로 올리세요'))}</div>`
+                + `<div class="fs-empty-actions">`
+                + `<button type="button" class="btn btn-primary" data-empty-act="upload-file">${fsIco('upload')} ${this.escapeHtml(t('fs_empty_upload_file', '파일 올리기'))}</button>`
+                + `<button type="button" class="btn" data-empty-act="upload-folder">${fsIco('folder-open')} ${this.escapeHtml(t('fs_empty_upload_folder', '폴더 올리기'))}</button>`
+                + `<button type="button" class="btn" data-empty-act="new-folder">${fsIco('folder-plus')} ${this.escapeHtml(t('new_folder', '새 폴더'))}</button>`
+                + `</div>`;
+            if (this.clipboard && this.clipboard.items && this.clipboard.items.length > 0) {
+                html += `<div class="fs-empty-hint">${this.escapeHtml(t('fs_empty_paste', '복사해 둔 항목은 Ctrl+V 로 붙여넣을 수 있습니다'))}</div>`;
+            }
+        } else {
+            html += `<div class="fs-empty-desc">${this.escapeHtml(t('fs_empty_readonly', '읽기 전용 폴더입니다'))}</div>`;
+        }
+        html += `</div>`;
+        list.innerHTML = html;
+    },
+
+    // ---------- 상태줄 ----------
+
+    /** 상태줄 왼쪽(항목 수 · 선택) — updateSelectionUI 에서 부름. items = 선택된 항목. (이름을 _updateStatusBar 로 하면 메모장의 같은 이름 함수와 겹쳐 덮어써짐 — 시험에서 잡음) */
+    _updateFileStatusBar(items) {
+        const el = document.getElementById('status-selection');
+        if (!el) return;
+        el.classList.add('fs-noico');   // 검색 '위치: 스토리지/폴더' 속 이모지를 선 그림으로 바꾸지 않게(재검토)
+        const files = Array.isArray(this.files) ? this.files : [];
+        // ★ (2026-10-30 16:42, 재검토) 폴더 여부가 빠진 선택 항목(사이드바·즐겨찾기에서 넘어와 자동 선택된 것)은 목록에서 찾아 봄 — 종전엔 폴더를 '폴더 0 · 파일 1' 로 셌음(재현 확인)
+        let _byPath = null;
+        const _lookup = (x) => { if (!_byPath) { _byPath = new Map(); files.forEach(f => _byPath.set(f.path, f)); } return _byPath.get(x.path); };
+        const isDirOf = (x) => { if (!x) return false; if (x.isDir !== undefined || x.is_dir !== undefined) return !!(x.isDir || x.is_dir); const f = x.path ? _lookup(x) : null; return !!(f && (f.isDir || f.is_dir)); };
+        let base = '';
+        if (this.isSearchMode) {
+            const total = this.searchState?.total || 0;
+            base = total > 0 ? tf('sb_search_count', { n: total.toLocaleString() }, `검색 결과 ${total.toLocaleString()}개`) : '';
+        } else if (files.length > 0) {
+            const nd = files.filter(isDirOf).length, nf = files.length - nd;
+            const sum = files.reduce((n, f) => n + (isDirOf(f) ? 0 : (Number(f.size) || 0)), 0);
+            base = tf('sb_items', { n: files.length.toLocaleString(), d: nd.toLocaleString(), f: nf.toLocaleString() }, `${files.length.toLocaleString()}개 항목 (폴더 ${nd.toLocaleString()} · 파일 ${nf.toLocaleString()})`);
+            if (sum > 0) base += ' · ' + tf('sb_files_total', { s: this.formatSize(sum) }, `파일 합계 ${this.formatSize(sum)}`);
+        }
+        if (items && items.length > 0) {
+            const sd = items.filter(isDirOf).length, sf = items.length - sd;
+            const ssum = items.reduce((n, x) => n + (isDirOf(x) ? 0 : (Number(x.size) || 0)), 0);
+            let s = tf('sb_selected', { n: items.length.toLocaleString(), d: sd, f: sf }, `${items.length.toLocaleString()}개 선택함 (폴더 ${sd} · 파일 ${sf})`);
+            if (ssum > 0) s += ' · ' + this.formatSize(ssum);
+            if (sd > 0) s += ' ' + t('sb_dir_size_excluded', '(폴더 크기 제외)');
+            if (this.isSearchMode && items.length === 1) {
+                const it = items[0];
+                const st = (this.storages || []).find(x => String(x.id) === String(it.storageId || this.currentStorage));
+                const dir = String(it.path || '').split('/').slice(0, -1).join('/');
+                s += ' · ' + t('sb_location', '위치') + ': ' + (st ? st.name : '') + (dir ? '/' + dir : '');
+            }
+            // ★ (2026-10-30 15:32, 해상도별 점검) 휴대폰·좁은 화면은 선택만(종전처럼) — 항목 수까지 붙이면 360·390px 세로 화면에서 선택 글자가 '…' 로 잘렸음
+            const narrow = document.body.classList.contains('is-mobile') || window.innerWidth <= 768;
+            el.innerHTML = (base && !narrow ? this.escapeHtml(base) + '<span class="sb-sep" aria-hidden="true"></span>' : '') + `<span class="sb-sel">${this.escapeHtml(s)}</span>`;
+        } else {
+            el.textContent = base;
+        }
+    },
+
+    // ★ (2026-10-30 22:06, 펜닐 요청) 상태줄 오른쪽(스토리지·사용량 | 보기·정렬, 진행 요약) 없앰 — 사용량은 사이드바, 보기·정렬은 툴바, 진행은 진행 창에 이미 있어 겹쳤음.
+    //   오른쪽 칸은 종전(29차 전)처럼 비워 둠
+
+    // ---------- 세부 정보 창 ----------
+
+    _detailsOn() {
+        try { return localStorage.getItem('fs_details_pane') === '1'; } catch (e) { return false; }
+    },
+
+    toggleDetailsPane(force) {
+        const on = typeof force === 'boolean' ? force : !this._detailsOn();
+        try { localStorage.setItem('fs_details_pane', on ? '1' : '0'); } catch (e) {}
+        this._detailsForce = on;   // 저장소를 못 쓰는 창(사생활 보호 모드)에서도 이번 화면에선 켜고 끄기가 되게
+        this._detailsRefresh();
+    },
+
+    /** 창을 보이거나 숨기고 위치를 맞춘 뒤 내용을 그림 — 선택이 바뀔 때마다 부름(그리기는 한 프레임에 한 번) */
+    _detailsRefresh() {
+        const area = document.querySelector('.file-area');
+        const btn = document.getElementById('btn-details-pane');
+        if (!area) return;
+        const on = typeof this._detailsForce === 'boolean' ? this._detailsForce : this._detailsOn();
+        // ★ (2026-10-30 15:32, 해상도별 점검) 1200px 미만에서는 쓰지 않음 — 목록이 550px 안팎으로 좁아져 열 머리글이 끼었고, 단추가 늘어 툴바가 한 줄 더 생겼음(1100px: 135→175px, 1150px: 99→135px — 종전과 비교 시험)
+        const isMobile = document.body.classList.contains('is-mobile') || window.innerWidth < 1200;
+        if (btn) { btn.classList.toggle('active', on); btn.setAttribute('aria-pressed', on ? 'true' : 'false'); }
+        let pane = document.getElementById('fs-details-pane');
+        if (!on || isMobile || this.boardInlineMode) {
+            area.classList.remove('fs-details-open');
+            if (pane) pane.style.display = 'none';
+            return;
+        }
+        if (!pane) {
+            pane = document.createElement('aside');
+            pane.id = 'fs-details-pane';
+            pane.className = 'fs-details-pane';
+            pane.setAttribute('aria-label', t('fs_details', '세부 정보'));
+            area.appendChild(pane);
+            pane.addEventListener('click', (e) => {
+                const b = e.target.closest('[data-dp-act]');
+                if (!b) return;
+                const act = b.getAttribute('data-dp-act');
+                if (act === 'close') { this.toggleDetailsPane(false); return; }
+                // ★ (2026-10-30 22:08) 열기·다운로드·공유 단추는 없앰(세부 정보 창 다시 짬) — 자세한 정보 창·폴더 크기 계산만
+                if (act === 'more') { const d = this._dpItem; if (d) this.showDetailedInfo(d.item); return; }
+                if (act === 'calcsize') { this._dpCalcSize(); return; }
+            });
+        }
+        area.classList.add('fs-details-open');
+        pane.style.display = '';
+        const hdr = document.getElementById('file-list-header');
+        const fl = document.getElementById('file-list');
+        const anchor = (hdr && hdr.offsetParent && hdr.style.display !== 'none') ? hdr : fl;
+        if (anchor) pane.style.top = anchor.offsetTop + 'px';
+        if (this._detailsRAF) cancelAnimationFrame(this._detailsRAF);
+        this._detailsRAF = requestAnimationFrame(() => { this._detailsRAF = null; try { this._detailsRender(pane); } catch (e) {} });
+    },
+
+    // ★ (2026-10-30 22:08, 펜닐 요청 "세부 정보 창 내용이 이상함 — 구글 드라이브·윈도우 탐색기·시놀로지처럼 파일/폴더 상세 정보") 다시 짬.
+    //   종전: 이름·'JPG 파일 · 크기' 아래 열기·다운로드·공유 단추와 크기·수정한 날짜·위치 3줄뿐(단추는 탐색기·드라이브 세부 창엔 없는 것).
+    //   지금: 종류·크기(폴더는 '크기 계산' 단추)·내용(폴더 안 항목 수)·사진 크기·촬영 날짜·카메라·위치·만든/수정한/액세스한 날짜·특성(숨김)·공유 —
+    //   기존 '자세한 정보' 창과 같은 서버 응답(detailed_info)을 씀(light=1: 폴더 전체 크기 계산은 건너뜀). 동영상 정보·GPS·숨김 바꾸기는 '자세한 정보…' 로
+    _detailsRender(pane) {
+        const esc = (v) => this.escapeHtml(v == null ? '' : String(v));
+        const files = Array.isArray(this.files) ? this.files : [];
+        const byPath = new Map(); files.forEach(f => byPath.set(f.path, f));
+        // 폴더 여부가 빠진 선택 항목(사이드바·즐겨찾기에서 넘어와 자동 선택된 것)은 목록에서 찾아 봄
+        const isDirOf = (x) => { if (!x) return false; if (x.isDir !== undefined || x.is_dir !== undefined) return !!(x.isDir || x.is_dir); const f = x.path ? byPath.get(x.path) : null; return !!(f && (f.isDir || f.is_dir)); };
+        const inVault = !!(this.vault && this.vault.isVaultView);
+        const sel = this.getSelectedOrCheckedItems();
+        const row = (k, v) => v === '' || v == null ? '' : `<dt>${esc(k)}</dt><dd class="fs-noico">${esc(v)}</dd>`;   // fs-noico: 이름·위치 속 이모지 그대로(재검토)
+        const rowHtml = (k, h) => `<dt>${esc(k)}</dt><dd>${h}</dd>`;
+        const countText = (d, f) => tf('il_folder_contents', { folders: d.toLocaleString(), files: f.toLocaleString() }, `${d.toLocaleString()}개 폴더, ${f.toLocaleString()}개 파일`);
+        let html = `<div class="dp-head"><span class="dp-title">${esc(t('fs_details', '세부 정보'))}</span>`
+            + `<button type="button" class="dp-close" data-dp-act="close" aria-label="${esc(t('fs_details_close', '세부 정보 창 닫기'))}" title="${esc(t('fs_details_close', '세부 정보 창 닫기'))}">${fsIco('x')}</button></div>`;
+        this._dpItem = null;
+        if (sel.length === 1) {
+            const it = sel[0];
+            // 검색 중이면 검색 결과 항목에서(this.files 는 검색 전 폴더 목록) — 스토리지까지 같은 것
+            const full = this.isSearchMode
+                ? ((this._lastSearchItems || []).find(f => String(f.path) === String(it.path) && (!it.storageId || String(f.storage_id) === String(it.storageId))) || {})
+                : (files.find(f => f.path === it.path && (!f.storageId || !it.storageId || String(f.storageId) === String(it.storageId))) || {});
+            const isDir = isDirOf(it) || isDirOf(full);
+            const name = it.name || full.name || String(it.path || '').split('/').pop();
+            const sid = it.storageId || full.storage_id || full.storageId || this.currentStorage;
+            const st = (this.storages || []).find(x => String(x.id) === String(sid));
+            const isLocal = !!st && ['home', 'shared', 'local'].includes(st.storage_type);
+            const ext = isDir ? '' : (name.includes('.') ? name.split('.').pop().toLowerCase() : '');
+            const ftype = isDir ? '' : this.getFileType(name);
+            const size = Number(it.size || full.size) || 0;
+            const canThumb = !inVault && !isDir && isLocal && (ftype === 'image' || ftype === 'video' || ext === 'pdf');
+            // 목록의 '유형' 칸과 같은 글자
+            const kind = isDir ? t('type_folder', '파일 폴더') : (ext ? ext.toUpperCase() + ' ' + t('type_file', '파일') : t('type_file', '파일'));
+            const key = sid + '|' + it.path + '|' + (full.modified || '') + '|' + size;
+            this._dpItem = { item: Object.assign({}, it, { storageId: sid, isDir }), key, isDir, isLocal };
+            const info = inVault ? null : this._dpCacheGet(key);
+            html += `<div class="dp-preview">`;
+            if (canThumb) {
+                const _dpV = this._fsMediaVer({ modified: full.modified || it.modified, size });   // ★ (2026-11-02 10:33, 42차 점검) 정보 창 썸네일에도 버전 값(_fsMediaVer 주석)
+                const url = `api.php?action=thumbnail&storage_id=${encodeURIComponent(sid)}&path=${encodeURIComponent(btoa(unescape(encodeURIComponent(it.path))))}&size=400&enc=b64&tv=2` + (_dpV ? '&v=' + _dpV : '');   // ★ (2026-11-12 21:13, 104차 펜닐 요청 썸네일 B안) &tv= 썸네일 만들기 판(FileManager::THUMB_VER 와 같게 — 서버는 읽지 않음). 주소가 바뀌어 브라우저에 하루 저장된 옛 정사각 썸네일을 쓰지 않음
+                html += `<img class="dp-thumb" alt="" src="${esc(url)}" onerror="this.style.display='none';this.nextElementSibling.style.display='';">`
+                    + `<span class="dp-icon" style="display:none;">${fsIco('file')}</span>`;
+            } else {
+                html += `<span class="dp-icon">${fsIco(isDir ? 'folder' : (ftype === 'image' ? 'image' : ftype === 'video' ? 'film' : ftype === 'audio' ? 'music' : 'file'))}</span>`;
+            }
+            html += `</div><div class="dp-name fs-noico">${esc(name)}</div><div class="dp-sub">${esc(kind)}</div>`;
+            const dir = String(it.path || '').split('/').slice(0, -1).join('/');
+            html += `<dl class="dp-props">` + row(t('il_type', '종류'), kind);
+            // 크기 — 파일은 바로, 폴더는 단추로(하위 전부를 훑어야 해서). 원격 폴더·보관함은 계산하지 않음(자세한 정보 창과 같음)
+            if (!isDir) {
+                html += row(t('fs_details_size', '크기'), size > 0 ? `${this.formatSize(size)} (${size.toLocaleString()} ${t('bytes', '바이트')})` : (full.size === 0 || it.size === 0 ? '0 ' + t('bytes', '바이트') : ''));
+            } else if (info && info.restricted) {
+                html += row(t('fs_details_size', '크기'), t('fs_details_no_read', '읽기 권한 없음'));   // ★ (2026-10-30 23:17, 재검토) 보기만 허용된 폴더 — 서버가 안 개수·크기를 주지 않음(계산 단추도 없음)
+            } else if (info && typeof info.size === 'number' && info.size >= 0 && info._full) {
+                html += row(t('fs_details_size', '크기'), `${this.formatSize(info.size)} (${info.size.toLocaleString()} ${t('bytes', '바이트')})`);
+            } else if (!inVault && isLocal) {
+                const busy = this._dpCalcKey === key;
+                const other = !!this._dpCalcKey && !busy;   // ★ (2026-10-30 22:44, 재검토) 다른 폴더를 계산하는 동안엔 눌러도 조용히 무시됐음 → 비활성으로 보이게
+                html += rowHtml(t('fs_details_size', '크기'), `<button type="button" class="dp-link" data-dp-act="calcsize"${busy || other ? ' disabled' : ''}>${esc(busy ? t('fs_details_calcing', '계산하는 중…') : t('fs_details_calc', '크기 계산'))}</button>`);
+            }
+            if (isDir && info && info.item_count) html += row(t('il_contents', '내용'), countText(Number(info.item_count.folders) || 0, Number(info.item_count.files) || 0));
+            if (info && info.dimensions) html += row(t('fs_details_dimensions', '사진 크기'), String(info.dimensions).replace(' x ', ' × ') + (ftype === 'image' ? ' px' : ''));
+            if (info && info.exif && info.exif.taken) html += row(t('fs_details_taken', '찍은 날짜'), String(info.exif.taken).replace(/^(\d{4}):(\d{2}):(\d{2})/, '$1-$2-$3'));   // EXIF '2025:05:05' → 다른 날짜와 같은 '2025-05-05'
+            if (info && info.exif && (info.exif.make || info.exif.model)) {
+                const mk = String(info.exif.make || '').trim(), md = String(info.exif.model || '').trim();
+                html += row(t('fs_details_camera', '카메라'), md && mk && md.toLowerCase().startsWith(mk.toLowerCase()) ? md : [mk, md].filter(Boolean).join(' '));
+            }
+            html += row(t('fs_details_location', '위치'), (st ? st.name : '') + (dir ? '/' + dir : ''));
+            if (info && info.created && !/^1970-01-0[12]/.test(String(info.created))) html += row(t('fs_details_created', '만든 날짜'), info.created);
+            // ★ (2026-10-30 22:44, 재검토) 서버가 수정 시각을 못 얻으면(S3 는 늘 0, 폴더 날짜를 안 주는 FTP 는 -1) '1970-01-01' 이 와서 목록의 바른 날짜를 덮었음 → 그땐 목록 값
+            const srvMod = info && info.modified && !/^1970-01-0[12]/.test(String(info.modified)) ? info.modified : '';
+            html += row(t('fs_details_modified', '수정한 날짜'), srvMod || full.modified || '');
+            if (info && info.accessed && !/^1970-01-0[12]/.test(String(info.accessed))) html += row(t('fs_details_accessed', '액세스한 날짜'), info.accessed);
+            if (inVault) html += row(t('vault_label_short', '보관함'), full._vault && !full._plain ? t('vault_encrypted_file', '암호화 파일') : '');
+            if (info && info.hidden) html += row(t('il_attributes', '특성'), t('il_hidden', '숨김'));
+            if (info && info.shared) html += row(t('fs_details_sharing', '공유'), t('fs_details_shared_link', '공유 링크 있음'));
+            html += `</dl>`;
+            if (!inVault && !info) html += `<div class="dp-loading">${esc(t('fs_details_loading', '정보를 읽는 중…'))}</div>`;
+            html += `<div class="dp-foot"><button type="button" class="dp-link" data-dp-act="more">${esc(t('fs_details_more', '자세한 정보…'))}</button></div>`;
+            if (!inVault && !info) this._dpFetch(key, sid, it.path);
+        } else if (sel.length > 1) {
+            const sd = sel.filter(isDirOf).length, sf = sel.length - sd;
+            const ssum = sel.reduce((n, x) => n + (isDirOf(x) ? 0 : (Number(x.size) || 0)), 0);
+            html += `<div class="dp-preview"><span class="dp-icon">${fsIco('copy')}</span></div>`
+                + `<div class="dp-name">${esc(tf('sb_selected_short', { n: sel.length }, `${sel.length}개 선택함`))}</div>`
+                + `<dl class="dp-props">` + row(t('il_contents', '내용'), countText(sd, sf))
+                + row(t('fs_details_size', '크기'), ssum > 0 ? this.formatSize(ssum) + (sd > 0 ? ' ' + t('sb_dir_size_excluded', '(폴더 크기 제외)') : '') : '') + `</dl>`;
+        } else {
+            // 선택 없음 — 지금 폴더
+            const st = (this.storages || []).find(x => String(x.id) === String(this.currentStorage));
+            const bc = this._lastBreadcrumb || [];
+            const title = this.isSearchMode ? t('search_results', '검색 결과') : (bc.length ? bc[bc.length - 1].name : (st ? st.name : ''));
+            html += `<div class="dp-preview"><span class="dp-icon">${fsIco(this.isSearchMode ? 'search' : 'folder-open')}</span></div>`
+                + `<div class="dp-name fs-noico">${esc(title)}</div><dl class="dp-props">`;
+            if (this.isSearchMode) {
+                // 검색 중엔 검색 결과 수만(this.files 는 검색 전 폴더 목록이라 쓰지 않음)
+                html += row(t('search_results', '검색 결과'), tf('sb_count_unit', { n: (this.searchState?.total || 0).toLocaleString() }, `${(this.searchState?.total || 0).toLocaleString()}개`));
+            } else {
+                const nd = files.filter(isDirOf).length, nf = files.length - nd;
+                const sum = files.reduce((n, f) => n + (isDirOf(f) ? 0 : (Number(f.size) || 0)), 0);
+                html += row(t('il_contents', '내용'), countText(nd, nf))
+                    + row(t('sb_files_total_label', '파일 합계'), sum > 0 ? this.formatSize(sum) : '')
+                    + row(t('fs_details_location', '위치'), (st ? st.name : '') + (this.currentPath ? '/' + this.currentPath : ''));
+            }
+            html += `</dl><div class="dp-hint">${esc(t('fs_details_hint', '항목을 고르면 자세한 정보가 보입니다'))}</div>`;
+        }
+        pane.innerHTML = html;
+    },
+
+    /** 세부 정보 캐시(최근 40개) — 키에 수정 시각·크기가 들어 있어 파일이 바뀌면 새로 읽음 */
+    _dpCacheGet(key) {
+        const c = this._dpCache; if (!c || !c.has(key)) return null;
+        const v = c.get(key); c.delete(key); c.set(key, v); return v;
+    },
+    _dpCacheSet(key, info) {
+        if (!this._dpCache) this._dpCache = new Map();
+        this._dpCache.delete(key); this._dpCache.set(key, info);
+        while (this._dpCache.size > 40) this._dpCache.delete(this._dpCache.keys().next().value);
+    },
+
+    /** 고른 항목의 자세한 정보를 잠깐 기다렸다 읽음 — 방향키로 훑을 때 지나간 항목마다 요청하지 않게(250ms), 그 사이 선택이 바뀌면 버림 */
+    _dpFetch(key, sid, path) {
+        if (this._dpPendingKey === key) return;
+        this._dpPendingKey = key;
+        clearTimeout(this._dpFetchTimer);
+        const seq = (this._dpSeq = (this._dpSeq || 0) + 1);
+        this._dpFetchTimer = setTimeout(async () => {
+            let res = null;
+            try { res = await this.api('detailed_info', { storage_id: sid, path, light: 1, show_hidden: this._isShowHidden() ? 1 : 0 }, 'GET'); } catch (e) { res = null; }   // ★ (2026-10-30 23:01) show_hidden: 폴더 '내용' 개수를 목록과 같은 기준으로
+            if (seq !== this._dpSeq) return;
+            this._dpPendingKey = null;
+            // 실패해도 빈 정보로 넣어 '읽는 중' 이 계속 남지 않게(목록에 있는 크기·수정한 날짜·위치는 그대로 보임)
+            // ★ (2026-10-30 22:44, 재검토) 그사이 '크기 계산'이 먼저 끝나 넣어 둔 전체 크기(_full)는 남김 — 종전엔 늦게 온 가벼운 응답이 덮어 다시 '크기 계산' 단추로 돌아갔음
+            const prev = this._dpCacheGet(key);
+            const got = (res && res.success && res.info) ? res.info : {};
+            this._dpCacheSet(key, prev && prev._full ? Object.assign({}, got, { size: prev.size, size_formatted: prev.size_formatted, _full: true }) : got);
+            if (this._dpItem && this._dpItem.key === key) this._detailsRefresh();
+        }, 250);
+    },
+
+    /** 폴더 '크기 계산' — 자세한 정보 창과 같은 호출(하위 전부를 훑음). 끝나면 캐시에 넣어 다시 그림 */
+    async _dpCalcSize() {
+        const d = this._dpItem;
+        if (!d || !d.isDir || this._dpCalcKey) return;
+        const key = d.key;
+        this._dpCalcKey = key;
+        this._detailsRefresh();
+        let res = null;
+        try { res = await this.api('detailed_info', { storage_id: d.item.storageId, path: d.item.path, show_hidden: this._isShowHidden() ? 1 : 0 }, 'GET', null, 0, 30000); } catch (e) { res = null; }
+        this._dpCalcKey = null;
+        if (res && res.success && res.info) {
+            this._dpCacheSet(key, Object.assign({}, this._dpCacheGet(key) || {}, res.info, { _full: true }));
+        } else {
+            this.toast((res && res.error) || t('fs_details_calc_failed', '크기를 계산하지 못했습니다'), 'error');
+        }
+        this._detailsRefresh();
+    },
+
+    // ---------- 주소창 ----------
+
+    /** 주소창 빈 곳·연필 단추 → 경로를 글자로 고쳐 Enter 로 이동(없는 경로·권한 없음은 알림만, 이동 안 함) */
+    _bcStartEdit() {
+        const bc = document.getElementById('breadcrumb');
+        if (!bc || bc.classList.contains('bc-editing')) return;
+        if (document.body.classList.contains('is-mobile')) return;   // PC 전용(위 renderBreadcrumb)
+        if (this.isSearchMode || (this.vault && this.vault.isVaultView) || this.boardInlineMode || !this.currentStorage) return;
+        this._bcCloseMenus();
+        bc.classList.add('bc-editing');
+        bc.innerHTML = `<input type="text" class="bc-input" aria-label="${this.escapeHtml(t('bc_path_input', '경로 입력'))}" title="${this.escapeHtml(t('bc_path_tip', '예: /폴더/하위 폴더 · 다른 스토리지: /스토리지 이름/폴더 · 파일 경로면 그 파일을 골라 줌'))}" spellcheck="false" autocomplete="off">`
+            + `<span class="bc-input-hint">${this.escapeHtml(t('bc_path_hint', 'Enter 이동 · Esc 취소'))}</span>`;
+        const input = bc.querySelector('.bc-input');
+        input.value = '/' + (this.currentPath || '');
+        input.defaultValue = input.value;
+        input.focus();
+        input.select();
+        let done = false;
+        // ★ (2026-10-31 01:54, 재검토 — 재현) 찾는 동안은 입력칸을 막지(disabled) 않고 읽기 전용으로 — 막으면 Esc 가 안 먹어 원격(FTP)·깊은 경로에서 끝날 때까지 기다려야 했음.
+        //   Esc 를 누르면 닫히고(입력칸이 사라져 stale() 이 참 → 남은 확인을 멈춤), 그동안 안내는 '찾는 중… (Esc 취소)'
+        let resolving = false;
+        const hintEl = bc.querySelector('.bc-input-hint');
+        const setBusy = (on) => { resolving = on; input.readOnly = on; input.classList.toggle('bc-busy', on); if (hintEl) hintEl.textContent = on ? t('bc_path_busy', '찾는 중… (Esc 취소)') : t('bc_path_hint', 'Enter 이동 · Esc 취소'); };
+        const finish = () => { if (done) return; done = true; bc.classList.remove('bc-editing'); this.renderBreadcrumb(this._lastBreadcrumb || []); };
+        input.addEventListener('keydown', async (e) => {
+            e.stopPropagation();
+            if (e.key === 'Escape') { e.preventDefault(); finish(); return; }
+            if (e.key !== 'Enter' || e.isComposing) return;
+            if (resolving) { e.preventDefault(); return; }   // 찾는 중에 Enter 를 또 누르면 무시
+            e.preventDefault();
+            const raw = String(input.value || '');
+            if (raw.trim() === input.defaultValue.trim()) { finish(); return; }   // ★ (2026-10-31 00:57, 재검토 — 재현) 시작값 그대로 Enter 면 그대로 닫음 — 종전엔 다시 풀다가 같은 이름의 다른 스토리지로 튀었음
+            if (/(^|[\\/])\.\.([\\/]|$)/.test(raw.trim())) { this.toast(t('err_invalid_path', '잘못된 경로입니다.'), 'error'); return; }
+            setBusy(true);
+            const fromSid = this.currentStorage, fromPath = this.currentPath || '';
+            const stale = () => fromSid !== this.currentStorage || (this.currentPath || '') !== fromPath || !input.isConnected || this.isSearchMode || this.boardInlineMode || (this.vault && this.vault.isVaultView);
+            let hit = null;
+            try { hit = await this._bcResolvePath(raw, stale); } catch (err) { hit = null; }
+            // ★ (2026-10-30 14:39, 재검토) 기다리는 사이 다른 곳으로 옮겼거나(폴더·검색·게시판·보관함) 입력칸이 사라졌으면 이동하지 않음
+            if (stale()) { if (input.isConnected) finish(); return; }
+            if (!hit) {
+                setBusy(false);
+                input.focus();
+                this.toast(t('bc_path_not_found', '경로를 찾을 수 없습니다.'), 'error');
+                return;
+            }
+            done = true;
+            bc.classList.remove('bc-editing');
+            // ★ (2026-10-31 00:57, 재검토 — 재현) 숨긴 파일은 '숨긴 항목 표시' 를 끈 목록엔 없어 고르지 못하고 '파일을 찾을 수 없습니다' 경고가 떴음 → 그 폴더로만 가고 안내
+            if (hit.selectFile && hit.hidden && !this._isShowHidden()) {
+                this.toast(t('bc_hidden_file', "숨긴 파일이라 목록에 보이지 않습니다. 정렬 메뉴에서 '숨긴 항목 표시'를 켜면 보입니다."), 'info');
+                hit = Object.assign({}, hit, { selectFile: null });
+            }
+            if (String(hit.sid) === String(this.currentStorage) && hit.path === fromPath) {
+                this.renderBreadcrumb(this._lastBreadcrumb || []);
+                // 같은 폴더의 파일이면 다시 불러오지 않고 고르기만(브라우저 기록이 하나 더 쌓이지 않게)
+                if (hit.selectFile) { const el = document.querySelector(`.file-item[data-name="${CSS.escape(hit.selectFile)}"]`); if (el) { el.click(); el.scrollIntoView({ block: 'center' }); } }
+                return;
+            }
+            if (String(hit.sid) !== String(this.currentStorage)) {
+                this._sidebarGoStorage(hit.sid);   // 즐겨찾기에서 다른 스토리지로 갈 때와 같은 방식(검색·게시판 닫기, 보기·정렬·권한)
+                // 사이드바 스토리지 선택 표시도 옮김(뒤로·앞으로 이동과 같은 방식) — 안 하면 앞 스토리지가 선택된 채로 남았음(시험)
+                $('#storage-list a').removeClass('active');
+                $(`#storage-list a[data-id="${String(hit.sid).replace(/[^0-9a-zA-Z_-]/g, '')}"]`).addClass('active');
+                document.querySelectorAll('.favorite-item.active, .recent-file-item.active').forEach(el => el.classList.remove('active'));
+                // ★ (2026-10-31 00:57 → 01:23) 원격 안내 띠·정렬·동기화 단추는 _sidebarGoStorage → _restoreStorageSettings → _storageChrome 이 함(뒤로/앞으로·즐겨찾기와 공통)
+                document.querySelectorAll('.board-sidebar-item').forEach(el => el.classList.remove('active'));
+                document.querySelectorAll('.menu-list li.active').forEach(el => el.classList.remove('active'));
+            }
+            this.navigate(hit.path, true, hit.selectFile || null);
+        });
+        // ★ (2026-10-31 00:34, 재현) Enter 뒤 입력칸을 잠깐 막을 때 생기는 '포커스 잃음'은 무시 — 종전엔 그때 건 0.12초 닫기 예약이, 서버가 더 빨리
+        //   '없음' 이라고 답해 입력칸이 다시 살아난 뒤 실행돼 입력칸이 닫혔음(고쳐 다시 칠 수 없었음). 닫을 때 입력칸에 다시 포커스가 와 있어도 닫지 않음
+        input.addEventListener('blur', () => { const busy = resolving; setTimeout(() => { if (!busy && !resolving && document.activeElement !== input) finish(); }, 120); });   // 01:54 부터 찾는 중엔 읽기 전용(포커스 유지)
+    },
+
+    /**
+     * ★ (2026-10-31 00:29, 펜닐 요청 "스토리지 이름이 들어가면 경로를 못 찾거나, 없는 폴더인데 빈 폴더처럼 들어가 업로드가 뜸 — 윈도우 탐색기처럼 하드가 여러 개여도 잘 찾아가게")
+     *   경로 입력 글자를 { sid, path, selectFile } 로 풂. 못 찾으면 null.
+     *   - 앞뒤 공백·따옴표("탐색기 '경로로 복사'")·\ 정리, '.' 는 무시
+     *   - 맨 앞이 다른 스토리지 이름이면 그 스토리지부터(자세한 정보 창의 '/스토리지 이름/폴더'·'경로 복사' 의 '스토리지 이름/폴더' 를 그대로 붙여 넣어도 됨) → 없으면 지금 스토리지 안 경로
+     *   - 맨 앞이 지금 스토리지 이름이면 종전 규칙 먼저('/' 로 시작하면 같은 이름의 맨 위 폴더, 아니면 스토리지 이름 — 14:39 재검토), 없으면 다른 쪽
+     *   - 있는지 확인은 '바로 위 폴더 목록에 그 이름이 있는지'로 — 종전엔 그 경로의 목록을 읽어 성공이면 이동했는데, FTP 는 없는 경로도
+     *     '성공·0개' 로 답해 없는 폴더가 빈 폴더처럼 열리고 올리기 단추가 떴음(재현). 대소문자만 다르면 실제 이름으로 맞춤(하나일 때만),
+     *     파일이면 그 파일이 든 폴더로 가서 파일을 고름. 숨긴 항목도 찾음(탐색기처럼 경로를 알면 감). 폴더 권한으로 안 보이는 폴더는 못 찾음
+     */
+    async _bcResolvePath(raw, stale) {
+        // ★ (2026-10-31 01:54, 재검토 — 재현) 한 번 풀 때 목록 요청은 12번까지 — 서버가 IP 당 분당 120번으로 막아(api.php, API_RATE_LIMIT) 깊은 경로 오타를 몇 번 고쳐 치면
+        //   그 IP 의 다른 화면 요청까지 1분간 막힐 수 있었음(깊이 7 오타 1번에 9번 요청 재현). 넘으면 '찾을 수 없음'
+        const budget = { left: 12 };
+        const listFiles = (sid, path) => { if (budget.left <= 0) return Promise.resolve(null); budget.left--; return this.api('files', { storage_id: sid, path, sort: 'name', order: 'asc', show_hidden: 1 }, 'GET').catch(() => null); };
+        let s = String(raw || '').replace(/^[\s\u00a0\u3000]+|[\s\u00a0\u3000]+$/g, '');   // ★ (2026-10-31 00:57, 재검토 — 재현) 앞뒤만 — 종전엔 이름 속 전각 공백·NBSP 까지 바꿔 그런 이름을 못 찾았음
+        if (s.length >= 2 && ((s[0] === '"' && s.endsWith('"')) || (s[0] === "'" && s.endsWith("'")))) s = s.slice(1, -1).trim();
+        s = s.replace(/\\/g, '/');
+        const lead = s.startsWith('/');
+        const segs = s.split('/').map(x => x.trim()).filter(x => x !== '' && x !== '.');
+        if (segs.some(x => x === '..')) return null;
+        const storages = this.storages || [];
+        const curId = this.currentStorage, cur = String(curId);
+        const norm = (v) => String(v || '').trim().toLowerCase();
+        const cands = [];
+        const add = (sid, parts) => { const k = String(sid) + '|' + parts.join('/'); if (!cands.some(c => c.k === k)) cands.push({ k, sid, parts }); };   // sid 는 원래 값 그대로(숫자) — 즐겨찾기 이동과 같게
+        if (segs.length) {
+            const first = segs[0];
+            let named = storages.filter(st => String(st.name || '').trim() === first);
+            if (!named.length) named = storages.filter(st => norm(st.name) === norm(first));
+            const curNamed = named.some(st => String(st.id) === cur);
+            const others = named.filter(st => String(st.id) !== cur);
+            if (curNamed) {
+                if (lead) { add(curId, segs); add(curId, segs.slice(1)); }
+                else { add(curId, segs.slice(1)); add(curId, segs); }
+            }
+            // ★ (2026-10-31 00:57, 재검토 — 재현) '/' 로 시작하면 지금 스토리지 안 경로를 먼저(지금 스토리지 이름일 때와 같은 규칙) — 종전엔 다른 스토리지가 먼저라, 지금 스토리지의
+            //   맨 위 폴더 이름이 다른 스토리지 이름과 같으면 그 폴더 대신 다른 스토리지로 갔음. 자세한 정보 창의 '/스토리지/경로' 는 지금 스토리지에 없으면 그대로 그 스토리지로 감
+            if (lead) add(curId, segs);
+            others.forEach(st => add(st.id, segs.slice(1)));
+        }
+        add(curId, segs);
+        for (const c of cands) {
+            if (stale && stale()) return null;
+            if (!c.parts.length) return { sid: c.sid, path: '' };   // 스토리지 맨 위 — 사이드바에 보이는 스토리지만 후보라 늘 있음
+            const parent = c.parts.slice(0, -1).join('/');
+            const want = c.parts[c.parts.length - 1];
+            const r = await listFiles(c.sid, parent);
+            if (!r || !r.success || !Array.isArray(r.items)) {
+                // ★ (2026-10-31 00:53, 재검토 — 재현) 위 폴더는 읽기 금지인데 그 안 폴더만 따로 허용된 경우(더 구체적인 폴더 권한) — 위 폴더 목록을 못 읽어
+                //   '찾을 수 없음' 이 됐음(종전 방식에선 들어가졌음). 그땐 그 경로를 직접 열어 봄: 로컬은 없는 경로면 오류로 답해 성공이면 있는 것,
+                //   원격(FTP 등)은 없는 경로도 '성공·0개' 일 수 있어 항목이 있을 때만 믿음
+                if (stale && stale()) return null;
+                const st = storages.find(x => String(x.id) === String(c.sid));
+                const isLocal = !!st && ['home', 'shared', 'local'].includes(st.storage_type);
+                const full = c.parts.join('/');
+                const d = await listFiles(c.sid, full);
+                if (d && d.success && Array.isArray(d.items) && (isLocal || d.items.length > 0)) return { sid: c.sid, path: full };
+                const w = await this._bcWalkPath(c, stale, listFiles); if (w) return w;   // 대소문자가 다른 중간 칸(아래 설명)
+                continue;
+            }
+            let it = r.items.find(x => String(x.name) === want);
+            if (!it) { const ci = r.items.filter(x => String(x.name).toLowerCase() === want.toLowerCase()); if (ci.length === 1) it = ci[0]; }
+            // ★ (2026-10-31 01:54, 재검토 — 재현) 위 폴더 목록을 제대로 읽었는데(항목 있음) 없으면 칸별로 내려가 봐도 결과가 같아 걷지 않음 — 비었을 때만(FTP 는 대소문자가 다른 없는 위 폴더도 '성공·0개')
+            if (!it) { if (r.items.length === 0) { const w = await this._bcWalkPath(c, stale, listFiles); if (w) return w; } continue; }
+            const name = String(it.name);
+            if (it.is_dir || it.isDir) return { sid: c.sid, path: parent ? parent + '/' + name : name };
+            return { sid: c.sid, path: parent, selectFile: name, hidden: !!it.hidden };
+        }
+        return null;
+    },
+
+    /**
+     * ★ (2026-10-31 01:24, 펜닐 요청 — 남은 항목 개선) 경로 입력 — 맨 위부터 한 칸씩 내려가며 칸마다 실제 이름(대소문자)으로 맞춰 찾음.
+     *   빠른 확인(바로 위 폴더 목록)이 실패했을 때만 부름 — 종전엔 마지막 칸만 맞춰, 대소문자를 구분하는 서버(리눅스·FTP)에서 중간 칸이 다르면
+     *   ('/photos/2024' ↔ 실제 'Photos/2024') 못 찾았음. 칸마다 정확히 같은 이름 먼저, 없으면 대소문자만 다른 것이 하나일 때만. 32칸까지
+     */
+    async _bcWalkPath(c, stale, listFiles) {
+        const parts = c.parts || [];
+        if (parts.length < 2 || parts.length > 32) return null;
+        let cur = '';
+        for (let i = 0; i < parts.length; i++) {
+            if (stale && stale()) return null;
+            const r = listFiles ? await listFiles(c.sid, cur) : await this.api('files', { storage_id: c.sid, path: cur, sort: 'name', order: 'asc', show_hidden: 1 }, 'GET').catch(() => null);
+            if (!r || !r.success || !Array.isArray(r.items)) return null;
+            const want = parts[i];
+            // ★ (2026-10-31 01:54, 재검토 — 재현) 중간 칸은 폴더만 후보(같은 이름의 파일 'photos' 와 폴더 'Photos' 가 함께 있으면 파일을 골라 실패했음)
+            const pool = i < parts.length - 1 ? r.items.filter(x => x.is_dir || x.isDir) : r.items;
+            let it = pool.find(x => String(x.name) === want);
+            if (!it) { const ci = pool.filter(x => String(x.name).toLowerCase() === want.toLowerCase()); if (ci.length === 1) it = ci[0]; }
+            if (!it) return null;
+            const name = String(it.name);
+            const isDir = !!(it.is_dir || it.isDir);
+            if (i < parts.length - 1) { if (!isDir) return null; cur = cur ? cur + '/' + name : name; continue; }
+            if (isDir) return { sid: c.sid, path: cur ? cur + '/' + name : name };
+            return { sid: c.sid, path: cur, selectFile: name, hidden: !!it.hidden };
+        }
+        return null;
+    },
+
+    /** 띄운 끝 단추(›·경로 입력·복사)가 오른쪽 단추들과 겹치거나 화면 밖으로 나가면 잠시 숨김 — 자리를 차지하게 하면 줄이 바뀌어 목록이 출렁이고, 그대로 두면 '작업' 단추를 덮었음(시험) */
+    _bcFitTools() {
+        if (this._bcFitRAF) cancelAnimationFrame(this._bcFitRAF);
+        this._bcFitRAF = requestAnimationFrame(() => {
+            this._bcFitRAF = null;
+            const tools = document.querySelector('#breadcrumb .bc-tools');
+            if (!tools) return;
+            tools.classList.remove('bc-tools-hidden');
+            const tr = document.querySelector('.file-area > .toolbar .toolbar-right');
+            const a = tools.getBoundingClientRect();
+            let hide = a.right > window.innerWidth - 4;
+            if (!hide && tr && tr.offsetParent) {
+                const b = tr.getBoundingClientRect();
+                hide = a.bottom > b.top && a.top < b.bottom && a.right > b.left - 4;
+            }
+            if (hide) tools.classList.add('bc-tools-hidden');
+        });
+    },
+    
+    _bcCloseMenus() {
+        document.querySelectorAll('.bc-menu').forEach(m => m.remove());
+        if (this._bcMenuOff) { document.removeEventListener('mousedown', this._bcMenuOff, true); document.removeEventListener('keydown', this._bcMenuOff, true); this._bcMenuOff = null; }
+    },
+
+    _bcOpenMenu(anchor, html, onPick) {
+        this._bcCloseMenus();
+        const m = document.createElement('div');
+        m.className = 'bc-menu';
+        m.setAttribute('role', 'menu');
+        m.innerHTML = html;
+        document.body.appendChild(m);
+        const r = anchor.getBoundingClientRect();
+        const left = Math.max(8, Math.min(r.left, window.innerWidth - m.offsetWidth - 8));
+        m.style.left = left + 'px';
+        m.style.top = (r.bottom + 4) + 'px';
+        m.addEventListener('click', (e) => {
+            const b = e.target.closest('[data-bc-pick]');
+            if (!b) return;
+            e.preventDefault();
+            const v = b.getAttribute('data-bc-pick');
+            this._bcCloseMenus();
+            onPick(v);
+        });
+        // ★ (2026-10-30 14:39, 재검토) 메뉴가 떠 있는 동안 키는 메뉴만 — 종전엔 Enter 가 뒤의 목록에서 고른 파일을 열고, 방향키·Backspace 가 목록을 움직였으며
+        //   Esc 가 메뉴를 닫으며 파일 선택까지 풀었음(재현). 위·아래로 항목 이동, Enter·Space 로 고르기, Esc·Tab 으로 닫기
+        this._bcMenuOff = (e) => {
+            if (e.type === 'keydown') {
+                const items = Array.from(m.querySelectorAll('[data-bc-pick]'));
+                const idx = items.indexOf(document.activeElement);
+                if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); this._bcCloseMenus(); try { anchor.focus(); } catch (x) {} return; }
+                if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                    e.preventDefault(); e.stopPropagation();
+                    if (items.length) items[(idx + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+                    return;
+                }
+                if ((e.key === 'Enter' || e.key === ' ') && idx >= 0) { e.preventDefault(); e.stopPropagation(); items[idx].click(); return; }
+                if (m.contains(document.activeElement)) e.stopPropagation();   // 그 밖의 키도 뒤의 목록 단축키로 가지 않게
+                return;
+            }
+            if (!m.contains(e.target) && e.target !== anchor) this._bcCloseMenus();
+        };
+        document.addEventListener('mousedown', this._bcMenuOff, true);
+        document.addEventListener('keydown', this._bcMenuOff, true);
+        const first = m.querySelector('[data-bc-pick]');
+        if (first) first.focus();
+    },
+
+    /** › 단추 — 그 단계의 하위 폴더 목록(누르면 이동) */
+    async _bcShowChildren(btn) {
+        const parent = btn.getAttribute('data-bc-children') || '';
+        const sid = this.currentStorage;
+        if (!sid) return;
+        const _reqPath = this.currentPath || '';
+        btn.disabled = true;
+        const r = await this.api('files', { storage_id: sid, path: parent, sort: 'name', order: 'asc', show_hidden: this._isShowHidden() ? 1 : 0 }, 'GET').catch(() => null);
+        btn.disabled = false;
+        // ★ (2026-11-01 01:02, 35차 전체 점검) 기다리는 동안 같은 스토리지 안에서 이동하면 주소창이 다시 그려져 btn 이 빠지고 메뉴가 왼쪽 위에 지난 목록으로 떴음 → 단추가 화면에 없거나 경로가 바뀌었으면 띄우지 않음
+        if (sid !== this.currentStorage || !btn.isConnected || (this.currentPath || '') !== _reqPath) return;
+        if (!r || !r.success) { this.toast((r && r.error) || t('bc_path_not_found', '경로를 찾을 수 없습니다.'), 'error'); return; }
+        const dirs = (r.items || r.files || []).filter(x => x && (x.is_dir || x.isDir));
+        const MAX = 300;
+        let html = '';
+        if (!dirs.length) html = `<div class="bc-menu-empty">${this.escapeHtml(t('bc_no_subfolders', '하위 폴더가 없습니다'))}</div>`;
+        dirs.slice(0, MAX).forEach(d => {
+            const p = d.path != null ? String(d.path) : (parent ? parent + '/' : '') + d.name;
+            const cur = (this.currentPath || '') === p || String(this.currentPath || '').startsWith(p + '/');
+            html += `<button type="button" role="menuitem" class="bc-menu-item${cur ? ' current' : ''}" data-bc-pick="${this.escapeHtml(p)}">${fsIco('folder')} <span class="fs-noico">${this.escapeHtml(d.name)}</span></button>`;   // fs-noico: 이름 속 이모지를 선 그림으로 바꾸지 않게(재검토)
+        });
+        if (dirs.length > MAX) html += `<div class="bc-menu-empty">${this.escapeHtml(tf('bc_more_folders', { n: dirs.length - MAX }, `외 ${dirs.length - MAX}개`))}</div>`;
+        this._bcOpenMenu(btn, html, (p) => this.navigate(p));
+    },
+
+    /** 복사 단추 — 경로 복사 / 이 위치 주소 복사(로그인한 사람만 열림 — 공유 링크 아님) */
+    _bcShowCopyMenu(btn) {
+        const st = (this.storages || []).find(x => String(x.id) === String(this.currentStorage));
+        const pathText = (st ? st.name : '') + '/' + (this.currentPath || '');
+        const url = `${location.origin}${location.pathname}#storage=${encodeURIComponent(this.currentStorage)}&path=${encodeURIComponent(this.currentPath || '')}`;
+        const html = `<button type="button" role="menuitem" class="bc-menu-item" data-bc-pick="path">${fsIco('copy')} <span>${this.escapeHtml(t('bc_copy_path', '경로 복사'))}</span><small class="fs-noico">${this.escapeHtml(pathText)}</small></button>`
+            + `<button type="button" role="menuitem" class="bc-menu-item" data-bc-pick="url">${fsIco('link')} <span>${this.escapeHtml(t('bc_copy_url', '이 위치 주소 복사'))}</span><small>${this.escapeHtml(t('bc_copy_url_desc', '로그인한 사람만 열림 · 공유 링크와 다름'))}</small></button>`;
+        this._bcOpenMenu(btn, html, (v) => this.copyToClipboard(v === 'url' ? url : pathText));
     },
     
     /** ★ (2026-10-26 오후) 스토리지 연결 방식에 맞는 선 그림 아이콘 이름 (사이드바·모바일 현재 위치 줄 공통) */
@@ -12140,7 +13400,7 @@ const App = {
         if (byType[type]) return byType[type];
         if (type === 'local' || type === '') {
             const p = String(s.path || '');
-            if (/^(?:\\\\|\/\/)[^\\\/]+[\\\/]/.test(p)) return 'network';   // \\서버\공유 · //서버/공유 → 네트워크 경로
+            if (s.is_network === true || /^(?:\\\\|\/\/)[^\\\/]+[\\\/]/.test(p)) return 'network';   // \\서버\공유 · //서버/공유 → 네트워크 경로   // ★ (2026-11-14 21:07, 132차 S1) 일반 사용자는 경로 대신 서버가 준 is_network 로 판정
             if (type === 'local') return 'hard-drive';
         }
         const hit = window.FS_ICO_EMOJI && window.FS_ICO_EMOJI[String(s.icon || '').replace(/\uFE0F/g, '')];
@@ -12181,6 +13441,7 @@ const App = {
         }
         this.currentPath = path || '';
         this._pendingSelectFile = selectFile;
+        this._pendingSelectFor = (this._loadSeq || 0) + 1;   // ★ (2026-10-31 01:54, 재검토 — 재현) 바로 아래 loadFiles 회차에만 쓰게 — 실패한 이동의 예약이 남아 다음에 연 다른 폴더에서 '파일을 찾을 수 없습니다' 가 떴음(재현)
         this.loadFiles(addHistory);
     },
     
@@ -12265,6 +13526,8 @@ const App = {
                 this._restoreStorageSettings(entry.storageId);
             }
             this.currentPath = entry.path;
+            // ★ (2026-11-02 17:44, 46차 점검) ←/→ 로 옮겨도 주소(#storage&path)가 그대로라 새로 고침하면 앞 폴더가 열렸음(휴대폰 화면 재현) → 기록을 쌓지 않고 지금 주소만 바꿈(replaceState — 위 '첫 로드' 와 같은 형식)
+            try { history.replaceState({ storageId: this.currentStorage, path: this.currentPath || '' }, '', `#storage=${this.currentStorage}&path=${encodeURIComponent(this.currentPath || '')}`); } catch (e) {}
             this.loadFiles(false);
         }
         
@@ -12287,6 +13550,9 @@ const App = {
         $('#mobile-search-input').val('');
         $('#search-result-header').hide();
         $('#search-pagination').hide();
+        // ★ (2026-11-01 01:49, 36차 전체 점검) 필터 패널이 열린 채·토글 단추가 눌린 채 남았다 → exitSearchMode 와 같게 닫음
+        $('#search-filters').hide();
+        $('#search-filter-toggle, #mobile-filter-toggle').removeClass('active');
         $('.mobile-search-bar').removeClass('active');
         $('#filter-type').val('all');
         $('#filter-date-from').val('');
@@ -12335,7 +13601,12 @@ const App = {
             parts.pop();
             const parentPath = parts.join('/');
             
-            const isUnlocked = parentPath && this.isVaultUnlocked(this.currentStorage, parentPath);
+            // ★ (2026-11-01 08:02, 37차 기능 점검 재검토) 캐시 키가 상위 보관함 비밀번호와 맞을 때만(37차 키 확인이 이 경로엔 빠졌음 — 틀리면 아래 일반 흐름이 비밀번호 창으로)
+            const _reqStorageId = this.currentStorage, _reqPath = this.currentPath;   // ★ (2026-11-01 09:41, 38차 점검) 키 확인(vault_info 왕복)을 기다리는 사이 다른 곳으로 가면
+            //   늦게 끝난 ↑ 가 경로를 되돌렸음 — loadFiles 자동 감지와 같이 요청 시점 위치를 잡아 두고 await 뒤 달라졌으면 아무것도 안 함
+            const isUnlocked = parentPath && this.isVaultUnlocked(this.currentStorage, parentPath)
+                && await this._vaultKeyMatches(this.currentStorage, parentPath, this.getVaultKey(this.currentStorage, parentPath));
+            if (this.currentStorage !== _reqStorageId || this.currentPath !== _reqPath) return;
             
             // 상위 경로가 vault인지 확인 (키가 캐시되어 있으면 vault)
             if (isUnlocked) {
@@ -12350,7 +13621,11 @@ const App = {
                 if (currentKey) {
                     try {
                         const parentInfo = await this.api('vault_info', { storage_id: this.currentStorage, path: parentPath }, 'GET');
-                        if (parentInfo.success && parentInfo.is_vault) {
+                        // ★ (2026-11-01 07:25, 37차 기능 점검) 부모 보관함 비밀번호가 다르면 물려주지 않음(아래 일반 목록 → 자동 감지가 비밀번호 창을 띄움)
+                        const _pv = parentInfo && (parentInfo.passwordValidator || parentInfo.password_validator);
+                        const _pOk = parentInfo.success && parentInfo.is_vault && (!_pv || await E2ECrypto.verifyPassword(currentKey, _pv));
+                        if (this.currentStorage !== _reqStorageId || this.currentPath !== _reqPath) return;   // ★ (2026-11-01 10:14, 38차 점검) 이 분기의 await(vault_info·비밀번호 확인) 뒤에도 위치가 그대로인지(위 분기와 같음)
+                        if (_pOk) {
                             // 부모도 vault → 키 상속
                             this.vault.keys.set(this._vaultCacheKey(this.currentStorage, parentPath), currentKey);
                             this._saveVaultKeyToSession(this.currentStorage, parentPath, currentKey);
@@ -12361,6 +13636,7 @@ const App = {
                         }
                     } catch(e) {}
                 }
+                if (this.currentStorage !== _reqStorageId || this.currentPath !== _reqPath) return;   // ★ (2026-11-01 10:14, 38차 점검) 실패로 빠진 경우도 같은 확인
                 // vault 해제하고 상위 폴더로
                 this.vault.isVaultView = false;
                 this.vault.currentVaultPath = null;
@@ -12474,6 +13750,7 @@ const App = {
     
     // 선택 항목 업데이트 (네이티브 DOM으로 최적화)
     updateSelection() {
+        this._saPendSel = false;   // ★ (2026-11-13 15:37, 112차 RGR28-2) 클릭 등으로 선택이 바뀌면 '뒤 묶음도 선택' 표시만 지움 — 체크는 다 그린 뒤 클릭해도 그대로라 체크 표시(_saPending)는 남김. 종전(111차 RGR27-1)엔 _saPending 을 지워 첫 30개만 체크로 남았음(재현)
         const selected = document.querySelectorAll('#file-list .file-item.selected');
         this.selectedItems = [];
         
@@ -12617,7 +13894,9 @@ const App = {
             }
         } else {
             // 일반: 단일 선택
-            items[currentIndex].classList.remove('selected');
+            // ★ (2026-11-01 11:35, 39차 점검) 첫 선택 항목 하나만 풀어 Ctrl+A·Shift 범위·Ctrl+클릭으로 고른 나머지가 선택된 채 남았음
+            //   → 탐색기처럼 전체 선택을 풀고 새 항목만 고름
+            for (let i = 0; i < len; i++) items[i].classList.remove('selected');
             items[newIndex].classList.add('selected');
             this.selectionAnchor = newIndex;
         }
@@ -12629,6 +13908,14 @@ const App = {
         
         // 데이터 업데이트 지연
         this.scheduleUpdateSelection();
+    },
+    
+    // ★ (2026-11-11 23:06, 87차 DND-2) 방향키·Home/End 가 예약한 선택 갱신이 남아 있으면 지금 끝냄(이미 끝났으면 같은 결과를 한 번 더 계산할 뿐)
+    _flushNavSelection() {
+        if (!this.navUpdateTimer) return;
+        clearTimeout(this.navUpdateTimer);
+        this.navUpdateTimer = null;
+        this.updateSelection();
     },
     
     // 선택 데이터 업데이트 예약
@@ -12652,15 +13939,10 @@ const App = {
     
     // 단일 선택 (최적화 - 이전 것만 해제)
     selectSingleFast(items, len, index) {
-        // 이전 선택 해제
-        if (this.prevSelectedIndex >= 0 && this.prevSelectedIndex < len) {
-            items[this.prevSelectedIndex].classList.remove('selected');
-        }
-        // 혹시 다른 선택이 있으면 해제 (처음 한 번만)
-        if (this.prevSelectedIndex === -1) {
-            for (let i = 0; i < len; i++) {
-                items[i].classList.remove('selected');
-            }
+        // ★ (2026-11-01 11:35, 39차 점검) prevSelectedIndex(앞서 Home/End 로 고른 위치)만 풀었는데 클릭·방향키·Ctrl+클릭은 이 값을
+        //   갱신하지 않아 Home → ↓ → End 에서 두 개가 선택된 채 남았음 → 늘 전체를 풀고 새 항목만 고름
+        for (let i = 0; i < len; i++) {
+            items[i].classList.remove('selected');
         }
         // 새 선택
         items[index].classList.add('selected');
@@ -12676,28 +13958,13 @@ const App = {
         const start = anchor < focus ? anchor : focus;
         const end = anchor < focus ? focus : anchor;
         
-        // 이전 범위와 비교해서 변경된 부분만 처리
-        if (this.prevRangeStart >= 0) {
-            // 이전 범위에서 벗어난 것 해제
-            for (let i = this.prevRangeStart; i <= this.prevRangeEnd; i++) {
-                if (i < start || i > end) {
-                    items[i].classList.remove('selected');
-                }
-            }
-            // 새로 추가된 것 선택
-            for (let i = start; i <= end; i++) {
-                if (i < this.prevRangeStart || i > this.prevRangeEnd) {
-                    items[i].classList.add('selected');
-                }
-            }
-        } else {
-            // 처음: 전체 해제 후 범위 선택
-            for (let i = 0; i < len; i++) {
-                if (i >= start && i <= end) {
-                    items[i].classList.add('selected');
-                } else {
-                    items[i].classList.remove('selected');
-                }
+        // ★ (2026-11-01 11:35, 39차 점검) 종전엔 prevRangeStart/End(이전 범위)와 비교해 바뀐 부분만 칠했는데, 이 값이 Ctrl+A·Shift+방향키·
+        //   Esc·Home/End 단일 선택에서 갱신되지 않아 범위 밖 항목이 선택된 채 남거나 범위 안 항목이 빠졌음 → 늘 전체를 다시 칠함
+        for (let i = 0; i < len; i++) {
+            if (i >= start && i <= end) {
+                items[i].classList.add('selected');
+            } else {
+                items[i].classList.remove('selected');
             }
         }
         
@@ -12919,6 +14186,8 @@ const App = {
         if (selectAll) selectAll.checked = true;
         
         this.updateSelection();
+        if (this._renderRAF) this._saPending = true;   // ★ (2026-11-13 11:22, 111차 RGR27-1) 그리는 도중 Ctrl+A 를 눌렀다는 표시(위 '전체' 칸과 같음)
+        if (this._renderRAF) this._saPendSel = true;   // ★ (2026-11-13 15:37, 112차 RGR28-2) Ctrl+A 는 선택(.selected)도 — 뒤 묶음에 이어 붙임(renderFiles 주석)
     },
     
     // 선택 UI 업데이트 (선택 개수 표시)
@@ -12940,20 +14209,16 @@ const App = {
                 infoEl.textContent = text;
                 infoEl.style.display = '';
             }
-            if (statusEl) {
-                statusEl.textContent = text;
-            }
         } else {
             if (infoEl) {
                 infoEl.style.display = 'none';
             }
-            if (statusEl) {
-                // 선택 없으면 현재 폴더 파일 수 표시
-                // ★ (2026-10-28 19:55, 6차 점검) 검색 중이면 검색 결과 수 — 종전엔 검색 전에 보던 폴더의 항목 수가 나왔음
-                const fileCount = this.isSearchMode ? (this.searchState?.total || 0) : (this.files?.length || 0);
-                statusEl.textContent = fileCount > 0 ? `${fileCount}${t('count_items','개 항목')}` : '';
-            }
         }
+        // ★ (2026-10-30 14:10, 펜닐 요청) 상태줄 보강 — 항목 수(폴더·파일)·파일 합계 + 선택(폴더·파일·크기), 검색 중이면 검색 결과 수(2026-10-28 6차 점검 동작 유지)·고른 항목 위치.
+        //   종전엔 선택이 있으면 '3개 선택 (2.3 MB)' 만, 없으면 'N개 항목' 만 보였음. 세부 정보 창도 같은 때 다시 그림
+        if (statusEl) this._updateFileStatusBar(items);
+        this._detailsRefresh();
+        this._bcFitTools();   // 위 '1개 선택' 칩이 나오고 들어가며 주소창 뒤 공간이 바뀜
         this._updateToolbarCenterVisibility();
         
         // 툴바 액션 드롭다운: 선택 없으면 메뉴 닫기만
@@ -13222,7 +14487,8 @@ const App = {
         const res = await this.api('clear_thumbcache');
         if (res.success) {
             const freedMB = (res.freed / 1024 / 1024).toFixed(1);
-            $('#thumbcache-status').text(`✅ ${res.deleted}개 삭제 (${freedMB} MB 확보)`);
+            // ★ (2026-10-31 13:36, 34차 후속 개선) 삭제 결과 글자가 영어 화면에도 한국어로 나오던 것 — tf() 로
+            $('#thumbcache-status').text('✅ ' + tf('thumbcache_deleted_status', {n: res.deleted, mb: freedMB}, `${res.deleted}개 삭제 (${freedMB} MB 확보)`));
             this.toast(tf('nt_thumb_cache_deleted', {n: res.deleted}, `썸네일 캐시 ${res.deleted}개 삭제 완료`), 'success');
             // 캐시 상태 새로고침
             this.loadThumbCapabilities();
@@ -13307,7 +14573,7 @@ const App = {
     },
     
     // 썸네일 로드
-    async _renderPdfJs(containerId, pdfUrl) {
+    async _renderPdfJs(containerId, pdfUrl, pdfName) {
         const container = document.getElementById(containerId);
         if (!container) return;
         
@@ -13318,52 +14584,63 @@ const App = {
         
         try {
             // PDF.js 라이브러리 동적 로드
-            if (!window.pdfjsLib) {
+            // ★ (2026-10-30 11:30) PDF.js 2.6.347 → 6.4.299(legacy 빌드 — 옛 모바일 브라우저도). 6.x 는 모듈(ESM)이라 import() 로 읽음.
+            //   종전 판은 악성 PDF 로 스크립트가 실행되는 취약점(CVE-2024-4367, 4.2.67 에서 고침)이 있었음. 파일 이름은 .js 그대로(.mjs 는 Windows Apache·IIS 에 MIME 이 없을 수 있어)
+            const _pdfBase = new URL('assets/lib/', document.baseURI).href;
+            if (!window.pdfjsLib || !window.pdfjsLib.version || parseInt(window.pdfjsLib.version, 10) < 6) {
                 container.innerHTML = `<div style="padding:20px;color:#fff;text-align:center;">📄 PDF.js ${t('loading','로딩 중...')}</div>`;
                 try {
-                    await new Promise((resolve, reject) => {
-                        const script = document.createElement('script');
-                        script.src = 'assets/lib/pdf.min.js';
-                        script.onload = () => {
-                            if (window.pdfjsLib) resolve();
-                            else reject(new Error('pdfjsLib not found'));
-                        };
-                        script.onerror = () => reject(new Error('PDF.js load failed'));
-                        document.head.appendChild(script);
-                    });
-                    pdfjsLib.GlobalWorkerOptions.workerSrc = 'assets/lib/pdf.worker.min.js';
+                    const mod = await import(_pdfBase + 'pdf.min.js?v=6.5.438');
+                    window.pdfjsLib = (mod && mod.getDocument) ? mod : (globalThis.pdfjsLib || mod);
+                    if (!window.pdfjsLib || !window.pdfjsLib.getDocument) throw new Error('pdfjsLib not found');
+                    pdfjsLib.GlobalWorkerOptions.workerSrc = _pdfBase + 'pdf.worker.min.js?v=6.5.438';
                 } catch (cdnErr) {
                     showIframe();
                     return;
                 }
             }
             
+            if (!container.isConnected) return;   // ★ (2026-11-12 11:15, 97차 개선 A3) PDF.js 를 읽는 사이 닫았거나 다른 미리보기로 넘어갔으면 PDF 를 받지 않음 — 종전엔 화면에 없는 칸을 위해 PDF 를 끝까지 받았음(재현: PDF.js 2초 늦춤, 0.5초에 닫기)
             container.innerHTML = `<div style="padding:20px;color:#fff;text-align:center;">📄 PDF ${t('loading','로딩 중...')} <span id="pdf-load-progress"></span></div>`;
             
             // PDF 파일을 fetch로 직접 가져오기 (CORS/CSP 문제 회피)
-            const response = await fetch(pdfUrl);
+            // ★ (2026-11-12 06:01, 94차 DOC-3) 받기를 끊을 수 있게 — 앞 PDF 받기는 여기서, 미리보기를 닫으면 _pdfJsCleanup 에서 끊음.
+            //   종전엔 받는 중에 닫아도 끝까지 받았음(재현: 2MB/s 회선 흉내, 80MB PDF 를 2초 만에 닫았는데 41초 뒤 다 받고 버림)
+            try { if (this._pdfFetchAbort) this._pdfFetchAbort.abort(); } catch (e) {}
+            const _pdfAc = this._pdfFetchAbort = (typeof AbortController === 'function') ? new AbortController() : null;
+            const response = await fetch(pdfUrl, _pdfAc ? { signal: _pdfAc.signal } : undefined);
             if (!response.ok) throw new Error('PDF fetch failed: ' + response.status);
             const arrayBuffer = await response.arrayBuffer();
+            // ★ (2026-10-31 12:03, 34차 전체 점검) 기다리는 사이 다른 미리보기로 넘어갔으면(이 칸이 화면에서 빠짐) 여기서 멈춤 — 종전엔 늦게 끝난 앞 PDF 가
+            //   지금 PDF 문서를 정리(destroy)하고 지금 화면의 #pdf-pages 를 앞 PDF 쪽(음수 배율)으로 다시 그렸음
+            if (!container.isConnected) return;
             
             const pdf = await pdfjsLib.getDocument({
                 data: arrayBuffer,
-                cMapUrl: 'assets/lib/cmaps/',
-                cMapPacked: true
+                cMapUrl: _pdfBase + 'cmaps/',            // 한중일 글꼴 문자표 — 주소는 절대 경로로(워커가 읽어도 같은 곳)
+                cMapPacked: true,
+                standardFontDataUrl: _pdfBase + 'standard_fonts/',   // 넣지 않은 기본 글꼴(Helvetica 등)
+                wasmUrl: _pdfBase + 'wasm/',             // JPEG2000·JBIG2 그림 풀기
+                iccUrl: _pdfBase + 'iccs/',              // (★ 2026-10-30 13:35, 28차 재검토) 처음 넣었던 isEvalSupported 는 6.x 에 없는 옵션이라 뺌 — CVE-2024-4367 은 4.2.67 부터 라이브러리 안에서 고쳐짐
+                enableXfa: false
             }).promise;
+            if (!container.isConnected) { try { (pdf.loadingTask && typeof pdf.loadingTask.destroy === 'function') ? pdf.loadingTask.destroy() : pdf.destroy(); } catch (_) {} return; }   // ★ (2026-10-31 12:03, 34차 전체 점검)
             const totalPages = pdf.numPages;
             
             // 컨테이너 초기화 + 툴바
+            // ★ (2026-11-13 01:08, 108차 ARIA-4) PDF 축소·확대 단추(➖➕ 그림만)에 이름 — 종전엔 이름이 비었음
+            // ★ (2026-11-13 17:07, 113차 DEF-5) 쪽 번호 칸(#pdf-page-input)에 이름 '페이지 번호' — 종전엔 이름이 비었음
             container.innerHTML = `
                 <div id="pdf-toolbar" style="background:#3a3a3a;padding:4px 8px;flex-shrink:0;">
                     <div style="display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:nowrap;">
                         <button onclick="App._pdfPrevPage()" style="background:#555;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:12px;">◀</button>
-                        <input id="pdf-page-input" type="tel" inputmode="numeric" pattern="[0-9]*" value="1" style="width:36px;max-width:36px;text-align:center;background:#444;color:#fff;border:1px solid #666;border-radius:3px;padding:2px 4px;font-size:11px;margin:0;box-sizing:border-box;" onchange="App._pdfGoToPage(this.value)">
+                        <input id="pdf-page-input" type="tel" inputmode="numeric" pattern="[0-9]*" value="1" aria-label="${t('pdf_page_number', '페이지 번호')}" style="width:36px;max-width:36px;text-align:center;background:#444;color:#fff;border:1px solid #666;border-radius:3px;padding:2px 4px;font-size:11px;margin:0;box-sizing:border-box;" onchange="App._pdfGoToPage(this.value)">
                         <span style="color:var(--fs-text-3, #aaa);font-size:11px;white-space:nowrap;">/ ${totalPages}</span>
                         <button onclick="App._pdfNextPage()" style="background:#555;color:#fff;border:none;padding:3px 8px;border-radius:3px;cursor:pointer;font-size:12px;">▶</button>
                         <span style="color:var(--fs-text-2, #555);">|</span>
-                        <button onclick="App._pdfZoom(-0.25)" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">➖</button>
+                        <button onclick="App._pdfZoom(-0.25)" aria-label="${t('viewer_zoom_out','축소')}" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">➖</button>
                         <span id="pdf-zoom-level" style="color:#fff;font-size:11px;min-width:35px;text-align:center;">100%</span>
-                        <button onclick="App._pdfZoom(0.25)" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">➕</button>
+                        <button onclick="App._pdfZoom(0.25)" aria-label="${t('viewer_zoom_in','확대')}" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">➕</button>
                         <span style="color:var(--fs-text-2, #555);">|</span>
                         <button onclick="App._pdfFitWidth()" title="${t('fit_width','너비 맞춤')}" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">↔️</button>
                         <button onclick="App._pdfFitPage()" title="${t('fit_page','페이지 맞춤')}" style="background:#555;color:#fff;border:none;padding:3px 6px;border-radius:3px;cursor:pointer;">📐</button>
@@ -13376,15 +14653,19 @@ const App = {
             container.style.display = 'flex';
             container.style.flexDirection = 'column';
             
+            // ★ (2026-10-30 13:35, 28차 재검토) 앞서 연 PDF 정리 — 종전엔 미리보기를 열 때마다 PDF 문서·워커가 남아 쌓였음(재현: 3번 열면 워커 3개)
+            if (this._pdfDoc && this._pdfDoc !== pdf) { try { const _old = this._pdfDoc; (_old.loadingTask && typeof _old.loadingTask.destroy === 'function') ? _old.loadingTask.destroy() : (typeof _old.destroy === 'function' && _old.destroy()); } catch (e) {} }   // 6.x 는 문서에 destroy 가 없어 loadingTask 로(워커까지 정리)
             this._pdfDoc = pdf;
             this._pdfScale = 1.0;
             this._pdfContainerId = containerId;
             this._pdfRenderedPages = new Set();
             this._pdfUrl = pdfUrl;
+            this._pdfName = pdfName || '';   // ★ (2026-11-01 11:41, 39차 점검) _pdfDownload 의 blob 저장 이름
             this._pdfRotation = 0;
             
             // 컨테이너 너비 기준 자동 맞춤
             const firstPage = await pdf.getPage(1);
+            if (!container.isConnected || this._pdfDoc !== pdf) return;   // ★ (2026-10-31 12:03, 34차 전체 점검) 그사이 다른 미리보기로 넘어감
             const viewport = firstPage.getViewport({ scale: 1.0, rotation: this._pdfRotation || 0 });
             const containerWidth = container.clientWidth - 40;
             this._pdfScale = containerWidth / viewport.width;
@@ -13393,6 +14674,7 @@ const App = {
             await this._renderPdfPages();
             
         } catch (e) {
+            if (!container.isConnected) return;   // ★ (2026-11-12 06:01, 94차 DOC-3) 닫았거나 다른 미리보기로 넘어가 받기를 끊은 경우 — 화면에 없는 칸에 대체 iframe 을 만들지 않음(만들면 그 iframe 이 PDF 를 다시 받음)
             // fallback: iframe
             { const _iframe = document.createElement('iframe'); _iframe.src = pdfUrl; _iframe.style.cssText = 'width:100%;height:100%;border:none;'; container.innerHTML = ''; container.appendChild(_iframe); }
         }
@@ -13403,6 +14685,8 @@ const App = {
         if (!pdf) return;
         const pagesDiv = document.getElementById('pdf-pages');
         if (!pagesDiv) return;
+        { const _pd0 = document.getElementById('pdf-pages'); if (_pd0 && _pd0._pdfScrollHandler) _pd0._pdfScrollHandler(); }   // ★ (2026-11-12 07:11, 94차 DOC-4 보완) 번호 칸을 지금 화면 쪽으로 먼저 맞춤 — 범위 밖·0·글자를 넣어 둔 채 확대·회전하면 그 값으로 엉뚱한 쪽(마지막·1쪽)으로 갔음(재검토 재현)
+        const _keepPage = parseInt((document.getElementById('pdf-page-input') || {}).value) || 1;   // ★ (2026-11-12 06:01, 94차 DOC-4) 다시 그린 뒤 보던 쪽으로 돌아가려고 기억(아래)
         pagesDiv.innerHTML = '';
         this._pdfRenderedPages = new Set();
         
@@ -13438,6 +14722,17 @@ const App = {
                     if (!this._pdfRenderedPages.has(pageNum)) {
                         this._renderSinglePdfPage(pageNum, entry.target);
                     }
+                } else if (this._pdfRenderedPages.has(parseInt(entry.target.dataset.pageNum))) {
+                    const pageNum = parseInt(entry.target.dataset.pageNum);
+                    // ★ (2026-11-12 06:00, 94차 DOC-1) 멀어진 쪽(앞뒤 500px 밖)의 캔버스를 지우고 쪽 번호 자리로 되돌림 — 다시 다가오면 위에서 다시 그림.
+                    //   종전엔 넘겨 본 쪽 캔버스가 모두 남아 휴대폰(배율 3)에서 쪽마다 약 6MB 씩 쌓여 2000쪽 PDF 200쪽쯤(1.2GB)에서 탭이 죽었음(재현)
+                    this._pdfRenderedPages.delete(pageNum);
+                    const _cv = entry.target.querySelector('canvas');
+                    if (_cv) {
+                        try { if (_cv._fsRenderTask) _cv._fsRenderTask.cancel(); } catch (e) {}
+                        _cv.width = 0; _cv.height = 0;   // iOS Safari 가 캔버스 메모리를 바로 돌려받게
+                        entry.target.innerHTML = `<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:var(--fs-text-4, #ccc);font-size:14px;">${pageNum}</div>`;
+                    }
                 }
             });
         }, {
@@ -13451,16 +14746,32 @@ const App = {
         });
         
         // 현재 페이지 표시 업데이트
-        pagesDiv.addEventListener('scroll', () => {
-            const scrollTop = pagesDiv.scrollTop;
-            const pageHeight = vp.height + 8;
-            const currentPage = Math.floor(scrollTop / pageHeight) + 1;
+        // ★ (2026-10-31 13:35, 34차 후속 개선) #pdf-pages 는 유지되는데 확대·회전·맞춤 때마다 scroll 리스너를 새로 붙여 쌓였음 —
+        //   요소에 보관한 이전 핸들러를 떼고 붙임
+        if (pagesDiv._pdfScrollHandler) pagesDiv.removeEventListener('scroll', pagesDiv._pdfScrollHandler);
+        pagesDiv._pdfScrollHandler = () => {
+            // ★ (2026-11-12 06:01, 94차 DOC-4) 지금 쪽을 실제 쪽 자리 위치로 찾음(위쪽이 스크롤 위치 이하인 마지막 쪽, 이진 탐색) — 종전엔 '스크롤 ÷ 첫 쪽 높이'라
+            //   쪽 크기가 다른 PDF(DOC-2 로 자리 크기가 쪽마다 다름)에서 번호가 어긋났음
+            const kids = pagesDiv.children;
+            if (!kids.length) return;
+            const y = pagesDiv.scrollTop + kids[0].offsetTop + 2;
+            let lo = 0, hi = kids.length - 1;
+            while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (kids[mid].offsetTop <= y) lo = mid; else hi = mid - 1; }
+            // ★ (2026-11-12 06:07, 94차 DOC-4) 맨 끝까지 내렸으면 마지막 쪽 — 마지막 쪽(또는 끝의 작은 쪽들)은 위쪽이 화면 맨 위까지 올라오지 못해 번호가 앞 쪽에 머물렀음(재현: 쪽 크기 섞인 PDF 5쪽에서 '4'). 한 화면에 다 들어가는 문서(스크롤 0)는 그대로
+            const currentPage = (pagesDiv.scrollTop > 0 && pagesDiv.scrollTop + pagesDiv.clientHeight >= pagesDiv.scrollHeight - 2) ? kids.length : lo + 1;
             const input = document.getElementById('pdf-page-input');
             if (input) {
                 input.value = currentPage;
-                input.style.width = (String(currentPage).length + 1) + 'ch';
+                input.style.width = 'calc(' + (String(currentPage).length + 1) + 'ch + 10px)';   // ★ (2026-11-12 06:01, 94차 DOC-4) 칸 여백·테두리(10px)를 더함 — 종전 '2ch' 는 border-box 라 글자 칸이 10px 뿐이어서 숫자가 잘렸음(재현: scrollWidth 14 > clientWidth 10)
+                input.style.paddingLeft = input.style.paddingRight = (String(currentPage).length >= 5) ? '0px' : '';   // ★ (2026-11-12 11:19, 97차 개선 A4) 5자리 쪽 번호는 칸 좌우 여백을 없애 글자를 넣음(칸 폭 max-width 36px 은 그대로라 도구줄 폭 같음) — 종전엔 10000쪽 이상에서 숫자가 5px 잘렸음(재현: 칸 34 < 글자 39)
             }
-        });
+        };
+        pagesDiv.addEventListener('scroll', pagesDiv._pdfScrollHandler);
+        // ★ (2026-11-12 07:11, 94차 DOC-4 보완) 손으로 넘기면(휠·터치) ▶·◀ 연타용 목표 기억을 지움 — ▶ 직후 손으로 더 내린 뒤 ▶ 를 누르면 앞 목표 기준으로 뒤로 되돌아갔음(재검토 재현). 단추 연타는 종전 그대로
+        if (!pagesDiv._pdfUserScrollClear) { pagesDiv._pdfUserScrollClear = () => { this._pdfNavTarget = null; }; pagesDiv.addEventListener('wheel', pagesDiv._pdfUserScrollClear, { passive: true }); pagesDiv.addEventListener('touchstart', pagesDiv._pdfUserScrollClear, { passive: true }); }
+        // ★ (2026-11-12 06:01, 94차 DOC-4) 확대·회전·맞춤으로 다시 그린 뒤 보던 쪽으로 — 종전엔 스크롤 값만 남아 다른 쪽이 보이고 번호는 그대로였음(재현: 9쪽에서 ➕ → 표시 9, 화면 6쪽)
+        { const _kp = document.getElementById('pdf-page-' + Math.min(_keepPage, pdf.numPages)); if (_kp) pagesDiv.scrollTop = _kp.offsetTop - pagesDiv.children[0].offsetTop; }
+        pagesDiv._pdfScrollHandler();
     },
     
     async _renderSinglePdfPage(pageNum, container) {
@@ -13472,6 +14783,7 @@ const App = {
         
         try {
             const page = await pdf.getPage(pageNum);
+            if (!this._pdfRenderedPages.has(pageNum) || !container.isConnected) return;   // ★ (2026-11-12 06:00, 94차 DOC-1) 쪽을 받는 사이 멀어져 지운 쪽이면 그리지 않음(위 관찰자) — 안 막으면 지운 뒤에 캔버스가 다시 붙어 남음
             const viewport = page.getViewport({ scale: this._pdfScale, rotation: this._pdfRotation });
             
             // 고해상도 디스플레이(Retina) 대응
@@ -13482,13 +14794,16 @@ const App = {
             canvas.style.display = 'block';
             canvas.style.width = viewport.width + 'px';
             canvas.style.height = viewport.height + 'px';
-            
+            // ★ (2026-11-12 06:00, 94차 DOC-2) 쪽 자리를 이 쪽의 실제 크기로 — 자리는 처음에 첫 쪽 크기로 만들어, 크기가 다른 쪽(A3·가로)은 캔버스가 자리 밖으로 넘쳐 아래가 다음 쪽에 가려졌음(재현). 같은 크기 쪽은 값이 같아 변화 없음
+            container.style.width = viewport.width + 'px';
+            container.style.height = viewport.height + 'px';
+
             container.innerHTML = '';
             container.appendChild(canvas);
             
-            const ctx = canvas.getContext('2d');
-            ctx.scale(dpr, dpr);
-            await page.render({ canvasContext: ctx, viewport }).promise;
+            // ★ (2026-10-30 11:30) PDF.js 6 은 canvas 를 넘기는 방식 — 고해상도 배율은 ctx.scale 대신 transform 으로(판에 상관없이 같은 결과)
+            canvas._fsRenderTask = page.render({ canvas, viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null });   // ★ (2026-11-12 06:00, 94차 DOC-1) 멀어져 지울 때 그리던 것을 멈추게 보관
+            await canvas._fsRenderTask.promise;
         } catch (e) {
         }
     },
@@ -13516,6 +14831,7 @@ const App = {
         const pagesDiv = document.getElementById('pdf-pages');
         const pageEl = document.getElementById('pdf-page-' + num);
         if (pagesDiv && pageEl) {
+            this._pdfNavTarget = { n: num, t: Date.now() };   // ★ (2026-11-12 06:01, 94차 DOC-4) 부드러운 스크롤 중엔 번호 칸이 아직 앞 쪽이라 ▶ 를 빨리 여러 번 누르면 한 쪽만 넘어갔음(재현: 0.15초 간격 3번 → 1쪽만) — 아래 ◀·▶ 가 0.8초 안에는 이 목표 쪽을 기준으로
             pageEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
     },
@@ -13523,14 +14839,16 @@ const App = {
     _pdfPrevPage() {
         const input = document.getElementById('pdf-page-input');
         if (!input) return;
-        const cur = parseInt(input.value) || 1;
+        const _nt = this._pdfNavTarget;
+        const cur = (_nt && Date.now() - _nt.t < 800) ? _nt.n : (parseInt(input.value) || 1);   // ★ (2026-11-12 06:01, 94차 DOC-4) 위 _pdfGoToPage 설명
         if (cur > 1) this._pdfGoToPage(cur - 1);
     },
     
     _pdfNextPage() {
         const input = document.getElementById('pdf-page-input');
         if (!input || !this._pdfDoc) return;
-        const cur = parseInt(input.value) || 1;
+        const _nt = this._pdfNavTarget;
+        const cur = (_nt && Date.now() - _nt.t < 800) ? _nt.n : (parseInt(input.value) || 1);   // ★ (2026-11-12 06:01, 94차 DOC-4) 위 _pdfGoToPage 설명
         if (cur < this._pdfDoc.numPages) this._pdfGoToPage(cur + 1);
     },
     
@@ -13572,12 +14890,24 @@ const App = {
         if (!this._pdfUrl) return;
         const a = document.createElement('a');
         a.href = this._pdfUrl.replace('inline=1', 'inline=0');
-        a.download = '';
+        // ★ (2026-11-01 11:41, 39차 점검) 보관함 PDF 는 blob: 주소라 download='' 면 blob UUID(확장자 없음)로 저장됐음 → blob 일 때는 파일 이름을 줌
+        a.download = (String(this._pdfUrl).startsWith('blob:') && this._pdfName) ? this._pdfName : '';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
     },
     
+    // ★ (2026-11-01 11:41, 39차 점검) 미리보기를 닫아도 마지막 PDF 문서·워커·쪽 IntersectionObserver 가 다음 PDF 를 열 때까지 남았음 → 닫을 때 정리(hideModal·closeModal)
+    _pdfJsCleanup() {
+        try { if (this._pdfFetchAbort) { this._pdfFetchAbort.abort(); this._pdfFetchAbort = null; } } catch (e) {}   // ★ (2026-11-12 06:01, 94차 DOC-3) 받는 중인 PDF 받기 끊기(위 _renderPdfJs)
+        try { if (this._pdfPageObserver) { this._pdfPageObserver.disconnect(); this._pdfPageObserver = null; } } catch (e) {}
+        try {
+            const _old = this._pdfDoc;
+            if (_old) { (_old.loadingTask && typeof _old.loadingTask.destroy === 'function') ? _old.loadingTask.destroy() : (typeof _old.destroy === 'function' && _old.destroy()); }
+        } catch (e) {}
+        this._pdfDoc = null;
+    },
+
     _viewerInstance: null,
 
     // Viewer.js 로 이미지 뷰어 초기화
@@ -13601,6 +14931,7 @@ const App = {
         }
 
         const initWithSize = () => {
+            if (!img.isConnected || img.viewer) return;   // ★ (2026-11-11 23:36, 88차 IMV-1) 이미 화면에서 빠졌거나 이미 뷰어가 붙은 그림이면 또 만들지 않음 — 느린 그림을 빠르게 두 장 넘기면 같은 그림에 뷰어가 세 번 만들어져 앱이 빈 뷰어를 쥐어 확대·축소·회전 단추가 안 먹고 창 크기 리스너가 남았음(재현)
             // Viewer.js 사용 (모든 이미지 통일)
             if (wrap)      { wrap.style.cssText = 'width:100%;height:100%;overflow:hidden;position:relative;'; }
             if (modalBody) { modalBody.style.overflow = 'hidden'; modalBody.style.overflowX = ''; modalBody.style.overflowY = ''; modalBody.style.display = ''; }
@@ -13633,7 +14964,8 @@ const App = {
                 container: wrap || img.parentElement,
                 viewed() {
                     const el = document.getElementById('img-zoom-level');
-                    if (el) el.textContent = '맞춤';
+                    // ★ (2026-10-31 13:36, 34차 후속 개선) 배율 표시 '맞춤' 이 영어 화면에도 한국어로 나오던 것 — t() 로
+                    if (el) el.textContent = t('zoom_fit_label', '맞춤');
                     // 맞춤 비율 저장 (확대 여부 판단 기준)
                     if (self._viewerInstance) {
                         // 컨테이너에 맞게 비율 자동 조절
@@ -13660,7 +14992,10 @@ const App = {
             });
             
             // Viewer.js 이동 후 상태 고착 방지
-            if (wrap) {
+            // ★ (2026-11-01 11:42, 39차 점검) 같은 그림을 보는 동안 wrap 은 그대로인데 창 크기를 바꿀 때마다 _initViewer 가 리스너를 2개씩 더 붙였음 → 한 번만
+            //   (처리기는 self._viewerInstance 를 그때그때 읽으므로 한 번 붙인 것으로 새 인스턴스에도 동작)
+            if (wrap && !wrap._fsPtrBound) {
+                wrap._fsPtrBound = true;
                 wrap.addEventListener('pointerup', () => {
                     if (self._viewerInstance && self._viewerInstance.pointers) {
                         // 포인터 상태 강제 클리어
@@ -13708,7 +15043,8 @@ const App = {
         if (this._viewerInstance) {
             this._viewerInstance.reset();
             const el = document.getElementById('img-zoom-level');
-            if (el) el.textContent = '맞춤';
+            // ★ (2026-10-31 13:36, 34차 후속 개선) 배율 표시 '맞춤' 이 영어 화면에도 한국어로 나오던 것 — t() 로
+            if (el) el.textContent = t('zoom_fit_label', '맞춤');
         }
     },
 
@@ -13761,7 +15097,8 @@ const App = {
         }
         const title = document.getElementById('preview-title')?.textContent || '';
         const counter = document.getElementById('preview-counter')?.textContent || '';
-        info.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:10px;">${this.escapeHtml(title)}</span><span style="flex-shrink:0;">${this.escapeHtml(counter)}</span><button id="_fs-close" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:6px 12px;margin-left:20px;line-height:1;flex-shrink:0;pointer-events:auto;opacity:0.8;" title="닫기">&times;</button>`;
+        // ★ (2026-10-31 13:36, 34차 후속 개선) 전체화면 정보 줄 닫기 단추 title 이 한국어 고정이던 것 — t() 로
+        info.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;margin-right:10px;">${this.escapeHtml(title)}</span><span style="flex-shrink:0;">${this.escapeHtml(counter)}</span><button id="_fs-close" style="background:none;border:none;color:#fff;font-size:24px;cursor:pointer;padding:6px 12px;margin-left:20px;line-height:1;flex-shrink:0;pointer-events:auto;opacity:0.8;" title="${this.escapeHtml(t('close', '닫기'))}">&times;</button>`;
         info.style.display = 'flex';
         info.style.pointerEvents = 'none';
         
@@ -13805,14 +15142,26 @@ const App = {
     //   모달이 열린 채 다른 스토리지를 눌러도 안전한, 이미 검증된 방식이다.
     async _imgShowExif() {
         if (!this.currentPreviewPath) return;
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 압축 안 그림이면 스토리지의 같은 경로 파일을 읽고 '개인정보 삭제'로 덮어쓸 수 있었다 → 막고 안내
+        if (this._previewArchiveEntry) { this.toast(t('archive_entry_not_supported', '압축 파일 안의 항목에서는 사용할 수 없습니다.'), 'warning'); return; }
         const sid = this.currentPreviewStorageId || this.currentStorage;
+        // ★ (2026-11-01 17:20, 40차 점검) 대상 경로를 응답 '뒤'에 읽어, EXIF 를 받는 동안 다음 사진으로 넘기면 창에는 앞 사진 정보가 보이는데 [개인정보 삭제]는
+        //   지금 사진을 덮어썼음 → 요청 전에 잡고, 응답 뒤 사진이 바뀌었으면 창을 띄우지 않음
+        const exPath = this.currentPreviewPath;
+        // ★ (2026-11-02 10:25, 42차 점검) 진행 중 막기가 없어 EXIF 단추 더블클릭 시 응답 둘이 각각 확인 창을 띄워 겹쳤음 → 요청 중이면 무시
+        if (this._exifLoading) return;
+        this._exifLoading = true;
         let res;
         try {
-            res = await this.api('image_exif', { storage_id: sid, path: this.currentPreviewPath }, 'GET');
+            res = await this.api('image_exif', { storage_id: sid, path: exPath }, 'GET');
         } catch (e) {
+            if (this.currentPreviewPath !== exPath) return;   // ★ (2026-11-01 17:20, 40차 점검) 위 exPath 주석
             this.toast(t('exif_failed', 'EXIF 정보를 읽지 못했습니다.'), 'error');
             return;
+        } finally {
+            this._exifLoading = false;   // ★ (2026-11-02 10:25, 42차 점검) 위 _exifLoading 주석 — 응답(성공·실패)이 오면 풂
         }
+        if (this.currentPreviewPath !== exPath) return;   // ★ (2026-11-01 17:20, 40차 점검) 위 exPath 주석
         if (!res || !res.success) {
             this.toast((res && res.error) || t('exif_failed', 'EXIF 정보를 읽지 못했습니다.'), 'error');   // ★ (2026-10-29 18:21, 22차 점검) toast 는 글자로 넣으므로(text) escape 하지 않음 — 종전엔 '&quot;' 같은 글자가 그대로 보였음
             return;
@@ -13896,8 +15245,7 @@ const App = {
         html += '</div>';
         // ★ (2026-10-07) [🧹 개인정보 삭제] — 지원 형식 · 보관함/원격 아님 · (지금 폴더의 파일이면) 쓰기 권한 · 잠기지 않음.
         //   다른 저장소에서 연 미리보기(검색 결과 등)는 서버가 권한·잠금을 다시 확인한다.
-        const exPath = this.currentPreviewPath;
-        const exExt = (exPath.split('.').pop() || '').toLowerCase();
+        const exExt = (exPath.split('.').pop() || '').toLowerCase();   // ★ (2026-11-01 17:20, 40차 점검) exPath 는 위(요청 전)에서 잡음
         const exSt = (this.storages || []).find(s => s.id == sid);
         const exRemote = !!exSt && !['home', 'shared', 'local'].includes(exSt.storage_type);
         const exSame = sid == this.currentStorage;
@@ -14416,6 +15764,17 @@ const App = {
         }
     },
     
+    // ★ (2026-11-02 10:33, 42차 점검) 썸네일·재생바 장면·음악 커버 주소에 붙이는 버전 값 'v=<수정시각 정수 초>-<크기 바이트>'(FileManager::versionedCacheControl·공유 화면과 같은 형식).
+    //   주소에 버전이 없어 원본을 바꿔도(같은 이름 다시 올리기·EXIF 지우기·편집 저장·덮어쓰기) 브라우저가 하루~30일 옛 그림을 썼음.
+    //   수정 시각을 못 읽으면 '' (v 를 안 붙임 → 서버가 매번 재검증하는 정책)
+    _fsMediaVer(it) {
+        if (!it || !it.modified) return '';
+        let ms = new Date(String(it.modified).replace(' ', 'T')).getTime();
+        if (!isFinite(ms)) ms = new Date(it.modified).getTime();
+        if (!isFinite(ms) || ms <= 0) return '';
+        return Math.floor(ms / 1000) + '-' + (Math.max(0, parseInt(it.size, 10) || 0));
+    },
+
     _loadSingleThumbnail(el) {
         const path = el.dataset.thumbPath;
         const storageId = el.dataset.storageId;
@@ -14436,7 +15795,7 @@ const App = {
             return;
         }
         
-        const url = `api.php?action=thumbnail&storage_id=${encodeURIComponent(storageId)}&path=${encodeURIComponent(btoa(unescape(encodeURIComponent(path))))}&size=${this.thumbnailSize || 200}&enc=b64`;
+        const url = `api.php?action=thumbnail&storage_id=${encodeURIComponent(storageId)}&path=${encodeURIComponent(btoa(unescape(encodeURIComponent(path))))}&size=${this.thumbnailSize || 200}&enc=b64&tv=2` + (el.dataset.thumbV ? '&v=' + encodeURIComponent(el.dataset.thumbV) : '');   // ★ (2026-11-02 10:33, 42차 점검) 버전 값(_fsMediaVer 주석)   // ★ (2026-11-12 21:13, 104차 펜닐 요청 썸네일 B안) &tv= 썸네일 만들기 판(FileManager::THUMB_VER 와 같게, 정보 창 주소와 같음)
         
         const img = new Image();
         img.className = 'thumb-img';
@@ -14542,6 +15901,7 @@ const App = {
         this.toast(on ? (this._isShowHidden() ? t('nt_hidden_on_shown', '숨김으로 표시했습니다. (숨긴 항목 표시 중이라 흐리게 보입니다)') : t('nt_hidden_on', '숨김으로 표시했습니다. 목록에서 숨겨집니다.'))
                       : t('nt_hidden_off', '숨김을 해제했습니다.'), 'success');
         this._fileListCache.delete(`${storageId}:${String(path || '').split('/').slice(0, -1).join('/')}`);   // ★ (2026-10-28) 그 항목이 든 폴더의 캐시
+        if (this._dpCache) this._dpCache.clear();   // ★ (2026-10-30 22:36, 재검토) 세부 정보 창도 다시 읽게(검색 결과에서 바꾼 경우 — 목록 다시 읽기를 안 거침)
         if (this.isSearchMode && this.searchState && this.searchState.query) {
             this._reSearchKeepScroll();   // ★ (2026-10-28) 검색 결과에서 바꿨으면 검색 결과를 다시(종전엔 현재 폴더 목록을 불러옴) — 같은 페이지·스크롤 위치
         } else if (this.currentStorage && !(this.vault && this.vault.isVaultView)) this._reloadFilesKeepScroll();
@@ -14610,7 +15970,10 @@ const App = {
         const update = () => {
             // 메뉴가 숨겨진 상태면 스킵 (clientHeight=0)
             if (scrollEl.clientHeight === 0) {
-                menuEl.classList.remove('has-scroll-up', 'has-scroll-down');
+                // ★ (2026-11-02 10:24, 42차 점검) classList.remove 는 없는 이름이어도 class 속성을 다시 써서 아래 MutationObserver 를 깨워
+                //   숨김 동안 update→remove→관찰자→setTimeout(update) 가 초당 ~1000번 돌았음. toggle(x,false) 는 값이 그대로면 기록을 안 만듦.
+                menuEl.classList.toggle('has-scroll-up', false);
+                menuEl.classList.toggle('has-scroll-down', false);
                 return;
             }
             // ▲▼이 scrollEl 안에 있는 경우(작업버튼: menuEl===scrollEl, sticky)
@@ -14792,7 +16155,7 @@ const App = {
                 'file-lock': isFile && !isLocked && !!perms.can_write && !inVault && !isRemote,
                 'file-unlock': isFile && isLocked && !inVault && !isRemote,
                 'rename': !!perms.can_write && !isLocked,
-                'move': !!perms.can_write && !isLocked && !inVault,
+                'move': !!perms.can_write && (!!perms.can_delete || (this.isSearchMode && selectedItems.some(it => it && it.storageId && String(it.storageId) !== String(this.currentStorage)))) && !isLocked && !inVault,   // ★ (2026-11-10 13:22, 63차 1) 이동(잘라내기)은 다른 폴더로 옮기는 것이라 삭제 권한도(서버 moveInner·job_create 와 같은 기준) — 없으면 숨김 ★ (2026-11-10 15:01, 64차) 단 검색 결과에서 다른 스토리지 항목을 고르면 perms 는 지금 연 스토리지 것이라 63차 전처럼 쓰기만 봄(실제 판정은 서버) — 종전엔 삭제 권한 있는 홈 파일도 숨겨졌음(재현)
                 'copy': !!perms.can_write && !inVault,
                 'paste': hasClipboard && !!perms.can_write && !inVault,
                 'versions': isFile && !inVault && !isRemote,
@@ -14892,11 +16255,15 @@ const App = {
             menuEl.style.overflowY = contentH > maxH ? 'auto' : 'hidden';
             
             // 메뉴 내부 스크롤이 끝에 도달해도 배경 스크롤 방지
-            menuEl.addEventListener('touchmove', function(e) {
-                if (menuEl.scrollHeight <= menuEl.clientHeight) {
-                    e.preventDefault();
-                }
-            }, { passive: false });
+            // ★ (2026-10-31 13:36, 34차 후속 개선) #context-menu 는 페이지에 하나로 남는데 메뉴를 열 때마다 touchmove 리스너를 새로 붙여 쌓였음 — 한 번만 붙임
+            if (!menuEl._tmBound) {
+                menuEl._tmBound = true;
+                menuEl.addEventListener('touchmove', function(e) {
+                    if (menuEl.scrollHeight <= menuEl.clientHeight) {
+                        e.preventDefault();
+                    }
+                }, { passive: false });
+            }
         } else {
             // PC: 기존 방식
             menuEl.style.left = x + 'px';
@@ -15018,7 +16385,7 @@ const App = {
             'file-lock': isFile && !isLocked && !!perms.can_write && !isRemote,
             'file-unlock': isFile && isLocked && !isRemote,
             'copy': !!perms.can_write,
-            'move': !!perms.can_write && !isLocked,
+            'move': !!perms.can_write && (!!perms.can_delete || (this.isSearchMode && items.some(it => it && it.storageId && String(it.storageId) !== String(this.currentStorage)))) && !isLocked,   // ★ (2026-11-10 13:22, 63차 1) 위 컨텍스트 메뉴와 같음 — 삭제 권한 없으면 숨김 ★ (2026-11-10 15:01, 64차) 검색 결과의 다른 스토리지 항목은 63차 전처럼(위 컨텍스트 메뉴 주석)
             'paste': hasClipboard && !!perms.can_write,
             'extract': hasExtractable && !!perms.can_write && !isLocked && !isRemote,
             'compress': items.length > 0 && !!perms.can_write && !isRemote,
@@ -15109,6 +16476,7 @@ const App = {
                 return;
             case 'refresh':
                 if (this.vault && this.vault.isVaultView) this.vaultLoadFiles();
+                else if (this.isSearchMode && this.searchState && this.searchState.query && !this.boardInlineMode) this._reSearchKeepScroll();   // ★ (2026-11-11 22:33, 86차 CTX-4) 검색 결과에서 새로고침하면 검색을 다시(_reloadFilesKeepScroll 과 같은 조건) — 종전엔 목록만 폴더 내용으로 바뀌고 '검색 결과 n개' 띠가 남았음(재현). 검색이 아닐 때는 종전 그대로
                 else this.loadFiles();
                 return;
         }
@@ -15271,7 +16639,12 @@ const App = {
                 this.deleteSelectedItems(items);
                 break;
             case 'extract':
-                this.showExtractModeModal(item);
+                // ★ (2026-11-11 22:33, 86차 CTX-2) 여러 개를 골랐으면 풀 수 있는 첫 항목을 풂(메뉴를 보이는 조건 hasExtractable 과 같은 판정) — 종전엔 첫 항목(a.txt)을 풀려다 '지원하지 않는 형식'(재현)
+                this.showExtractModeModal(items.find(it => {
+                    const ext = (it && it.name || '').split('.').pop().toLowerCase();
+                    if (ext === 'zip') return true;
+                    return !!this.sevenZipInstalled && ['001', 'rar', '7z', 'iso', 'cab', 'wim', 'arj', 'lzh', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz'].includes(ext);
+                }) || item);
                 break;
             case 'compress':
                 this.compressFiles(items);
@@ -15347,11 +16720,12 @@ const App = {
             // 파일 잠금
             case 'file-lock': {
                 const lockTargets = items.filter(it => !it.isDir);
-                let lockOk = 0, lockFail = 0;
+                let lockOk = 0, lockFail = 0, lockErr = '';   // ★ (2026-11-15 16:12, 188차) 실패 이유(서버 문구)를 알림에 — 종전엔 '파일 잠금 실패'만 나와 이유를 알 수 없었음(unlockFile·lockFile 은 이미 서버 문구)
+                const _lkPace = { off: lockTargets.length <= 110 };   // ★ (2026-11-13 09:19, 110차 BULK-1) 속도 맞춤(_bulkPaced) / ★ (2026-11-13 09:55) 110개 이하면 종전 그대로
                 for (const it of lockTargets) {
-                    const res = await this.api('file_lock', { storage_id: it.storageId || this.currentStorage, path: it.path });   // ★ (22차) 검색 결과면 그 항목의 스토리지
+                    const res = await this._bulkPaced(_lkPace, () => this.api('file_lock', { storage_id: it.storageId || this.currentStorage, path: it.path }));   // ★ (22차) 검색 결과면 그 항목의 스토리지 / ★ (2026-11-13 09:19, 110차 BULK-1)
                     if (res.success) { lockOk++; this._updateLockUI(it.path, true); }
-                    else lockFail++;
+                    else { lockFail++; if (!lockErr && res && res.error) lockErr = res.error; }
                 }
                 if (lockOk > 0) this.loadLockedFiles();
                 if (lockOk > 0 && lockFail === 0) {
@@ -15359,17 +16733,18 @@ const App = {
                 } else if (lockFail > 0 && lockOk > 0) {
                     this.toast(`${tf('nt_lock_done_s', {n: lockOk}, `${lockOk}개 잠금`)}, ${tf('nt_failed_s', {n: lockFail}, `${lockFail}개 실패`)}`, 'warning');
                 } else if (lockFail > 0) {
-                    this.toast(t('file_lock_failed', '파일 잠금 실패'), 'error');
+                    this.toast(lockErr || t('file_lock_failed', '파일 잠금 실패'), 'error');
                 }
                 break;
             }
             case 'file-unlock': {
                 const unlockTargets = items.filter(it => !it.isDir);
-                let unlockOk = 0, unlockFail = 0;
+                let unlockOk = 0, unlockFail = 0, unlockErr = '';   // ★ (2026-11-15 16:12, 188차) 남이 잠근 파일 해제가 '파일 잠금 해제 실패'로만 나왔음(재현 — 서버는 '본인이 잠근 파일만 해제할 수 있습니다.') → 서버 문구를 알림에
+                const _ulPace = { off: unlockTargets.length <= 110 };   // ★ (2026-11-13 09:19, 110차 BULK-1) 속도 맞춤(_bulkPaced) / ★ (2026-11-13 09:55) 110개 이하면 종전 그대로
                 for (const it of unlockTargets) {
-                    const res = await this.api('file_unlock', { storage_id: it.storageId || this.currentStorage, path: it.path });   // ★ (22차) 검색 결과면 그 항목의 스토리지
+                    const res = await this._bulkPaced(_ulPace, () => this.api('file_unlock', { storage_id: it.storageId || this.currentStorage, path: it.path }));   // ★ (22차) 검색 결과면 그 항목의 스토리지 / ★ (2026-11-13 09:19, 110차 BULK-1)
                     if (res.success) { unlockOk++; this._updateLockUI(it.path, false); }
-                    else unlockFail++;
+                    else { unlockFail++; if (!unlockErr && res && res.error) unlockErr = res.error; }
                 }
                 if (unlockOk > 0) this.loadLockedFiles();
                 if (unlockOk > 0 && unlockFail === 0) {
@@ -15377,7 +16752,7 @@ const App = {
                 } else if (unlockFail > 0 && unlockOk > 0) {
                     this.toast(`${tf('nt_unlock_done_s', {n: unlockOk}, `${unlockOk}개 잠금 해제`)}, ${tf('nt_failed_s', {n: unlockFail}, `${unlockFail}개 실패`)}`, 'warning');
                 } else if (unlockFail > 0) {
-                    this.toast(t('file_unlock_failed', '파일 잠금 해제 실패'), 'error');
+                    this.toast(unlockErr || t('file_unlock_failed', '파일 잠금 해제 실패'), 'error');
                 }
                 break;
             }
@@ -15394,15 +16769,18 @@ const App = {
         
         // 폴더 포함 여부 확인
         const hasDirs = items.some(i => i.isDir);
-        
+
         if (hasDirs) {
             // 폴더 포함 시 ZIP만 가능
             await this.downloadMultipleItems(items);
             return;
         }
-        
+
+        // ★ (2026-11-01 01:50, 36차 전체 점검) 원격 스토리지는 서버가 ZIP 을 못 만듦(늘 '권한이 없습니다') → 파일만 고른 경우 고르기 창 없이 개별 받기로
+        const _remoteNoZip = this._zipUnsupportedStorage(items[0].storageId || this.currentStorage);
+
         // 파일만 있는 경우: 선택지 제공
-        const choice = await new Promise(resolve => {
+        const choice = _remoteNoZip ? 'individual' : await new Promise(resolve => {
             const close = (val) => { document.getElementById('download-choice-modal')?.remove(); document.removeEventListener('keydown', escHandler); resolve(val); };
             const escHandler = (e) => { if (e.key === 'Escape') close(null); };
             const html = `
@@ -15452,9 +16830,20 @@ const App = {
         }
     },
     
+    // ★ (2026-11-01 01:50, 36차 전체 점검) 서버 ZIP 받기(multi/folder_download_stream)는 getRealPath 가 있는 스토리지(home·shared·local·smb)만 됨.
+    //   원격(FTP/SFTP/WebDAV/S3)은 늘 '권한이 없습니다'로 실패했음 → 화면에서 미리 막고 안내. 목록에 없는 스토리지는 서버 판단에 맡김(false).
+    _zipUnsupportedStorage(storageId) {
+        const s = (this.storages || []).find(st => st.id == storageId);
+        return !!s && !['home', 'shared', 'local', 'smb'].includes(s.storage_type);
+    },
+    _toastZipRemoteUnsupported() {
+        this.toast(t('nt_zip_remote_unsupported', '원격 스토리지(FTP/SFTP/WebDAV/S3)에서는 ZIP 받기를 지원하지 않습니다. 파일을 개별로 받으세요.'), 'warning');
+    },
+
     // 다중 항목 ZIP 다운로드
     async downloadMultipleItems(items) {
         const storageId = items[0].storageId || this.currentStorage;
+        if (this._zipUnsupportedStorage(storageId)) { this._toastZipRemoteUnsupported(); return; }   // ★ (2026-11-01 01:50, 36차 전체 점검) 원격은 ZIP 불가 안내
         // ★ (2026-10-29 18:21, 22차 점검) ZIP 은 한 스토리지 안에서만 — 검색 결과에서 여러 스토리지 항목을 고르면 종전엔 모든 경로를 첫 항목의 스토리지에서 찾아,
         //   다른 스토리지 항목은 빠지거나 그 스토리지의 같은 경로에 있는 엉뚱한 파일이 들어갔음
         if (items.some(it => Number(it.storageId || this.currentStorage) !== Number(storageId))) {
@@ -15480,6 +16869,7 @@ const App = {
         }
         
         try {
+            url = await this._sseUrl(url);   // ★ (2026-10-31 13:19, 34차 후속 개선) 경로 목록·암호는 주소 대신 POST 로(긴 주소 414·접근 로그에 암호가 남던 것)
             const eventSource = new EventSource(url); this._zipEventSource = eventSource;
             let tempId = null;
             let zipSize = 0;
@@ -15525,6 +16915,7 @@ const App = {
             const downloadUrl = `api.php?action=temp_download&temp_id=${tempId}`;
             
             await this._downloadWithSession(downloadUrl, finalZipName, zipSize, {
+                srcFolder: this._dlParentOf(paths), srcStorageId: storageId,   // ★ (2026-11-15 17:09, 192차) 출발지 표시
                 onComplete: () => {
                     this.toast(`${items.length}${t('items_download_complete','개 항목 다운로드 완료')}`, 'success');
                 }
@@ -15540,6 +16931,7 @@ const App = {
     // 다중 항목 다른 이름으로 저장
     async saveMultipleItemsAs(items) {
         const storageId = items[0].storageId || this.currentStorage;
+        if (this._zipUnsupportedStorage(storageId)) { this._toastZipRemoteUnsupported(); return; }   // ★ (2026-11-01 01:50, 36차 전체 점검) 원격은 ZIP 불가 안내
         // ★ (2026-10-29 21:34, 24차 점검) 22차 downloadMultipleItems 와 같은 검사 — 'ZIP 으로 다른 이름 저장'(HTTPS)에는 빠져 다른 스토리지 항목이 조용히 빠지거나 엉뚱한 파일이 들어갔음
         if (items.some(it => Number(it.storageId || this.currentStorage) !== Number(storageId))) {
             this.toast(t('nt_zip_one_storage', 'ZIP 받기는 같은 스토리지의 항목끼리만 할 수 있습니다. 개별 다운로드를 쓰거나 스토리지별로 나눠 받으세요.'), 'warning');
@@ -15564,7 +16956,8 @@ const App = {
                 // 1단계: 압축 진행률 표시
                 this.showZipProgressModal('compress', `${items.length}${t('count_items','개 항목')}`);
                 
-                const url = `api.php?action=multi_download_stream&storage_id=${storageId}&paths=${encodeURIComponent(JSON.stringify(paths))}&zip_name=${encodeURIComponent(defaultZipName)}`;
+                let url = `api.php?action=multi_download_stream&storage_id=${storageId}&paths=${encodeURIComponent(JSON.stringify(paths))}&zip_name=${encodeURIComponent(defaultZipName)}`;
+                url = await this._sseUrl(url);   // ★ (2026-10-31 13:19, 34차 후속 개선) 경로 목록·암호는 주소 대신 POST 로 맡기고 짧은 id 만 주소에
                 
                 let tempId = null;
                 let zipSize = 0;
@@ -15611,6 +17004,7 @@ const App = {
                 
                 await this._downloadWithSession(downloadUrl, finalZipName, zipSize, {
                     saveHandle: handle,
+                    srcFolder: this._dlParentOf(paths), srcStorageId: storageId,   // ★ (2026-11-15 17:09, 192차) 출발지 표시
                     onComplete: () => { this.toast(t('toast_saved'), 'success'); }
                 });
                 return;
@@ -15678,6 +17072,7 @@ const App = {
         const total = targets.length;
         let okCount = 0, skipCount = 0, failCount = 0;
         let _convCancelled = false;   // ★ (2026-10-29 23:35, 24차 점검)
+        this._convKeptN = 0;   // ★ (2026-11-12 07:56, 95차 CNV-4) '원본을 휴지통으로' 인데 원본이 남은 수(잠김·삭제 권한 없음)
         try {
             for (let i = 0; i < total; i++) {
                 const tgt = targets[i];
@@ -15695,7 +17090,9 @@ const App = {
             //   loadFiles는 범용 함수라 항상 최상위로 리셋 → 변환 후엔 직전 위치 복원.
             const _convFl = document.getElementById('file-list');
             const _convScroll = _convFl ? _convFl.scrollTop : 0;
-            await this.loadFiles();
+            // ★ (2026-11-01 01:51, 36차 전체 점검) 검색 결과에서 변환하면 끝난 뒤 폴더 목록으로 바뀌고 검색 상태만 남았다 → 삭제와 같게 다시 검색
+            if (this.isSearchMode && this.searchState.query) await this._reSearchKeepScroll();
+            else await this.loadFiles();
             if (_convScroll > 0) {
                 requestAnimationFrame(() => {
                     const _fl2 = document.getElementById('file-list');
@@ -15719,7 +17116,8 @@ const App = {
             if (failCount) parts.push(tf('nt_failed_s', {n: failCount}, `${failCount}개 실패`));
             // ★ (2026-10-29 23:35, 24차 점검) 취소했으면 그 사실도(종전엔 첫 파일에서 취소하면 빈 요약이 '완료되었습니다'(성공)로 떴음 — 4회차 재검토)
             if (_convCancelled) parts.push(t('convert_cancelled', '변환을 취소했습니다.'));
-            this.toast(parts.join(', '), failCount ? (okCount ? 'warning' : 'error') : (_convCancelled ? 'info' : 'success'));
+            if (deleteOriginal && this._convKeptN) parts.push(tf('nt_convert_orig_kept_s', {n: this._convKeptN}, `${this._convKeptN}개는 원본이 남음`));   // ★ (2026-11-12 07:56, 95차 CNV-4) 종전엔 잠긴 원본이 남아도 'n개 변환 완료'(성공)만 떴음(재현) — 원본은 종전대로 보존
+            this.toast(parts.join(', '), failCount ? (okCount ? 'warning' : 'error') : (_convCancelled ? 'info' : ((deleteOriginal && this._convKeptN) ? 'warning' : 'success')));
         }
     },
 
@@ -15796,7 +17194,7 @@ const App = {
                     if (trashed) suffix = ' (' + t('convert_orig_trashed', '원본은 휴지통으로 이동됨') + ')';
                     else if (trashSkipped) suffix = ' (' + t('convert_no_delete_perm', '삭제 권한이 없어 원본은 보존됨') + ')';
                     this.toast(baseMsg + suffix, trashSkipped ? 'info' : 'success');
-                }
+                } else if (deleteOriginal && !trashed) this._convKeptN = (this._convKeptN || 0) + 1;   // ★ (2026-11-12 07:56, 95차 CNV-4) 위 요약용
                 finish('done');
             });
             es.addEventListener('error', (e) => {
@@ -15870,6 +17268,7 @@ const App = {
     showExtractModeModal(item) {
         if (!item || !item.name) return;
         const self = this;
+        const _exSid = this.currentStorage;   // ★ (2026-11-01 17:21, 40차 점검) 창을 연 때의 스토리지로 풂(extractZip 주석)
         const baseName = item.name.replace(/\.(zip|7z|rar|001|iso|cab|wim|arj|lzh|tar|gz|tgz|bz2|tbz2|xz)$/i, '');
         const folderLabel = t('extract_to_folder', '폴더에 풀기');
         const hereLabel = t('extract_here', '여기에 풀기');
@@ -15899,14 +17298,15 @@ const App = {
         `;
         document.body.insertAdjacentHTML('beforeend', html);
         const modal = document.getElementById('extract-mode-modal');
-        const close = () => { if (modal) modal.remove(); };
-        document.getElementById('extract-mode-folder').onclick = () => { close(); self.extractZip(item, '', 'folder'); };
-        document.getElementById('extract-mode-here').onclick = () => { close(); self.extractZip(item, '', 'here'); };
+        App._ariaDialog(modal && modal.querySelector('.modal'), 'extract-mode-modal');   // ★ (2026-11-13 01:06, 108차 ARIA-1) 스크립트로 만드는 창도 같은 표시
+        // ★ (2026-10-31 13:38, 34차 후속 개선) 버튼으로 닫으면 Escape 리스너가 지워지지 않고 쌓였음 — close() 에서 함께 뗌
+        const escHandler = (e) => { if (e.key === 'Escape') close(); };
+        const close = () => { document.removeEventListener('keydown', escHandler); if (modal) modal.remove(); };
+        document.getElementById('extract-mode-folder').onclick = () => { close(); self.extractZip(item, '', 'folder', _exSid); };
+        document.getElementById('extract-mode-here').onclick = () => { close(); self.extractZip(item, '', 'here', _exSid); };
         document.getElementById('extract-mode-cancel').onclick = close;
         document.getElementById('extract-mode-close').onclick = close;
-        document.addEventListener('keydown', function escHandler(e) {
-            if (e.key === 'Escape') { document.removeEventListener('keydown', escHandler); close(); }
-        });
+        document.addEventListener('keydown', escHandler);
         // 기본 포커스: 폴더에 풀기 (엔터로 선택 가능)
         const folderBtn = document.getElementById('extract-mode-folder');
         if (folderBtn) folderBtn.focus();
@@ -15914,8 +17314,11 @@ const App = {
     
     // ZIP 압축 해제 (진행률 표시)
     // mode: 'folder'(압축파일명 폴더 생성 후 풀기, 기본) | 'here'(현재 위치에 풀기)
-    async extractZip(item, password = '', mode = 'folder') {
+    async extractZip(item, password = '', mode = 'folder', storageId = null) {
         if (!item || !item.name) return;
+        // ★ (2026-11-01 17:21, 40차 점검) 풀기 방식 창·토큰 확인·암호 재입력 창을 기다린 '뒤'의 currentStorage 로 보내, 그사이 뒤로 가기로 스토리지가 바뀌면
+        //   다른 스토리지의 같은 경로를 풀어 그쪽에 파일을 만들었음 → 창을 연 때의 스토리지를 받아(없으면 지금 스토리지) 암호 재시도에도 넘김
+        const _exSid = (storageId !== undefined && storageId !== null) ? storageId : this.currentStorage;
         // console.log('[FS압축][해제] name=' + item.name + ' / path=' + item.path + ' / mode=' + mode + ' / password=' + (password ? '[있음]' : '[없음]'));
         
         const ext = item.name.split('.').pop().toLowerCase();
@@ -15939,10 +17342,11 @@ const App = {
             
             // ★ (2026-10-28 19:55, 6차 점검) 파일을 만들거나 바꾸는 스트림이라 서버가 CSRF 토큰을 요구 — 주소에 붙임(EventSource 는 헤더를 못 보냄)
             await this.refreshCsrfToken();   // ★ (2026-10-28 20:42, 7차 점검) 다른 탭에서 다시 로그인해 토큰이 바뀌었어도 실패하지 않게 현재 토큰을 받아 씀(토큰을 새로 만들지는 않음)
-            let url = `api.php?action=extract_stream&storage_id=${this.currentStorage}&path=${encodeURIComponent(item.path)}&mode=${encodeURIComponent(mode)}&csrf_token=${encodeURIComponent(this.csrfToken || '')}`;
+            let url = `api.php?action=extract_stream&storage_id=${_exSid}&path=${encodeURIComponent(item.path)}&mode=${encodeURIComponent(mode)}&csrf_token=${encodeURIComponent(this.csrfToken || '')}`;
             if (password) url += `&password=${encodeURIComponent(password)}`;
             
             try {
+                url = await this._sseUrl(url);   // ★ (2026-10-31 13:19, 34차 후속 개선) 경로 목록·암호는 주소 대신 POST 로(긴 주소 414·접근 로그에 암호가 남던 것)
                 const eventSource = new EventSource(url); this._zipEventSource = eventSource;
                 let lastPercent = 0;
                 
@@ -15967,7 +17371,9 @@ const App = {
                                 `${t('extract_complete','압축 해제 완료')} (${data.file_count})`,
                                 'success'
                             );
-                            this.loadFiles();
+                            if ((data.failed_count | 0) > 0) this.toast(tf('extract_partial_failed', { n: data.failed_count | 0 }, `풀지 못한 항목이 ${data.failed_count | 0}개 있습니다(이름이 너무 길거나 쓸 수 없는 이름).`), 'warning', 6000);   // ★ (2026-11-17 07:49, 296차 펜닐 결정 "압축 풀기 일부 실패 알리기")
+                            // ★ (2026-11-01 01:51, 36차 전체 점검) 검색 결과에서 했으면 끝난 뒤 폴더 목록으로 바뀌던 것 → 삭제와 같게 다시 검색
+                            if (this.isSearchMode && this.searchState.query) this._reSearchKeepScroll(); else this.loadFiles();
                         } else if (data.need_password) {
                             const self = this;
                             const msg = data.error === 'wrong_password'
@@ -15976,7 +17382,7 @@ const App = {
                             this.showZipPasswordModal({
                                 title: t('zip_extract_password_title', '📦 압축 해제 암호'),
                                 message: msg
-                            }).then(pwd => { if (pwd) self.extractZip(item, pwd, mode); });
+                            }).then(pwd => { if (pwd) self.extractZip(item, pwd, mode, _exSid); });
                         } else {
                             this.toast(data.error || t('err_extract_failed', '압축 해제 실패'), 'error');
                         }
@@ -16004,12 +17410,13 @@ const App = {
         // SSE 스트리밍으로 진행률 표시
         // ★ (2026-10-28 19:55, 6차 점검) 파일을 만들거나 바꾸는 스트림이라 서버가 CSRF 토큰을 요구 — 주소에 붙임(EventSource 는 헤더를 못 보냄)
         await this.refreshCsrfToken();   // ★ (2026-10-28 20:42, 7차 점검) 다른 탭에서 다시 로그인해 토큰이 바뀌었어도 실패하지 않게 현재 토큰을 받아 씀(토큰을 새로 만들지는 않음)
-        let url = `api.php?action=extract_stream&storage_id=${this.currentStorage}&path=${encodeURIComponent(item.path)}&mode=${encodeURIComponent(mode)}&csrf_token=${encodeURIComponent(this.csrfToken || '')}`;
+        let url = `api.php?action=extract_stream&storage_id=${_exSid}&path=${encodeURIComponent(item.path)}&mode=${encodeURIComponent(mode)}&csrf_token=${encodeURIComponent(this.csrfToken || '')}`;
         if (password) {
             url += `&password=${encodeURIComponent(password)}`;
         }
         
         try {
+            url = await this._sseUrl(url);   // ★ (2026-10-31 13:19, 34차 후속 개선) 경로 목록·암호는 주소 대신 POST 로(긴 주소 414·접근 로그에 암호가 남던 것)
             const eventSource = new EventSource(url); this._zipEventSource = eventSource;
             let lastPercent = 0;
             
@@ -16031,7 +17438,9 @@ const App = {
                             `${t('extract_complete','압축 해제 완료')} (${data.file_count})`,
                             'success'
                         );
-                        this.loadFiles();
+                        if ((data.failed_count | 0) > 0) this.toast(tf('extract_partial_failed', { n: data.failed_count | 0 }, `풀지 못한 항목이 ${data.failed_count | 0}개 있습니다(이름이 너무 길거나 쓸 수 없는 이름).`), 'warning', 6000);   // ★ (2026-11-17 07:49, 296차 펜닐 결정 "압축 풀기 일부 실패 알리기")
+                        // ★ (2026-11-01 01:51, 36차 전체 점검) 검색 결과에서 했으면 끝난 뒤 폴더 목록으로 바뀌던 것 → 삭제와 같게 다시 검색
+                        if (this.isSearchMode && this.searchState.query) this._reSearchKeepScroll(); else this.loadFiles();
                     } else if (data.need_password) {
                         // 암호 필요 — 모달 표시
                         const msg = data.error === 'password_required'
@@ -16042,7 +17451,7 @@ const App = {
                             message: msg
                         });
                         if (pwd !== null && pwd !== '') {
-                            this.extractZip(item, pwd, mode);
+                            this.extractZip(item, pwd, mode, _exSid);
                         }
                     } else {
                         this.toast(data.error || t('err_extract_failed', '압축 해제 실패'), 'error');
@@ -16066,8 +17475,31 @@ const App = {
     },
     
     // 파일/폴더 압축 (진행률 표시)
+    /**
+     * ★ (2026-10-31 13:19, 34차 후속 개선) 진행률 스트림(EventSource — GET 만 가능) 주소에 경로 목록(paths)·암호(password)가 있으면 서버에 POST 로 맡기고
+     *   짧은 id(sp)만 주소에 넣음 — 종전엔 한글 이름 수십 개면 주소가 서버 길이 제한(Apache 8KB·IIS 2KB)을 넘어 414 가 났고,
+     *   ZIP 암호가 접근 로그에 그대로 남았음. 맡기기에 실패하면 종전 주소 그대로
+     */
+    async _sseUrl(url) {
+        try {
+            const u = new URL(url, location.href);
+            const qp = u.searchParams;
+            if (!qp.has('paths') && !qp.has('password') && url.length < 1500) return url;
+            const action = qp.get('action') || '';
+            const params = {};
+            qp.forEach((v, k) => { if (k !== 'action' && k !== 'csrf_token') params[k] = v; });
+            const res = await this.api('stream_params_put', { target: action, params: JSON.stringify(params) });
+            if (!res || !res.success || !/^[a-f0-9]{16}$/.test(res.id || '')) return url;
+            let out = `api.php?action=${encodeURIComponent(action)}&sp=${res.id}`;
+            if (qp.has('csrf_token')) out += `&csrf_token=${encodeURIComponent(qp.get('csrf_token'))}`;
+            return out;
+        } catch (e) { return url; }
+    },
+    
     async compressFiles(items) {
         if (!items || !items.length) return;
+        // ★ (2026-11-01 17:21, 40차 점검) 압축 설정 창·토큰 확인을 기다린 '뒤'의 currentStorage 로 보내, 창이 뜬 채 뒤로 가기로 스토리지가 바뀌면 다른 스토리지의 같은 경로를 압축했음 → 시작할 때 잡음
+        const _czSid = this.currentStorage;
         
         // 자동으로 압축 파일명 생성 (중복 시 서버에서 자동으로 (2) 추가됨)
         let zipName;
@@ -16105,7 +17537,7 @@ const App = {
         }
         // ★ (2026-10-28 21:53, 9차 점검) 자동으로 정한 이름에 서버 실행 확장자가 끼면('x.php' 폴더 → 'x.php.zip', 'a.php.bak' → 'a.php.bak.zip')
         //   서버가 보안상 거부하므로(8차) 처음부터 그 점을 '_' 로 바꿔 둠('x_php.zip'). 사용자가 직접 고친 이름은 서버 검사 그대로
-        zipName = zipName.replace(/\.(php\d?|phtml|phar|phps|jspx?|aspx?|cgi)(?=\.)/gi, '_$1');
+        zipName = zipName.replace(/\.(php\d?|phtml|phar|phps|pht|jspx?|aspx?|cgi)(?=\.)/gi, '_$1');   // ★ (2026-11-01 07:37, 37차 기능 점검) pht 추가 — 서버 차단 목록과 맞춤
         
         // 압축 설정 모달 (암호 체크박스)
         const compressResult = await this.showCompressModal(zipName);
@@ -16123,7 +17555,7 @@ const App = {
         // SSE 스트리밍
         // ★ (2026-10-28 19:55, 6차 점검) 파일을 만들거나 바꾸는 스트림이라 서버가 CSRF 토큰을 요구 — 주소에 붙임(EventSource 는 헤더를 못 보냄)
         await this.refreshCsrfToken();   // ★ (2026-10-28 20:42, 7차 점검) 다른 탭에서 다시 로그인해 토큰이 바뀌었어도 실패하지 않게 현재 토큰을 받아 씀(토큰을 새로 만들지는 않음)
-        let url = `api.php?action=compress_stream&storage_id=${this.currentStorage}&paths=${encodeURIComponent(JSON.stringify(paths))}&zip_name=${encodeURIComponent(zipName)}&csrf_token=${encodeURIComponent(this.csrfToken || '')}`;
+        let url = `api.php?action=compress_stream&storage_id=${_czSid}&paths=${encodeURIComponent(JSON.stringify(paths))}&zip_name=${encodeURIComponent(zipName)}&csrf_token=${encodeURIComponent(this.csrfToken || '')}`;
         if (zipPassword) {
             url += `&password=${encodeURIComponent(zipPassword)}`;
         }
@@ -16132,6 +17564,7 @@ const App = {
         }
         
         try {
+            url = await this._sseUrl(url);   // ★ (2026-10-31 13:19, 34차 후속 개선) 경로 목록·암호는 주소 대신 POST 로(긴 주소 414·접근 로그에 암호가 남던 것)
             const eventSource = new EventSource(url); this._zipEventSource = eventSource;
             let lastPercent = 0;
             
@@ -16154,7 +17587,8 @@ const App = {
                             `${t('compress_complete','압축 완료')} (${data.file_count})`,
                             'success'
                         );
-                        this.loadFiles();
+                        // ★ (2026-11-01 01:51, 36차 전체 점검) 검색 결과에서 했으면 끝난 뒤 폴더 목록으로 바뀌던 것 → 삭제와 같게 다시 검색
+                        if (this.isSearchMode && this.searchState.query) this._reSearchKeepScroll(); else this.loadFiles();
                     } else {
                         this.toast(data.error || t('err_compress_failed', '압축 실패'), 'error');
                     }
@@ -16213,7 +17647,10 @@ const App = {
         const filenameEl = document.getElementById('zip-progress-filename');
         
         if (bar) bar.style.width = percent + '%';
-        if (countEl) countEl.textContent = `${current} / ${total} ${t('files','파일')}`;
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 7z·분할 풀기/분할 압축은 (퍼센트, 100, '이름 (7-Zip)'·'이름 (N%)') 로 보내는데 '37 / 100 파일' 로 그렸다
+        //   → 그런 이벤트(분모 100 + 이름 끝 '(7-Zip)'·'(N%)')를 한 번 보면 이 창은 끝까지 퍼센트만 표시(파일 수 칸 비움)
+        if (countEl && Number(total) === 100 && /\((7-Zip|\d+%)\)\s*$/.test(String(filename || ''))) countEl.dataset.pctMode = '1';
+        if (countEl) countEl.textContent = countEl.dataset.pctMode === '1' ? '' : `${current} / ${total} ${t('files','파일')}`;
         if (percentEl) percentEl.textContent = percent + '%';
         if (filenameEl) filenameEl.textContent = filename;
     },
@@ -16260,6 +17697,7 @@ const App = {
             document.body.insertAdjacentHTML('beforeend', html);
             
             const modal = document.getElementById('zip-password-modal');
+            App._ariaDialog(modal && modal.querySelector('.modal'), 'zip-password-modal');   // ★ (2026-11-13 01:06, 108차 ARIA-1) 스크립트로 만드는 창도 같은 표시
             const input = document.getElementById('zip-password-input');
             const confirmInput = document.getElementById('zip-password-confirm');
             const pwdError = document.getElementById('zip-password-error');
@@ -16290,6 +17728,9 @@ const App = {
                     }
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
+                    e.stopPropagation();   // ★ (2026-11-11 03:38, 71차 확인 반영) 입력칸 포커스가 없으면 Esc 가 문서의 일반 키 처리까지 내려가 미리보기를 닫았음
+                    // ★ (2026-11-11 02:29, 71차 점검) 압축 미리보기 위 암호 창에서 Esc 한 번에 미리보기까지 닫혔음 → 확인 창과 같은 1회용 표시로 미리보기는 남김(취소 단추와 같게)
+                    try { const _pv = document.getElementById('modal-preview'); if (_pv && _pv.style.display !== 'none') App._escConsumedByConfirm = true; } catch (_) {}
                     closeModal(null);
                 }
             };
@@ -16328,6 +17769,7 @@ const App = {
     // ZIP 압축 모달 (파일명 + 암호 체크박스)
     showCompressModal(defaultZipName) {
         return new Promise((resolve) => {
+            // ★ (2026-11-13 17:07, 113차 DEF-5) 파일명 칸(#compress-zip-name)에 이름 '파일명'(위 글자와 같은 키) — 종전엔 위 <label> 이 칸과 이어지지 않아 이름이 비었음. for 를 달지 않고 aria-label 로(글자 눌렀을 때 동작 그대로)
             const html = `
                 <div id="zip-compress-modal" class="modal-overlay" style="z-index:10001;">
                     <div class="modal" style="max-width:420px;">
@@ -16338,7 +17780,7 @@ const App = {
                         <div class="modal-body">
                             <div class="form-group">
                                 <label>${t('compress_filename', '파일명')}</label>
-                                <input type="text" id="compress-zip-name" value="${this.escapeHtml(defaultZipName)}">
+                                <input type="text" id="compress-zip-name" value="${this.escapeHtml(defaultZipName)}" aria-label="${t('compress_filename', '파일명')}">
                             </div>
                             <div style="margin-top:12px;padding:10px;background:var(--bg-light, var(--fs-surface-2, #f8f9fa));border-radius:6px;">
                                 <label style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;margin:0;">
@@ -16388,6 +17830,7 @@ const App = {
             document.body.insertAdjacentHTML('beforeend', html);
             
             const modal = document.getElementById('zip-compress-modal');
+            App._ariaDialog(modal && modal.querySelector('.modal'), 'zip-compress-modal');   // ★ (2026-11-13 01:06, 108차 ARIA-1) 스크립트로 만드는 창도 같은 표시
             const nameInput = document.getElementById('compress-zip-name');
             const usePassword = document.getElementById('compress-use-password');
             const pwdFields = document.getElementById('compress-password-fields');
@@ -16438,11 +17881,14 @@ const App = {
                 });
             });
             
+            // ★ (2026-10-31 13:38, 34차 후속 개선) 버튼으로 닫으면 Escape 리스너가 지워지지 않고 쌓였음 — close() 에서 함께 뗌
+            const escHandler = (e) => { if (e.key === 'Escape') close(null); };
             const close = (result) => {
+                document.removeEventListener('keydown', escHandler);
                 modal.remove();
                 resolve(result);
             };
-            
+
             const submit = () => {
                 const zipName = nameInput.value.trim();
                 if (!zipName) {
@@ -16483,20 +17929,38 @@ const App = {
             document.getElementById('compress-modal-ok').onclick = submit;
             document.getElementById('compress-modal-cancel').onclick = () => close(null);
             document.getElementById('compress-modal-close').onclick = () => close(null);
-            document.addEventListener('keydown', function escHandler(e) {
-                if (e.key === 'Escape') { document.removeEventListener('keydown', escHandler); close(null); }
-            });
-            nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
-            pwdInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') pwdConfirm.focus(); });
-            pwdConfirm.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+            document.addEventListener('keydown', escHandler);
+            // ★ (2026-11-09 12:03, 57차 Z02-1) preventDefault·stopPropagation — 빠지면 전역 '모달 안 Enter → .btn-primary 클릭'이 한 번 더 돌아 암호 칸 Enter 때 확인 칸이 빈 채 제출됨
+            nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); submit(); } });
+            pwdInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); pwdConfirm.focus(); } });
+            pwdConfirm.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); submit(); } });
         });
     },
     
+    // ★ (2026-11-04) 56차 여러 개 삭제가 대량 삭제 감지로 멈췄으면 그 이유(서버가 '🔐 ' 를 붙여 보낸 문구)를 알림 뒤에 — 종전엔 'N개 삭제 완료, M개 실패' 만 떠 왜 멈췄는지 몰랐음. 문구만, 동작 그대로
+    _bulkStopNote(job) {
+        const errs = (job && job.progress && Array.isArray(job.progress.errors)) ? job.progress.errors : [];
+        for (const e of errs) {
+            const s = typeof e === 'string' ? e : '';
+            const i = s.indexOf('🔐 ');
+            if (i >= 0) return ' — ' + s.slice(i + '🔐 '.length).trim();
+        }
+        return '';
+    },
+
     // 선택된 파일들 삭제
     async deleteSelectedItems(items) {
         if (!items.length) return;
-        
-        if (!await this.confirmDeleteFiles(items)) return;
+        // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 스토리지는 확인 창 '전'에 잡음(40차 deleteAllFiles _delSid 와 같은 방식) — 종전엔 체크박스 '선택 삭제'(항목에 storageId 없음)가
+        //   창이 닫힌 '뒤'의 currentStorage 를 써서, 창이 뜬 채 브라우저 '뒤로'로 다른 스토리지에 가면 그 스토리지의 같은 경로 파일이 휴지통으로 갔음(재현). 뒤로 가지 않으면 값이 같음
+        const _delSid = items[0].storageId || this.currentStorage;
+
+        // ★ (2026-11-03 09:34, 49차 점검) 암호화 폴더(보관함)는 서버가 휴지통 없이 영구 삭제하는데(FileManager delete — .vault.json 폴더), 확인 창은 '휴지통으로 이동' 안내 그대로였음(재현)
+        //   → 고른 항목에 보관함 폴더가 있으면 보관함 안 삭제와 같은 '영구 삭제' 제목·경고
+        const _hasVaultDir = items.some(it => it && it.isVault);
+        if (!await (_hasVaultDir
+            ? this.confirmDeleteFiles(items, t('permanent_delete', '영구 삭제'), { warn: t('vault_folder_delete_permanent_warn', '⚠️ 암호화 폴더는 휴지통으로 이동하지 않고 안의 파일까지 영구 삭제되며 복구할 수 없습니다.'), okText: t('permanent_delete', '영구 삭제') })
+            : this.confirmDeleteFiles(items))) return;
         
         // 폴더가 포함된 경우 내부 파일 수/크기를 서버에서 조회
         const hasDirs = items.some(item => item.isDir);
@@ -16505,7 +17969,7 @@ const App = {
         if (hasDirs) {
             try {
                 const paths = items.map(item => item.path);
-                const storageId = items[0].storageId || this.currentStorage;
+                const storageId = _delSid;   // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 위 _delSid 주석
                 const countRes = await this.api('count_items', { storage_id: storageId, paths }, 'POST');
                 if (countRes.success && countRes.items) {
                     countRes.items.forEach(d => { itemSizeMap[d.path] = d.size; });
@@ -16513,11 +17977,11 @@ const App = {
             } catch(e) {}
         }
         
-        const storageId = items[0].storageId || this.currentStorage;
+        const storageId = _delSid;   // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 위 _delSid 주석
         const jobItems = items.map(item => ({
             path: item.path, name: item.name, isDir: item.isDir,
             size: itemSizeMap[item.path] || item.size || 0,
-            storage_id: item.storageId || this.currentStorage
+            storage_id: item.storageId || _delSid   // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 위 _delSid 주석
         }));
         
         await this._createJob('delete', jobItems, { storage_id: storageId }, (session, job) => {
@@ -16534,14 +17998,14 @@ const App = {
                             ? t('err_delete_locked', '잠긴 파일은 삭제할 수 없습니다.')
                             : `${t('err_delete_locked_count', '잠긴 파일')} ${session.failed}${t('err_delete_locked_suffix', '개는 삭제할 수 없습니다.')}`;
                     } else {
-                        failMsg = `${session.failed}${t('items_delete_failed','개 항목 삭제 실패')}`;
+                        failMsg = `${session.failed}${t('items_delete_failed','개 항목 삭제 실패')}` + this._bulkStopNote(job);   // ★ (2026-11-04) 56차 대량 감지로 멈춘 이유
                     }
                     if (session.success > 0) {
                         // ★ (2026-10-26) 일부만 실패 → "3개 삭제 완료, 1개 실패"(경고). 종전엔 "…삭제되었습니다. / …" 빨강
                         const _fs = (lockedErrors.length > 0 && lockedErrors.length === session.failed)
                             ? tf('nt_locked_excluded_s', {n: session.failed}, `잠긴 파일 ${session.failed}개 제외`)
-                            : tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`);
-                        this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${_fs}`, 'warning');
+                            : tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`) + this._bulkStopNote(job);   // ★ (2026-11-04) 56차 대량 감지로 멈춘 이유
+                        this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${_fs}`, 'warning', this._bulkStopNote(job) ? 8000 : undefined);
                     } else {
                         this.toast(failMsg, 'error');
                     }
@@ -16560,8 +18024,29 @@ const App = {
         });
     },
     
+    // ★ (2026-11-09 14:02, 58차 덮어쓰기 한도) 업로드 전 용량 확인이 전체 크기로 거부됐을 때만 — 같은 이름 파일이 있으면 같은 이름 창에서 '덮어쓰기'를 고를 수 있으므로
+    //   그때 늘어나는 양(새 크기 − 기존 크기, 0 미만이면 0)으로 한 번 더 확인(서버 조각 업로드·복사·이동과 같은 기준). 통과하면 그 결과, 아니면 null(종전처럼 거부).
+    //   실제 판정은 고른 동작으로 서버가 다시 함(이름 변경·건너뛰기는 종전 기준). list: 같은 폴더 목록 항목, picks: [{name, size}]
+    async _owQuotaRecheck(storageId, list, picks) {
+        const exSize = new Map();
+        for (const f of (list || [])) if (!f.is_dir) exSize.set(String(f.name).normalize('NFC').toLowerCase(), Number(f.size) || 0);
+        let need = 0, hasDup = false;
+        for (const p of picks) {
+            const k = String(p.name).normalize('NFC').toLowerCase();
+            if (exSize.has(k)) { hasDup = true; need += Math.max(0, p.size - exSize.get(k)); } else need += p.size;
+        }
+        if (!hasDup) return null;
+        if (need <= 0) return { success: true, allowed: true };
+        const r = await this.api('check_quota', { storage_id: storageId, size: need });
+        return (r && r.success && r.allowed) ? r : null;
+    },
+    
     // 파일 업로드 (멀티 업로드 지원)
     async handleUpload(files) {
+        // ★ (2026-11-04 01:42, 54차 점검) 고른 목록을 배열로 복사한 뒤 입력값을 바로 비움 — 종전엔 '같은 이름' 창을 ✕·Esc·바깥 클릭으로 닫으면 값이 남아 같은 파일을 다시 골라도 change 가 안 와 아무 반응이 없었음(재현).
+        //   FileList 는 입력값을 비우면 같이 비므로 먼저 복사(File 객체는 배열에 그대로 남아 이후 확인·업로드는 같음)
+        files = Array.from(files || []);
+        $('#file-input').val('');
         if (!this.currentStorage) {
             this.toastResponsive(t('prompt_select_storage', '스토리지를 먼저 선택하세요'), t('storage_select_required', '스토리지 선택 필요'), 'warning');
             return;
@@ -16573,6 +18058,10 @@ const App = {
             $('#file-input').val('');
             return;
         }
+        // ★ (2026-11-01 11:36, 39차 점검) 같은 이름 확인은 이 시점 폴더로 하는데 실제 업로드 대상은 '같은 이름' 창에서 단추를 누를 때의
+        //   currentStorage/currentPath 였음 → 창이 뜬 채 뒤로 가기로 다른 폴더가 되면 [덮어쓰기]가 확인한 적 없는 그 폴더 파일을 덮어씀.
+        //   요청 시점 위치를 잡아 두고 확인·업로드 모두 그 위치로 함(startMultiUpload 세 번째 인자).
+        const _upTarget = { storageId: this.currentStorage, path: this.currentPath };
         
         // 클라이언트 확장자 검증 (업로드 설정 기반)
         try {
@@ -16583,7 +18072,7 @@ const App = {
                 const rejected = [];
                 
                 if (mode === 'allow' && s.allowed_extensions) {
-                    const allowed = s.allowed_extensions.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+                    const allowed = s.allowed_extensions.toLowerCase().split(/[\s,]+/).map(e => e.replace(/^\.+/, '')).filter(Boolean);   // ★ (2026-11-02 11:53, 43차 점검) 서버(FileManager 39차)와 같은 기준 — 쉼표·공백·줄바꿈으로 나누고 앞 점 제거. 종전 split(',') 은 '.jpg, .png'·줄바꿈 목록에서 허용 파일까지 화면이 막았음
                     if (allowed.length > 0) {
                         for (const file of files) {
                             const ext = file.name.split('.').pop().toLowerCase();
@@ -16593,7 +18082,7 @@ const App = {
                         }
                     }
                 } else if (mode === 'block' && s.blocked_extensions) {
-                    const blocked = s.blocked_extensions.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+                    const blocked = s.blocked_extensions.toLowerCase().split(/[\s,]+/).map(e => e.replace(/^\.+/, '')).filter(Boolean);   // ★ (2026-11-02 11:53, 43차 점검) 서버(FileManager 39차)와 같은 기준 — 쉼표·공백·줄바꿈으로 나누고 앞 점 제거. 종전 split(',') 은 '.jpg, .png'·줄바꿈 목록에서 허용 파일까지 화면이 막았음
                     if (blocked.length > 0) {
                         for (const file of files) {
                             const ext = file.name.split('.').pop().toLowerCase();
@@ -16626,8 +18115,8 @@ const App = {
         
         // 용량 체크 + 파일 목록 동시 요청 (업로드 시작 지연 최소화)
         const [checkRes, listRes] = await Promise.all([
-            this.api('check_quota', { storage_id: this.currentStorage, size: totalSize }),
-            this.api('files', { storage_id: this.currentStorage, path: this.currentPath, show_hidden: 1 }, 'GET')   // ★ (2026-10-28) 같은 이름 확인은 숨긴 항목까지
+            this.api('check_quota', { storage_id: _upTarget.storageId, size: totalSize }),
+            this.api('files', { storage_id: _upTarget.storageId, path: _upTarget.path, show_hidden: 1 }, 'GET')   // ★ (2026-10-28) 같은 이름 확인은 숨긴 항목까지
         ]);
         
         if (!checkRes.success) {
@@ -16636,12 +18125,12 @@ const App = {
             return;
         }
         
-        if (!checkRes.allowed) {
+        if (!checkRes.allowed && !(listRes.success && await this._owQuotaRecheck(_upTarget.storageId, listRes.items, files.map(f => ({ name: f.name, size: f.size }))))) {   // ★ (2026-11-09 14:02, 58차 덮어쓰기 한도) _owQuotaRecheck 주석
             this.toast(checkRes.error || t('err_quota_exceeded', '용량이 부족합니다'), 'error');
             $('#file-input').val('');
             return;
         }
-        
+
         if (!listRes.success) {
             this.toastResponsive(t('err_folder_read', '폴더 정보를 읽을 수 없습니다'), t('err_folder_read', '폴더 읽기 실패'), 'error');
             $('#file-input').val('');
@@ -16649,26 +18138,29 @@ const App = {
         }
         
         // 기존 파일명 목록 (응답이 items)
-        const existingNames = new Set((listRes.items || []).map(f => f.name));
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 파일 선택 업로드만 같은 이름 확인이 대소문자를 구분해 'Report.pdf' 를 안 묻고 이름 바꿔 올렸다 → 폴더 업로드·끌어놓기(36차)처럼 대소문자 무시
+        // ★ (2026-11-02 08:58, 41차 점검) 맥에서 고른 파일 이름은 NFD(자모 분리)라 같은 NFC 이름을 다른 이름으로 봐 확인 없이 겉보기 같은 파일이 하나 더 생겼음 → 비교할 때만 normalize('NFC'), 보내는 이름은 그대로
+        const existingNames = new Set((listRes.items || []).map(f => String(f.name).normalize('NFC').toLowerCase()));
         
         // 중복 파일 확인
         const fileArray = Array.from(files);
-        const duplicates = fileArray.filter(file => existingNames.has(file.name));
+        const duplicates = fileArray.filter(file => existingNames.has(String(file.name).normalize('NFC').toLowerCase()));
         
         if (duplicates.length > 0) {
             // 중복 파일이 있으면 선택 모달 표시
-            this.showUploadDuplicateModal(duplicates, fileArray);
+            this.showUploadDuplicateModal(duplicates, fileArray, _upTarget);
         } else {
             // 중복 없으면 멀티 업로드 시작
-            await this.startMultiUpload(fileArray, 'rename');
+            await this.startMultiUpload(fileArray, 'rename', _upTarget);
         }
     },
     
     // 멀티 업로드 시작
-    async startMultiUpload(files, duplicateAction) {
+    async startMultiUpload(files, duplicateAction, target) {
         // 업로드 시작 시점의 스토리지/경로 고정
-        const targetStorage = this.currentStorage;
-        const targetPath = this.currentPath;
+        // ★ (2026-11-01 11:36, 39차 점검) target(handleUpload 가 같은 이름 확인한 위치)이 오면 그 위치로 — 위 handleUpload 주석 참고
+        const targetStorage = target ? target.storageId : this.currentStorage;
+        const targetPath = target ? target.path : this.currentPath;
         
         // 새 세션 생성
         const sessionId = this.multiUpload.nextSessionId++;
@@ -16731,6 +18223,7 @@ const App = {
             if (session.status === 'cancelled') break;
             
             session.currentFileIndex = i;
+            session.currentFileProgress = 0;   // ★ (2026-11-12 01:07, 89차 UPQ-1) 새 파일은 0% 부터 — 종전엔 앞 파일 값(100)이 남아 새 파일의 첫 조각 묶음이 끝날 때까지 이미 다 올라간 것처럼 보였음(마지막 파일이면 100% 뒤 88% 로 되돌아감, 재현)
             const file = session.files[i];
             
             this.updateMultiUploadItem(session, file.name);
@@ -16798,7 +18291,10 @@ const App = {
             try {
                 const testSlice = file.slice(0, 1);
                 const testBuf = await testSlice.arrayBuffer();
-                if (testBuf.byteLength === 0) {
+                // ★ (2026-11-16 11:44, 225차) PC 에서는 진짜 빈 파일(0바이트 — .gitkeep·빈 txt 등)도 올림 — 종전엔 폴더 올리기에서 'N개 실패 — 파일 크기가 0입니다'(재현).
+                //   서버는 빈 조각 하나로 0바이트 파일을 만듦(upload_chunk 확인 — 아래 totalChunks 0 → 1). 휴대폰·아이패드는 종전대로 거부(아이폰 크롬이 크기를 0으로 잘못 알리는 경우 대비)
+                const _zeroTouch = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && (navigator.maxTouchPoints || 0) > 1);
+                if (testBuf.byteLength === 0 && _zeroTouch) {
                     return { success: false, error: `${t('file_size_zero','파일 크기가 0입니다')}: ${file.name}` };
                 }
                 // slice는 되지만 size가 0인 경우 — File 객체를 그대로 사용
@@ -16820,12 +18316,13 @@ const App = {
         }
         
         const uploadId = 'upload_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        (session._chunkUploadIds = session._chunkUploadIds || []).push(uploadId);   // ★ (2026-11-15 10:13, 174차) 취소할 때 서버의 받은 조각을 지우려고(_abortChunkUploads)
         
         let uploadedChunks = 0;
         const PARALLEL = isMobile ? 2 : 3; // 모바일 2개, PC 3개 동시
         
         // 청크 하나를 업로드하는 함수 (네트워크 에러 시 재시도)
-        const uploadOneChunk = async (i, retryCount = 0) => {
+        const uploadOneChunk = async (i, retryCount = 0, rl429 = 0) => {   // ★ (2026-11-12 01:46, 90차 RGR9-N2) rl429: 아래 요청 제한(429) 다시 보내기 횟수(네트워크 재시도 횟수와 따로)
             if (session.status === 'cancelled') return { cancelled: true };
             
             const start = i * chunkSize;
@@ -16877,10 +18374,19 @@ const App = {
                 throw fetchErr;
             }
             
+            // ★ (2026-11-12 01:46, 90차 RGR9-N2) 업로드 요청 제한(IP당 분당 1000건, 서버 한도는 그대로)에 걸리면 잠시 기다렸다 같은 조각을 다시 보냄(최대 6번·약 90초 — 1분 창을 넘김) — 종전엔 바로 실패로 쳐 작은 파일 3000개를 올리면 약 2000개가 '요청이 너무 많습니다'로 실패했음(재현)
+            if (response.status === 429 && rl429 < 6 && session.status !== 'cancelled') {
+                await new Promise(r => setTimeout(r, Math.min(5000 * (rl429 + 1), 20000)));
+                if (session.status === 'cancelled') return { cancelled: true };
+                return uploadOneChunk(i, retryCount, rl429 + 1);
+            }
             // HTTP 에러 체크 (CSRF 403은 아래에서 재시도 처리)
             if (!response.ok && response.status !== 403) {
                 const errText = await response.text().catch(() => '');
-                return { success: false, error: `HTTP ${response.status}: ${errText.substring(0, 100)}` };
+                // ★ (2026-11-03 23:38, 53차 점검) 서버가 보낸 오류 문구만 보여 줌 — 종전엔 응답 원문(JSON 의 \u 글자·HTML)을 그대로 알림에 넣었음(재현: 업로드 중 계정 정지 → 'HTTP 401: {"error":"\ub85c…'})
+                let errMsg = '';
+                try { const ej = JSON.parse(errText); if (ej && typeof ej.error === 'string') errMsg = ej.error; } catch (_) {}
+                return { success: false, error: errMsg || `HTTP ${response.status}` };
             }
             
             let result;
@@ -16893,6 +18399,7 @@ const App = {
             // CSRF 에러 시 토큰 갱신 후 재시도
             if (result.csrf_error) {
                 await this.refreshCsrfToken();
+                if (await this._acctSwitchGuard()) return { success: false, error: t('account_switched_reload', '다른 탭에서 다른 계정으로 로그인되었습니다. 이 화면은 이전 계정으로 열려 있어 새로 고칩니다.') };   // ★ (2026-11-11 22:04, 85차 RGR4-1)
                 formData.set('csrf_token', this.csrfToken);
                 const retryRes = await fetch('api.php?action=upload_chunk', {
                     method: 'POST',
@@ -16940,6 +18447,9 @@ const App = {
         } catch (e) {
             if (e.name === 'AbortError') return { cancelled: true };
             return { success: false, error: e.message };
+        } finally {
+            // ★ (2026-11-15 10:14, 174차) 취소가 아닌 이유로 끝난(성공·실패) 업로드는 취소 때 지울 목록에서 뺌 — 폴더째 많이 올리다 취소해도 진행 중이던 것만 요청
+            if (session.status !== 'cancelled' && session._chunkUploadIds) { const _k = session._chunkUploadIds.indexOf(uploadId); if (_k >= 0) session._chunkUploadIds.splice(_k, 1); }
         }
         
         return { success: true };
@@ -16962,16 +18472,38 @@ const App = {
         
         // 취소 버튼 - 업로드 세션만 취소
         const cancelBtn = document.getElementById('transfer-cancel');
-        cancelBtn.onclick = () => {
+        // ★ (2026-11-01 01:04, 35차 전체 점검) 업로드 핸들러가 남은 채 다운로드만 진행 중이면 ✕ 가 다운로드를 취소하지 못했음(34차 후속은 작업 쪽만 처리) →
+        //   _cancelTransferPanel 이 자기 세션(업로드)이 없으면 남은 종류(다운로드·작업)를 취소
+        cancelBtn.onclick = () => this._cancelTransferPanel('upload');
+    },
+
+    // ★ (2026-11-01 01:04, 35차 전체 점검) 전송 패널 ✕ 공통 — 마지막에 연 UI 의 종류를 먼저, 그 세션이 없으면 남은 종류(업로드·다운로드·작업)를 취소
+    _cancelTransferPanel(prefer) {
+        const up = this.multiUpload.sessions.size > 0, down = this.multiDownload.sessions.size > 0;
+        if (prefer === 'upload' && up) return this._cancelUploadSessions();
+        if (prefer === 'download' && down) return this._cancelDownloadSessions();
+        if (up) return this._cancelUploadSessions();
+        if (down) return this._cancelDownloadSessions();
+        if (this.multiTransfer.sessions.size > 0) this._cancelTransferJobs();
+    },
+
+    // 업로드 세션 전체 취소 (★ 35차: showMultiUploadUI 의 ✕ 핸들러 본문을 그대로 함수로 뺌)
+    _cancelUploadSessions() {
+        let _cuRefresh = null;
+        const container = document.getElementById('transfer-progress');
+        const sessionsList = document.getElementById('upload-sessions-list');
             this.multiUpload.sessions.forEach((session, id) => {
                 if (session.status === 'uploading' || session.status === 'pending') {
                     session.status = 'cancelled';
                     session.abortController.abort();
+                    this._abortChunkUploads(session);
+                    if (!_cuRefresh && String(this.currentStorage) === String(session.storageId) && this.currentPath === session.path) _cuRefresh = session;   // ★ (2026-11-02 19:47, 47차 재검토) 패널 머리 ✕(전부 취소)도 같은 새로 고침
                 }
                 const el = document.getElementById(`upload-session-${id}`);
                 if (el) el.remove();
             });
             this.multiUpload.sessions.clear();
+            if (_cuRefresh) { const _cs = _cuRefresh; setTimeout(() => this._refreshIfUploadTarget(_cs), 1500); }
             
             // 다른 세션이 없으면 패널 숨김
             if (this.multiDownload.sessions.size === 0 && this.multiTransfer.sessions.size === 0) {
@@ -16980,7 +18512,6 @@ const App = {
             } else {
                 this._updateTransferTitle();
             }
-        };
     },
     
     // 멀티 업로드 아이템 추가 (기존 진행바 내 리스트)
@@ -17053,7 +18584,17 @@ const App = {
         // 전체 진행률 계산
         const fileProgress = session.currentFileIndex / session.files.length;
         const currentProgress = session.currentFileProgress / 100 / session.files.length;
-        const totalProgress = Math.round((fileProgress + currentProgress) * 100);
+        let totalProgress = Math.round((fileProgress + currentProgress) * 100);
+        let _upDoneFail = null;   // ★ (2026-11-12 11:23, 97차 개선 A6) 실패 파일이 섞였을 때 아래 크기·속도·남은 시간에 쓸 바이트
+        // ★ (2026-11-12 01:07, 89차 UPQ-2) 진행률 % 도 크기·속도·남은 시간처럼 바이트로(처리한 파일 크기 + 지금 파일 진행분) — 종전엔 파일 개수로만 세어 '33% · 14 B / 2.9 MB · 남은 시간 75시간'처럼 어긋났음(재현). 크기를 모르면 종전 계산
+        if (session.totalSize > 0) {
+            let _upDone = 0;
+            const _upN = Math.min(session.currentFileIndex, session.files.length);
+            for (let k = 0; k < _upN; k++) _upDone += (session.files[k] && session.files[k].size) || 0;
+            if (session.currentFileIndex < session.files.length) _upDone += ((session.files[session.currentFileIndex] && session.files[session.currentFileIndex].size) || 0) * session.currentFileProgress / 100;
+            totalProgress = Math.min(100, Math.round(_upDone / session.totalSize * 100));
+            if (session._failN) _upDoneFail = _upDone;   // ★ (2026-11-12 11:23, 97차 개선 A6) 아래 설명
+        }
         
         // 업로드된 바이트 계산
         let uploadedBytes = session.uploadedSize;
@@ -17061,6 +18602,8 @@ const App = {
             const currentFile = session.files[session.currentFileIndex];
             uploadedBytes += (currentFile.size * session.currentFileProgress / 100);
         }
+        // ★ (2026-11-12 11:23, 97차 개선 A6) 실패한 파일이 있으면 진행 중 크기·속도·남은 시간도 % 와 같은 '지나간 파일 + 지금 파일' 바이트로 — 종전엔 % 는 지나간 파일, 크기 칸은 성공한 파일만 세어 '80% · 2.0 MB / 5.0 MB · 남은 시간 13초'(실제 2초)처럼 어긋났음(재현: 2MB .php 거부 뒤). 실패가 없으면 두 값이 같아 종전 그대로, 끝난 뒤 '완료 (n개 실패)' 줄의 크기는 종전대로 성공한 파일만
+        if (_upDoneFail !== null) uploadedBytes = _upDoneFail;
         
         // 속도 계산
         const elapsed = (Date.now() - session.startTime) / 1000;
@@ -17081,18 +18624,31 @@ const App = {
         etaEl.textContent = eta;
         
         if (session.status === 'completed') {
-            item.classList.add('completed');
-            percentEl.textContent = t('completed', '완료') + ' ✓';
+            // ★ (2026-11-02 19:17, 47차 점검) 실패한 파일이 있어도(전부 실패해도) '완료 ✓'·100%·'N / N 파일 완료' 로 보였음(시험 서버 재현) → 전부 실패면 실패 표시, 일부 실패면 실패 수를 붙이고 개수는 실제로 올라간 수
+            const _upFail = session._failN || 0;
+            if (_upFail > 0 && !session.uploadedCount) {
+                item.classList.add('error');
+                percentEl.textContent = t('upload_failed', '업로드 실패');
+            } else {
+                item.classList.add('completed');
+                percentEl.textContent = t('completed', '완료') + (_upFail > 0 ? ` (${tf('nt_failed_s', { n: _upFail }, '{n}개 실패')})` : ' ✓');
+            }
             speedEl.textContent = '';
             etaEl.textContent = '';
-            fillEl.style.width = '100%';
+            fillEl.style.width = _upFail > 0 && !session.uploadedCount ? fillEl.style.width : '100%';
             sizeEl.textContent = `${this.formatSize(session.uploadedSize)} / ${this.formatSize(session.totalSize)}`;
-            if (countEl) countEl.textContent = `${session.files.length} / ${session.files.length} ${t('files_done','파일 완료')}`;
+            if (countEl) countEl.textContent = `${_upFail > 0 ? (session.uploadedCount || 0) : session.files.length} / ${session.files.length} ${t('files_done','파일 완료')}`;
         } else if (session.status === 'cancelled') {
             item.classList.add('error');
             percentEl.textContent = t('cancelled', '취소됨');
             speedEl.textContent = '';
             etaEl.textContent = '';
+            // ★ (2026-11-12 14:51, 98차 재검토 RGR17-1) 97차 A6 뒤 실패 파일이 섞인 업로드를 취소하면 크기 칸이 실패 파일까지 센 진행 바이트로 남았음(재현: '4.0 MB / 7.0 MB', 실제 저장 2MB) → 실패가 섞였을 때만 97차 전 계산(성공한 파일 + 지금 파일 진행분)으로 되돌림. 실패가 없으면 종전 그대로
+            if (_upDoneFail !== null) {
+                let _upCancelBytes = session.uploadedSize;
+                if (session.currentFileIndex < session.files.length) _upCancelBytes += (session.files[session.currentFileIndex].size * session.currentFileProgress / 100);
+                sizeEl.textContent = `${this.formatSize(_upCancelBytes)} / ${this.formatSize(session.totalSize)}`;
+            }
         }
         
         this._updateTransferTitle();
@@ -17127,18 +18683,39 @@ const App = {
         }
     },
     
+    // ★ (2026-11-15 10:13, 174차) 취소한 세션의 조각 업로드마다 서버에 받은 조각 지우기 요청 — 바로 한 번, 3초 뒤 한 번 더(그 사이 막 써진 조각).
+    //   결과는 알리지 않음(실패해도 종전처럼 하루 뒤 정리). 끝난 업로드는 서버가 건드리지 않음
+    _abortChunkUploads(session) {
+        const ids = (session && session._chunkUploadIds) ? session._chunkUploadIds.slice() : [];
+        if (!ids.length) return;
+        const send = () => ids.forEach(id => { try { this.api('upload_chunk_abort', { upload_id: id }).catch(() => {}); } catch (e) {} });
+        send();
+        setTimeout(send, 3000);
+    },
+
     // 멀티 업로드 세션 취소
     cancelMultiUploadSession(sessionId) {
         const session = this.multiUpload.sessions.get(sessionId);
         if (session && (session.status === 'uploading' || session.status === 'pending')) {
             session.status = 'cancelled';
             session.abortController.abort();
+            this._abortChunkUploads(session);
             this.updateMultiUploadItem(session);
             
             setTimeout(() => {
                 this.removeMultiUploadItem(sessionId);
             }, 2000);
+            // ★ (2026-11-02 19:17, 47차 점검) 취소는 브라우저 쪽 요청만 끊어, 마지막 조각을 서버가 이미 합친 뒤면 파일은 완성돼 남는데 목록은 그대로라 나중에야 보였음(93% 취소 재현) → 잠시 뒤 지금 폴더 목록을 다시 받아 실제 상태를 보여 줌
+            //   ★ (2026-11-02 19:47, 47차 재검토) 그 세션이 올리던 폴더를 지금 보고 있을 때만(완료 뒤 새로 고침과 같은 조건) — 종전엔 상관없는 폴더도 다시 불러 선택이 풀리고 맨 위로 갔음
+            setTimeout(() => this._refreshIfUploadTarget(session), 1500);
         }
+    },
+    
+    // ★ (2026-11-02 19:47, 47차 재검토) 업로드 취소 뒤 그 세션의 대상 폴더를 보고 있으면 목록을 다시 받음(마지막 조각을 서버가 이미 합쳤으면 파일이 남아 있음)
+    _refreshIfUploadTarget(session) {
+        if (!session || !this.user || this.isSearchMode || this.boardInlineMode) return;
+        if (String(this.currentStorage) !== String(session.storageId) || this.currentPath !== session.path) return;
+        if (this.vault && this.vault.isVaultView) this.vaultLoadFiles(); else this.loadFiles(false);
     },
     
     // 멀티 업로드 아이템 제거
@@ -17165,7 +18742,7 @@ const App = {
     },
     
     // 업로드 중복 파일 모달 표시
-    showUploadDuplicateModal(duplicates, allFiles) {
+    showUploadDuplicateModal(duplicates, allFiles, target) {
         const listEl = document.getElementById('duplicate-list');
         listEl.innerHTML = duplicates.map(file => 
             `<div class="duplicate-item">📄 ${this.escapeHtml(file.name)}</div>`
@@ -17196,7 +18773,7 @@ const App = {
                 !duplicates.some(d => d.name === file.name)
             );
             if (nonDuplicates.length > 0) {
-                await this.startMultiUpload(nonDuplicates, 'skip');
+                await this.startMultiUpload(nonDuplicates, 'skip', target);
             } else {
                 this.toast(tf('dup_skipped_count', '중복 파일 {count}개를 건너뛰었습니다.', {count: duplicates.length}), 'warning');
             }
@@ -17206,14 +18783,14 @@ const App = {
         // 덮어쓰기: 모든 파일 덮어쓰기
         newOverwriteBtn.onclick = async () => {
             closeModal();
-            await this.startMultiUpload(allFiles, 'overwrite');
+            await this.startMultiUpload(allFiles, 'overwrite', target);  // ★ (2026-11-01 11:36, 39차 점검) 확인한 위치로(handleUpload 주석)
             $('#file-input').val('');
         };
         
         // 이름 변경: 중복 파일은 (2), (3) 등 붙여서 업로드
         newRenameBtn.onclick = async () => {
             closeModal();
-            await this.startMultiUpload(allFiles, 'rename');
+            await this.startMultiUpload(allFiles, 'rename', target);
             $('#file-input').val('');
         };
         
@@ -17269,6 +18846,7 @@ const App = {
     
     // 폴더 업로드
     async handleFolderUpload(files) {
+        files = Array.from(files || []); $('#folder-input').val('');   // ★ (2026-11-04 01:42, 54차 점검) handleUpload 주석과 같음 — 복사 뒤 입력값 비움(같은 이름 창을 ✕·Esc 로 닫은 뒤 같은 폴더를 다시 골라도 반응이 없던 것)
         if (!this.currentStorage) {
             this.toastResponsive(t('prompt_select_storage', '스토리지를 먼저 선택하세요'), t('storage_select_required', '스토리지 선택 필요'), 'warning');
             return;
@@ -17296,9 +18874,14 @@ const App = {
             totalSize += file.size;
         }
         
+        // ★ (2026-11-01 17:17, 40차 점검) 39차 handleUpload 수정이 폴더 업로드에는 빠져 있었음 — 같은 이름 확인은 이 시점 폴더로 하고
+        //   실제 업로드 위치는 startMultiUploadFolder 가 그때의 currentStorage/currentPath 로 읽어, 확인 중·같은 이름 창 + 뒤로 가기로
+        //   위치가 바뀌면 [덮어쓰기]가 확인한 적 없는 폴더에 덮어씀 → 첫 await 전에 위치를 잡아 확인·창·업로드 모두 그 위치로.
+        const _upTarget = { storageId: this.currentStorage, path: this.currentPath };
+        
         // 업로드 전 용량 체크
         const checkRes = await this.api('check_quota', {
-            storage_id: this.currentStorage,
+            storage_id: _upTarget.storageId,
             size: totalSize
         });
         
@@ -17320,8 +18903,8 @@ const App = {
         
         // 현재 폴더의 파일 목록 가져오기 (중복 체크용)
         const listRes = await this.api('files', {
-            storage_id: this.currentStorage,
-            path: this.currentPath,
+            storage_id: _upTarget.storageId,   // ★ (2026-11-01 17:17, 40차 점검) 위 _upTarget 주석
+            path: _upTarget.path,
             show_hidden: 1   // ★ (2026-10-28) 같은 이름 확인은 숨긴 항목까지(숨긴 파일과 이름이 겹쳐도 묻도록)
         }, 'GET');
         
@@ -17332,18 +18915,20 @@ const App = {
         }
         
         // 기존 파일명 목록
-        const existingNames = new Set((listRes.items || []).map(f => f.name));
+        // ★ (2026-11-01 01:52, 36차 전체 점검) 같은 이름 확인이 대소문자를 구분해 'Photos'·'photos' 를 안 묻고 섞어 올렸다 → 붙여넣기(24차)처럼 대소문자 무시
+        // ★ (2026-11-02 08:58, 41차 점검) 맥에서 고른 파일 이름은 NFD(자모 분리)라 같은 NFC 이름을 다른 이름으로 봐 확인 없이 겉보기 같은 파일이 하나 더 생겼음 → 비교할 때만 normalize('NFC'), 보내는 이름은 그대로
+        const existingNames = new Set((listRes.items || []).map(f => String(f.name).normalize('NFC').toLowerCase()));
         
         // 폴더 이름 중복 확인
-        if (existingNames.has(folderName)) {
-            this.showFolderUploadDuplicateModal(folderName, Array.from(files));
+        if (existingNames.has(String(folderName).normalize('NFC').toLowerCase())) {
+            this.showFolderUploadDuplicateModal(folderName, Array.from(files), _upTarget);
         } else {
-            await this.executeFolderUpload(Array.from(files), 'rename');
+            await this.executeFolderUpload(Array.from(files), 'rename', _upTarget);
         }
     },
     
     // 폴더 업로드 중복 모달
-    showFolderUploadDuplicateModal(folderName, files) {
+    showFolderUploadDuplicateModal(folderName, files, target) {
         const listEl = document.getElementById('duplicate-list');
         listEl.innerHTML = `<div class="duplicate-item">📁 ${this.escapeHtml(folderName)}</div>`;
         
@@ -17373,14 +18958,14 @@ const App = {
         // 덮어쓰기 (기존 폴더에 병합)
         newOverwriteBtn.onclick = async () => {
             closeModal();
-            await this.executeFolderUpload(files, 'overwrite');
+            await this.executeFolderUpload(files, 'overwrite', target);   // ★ (2026-11-01 17:17, 40차 점검) 확인한 위치로(handleFolderUpload 주석)
             $('#folder-input').val('');
         };
         
         // 이름 변경
         newRenameBtn.onclick = async () => {
             closeModal();
-            await this.executeFolderUpload(files, 'rename');
+            await this.executeFolderUpload(files, 'rename', target);
             $('#folder-input').val('');
         };
         
@@ -17388,16 +18973,17 @@ const App = {
     },
     
     // 폴더 업로드 실행
-    async executeFolderUpload(files, duplicateAction) {
+    async executeFolderUpload(files, duplicateAction, target) {
         // 멀티 업로드로 전환
-        await this.startMultiUploadFolder(files, duplicateAction);
+        await this.startMultiUploadFolder(files, duplicateAction, target);
         $('#folder-input').val('');
     },
     
     // 폴더 업로드용 멀티 업로드 시작
-    async startMultiUploadFolder(files, duplicateAction) {
-        const targetStorage = this.currentStorage;
-        const targetPath = this.currentPath;
+    async startMultiUploadFolder(files, duplicateAction, target) {
+        // ★ (2026-11-01 17:17, 40차 점검) target(handleFolderUpload 가 같은 이름 확인한 위치)이 오면 그 위치로 — handleFolderUpload 주석 참고
+        const targetStorage = target ? target.storageId : this.currentStorage;
+        const targetPath = target ? target.path : this.currentPath;
         
         const firstPath = files[0].webkitRelativePath;
         const folderName = firstPath.split('/')[0];
@@ -17444,29 +19030,44 @@ const App = {
             return;
         }
         
+        // ★ (2026-11-01 17:17, 40차 점검) 끌어놓기도 handleUpload(39차)처럼 첫 await 전에 위치를 잡음 — 파일 수집(큰 폴더는 수 초)·확인 요청·같은 이름 창 사이에
+        //   뒤로 가기·사이드바로 위치가 바뀌면 업로드가 그때 위치(보관함이면 그때 보관함)로 가서, [덮어쓰기]가 확인 안 한 폴더에 덮어썼음.
+        const _upTarget = { storageId: this.currentStorage, path: this.currentPath };
+        
         // vault 뷰면 폴더 구조 유지하며 암호화 업로드
         if (this.vault && this.vault.isVaultView) {
+            const _vTarget = { storageId: this.currentStorage, vaultPath: this.vault.currentVaultPath };   // ★ (2026-11-01 17:17, 40차 점검) 위 _upTarget 주석(보관함 위치)
             const files = [];
             for (const entry of entries) {
                 await this.collectFilesFromEntry(entry, '', files);
             }
             if (files.length > 0) {
-                await this._vaultUploadWithStructure(files);
+                await this._vaultUploadWithStructure(files, _vTarget);
             }
             return;
         }
         
         const files = [];
+        const emptyDirs = [];   // ★ (2026-11-11 23:54, 88차 개선 G3-4) 끌어 놓은 폴더 속 빈 폴더(아래 _dropMakeEmptyDirs)
         
         // 모든 entry에서 파일 수집
         for (const entry of entries) {
-            await this.collectFilesFromEntry(entry, '', files);
+            await this.collectFilesFromEntry(entry, '', files, emptyDirs);
         }
         
         if (files.length === 0) {
+            if (emptyDirs.length > 0) {   // ★ (2026-11-11 23:54, 88차 개선 G3-4) 빈 폴더만 놓았으면 폴더만 만듦 — 종전엔 '업로드할 파일이 없습니다'(재현). 이미 다 있으면 종전 문구 그대로
+                const _g34 = await this._dropMakeEmptyDirs(emptyDirs, _upTarget);
+                if (_g34.err) this.toast(_g34.err, 'error');
+                else if (_g34.made > 0) this.toast(t('folder_created', '폴더가 생성되었습니다.'), 'success');
+                else this.toast(t('prompt_no_files'), 'warning');
+                if (_g34.made > 0 && String(this.currentStorage) === String(_upTarget.storageId) && this.currentPath === _upTarget.path && !this.isSearchMode) this.loadFiles();
+                return;
+            }
             this.toast(t('prompt_no_files'), 'warning');
             return;
         }
+        files._emptyDirs = emptyDirs;   // ★ (2026-11-11 23:54, 88차 개선 G3-4) 파일 업로드가 끝난 뒤 만들도록 세션에 넘김(startMultiUploadDrop)
         
         // 클라이언트 확장자 검증 (업로드 설정 기반)
         try {
@@ -17477,7 +19078,7 @@ const App = {
                 let rejected = [];
                 
                 if (mode === 'allow' && s.allowed_extensions) {
-                    const allowed = s.allowed_extensions.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+                    const allowed = s.allowed_extensions.toLowerCase().split(/[\s,]+/).map(e => e.replace(/^\.+/, '')).filter(Boolean);   // ★ (2026-11-02 11:53, 43차 점검) 서버(FileManager 39차)와 같은 기준 — 쉼표·공백·줄바꿈으로 나누고 앞 점 제거. 종전 split(',') 은 '.jpg, .png'·줄바꿈 목록에서 허용 파일까지 화면이 막았음
                     if (allowed.length > 0) {
                         for (const item of files) {
                             const ext = item.file.name.split('.').pop().toLowerCase();
@@ -17487,7 +19088,7 @@ const App = {
                         }
                     }
                 } else if (mode === 'block' && s.blocked_extensions) {
-                    const blocked = s.blocked_extensions.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+                    const blocked = s.blocked_extensions.toLowerCase().split(/[\s,]+/).map(e => e.replace(/^\.+/, '')).filter(Boolean);   // ★ (2026-11-02 11:53, 43차 점검) 서버(FileManager 39차)와 같은 기준 — 쉼표·공백·줄바꿈으로 나누고 앞 점 제거. 종전 split(',') 은 '.jpg, .png'·줄바꿈 목록에서 허용 파일까지 화면이 막았음
                     if (blocked.length > 0) {
                         for (const item of files) {
                             const ext = item.file.name.split('.').pop().toLowerCase();
@@ -17519,7 +19120,7 @@ const App = {
         
         // 업로드 전 용량 체크
         const checkRes = await this.api('check_quota', {
-            storage_id: this.currentStorage,
+            storage_id: _upTarget.storageId,   // ★ (2026-11-01 17:17, 40차 점검) handleDropEntries 첫 줄 _upTarget 주석
             size: totalSize
         });
         
@@ -17529,14 +19130,18 @@ const App = {
         }
         
         if (!checkRes.allowed) {
+            // ★ (2026-11-09 14:02, 58차 덮어쓰기 한도) 거부됐을 때만 같은 폴더 목록으로 '덮어쓰기' 때 늘어나는 양을 한 번 더 확인(_owQuotaRecheck 주석) — 하위 폴더 안 파일은 이름에 '/' 가 있어 전체 크기 그대로
+            const _owList = await this.api('files', { storage_id: _upTarget.storageId, path: _upTarget.path, show_hidden: 1 }, 'GET');
+            if (!(_owList && _owList.success && await this._owQuotaRecheck(_upTarget.storageId, _owList.items, files.map(it => ({ name: it.relativePath || it.file.name, size: it.file.size }))))) {
             this.toast(checkRes.error || t('err_quota_exceeded', '용량이 부족합니다'), 'error');
             return;
+            }
         }
-        
+
         // 현재 폴더의 파일 목록 가져오기 (중복 체크용)
         const listRes = await this.api('files', {
-            storage_id: this.currentStorage,
-            path: this.currentPath,
+            storage_id: _upTarget.storageId,   // ★ (2026-11-01 17:17, 40차 점검) handleDropEntries 첫 줄 _upTarget 주석
+            path: _upTarget.path,
             show_hidden: 1   // ★ (2026-10-28) 같은 이름 확인은 숨긴 항목까지(숨긴 파일과 이름이 겹쳐도 묻도록)
         }, 'GET');
         
@@ -17546,7 +19151,9 @@ const App = {
         }
         
         // 기존 파일명 목록
-        const existingNames = new Set((listRes.items || []).map(f => f.name));
+        // ★ (2026-11-01 01:52, 36차 전체 점검) 같은 이름 확인이 대소문자를 구분해 'Photos'·'photos' 를 안 묻고 섞어 올렸다 → 붙여넣기(24차)처럼 대소문자 무시
+        // ★ (2026-11-02 08:58, 41차 점검) 맥에서 고른 파일 이름은 NFD(자모 분리)라 같은 NFC 이름을 다른 이름으로 봐 확인 없이 겉보기 같은 파일이 하나 더 생겼음 → 비교할 때만 normalize('NFC'), 보내는 이름은 그대로
+        const existingNames = new Set((listRes.items || []).map(f => String(f.name).normalize('NFC').toLowerCase()));
         
         // 최상위 레벨 파일/폴더 중복 확인 (relativePath가 없거나 단일 레벨인 것)
         const topLevelFiles = files.filter(item => {
@@ -17556,28 +19163,28 @@ const App = {
         
         const duplicates = topLevelFiles.filter(item => {
             const name = item.relativePath || item.file.name;
-            return existingNames.has(name);
+            return existingNames.has(String(name).normalize('NFC').toLowerCase());
         });
         // ★ (2026-10-29 14:37, 21차 점검) 끌어놓은 폴더 이름이 이미 있으면 그 폴더도 확인 창에 — 종전엔 한 단계 파일만 보아 같은 이름 폴더는 묻지 않고
         //   바로 '이름 바꾸기' 로 기존 폴더에 합쳐 올렸음(폴더 선택 업로드는 묻는데 끌어놓기만 안 물었음). 확인 창의 건너뛰기는 원래 최상위 이름 기준이라 그대로 맞음
         const dupDirs = new Set();
         for (const item of files) {
             const parts = (item.relativePath || item.file.name).split('/');
-            if (parts.length > 1 && existingNames.has(parts[0])) dupDirs.add(parts[0]);
+            if (parts.length > 1 && existingNames.has(parts[0].normalize('NFC').toLowerCase())) dupDirs.add(parts[0]);
         }
         for (const d of dupDirs) duplicates.push({ relativePath: d, file: { name: d }, _isDir: true });
         
         if (duplicates.length > 0) {
             // 중복 파일이 있으면 선택 모달 표시
-            this.showDropDuplicateModal(duplicates, files);
+            this.showDropDuplicateModal(duplicates, files, _upTarget);
         } else {
             // 중복 없으면 바로 업로드
-            await this.executeDropUpload(files, 'rename');
+            await this.executeDropUpload(files, 'rename', _upTarget);
         }
     },
     
     // 드롭 업로드 중복 모달
-    showDropDuplicateModal(duplicates, allFiles) {
+    showDropDuplicateModal(duplicates, allFiles, target) {
         const listEl = document.getElementById('duplicate-list');
         listEl.innerHTML = duplicates.map(item => {
             const name = item.relativePath || item.file.name;
@@ -17603,15 +19210,19 @@ const App = {
         // 건너뛰기
         skipBtn.onclick = async () => {
             closeModal();
-            const duplicateNames = new Set(duplicates.map(d => d.relativePath || d.file.name));
+            // ★ (2026-11-01 01:52, 36차 전체 점검) 같은 이름 확인이 대소문자를 구분해 'Photos'·'photos' 를 안 묻고 섞어 올렸다 → 붙여넣기(24차)처럼 대소문자 무시
+            const duplicateNames = new Set(duplicates.map(d => String(d.relativePath || d.file.name).toLowerCase()));
             const nonDuplicates = allFiles.filter(item => {
                 const name = item.relativePath || item.file.name;
-                const topName = name.split('/')[0];
+                const topName = name.split('/')[0].toLowerCase();
                 return !duplicateNames.has(topName);
             });
+            nonDuplicates._emptyDirs = (allFiles._emptyDirs || []).filter(d => !duplicateNames.has(d.split('/')[0].toLowerCase()));   // ★ (2026-11-11 23:54, 88차 개선 G3-4) 건너뛴 최상위 이름 아래 빈 폴더는 빼고 넘김
             if (nonDuplicates.length > 0) {
-                await this.executeDropUpload(nonDuplicates, 'skip');
+                await this.executeDropUpload(nonDuplicates, 'skip', target);
             } else {
+                if (nonDuplicates._emptyDirs.length > 0 && (await this._dropMakeEmptyDirs(nonDuplicates._emptyDirs, target)).made > 0   // ★ (2026-11-11 23:54, 88차 개선 G3-4) 올릴 파일이 없어도 겹치지 않은 빈 폴더는 만듦(만들었으면 목록 새로 고침)
+                    && String(this.currentStorage) === String(target.storageId) && this.currentPath === target.path && !this.isSearchMode) this.loadFiles();
                 this.toast(tf('dup_skipped_count', '중복 파일 {count}개를 건너뛰었습니다.', {count: duplicates.length}), 'warning');
             }
             cleanup();
@@ -17620,14 +19231,14 @@ const App = {
         // 덮어쓰기
         overwriteBtn.onclick = async () => {
             closeModal();
-            await this.executeDropUpload(allFiles, 'overwrite');
+            await this.executeDropUpload(allFiles, 'overwrite', target);   // ★ (2026-11-01 17:17, 40차 점검) 확인한 위치로(handleDropEntries 주석)
             cleanup();
         };
         
         // 이름 변경
         renameBtn.onclick = async () => {
             closeModal();
-            await this.executeDropUpload(allFiles, 'rename');
+            await this.executeDropUpload(allFiles, 'rename', target);
             cleanup();
         };
         
@@ -17635,16 +19246,17 @@ const App = {
     },
     
     // 드롭 업로드 실행
-    async executeDropUpload(files, duplicateAction) {
+    async executeDropUpload(files, duplicateAction, target) {
         // 멀티 업로드로 전환 (files는 {file, relativePath} 형태)
-        await this.startMultiUploadDrop(files, duplicateAction);
+        await this.startMultiUploadDrop(files, duplicateAction, target);
     },
     
     // 드롭 업로드용 멀티 업로드 시작
-    async startMultiUploadDrop(files, duplicateAction) {
+    async startMultiUploadDrop(files, duplicateAction, target) {
         // 업로드 시작 시점의 스토리지/경로 고정
-        const targetStorage = this.currentStorage;
-        const targetPath = this.currentPath;
+        // ★ (2026-11-01 17:17, 40차 점검) target(handleDropEntries 가 같은 이름 확인한 위치)이 오면 그 위치로 — handleDropEntries 주석 참고
+        const targetStorage = target ? target.storageId : this.currentStorage;
+        const targetPath = target ? target.path : this.currentPath;
         
         // 새 세션 생성
         const sessionId = this.multiUpload.nextSessionId++;
@@ -17661,6 +19273,7 @@ const App = {
             id: sessionId,
             files: fileList,
             relativePathMap: relativePathMap,
+            emptyDirs: files._emptyDirs || [],   // ★ (2026-11-11 23:54, 88차 개선 G3-4) handleDropEntries 가 모은 빈 폴더
             storageId: targetStorage,
             path: targetPath,
             duplicateAction: duplicateAction,
@@ -17695,6 +19308,7 @@ const App = {
             if (session.status === 'cancelled') break;
             
             session.currentFileIndex = i;
+            session.currentFileProgress = 0;   // ★ (2026-11-12 01:07, 89차 UPQ-1) 새 파일은 0% 부터 — 종전엔 앞 파일 값(100)이 남아 새 파일의 첫 조각 묶음이 끝날 때까지 이미 다 올라간 것처럼 보였음(마지막 파일이면 100% 뒤 88% 로 되돌아감, 재현)
             const file = session.files[i];
             const relativePath = session.relativePathMap?.get(file) || null;
             
@@ -17720,6 +19334,10 @@ const App = {
             }
         }
         
+        if (session.status !== 'cancelled' && session.emptyDirs && session.emptyDirs.length > 0) {   // ★ (2026-11-11 23:54, 88차 개선 G3-4) 파일을 다 올린 뒤 빈 폴더를 만듦(실패는 끝 알림의 실패 개수·이유에 합침)
+            const _g34 = await this._dropMakeEmptyDirs(session.emptyDirs, { storageId: session.storageId, path: session.path });
+            if (_g34.err) { session._failN = (session._failN || 0) + 1; session._lastErr = session._lastErr || _g34.err; }
+        }
         if (session.status !== 'cancelled') {
             session.status = 'completed';
             this.updateMultiUploadItem(session);
@@ -17746,8 +19364,30 @@ const App = {
         }, 5000);
     },
     
+    // ★ (2026-11-11 23:54, 88차 개선 G3-4) 끌어 놓은 폴더 속 빈 폴더를 기존 '새 폴더 만들기'(mkdir) API 로 한 단계씩 만듦 — 같은 이름 폴더가 있으면 그대로 두고(오류로 보지 않음), 그 밖의 실패(쓰기 권한 등)는 마지막 이유를 돌려줌
+    async _dropMakeEmptyDirs(dirs, target) {
+        let made = 0, err = '';
+        const done = new Map();   // 놓은 상대 경로 → 서버가 만든 실제 상대 경로(이름 정리 반영)
+        for (const d of dirs) {
+            const parts = d.split('/');
+            let parent = '';
+            for (let i = 0; i < parts.length; i++) {
+                const key = parts.slice(0, i + 1).join('/');
+                if (done.has(key)) { parent = done.get(key); continue; }
+                const r = await this.api('mkdir', { storage_id: target.storageId, path: target.path ? (parent ? target.path + '/' + parent : target.path) : parent, name: parts[i] });
+                const exists = !r.success && (/already exists/i.test(r.error || '') || r.error === t('api_err_same_folder_exists', '같은 이름의 폴더가 이미 있습니다.'));   // ★ (2026-11-12 01:09, 89차 RGR8-3) 영어 'does not exist'(대상 폴더 없음)까지 '이미 있음'으로 읽어 이유 대신 'No files to upload' 가 나왔음(재현) — 'already exists' 만
+                if (!r.success && !exists) { err = `${parts[i]}: ${r.error || t('nt_error_generic', '오류가 발생했습니다.')}`; break; }
+                if (r.success) made++;
+                const real = (r.success && r.name !== undefined && r.name !== null && r.name !== '') ? String(r.name) : parts[i];
+                parent = parent ? parent + '/' + real : real;
+                done.set(key, parent);
+            }
+        }
+        return { made, err };
+    },
+    
     // Entry에서 파일 수집 (재귀)
-    async collectFilesFromEntry(entry, basePath, files) {
+    async collectFilesFromEntry(entry, basePath, files, emptyDirs) {
         if (entry.isFile) {
             const file = await this.getFileFromEntry(entry);
             if (file) {
@@ -17758,9 +19398,10 @@ const App = {
             const dirReader = entry.createReader();
             const entries = await this.readAllDirectoryEntries(dirReader);
             const newBasePath = basePath ? basePath + '/' + entry.name : entry.name;
+            if (emptyDirs && entries.length === 0) emptyDirs.push(newBasePath);   // ★ (2026-11-11 23:54, 88차 개선 G3-4) 빈 폴더 경로를 따로 모음(일반 끌어 놓기만 넘김 — 보관함 끌어 놓기는 종전 그대로) — 종전엔 말없이 빠졌음(재현)
             
             for (const childEntry of entries) {
-                await this.collectFilesFromEntry(childEntry, newBasePath, files);
+                await this.collectFilesFromEntry(childEntry, newBasePath, files, emptyDirs);
             }
         }
     },
@@ -17943,8 +19584,9 @@ const App = {
                             );
                         }
                         // 최근 파일에 추가
-                        const uploadedPath = this.currentPath ? `${this.currentPath}/${res.filename}` : res.filename;
-                        this.addToRecentFiles(uploadedPath, res.filename, 'upload');
+                        // ★ (2026-11-01 01:51, 36차 전체 점검) 업로드 중 다른 폴더·스토리지로 가면 지금 보는 위치로 기록됐다 → 시작 때 고정한 위치로
+                        const uploadedPath = uploadPath ? `${uploadPath}/${res.filename}` : res.filename;
+                        this.addToRecentFiles(uploadedPath, res.filename, 'upload', uploadStorage);
                         return { success: true };
                     }
                 } catch (e) {
@@ -18141,7 +19783,7 @@ const App = {
                 sizeEl.textContent = this.formatSize(processedSize);
             }
             sizeEl.style.display = '';
-            document.getElementById('transfer-eta').textContent = eta ? `${t('remaining_time','남은 시간')}: ${eta}` : '';
+            document.getElementById('transfer-eta').textContent = eta ? `${t('remaining_time','남은 시간: ')}${eta}` : '';   // ★ (2026-11-04) 문구(ko·en)에 이미 ': ' 가 있어 콜론이 두 번 나왔음
         }
         
         this.transfer.completedFiles = currentFile;
@@ -18172,7 +19814,7 @@ const App = {
         document.getElementById('transfer-percent').textContent = `${percent}%`;
         document.getElementById('transfer-speed').textContent = this.transfer.speed > 0 ? `${this.formatSize(this.transfer.speed)}/s` : '';
         document.getElementById('transfer-size').textContent = `${this.formatSize(transferred)} / ${this.formatSize(total)}`;
-        document.getElementById('transfer-eta').textContent = eta ? `${t('remaining_time','남은 시간')}: ${eta}` : '';
+        document.getElementById('transfer-eta').textContent = eta ? `${t('remaining_time','남은 시간: ')}${eta}` : '';   // ★ (2026-11-04) 콜론 두 번 → 한 번(문구에 이미 있음)
         document.getElementById('progress-fill').style.width = `${percent}%`;
     },
     
@@ -18317,7 +19959,7 @@ const App = {
             
             session.status = 'completed';
             this._updateMultiDownloadItem(session);
-            this.addToRecentFiles(path, filename, 'download', storageId);
+            this.addToRecentFiles(path, filename, 'download', targetStorageId);   // ★ (2026-11-01 01:51, 36차 전체 점검) null 이면 완료 시점 스토리지로 기록되던 것 → 시작 때 스토리지
             
             // 2초 후 아이템 제거
             setTimeout(() => this._removeMultiDownloadItem(sessionId), 2000);
@@ -18342,18 +19984,27 @@ const App = {
                 session.status = 'downloading';
                 session.percent = 0;
                 this._updateMultiDownloadItem(session);
-                const retryRes = await fetch(url);
+                // ★ (2026-11-01 01:04, 35차 전체 점검) 다시 받는 중 ✕ 로 취소해도 signal 이 없어 끝까지 받아 저장하고 '최근 파일'에 남겼고, 실패하면 iframe 으로 또 받았음 →
+                //   signal 을 넘기고 저장 전·iframe 폴백 전에 취소 여부를 확인
+                const retryRes = await fetch(url, { signal: abortController.signal });
                 if (retryRes.ok) {
                     const blob = await retryRes.blob();
+                    if (session.status === 'cancelled') throw new DOMException('Aborted', 'AbortError');
                     this.saveBlob(blob, filename);
                     session.status = 'completed';
                     session.percent = 100;
                     this._updateMultiDownloadItem(session);
-                    this.addToRecentFiles(path, filename, 'download', storageId);
+                    this.addToRecentFiles(path, filename, 'download', targetStorageId);   // ★ (2026-11-01 01:51, 36차 전체 점검) null 이면 완료 시점 스토리지로 기록되던 것 → 시작 때 스토리지
                     setTimeout(() => this._removeMultiDownloadItem(sessionId), 2000);
                     return;
                 }
             } catch (retryErr) {
+            }
+            if (session.status === 'cancelled' || abortController.signal.aborted) {
+                session.status = 'cancelled';
+                this._updateMultiDownloadItem(session);
+                setTimeout(() => this._removeMultiDownloadItem(sessionId), 1500);
+                return;
             }
             
             // 최종 폴백: iframe으로 다운로드 (대화상자 없이 브라우저 기본 동작)
@@ -18364,7 +20015,7 @@ const App = {
             iframe.src = url;
             document.body.appendChild(iframe);
             setTimeout(() => iframe.remove(), 30000);
-            this.addToRecentFiles(path, filename, 'download', storageId);
+            this.addToRecentFiles(path, filename, 'download', targetStorageId);   // ★ (2026-11-01 01:51, 36차 전체 점검) null 이면 완료 시점 스토리지로 기록되던 것 → 시작 때 스토리지
             setTimeout(() => this._removeMultiDownloadItem(sessionId), 3000);
         }
     },
@@ -18385,12 +20036,18 @@ const App = {
         
         // 전체 취소 버튼
         const cancelBtn = document.getElementById('transfer-cancel');
-        cancelBtn.onclick = () => {
+        // ★ (2026-11-01 01:04, 35차 전체 점검) 다운로드 핸들러가 남은 채 업로드만 진행 중이면 ✕ 가 아무것도 취소하지 못했음 → 공통 _cancelTransferPanel 로(자기 세션이 없으면 남은 업로드·작업을 취소)
+        cancelBtn.onclick = () => this._cancelTransferPanel('download');
+    },
+
+    // 다운로드 세션 전체 취소 (★ 35차: _showMultiDownloadUI 의 ✕ 핸들러 본문을 그대로 함수로 뺌)
+    _cancelDownloadSessions() {
+        const container = document.getElementById('transfer-progress');
             // 다운로드 세션만 취소/제거
             this.multiDownload.sessions.forEach((session) => {
                 if (session.status === 'downloading') {
                     session.status = 'cancelled';
-                    session.abortController.abort();
+                    session.abortController?.abort();   // ★ (2026-10-31 12:03, 34차 전체 점검) 보관함 '암호화 해제' 세션엔 없어 TypeError 로 취소·전체 취소가 멈췄음
                 }
                 const el = document.getElementById(`download-session-${session.id}`);
                 if (el) el.remove();
@@ -18403,7 +20060,6 @@ const App = {
             } else {
                 this._updateTransferTitle();
             }
-        };
     },
     
     // 멀티 다운로드 아이템 추가
@@ -18413,7 +20069,7 @@ const App = {
         item.className = 'upload-session-item';
         item.id = `download-session-${session.id}`;
         
-        const folderPath = session.path ? session.path.substring(0, session.path.lastIndexOf('/')) : '';
+        const folderPath = (session.srcFolder != null) ? String(session.srcFolder).replace(/^\/+|\/+$/g, '') : (session.path ? session.path.substring(0, session.path.lastIndexOf('/')) : '');   // ★ (2026-11-15 17:09, 192차) srcFolder(_downloadWithSession)가 있으면 그 폴더
         const srcPath = folderPath ? `/${folderPath}` : '/';
         const storageName = this._getStorageName(session.storageId || this.currentStorage);
         
@@ -18442,7 +20098,7 @@ const App = {
                 this._removeMultiDownloadItem(session.id);
             } else {
                 session.status = 'cancelled';
-                session.abortController.abort();
+                session.abortController?.abort();   // ★ (2026-10-31 12:03, 34차 전체 점검) 보관함 '암호화 해제' 세션엔 없어 TypeError 로 취소·전체 취소가 멈췄음
                 this._updateMultiDownloadItem(session);
                 this.toast(t('download_cancelled', '다운로드가 취소되었습니다.'), 'warning');
                 setTimeout(() => this._removeMultiDownloadItem(session.id), 1500);
@@ -18516,9 +20172,18 @@ const App = {
         this._updateTransferTitle();
     },
     
+    // ★ (2026-11-15 17:09, 192차) 경로들의 공통 부모 폴더(모두 같을 때만, 아니면 null — 출발지 표시용)
+    _dlParentOf(paths) {
+        const list = (Array.isArray(paths) ? paths : [paths]).map(x => String(x == null ? '' : x).replace(/\\/g, '/').replace(/^\/+|\/+$/g, ''));
+        if (!list.length) return null;
+        const par = list.map(x => (x.lastIndexOf('/') >= 0 ? x.substring(0, x.lastIndexOf('/')) : ''));
+        return par.every(x => x === par[0]) ? par[0] : null;
+    },
+    
     // 범용 다운로드 세션 (URL에서 blob을 다운받아 저장, 또는 handle에 기록)
     async _downloadWithSession(url, filename, totalSize, options = {}) {
         const { saveHandle, onComplete, abortSignal } = options;
+        // ★ (2026-11-15 17:09, 192차) 출발지 표시용 srcFolder·srcStorageId(넘기면) — 종전엔 path '' 라 ZIP 묶음·폴더 내려받기·다른 이름 저장이 어느 폴더에서 받아도 '출발지: 내 파일/'(최상위)로 보였음(재현)
         const sessionId = this.multiDownload.nextSessionId++;
         const abortController = new AbortController();
         
@@ -18526,7 +20191,8 @@ const App = {
             id: sessionId,
             filename: filename,
             path: '',
-            storageId: 0,
+            storageId: options.srcStorageId || 0,
+            srcFolder: (options.srcFolder == null ? undefined : options.srcFolder),
             status: 'downloading',
             abortController,
             percent: 0,
@@ -18540,6 +20206,9 @@ const App = {
         this.multiDownload.sessions.set(sessionId, session);
         this._showMultiDownloadUI();
         this._addMultiDownloadItem(session);
+        // ★ (2026-10-31 13:38, 34차 후속 개선) 받는 중 취소(read 예외)·실패하면 열린 writable 을 abort 하지 않아 임시 파일(.crswap)이 남았음 —
+        //   열린 writable 을 따라가 catch 에서 abort
+        let _openWritable = null;
         
         try {
             const response = await fetch(url, { signal: abortController.signal });
@@ -18567,8 +20236,9 @@ const App = {
                 if (saveHandle) {
                     // File System Access API로 직접 쓰기
                     const writable = await saveHandle.createWritable();
+                    _openWritable = writable;
                     while (true) {
-                        if (session.status === 'cancelled') { reader.cancel(); await writable.abort(); throw new DOMException('', 'AbortError'); }
+                        if (session.status === 'cancelled') { reader.cancel(); _openWritable = null; await writable.abort(); throw new DOMException('', 'AbortError'); }
                         const { done, value } = await reader.read();
                         if (done) break;
                         await writable.write(value);
@@ -18579,6 +20249,7 @@ const App = {
                         this._updateMultiDownloadItem(session);
                     }
                     await writable.close();
+                    _openWritable = null;
                 } else {
                     // Blob 방식
                     const chunks = [];
@@ -18603,8 +20274,10 @@ const App = {
                 session.percent = 100;
                 if (saveHandle) {
                     const writable = await saveHandle.createWritable();
+                    _openWritable = writable;
                     await writable.write(blob);
                     await writable.close();
+                    _openWritable = null;
                 } else {
                     this.saveBlob(blob, session.filename);
                 }
@@ -18616,6 +20289,7 @@ const App = {
             setTimeout(() => this._removeMultiDownloadItem(sessionId), 2000);
             
         } catch (e) {
+            if (_openWritable) { try { await _openWritable.abort(); } catch (_) {} _openWritable = null; }
             if (e.name === 'AbortError' || session.status === 'cancelled') {
                 session.status = 'cancelled';
                 this._updateMultiDownloadItem(session);
@@ -18631,6 +20305,7 @@ const App = {
     
     // 폴더 다운로드 (압축 진행률 + 다운로드 진행률)
     async downloadFolder(path, storageId) {
+        if (this._zipUnsupportedStorage(storageId)) { this._toastZipRemoteUnsupported(); return; }   // ★ (2026-11-01 01:50, 36차 전체 점검) 원격은 폴더 ZIP 불가 안내
         const folderName = path.split('/').pop();
         let zipName = folderName + '.zip';
         
@@ -18650,6 +20325,7 @@ const App = {
         }
         
         try {
+            url = await this._sseUrl(url);   // ★ (2026-10-31 13:19, 34차 후속 개선) 경로 목록·암호는 주소 대신 POST 로(긴 주소 414·접근 로그에 암호가 남던 것)
             const eventSource = new EventSource(url); this._zipEventSource = eventSource;
             let tempId = null;
             let zipSize = 0;
@@ -18693,6 +20369,7 @@ const App = {
             const downloadUrl = `api.php?action=temp_download&temp_id=${tempId}`;
             
             await this._downloadWithSession(downloadUrl, zipName, zipSize, {
+                srcFolder: this._dlParentOf(path), srcStorageId: storageId,   // ★ (2026-11-15 17:09, 192차) 출발지 표시(폴더가 있는 곳)
                 onComplete: () => {
                     this.toastResponsive(
                         `${t('folder_download_complete','폴더 다운로드 완료')}: ${zipName}`,
@@ -18759,9 +20436,10 @@ const App = {
                 // 다운로드 세션으로 진행률 표시
                 await this._downloadWithSession(url, name, 0, {
                     saveHandle: handle,
+                    srcFolder: this._dlParentOf(path), srcStorageId: targetStorageId,   // ★ (2026-11-15 17:09, 192차) 출발지 표시
                     onComplete: () => {
                         this.toast(t('toast_saved'), 'success');
-                        this.addToRecentFiles(path, name, 'download', storageId);
+                        this.addToRecentFiles(path, name, 'download', targetStorageId);   // ★ (2026-11-01 01:51, 36차 전체 점검) null 이면 완료 시점 스토리지로 기록되던 것 → 시작 때 스토리지
                     }
                 });
                 return;
@@ -18782,7 +20460,7 @@ const App = {
             document.body.appendChild(iframe);
         }
         iframe.src = url;
-        this.addToRecentFiles(path, name, 'download', storageId);
+        this.addToRecentFiles(path, name, 'download', targetStorageId);   // ★ (2026-11-01 01:51, 36차 전체 점검) null 이면 완료 시점 스토리지로 기록되던 것 → 시작 때 스토리지
         
         if (!isSecure) {
             this.toastResponsive(t('https_required_msg','HTTPS에서만 저장 위치를 직접 선택할 수 있습니다.'), t('https_required','HTTPS 필요'), 'info');
@@ -18791,6 +20469,7 @@ const App = {
     
     // 폴더 다른 이름으로 저장 (압축 후 저장 위치 선택)
     async saveFolderAs(path, folderName, storageId) {
+        if (this._zipUnsupportedStorage(storageId || this.currentStorage)) { this._toastZipRemoteUnsupported(); return; }   // ★ (2026-11-01 01:50, 36차 전체 점검) 원격은 폴더 ZIP 불가 안내
         const zipName = folderName + '.zip';
         const isSecure = location.protocol === 'https:';
         
@@ -18809,7 +20488,8 @@ const App = {
                 // 1단계: 압축 진행률 표시
                 this.showZipProgressModal('compress', folderName);
                 
-                const url = `api.php?action=folder_download_stream&storage_id=${storageId}&path=${encodeURIComponent(path)}`;
+                let url = `api.php?action=folder_download_stream&storage_id=${storageId}&path=${encodeURIComponent(path)}`;
+                url = await this._sseUrl(url);   // ★ (2026-10-31 13:19, 34차 후속 개선) 경로 목록·암호는 주소 대신 POST 로 맡기고 짧은 id 만 주소에
                 
                 let tempId = null;
                 let zipSize = 0;
@@ -18854,6 +20534,7 @@ const App = {
                 
                 await this._downloadWithSession(downloadUrl, zipName, zipSize, {
                     saveHandle: handle,
+                    srcFolder: this._dlParentOf(path), srcStorageId: storageId,   // ★ (2026-11-15 17:09, 192차) 출발지 표시
                     onComplete: () => {
                         this.toast(t('toast_saved'), 'success');
                         this.addToRecentFiles(path, zipName, 'download', storageId);
@@ -18980,7 +20661,9 @@ const App = {
                 _chunked: f._chunked,
                 _totalChunks: f._totalChunks,
                 _chunkSize: f._chunkSize,
-                _encSize: f._encSize
+                _encSize: f._encSize,
+                _chunkMismatch: f._chunkMismatch,   // ★ (2026-11-01 09:40, 38차 점검) 끊긴 조각 표시가 빠져 선택 받기·ZIP·해제·복사가 잘린 파일을 오류 없이 만들던 것 — 목록 값을 그대로 넘김
+                _meta: f._meta   // ★ (2026-11-01 11:43, 39차 점검) 일괄 이름 바꾸기에서 원래 메타 필드 유지용(vaultLoadFiles 주석)
             }));
         }
         
@@ -19060,9 +20743,12 @@ const App = {
         const items = this.clipboard.items;
         const sourceStorageId = this.clipboard.storageId;
         const destPath = this.currentPath;
+        // ★ (2026-11-01 17:18, 40차 점검) 대상 경로만 여기서 잡고 대상 스토리지는 executePaste 가 (같은 이름 확인·창 뒤) 그때의 currentStorage 로 읽어,
+        //   창이 뜬 채 뒤로 가기로 다른 스토리지가 되면 확인 안 한 스토리지의 같은 경로로 복사·이동(덮어쓰기 포함)했음 → 스토리지도 여기서 잡아 넘김
+        const destStorageId = this.currentStorage;
         
         // 암호화 폴더를 다른 스토리지로 복사/이동 차단
-        if (this.currentStorage != sourceStorageId) {
+        if (destStorageId != sourceStorageId) {
             const vaultFolders = items.filter(it => it.isVault);
             if (vaultFolders.length > 0) {
                 const names = vaultFolders.map(f => f.name).join(', ');
@@ -19073,7 +20759,7 @@ const App = {
         
         // 대상 폴더의 파일 목록 가져오기 (GET 방식)
         const listRes = await this.api('files', {
-            storage_id: this.currentStorage,
+            storage_id: destStorageId,   // ★ (2026-11-01 17:18, 40차 점검) 위 destStorageId 주석
             path: destPath,
             show_hidden: 1   // ★ (2026-10-28) 같은 이름 확인은 숨긴 항목까지
         }, 'GET');
@@ -19092,16 +20778,16 @@ const App = {
         
         if (duplicates.length > 0) {
             // 중복 파일이 있으면 선택 모달 표시
-            this.showDuplicateModal(duplicates, items, mode, sourceStorageId, destPath);
+            this.showDuplicateModal(duplicates, items, mode, sourceStorageId, destPath, destStorageId);
         } else {
             // 중복 없으면 바로 진행 — ★ (2026-10-29 21:10, 24차 점검) 'rename' 으로(업로드와 같게). 종전 'copy' 는 서버에서 '덮어쓰기'로 처리돼,
             //   목록을 받은 뒤 같은 이름이 생기면(다른 사람·대소문자) 기존 항목을 지우고 바꿨음. 같은 이름이 없으면 이름은 그대로
-            await this.executePaste(items, mode, sourceStorageId, destPath, 'rename');
+            await this.executePaste(items, mode, sourceStorageId, destPath, 'rename', destStorageId);
         }
     },
     
     // 중복 파일 모달 표시
-    showDuplicateModal(duplicates, allItems, mode, sourceStorageId, destPath) {
+    showDuplicateModal(duplicates, allItems, mode, sourceStorageId, destPath, destStorageId) {
         const listEl = document.getElementById('duplicate-list');
         listEl.innerHTML = duplicates.map(item => 
             `<div class="duplicate-item">📄 ${this.escapeHtml(item.name)}</div>`
@@ -19132,7 +20818,7 @@ const App = {
                 !duplicates.some(d => d.name === item.name)
             );
             if (nonDuplicates.length > 0) {
-                await this.executePaste(nonDuplicates, mode, sourceStorageId, destPath, 'skip');
+                await this.executePaste(nonDuplicates, mode, sourceStorageId, destPath, 'skip', destStorageId);
             } else {
                 this.toast(tf('dup_skipped_count', '중복 파일 {count}개를 건너뛰었습니다.', {count: duplicates.length}), 'warning');
             }
@@ -19141,22 +20827,23 @@ const App = {
         // 덮어쓰기: 기존 파일을 삭제하고 새 파일로 대체
         newOverwriteBtn.onclick = async () => {
             closeModal();
-            await this.executePaste(allItems, mode, sourceStorageId, destPath, 'overwrite');
+            await this.executePaste(allItems, mode, sourceStorageId, destPath, 'overwrite', destStorageId);   // ★ (2026-11-01 17:18, 40차 점검) 확인한 스토리지로(clipboardPaste 주석)
         };
         
         // 이름 변경: 기존 파일은 유지, 새 파일에 (2), (3) 등 번호 붙여서 저장
         newRenameBtn.onclick = async () => {
             closeModal();
-            await this.executePaste(allItems, mode, sourceStorageId, destPath, 'rename');
+            await this.executePaste(allItems, mode, sourceStorageId, destPath, 'rename', destStorageId);
         };
         
         this.showModal('modal-duplicate');
     },
     
     // 실제 붙여넣기 실행 (멀티 세션 기반)
-    async executePaste(items, mode, sourceStorageId, destPath, duplicateAction) {
+    async executePaste(items, mode, sourceStorageId, destPath, duplicateAction, destStorage) {
         const _cbAtStart = this.clipboard;   // ★ (2026-10-29 23:42, 24차 점검) 이 작업을 시작할 때의 클립보드(끝난 뒤 비울지 판단용)
-        const destStorageId = this.currentStorage;
+        // ★ (2026-11-01 17:18, 40차 점검) clipboardPaste 가 같은 이름 확인한 스토리지(destStorage)가 오면 그것으로 — 없을 때만 지금 스토리지(종전 동작)
+        const destStorageId = (destStorage !== undefined && destStorage !== null) ? destStorage : this.currentStorage;
         const destTargetPath = destPath;
         const transferType = mode === 'cut' ? 'move' : 'copy';
         
@@ -19189,7 +20876,12 @@ const App = {
             // 이동(cut) 완료 시에만 클립보드 비우기 (복사 시에는 유지)
             // ★ (2026-10-29 23:42, 24차 점검) 작업 도중 새로 복사·잘라낸 클립보드는 남김 — 종전엔 이동이 끝나면 그것까지 지워 '클립보드가 비어있습니다'(5회차 재검토)
             if (transferType === 'move' && session.success > 0 && this.clipboard === _cbAtStart) {
-                this.clipboard = { items: [], mode: null, storageId: null };
+                // ★ (2026-11-13 09:21, 110차 BULK-6) 일부 실패면 실패한 항목(서버 errors 의 '이름: 이유')만 클립보드에 남김 — 종전엔 통째로 비워 잠긴 파일 등 남은 항목을 다시 붙일 수 없었음(재현). 전부 성공이면 종전처럼 비움
+                const _errs = (session.failed > 0 && job && job.progress && Array.isArray(job.progress.errors)) ? job.progress.errors.map(String) : [];
+                const _sent = new Set(items.map(it => it.path));
+                const _fp = (job && job.progress && Array.isArray(job.progress.failed_paths)) ? new Set(job.progress.failed_paths.map(String)) : null;   // ★ (2026-11-13 11:37, 111차 RGR27-3) 서버가 실패한 원본 경로를 주면 경로로 짝지음, 없으면(옛 응답) 종전처럼 이름으로 — 종전엔 이름만 보아 cb/sx/qq.txt 실패 때 이미 옮겨진 cb/sy/qq.txt 도 남았음(재현)
+                const _keep = _errs.length ? (_cbAtStart.items || []).filter(it => _sent.has(it.path) && (_fp ? _fp.has(String(it.path)) : _errs.some(e => e.startsWith(String(it.name) + ': ')))) : [];
+                this.clipboard = _keep.length ? { ..._cbAtStart, items: _keep } : { items: [], mode: null, storageId: null };
                 this.updatePasteButton();
             }
             
@@ -19210,7 +20902,13 @@ const App = {
                 this.toast(_mv ? tf('nt_move_done', {n: session.success}, `${session.success}개 항목 이동 완료`) : tf('nt_copy_done', {n: session.success}, `${session.success}개 항목 복사 완료`), 'success');
                 if (String(this.currentStorage) === String(destStorageId) && !this.isSearchMode) this.loadFiles();
             } else if (session.failed > 0) {
-                this.toast(_mv ? tf('nt_move_failed', {n: session.failed}, `${session.failed}개 이동 실패`) : tf('nt_copy_failed', {n: session.failed}, `${session.failed}개 복사 실패`), 'error');
+                // ★ (2026-11-03 14:04, 51차 점검) 서버가 준 첫 실패 이유(용량 부족·자기 안으로 복사 등)를 붙임 — 종전엔 'N개 복사 실패' 만 떠 이유를 알 수 없었음(끌어 놓기는 22차에 이유 표시).
+                //   예외 문구에 서버 실제 경로가 섞일 수 있어 절대 경로는 '…' 로 가림
+                const _fe = String(session.firstError || '').replace(/[A-Za-z]:[\\/][^:'",()\r\n]*/g, '…').replace(/\/[^\s:'",()]*\/[^\s:'",()]*/g, '…').slice(0, 160);
+                this.toast((_mv ? tf('nt_move_failed', {n: session.failed}, `${session.failed}개 이동 실패`) : tf('nt_copy_failed', {n: session.failed}, `${session.failed}개 복사 실패`)) + (_fe ? ' — ' + _fe : ''), 'error');
+            } else if (session.status === 'completed' && job && job.progress && (job.progress.done_items || 0) > 0) {
+                // ★ (2026-11-13 09:21, 110차 BULK-7) 성공 0·실패 0 으로 끝나면 처리한 항목은 모두 '건너뜀' — 그 수를 기존 키(nt_skipped_s)로 알림. 종전엔 아무 알림도 없었음(같은 폴더에 잘라 붙이기+덮어쓰기, 재현). 색은 모달 '건너뛰기'(dup_skipped_count)와 같게
+                this.toast(tf('nt_skipped_s', {n: job.progress.done_items}, `${job.progress.done_items}개 건너뜀`), 'warning');
             }
             if (transferType === 'move') {
                 this.updateShareBadges();
@@ -19360,23 +21058,26 @@ const App = {
         // 전역 취소 버튼 - transfer 세션 취소 (업로드/다운로드 핸들러가 없을 때만 설정)
         const cancelBtn = document.getElementById('transfer-cancel');
         if (cancelBtn && this.multiUpload.sessions.size === 0 && this.multiDownload.sessions.size === 0) {
-            cancelBtn.onclick = () => {
-                // transfer 세션만 취소
-                this.multiTransfer.sessions.forEach((session) => {
-                    if (session.status === 'running') {
-                        session.cancelled = true;
-                        if (session.jobId) {
-                            this.api('job_cancel', { id: session.jobId }, 'POST').catch(() => {});
-                            // 폴러 유지: 서버가 cancelled 상태를 반환하면 자동 정리
-                        } else {
-                            session.status = 'cancelled';
-                            this._updateTransferSessionUI(session.id);
-                        }
-                    }
-                });
-                this.toast(t('cancelling', '취소 중...'), 'info');
-            };
+            cancelBtn.onclick = () => this._cancelTransferJobs();
         }
+    },
+
+    // ★ (2026-10-31 13:37, 34차 후속 개선) 작업(복사·이동·삭제) 세션 전체 취소 — 업·다운로드 버튼 핸들러가 남아 있을 때도 부를 수 있게 함수로 뺌
+    _cancelTransferJobs() {
+        // transfer 세션만 취소
+        this.multiTransfer.sessions.forEach((session) => {
+            if (session.status === 'running') {
+                session.cancelled = true;
+                if (session.jobId) {
+                    this.api('job_cancel', { id: session.jobId }, 'POST').catch(() => {});
+                    // 폴러 유지: 서버가 cancelled 상태를 반환하면 자동 정리
+                } else {
+                    session.status = 'cancelled';
+                    this._updateTransferSessionUI(session.id);
+                }
+            }
+        });
+        this.toast(t('cancelling', '취소 중...'), 'info');
     },
     
     // 전송 세션 아이템 추가
@@ -19404,7 +21105,7 @@ const App = {
         
         item.innerHTML = `
             <div class="upload-session-header">
-                <span class="upload-session-name" title="${icon} ${typeName}: ${this.escapeHtml(displayName)}${totalCount > 1 ? ` 외 ${totalCount-1}건` : ''}">${icon} ${typeName}: ${this.escapeHtml(displayName)}${totalCount > 1 ? ` <small>외 ${totalCount-1}건</small>` : ''}</span>
+                <span class="upload-session-name" title="${icon} ${typeName}: ${this.escapeHtml(displayName)}${totalCount > 1 ? ' ' + this.escapeHtml(tf('transfer_and_more', { n: totalCount - 1 }, `외 ${totalCount-1}건`)) : ''}">${icon} ${typeName}: ${this.escapeHtml(displayName)}${totalCount > 1 ? ` <small>${this.escapeHtml(tf('transfer_and_more', { n: totalCount - 1 }, `외 ${totalCount-1}건`))}</small>` : ''}</span>
                 <button class="upload-session-cancel" title="${t('cancel','취소')}">✕</button>
             </div>
             ${pathHtml}
@@ -19525,7 +21226,7 @@ const App = {
         if (sizeEl) sizeEl.textContent = session.totalSize > 0 ? `${this.formatSize(session.processedSize)} / ${this.formatSize(session.totalSize)}` : '';
         
         const etaEl = el.querySelector('.upload-session-eta');
-        if (etaEl) etaEl.textContent = eta ? `${t('remaining_time','남은 시간')}: ${eta}` : '';
+        if (etaEl) etaEl.textContent = eta ? `${t('remaining_time','남은 시간: ')}${eta}` : '';   // ★ (2026-11-04) 콜론 두 번 → 한 번(문구에 이미 있음)
         
         // 완료/취소/실패 상태
         if (session.status === 'completed' || session.status === 'cancelled' || session.status === 'failed') {
@@ -19728,6 +21429,7 @@ const App = {
                 const errorCount = (p.errors || []).length;
                 session.success = (p.done_success !== undefined) ? p.done_success : Math.max(0, (p.done_items || 0) - errorCount);
                 session.failed = errorCount;
+                session.firstError = errorCount ? String(p.errors[0] || '') : '';   // ★ (2026-11-03 14:04, 51차 점검) 끝 알림에 첫 실패 이유를 붙이려고 보관
                 
                 this._updateTransferSessionUI(sessionId);
                 
@@ -19751,6 +21453,7 @@ const App = {
                     if (onComplete) {
                         onComplete(session, job);
                     }
+                    if (job.type === 'move' && session.success > 0) this._favRefreshSoon();   // ★ (2026-11-17 15:44, 339차) 옮긴 뒤 즐겨찾기 목록도 새 경로로(서버는 336차부터 따라감)
                     
                     setTimeout(() => {
                         this.multiTransfer.sessions.delete(sessionId);
@@ -19827,7 +21530,11 @@ const App = {
                     this._pollJobProgress(sessionId, job.id, (session, finishedJob) => {
                         // 복원된 작업 완료 시 파일 목록 갱신
                         if (['copy', 'move', 'delete'].includes(finishedJob.type)) {
-                            this.loadFiles();
+                            // ★ (2026-11-01 11:42, 39차 점검) 조건 없이 loadFiles 를 불러 검색 결과를 보는 중이면 검색 띠는 남은 채 목록만 폴더로 바뀌었고,
+                            //   다른 스토리지를 보고 있어도 새로고침했음 → 붙여넣기(executePaste)와 같게 검색 중이 아니고 작업 스토리지를 보고 있을 때만
+                            const _jp = job.params || {};
+                            const _jsids = [_jp.dest_storage_id, _jp.source_storage_id, _jp.storage_id].filter(v => v !== undefined && v !== null).map(String);
+                            if (!this.isSearchMode && (_jsids.length === 0 || _jsids.includes(String(this.currentStorage)))) this.loadFiles();
                         }
                         if (['restore', 'trash_empty', 'trash_delete'].includes(finishedJob.type)) {
                             this.updateTrashIcon();
@@ -19974,6 +21681,7 @@ const App = {
         if (res.success) {
             this.toast(t('toast_moved'), 'success');
             this.loadFiles();
+            this._favRefreshSoon();   // ★ (2026-11-17 15:44, 339차)
         } else {
             this.toast(res.error, 'error');
         }
@@ -19995,7 +21703,14 @@ const App = {
     },
     
     // 새 폴더
+    // ★ (2026-11-12 19:18, 102차 KBD-4) 진행 중 막기 — 종전엔 새 폴더 창에서 Enter 를 빠르게 두 번 누르면 mkdir 이 2번 가서 폴더는 만들어 놓고
+    //   "같은 이름의 폴더가 이미 있습니다" 오류 알림이 떴음(재현). 끝나면(실패·오류 포함) finally 로 풀림. 한 번 누를 때는 종전과 같음
     async createFolder() {
+        if (this._creatingFolder) return;
+        this._creatingFolder = true;
+        try { return await this._createFolderRun(); } finally { this._creatingFolder = false; }
+    },
+    async _createFolderRun() {
         const name = $('#new-folder-name').val().trim();
         if (!name) {
             this.toast(t('prompt_enter_folder_name', '폴더 이름을 입력하세요.'), 'warning');
@@ -20018,18 +21733,36 @@ const App = {
             if (!res.success) { this.toast(res.error, 'error'); return; }
             
             // 2) .vault.json 생성 (같은 키 사용 → 같은 salt/validator)
-            const subPath = parentPath ? parentPath + '/' + name : name;
+            // ★ (2026-11-04 01:39, 54차 점검) 서버가 정리해 실제로 만든 이름(res.name)으로 경로를 잡음 — 종전엔 입력한 이름 그대로라 '질문?'·'회의: 11월'·'보고서.' 처럼
+            //   서버가 글자를 지우는 이름이면 vault_init 이 늘 'Directory not found' 로 실패해 보관함 안에 일반 폴더가 남았음(재현). 이름이 그대로면 res.name === name 이라 종전과 같음
+            const _mkName = (res.name !== undefined && res.name !== null && res.name !== '') ? String(res.name) : name;
+            const subPath = parentPath ? parentPath + '/' + _mkName : _mkName;
             const vaultInfo = await this.api('vault_info', { storage_id: storageId, path: subPath }, 'GET');
             
-            if (!vaultInfo.is_vault) {
+            // ★ (2026-11-02 11:53, 43차 점검) vault_init 결과를 안 봐 실패해도 '폴더 생성됨' + 그 경로에 키를 캐시 → 일반 폴더인데 보관함처럼 보여 올리기가 이유 없이 거부됐음
+            //   → 암호화 폴더로 만들지 못했으면 키를 캐시하지 않고 알림(폴더 자체는 만들어졌으니 목록은 새로 고침)
+            let _viOk = !!(vaultInfo && vaultInfo.is_vault);
+            if (!_viOk) {
                 const parentInfo = await this.api('vault_info', { storage_id: storageId, path: parentPath }, 'GET');
-                if (parentInfo.success && parentInfo.is_vault) {
-                    await this.api('vault_init', {
+                let _viErr = '';
+                if (parentInfo && parentInfo.success && parentInfo.is_vault) {
+                    const _vi = await this.api('vault_init', {
                         storage_id: storageId,
                         path: subPath,
                         salt: parentInfo.salt,
                         passwordValidator: parentInfo.passwordValidator
                     });
+                    _viOk = !!(_vi && _vi.success);
+                    if (!_viOk) _viErr = (_vi && _vi.error) || '';
+                } else {
+                    _viErr = (parentInfo && parentInfo.error) || '';
+                }
+                if (!_viOk) {
+                    this.toast(t('vault_subfolder_init_failed', '폴더는 만들었지만 암호화 폴더로 설정하지 못했습니다.') + (_viErr ? ` (${_viErr})` : ''), 'error', 8000);
+                    closeModal();
+                    $('#new-folder-name').val('');
+                    this.vaultLoadFiles();
+                    return;
                 }
             }
             // 하위 vault도 같은 키로 캐시 (항상)
@@ -20118,7 +21851,7 @@ const App = {
                 // 서버가 자동 증가한 최종 파일명 표시 (예: "새 프레젠테이션 (2).pptx")
                 const actualName = res.name || fileName;
                 this.toast(`📄 ${actualName}`, 'success');
-                this.loadFiles();
+                if (this.isSearchMode && this.searchState && this.searchState.query && !this.boardInlineMode) this._reSearchKeepScroll(); else this.loadFiles();   // ★ (2026-11-11 22:33, 86차 CTX-4) 위 '새로고침'과 같음
             } else {
                 this.toast(res.error || t('error_create_file', '파일 생성에 실패했습니다.'), 'error');
             }
@@ -20135,18 +21868,18 @@ const App = {
         
         try {
             if (this.csrfToken) formData.append('csrf_token', this.csrfToken);
-            const resp = await fetch('api.php?action=upload', {
+            const resp = await this._csrfFetch(() => { if (this.csrfToken) formData.set('csrf_token', this.csrfToken); return fetch('api.php?action=upload', {   // ★ (2026-11-13 08:02, 109차 개선 TABS-4) 토큰 오류면 새 토큰으로 한 번 다시(_csrfFetch ★)
                 method: 'POST',
                 body: formData,
                 credentials: 'same-origin',
                 headers: this.csrfToken ? {'X-CSRF-Token': this.csrfToken} : {}
-            });
+            }); });
             const data = await resp.json();
             if (data.success) {
                 // 서버 upload는 자동 (2),(3) 증가 → 응답 filename 사용
                 const actualName = data.filename || fileName;
                 this.toast(`📄 ${actualName}`, 'success');
-                this.loadFiles();
+                if (this.isSearchMode && this.searchState && this.searchState.query && !this.boardInlineMode) this._reSearchKeepScroll(); else this.loadFiles();   // ★ (2026-11-11 22:33, 86차 CTX-4) 위 '새로고침'과 같음
             } else {
                 this.toast(data.error || t('error_create_file', '파일 생성에 실패했습니다.'), 'error');
             }
@@ -20173,9 +21906,22 @@ const App = {
         this.updateCheckboxSelection();
     },
     
+    // ★ (2026-11-11 22:33, 86차 CTX-1) 메뉴를 연 항목이 체크한 묶음 밖이면 체크를 모두 풂(getSelectedOrCheckedItems 가 체크를 먼저 보기 때문)
+    _ctxDropChecksIfOutside(el) {
+        const list = document.getElementById('file-list');
+        if (!list || !el) return;
+        const own = el.querySelector('input.file-checkbox, input.item-checkbox');
+        if (own && own.checked) return;
+        const checked = list.querySelectorAll('.file-checkbox:checked, .item-checkbox:checked');
+        if (!checked.length) return;
+        checked.forEach(cb => { cb.checked = false; });
+        this.updateCheckboxSelection();
+    },
+    
     // 체크박스 선택 상태 업데이트
     updateCheckboxSelection() {
         const checked = document.querySelectorAll('.file-checkbox:checked');
+        if (!checked.length) this._saPending = false;   // ★ (2026-11-13 15:37, 112차 RGR28-2) 체크가 모두 풀렸을 때만 '뒤 묶음도 체크' 표시를 지움 — 다 그린 뒤 체크 하나를 풀면 나머지는 그대로이므로. 종전(111차 RGR27-1)엔 체크가 바뀌면 늘 지웠음
         const total = document.querySelectorAll('.file-checkbox');
         const selectAll = document.getElementById('select-all');
         const btnDeleteSelected = document.getElementById('btn-delete-selected');
@@ -20247,7 +21993,7 @@ const App = {
             const fileItem = el.closest('.file-item');
             const size = fileItem ? parseInt(fileItem.getAttribute('data-size')) || 0 : 0;
             const isDir = fileItem ? (fileItem.getAttribute('data-is-dir') === 'true' || fileItem.getAttribute('data-is-dir') === '1') : false;
-            items.push({ path, name: path.split('/').pop(), size, isDir });
+            items.push({ path, name: path.split('/').pop(), size, isDir, isVault: !!(fileItem && fileItem.getAttribute('data-vault') === 'true') });   // ★ (2026-11-03 09:34, 49차 점검) 보관함 폴더면 확인 창에 영구 삭제 경고
         });
         
         await this.deleteSelectedItems(items);
@@ -20255,23 +22001,37 @@ const App = {
     
     // 전체 삭제 (현재 폴더 내 모든 항목)
     async deleteAllFiles() {
+        // ★ (2026-11-13 09:50, 110차 BULK-5) 목록을 그리는 중이면 다 그릴 때까지 기다렸다 셈(그사이 다른 폴더로 가면 그만둠) — 종전엔 그때까지 그려진 항목만 '모든 항목'으로 삼았음(2만 개 중 2,130개, 재현)
+        if (this._renderRAF) {
+            const _daAt = [this.currentStorage, this.currentPath, this._searchSeq];
+            while (this._renderRAF) await new Promise(r => setTimeout(r, 50));
+            if (_daAt[0] !== this.currentStorage || _daAt[1] !== this.currentPath) return;
+            // ★ (2026-11-13 15:51, 112차 RGR28-3) 기다리는 사이 검색을 시작했으면(검색은 경로를 안 바꾸고 그리기를 멈춤) 조용히 그만둠 — 종전엔 검색 화면으로 이어 가 '삭제할 항목이 없습니다'(응답이 늦을 때)나
+            //   검색 결과 칸을 읽다 TypeError(…reading 'split', 응답이 빠를 때)가 났음(재현). 같은 폴더 다시 읽기(loadFiles 도 번호를 올림)는 검색어가 비어 있어 종전처럼 이어 감
+            if (this.isSearchMode || (_daAt[2] !== this._searchSeq && this.searchState && this.searchState.query)) return;
+        }
         const checkboxes = document.querySelectorAll('.file-checkbox');
         if (checkboxes.length === 0) {
             this.toast(t('prompt_no_delete_items'), 'warning');
             return;
         }
         
-        if (!await this.confirmDelete(`${t('confirm_delete_all_items','현재 폴더의 모든 항목을 삭제하시겠습니까?')} (${checkboxes.length})\n\n${t('deleted_to_trash','⚠️ 삭제된 항목은 휴지통으로 이동합니다.')}`)) return;
-        if (!await this.confirmDelete((t('delete_all_items_confirm', '정말로 모든 항목을 삭제하시겠습니까?')), t('final_confirm', '⚠️ 최종 확인'))) return;
-        
+        // ★ (2026-11-01 17:19, 40차 점검) 항목은 확인 창 '뒤에' DOM 에서 읽고 스토리지는 count_items 를 기다린 '뒤' 의 currentStorage 를 써서, 창이 뜬 채 뒤로 가기·
+        //   기다리는 중 이동하면 확인 안 한 폴더 전체나 다른 스토리지의 같은 이름 항목이 삭제 작업에 올라갔음 → 첫 확인 창 전에 스토리지·항목을 잡아 그것만 씀
+        const _delSid = this.currentStorage;
         const items = [];
         checkboxes.forEach(function(el) {
             const path = el.getAttribute('data-path');
             const fileItem = el.closest('.file-item');
             const size = fileItem ? parseInt(fileItem.getAttribute('data-size')) || 0 : 0;
             const isDir = fileItem ? (fileItem.getAttribute('data-is-dir') === 'true' || fileItem.getAttribute('data-is-dir') === '1') : false;
-            items.push({ path, name: path.split('/').pop(), size, isDir });
+            items.push({ path, name: path.split('/').pop(), size, isDir, isVault: !!(fileItem && fileItem.getAttribute('data-vault') === 'true') });   // ★ (2026-11-03 09:34, 49차 점검) 보관함 폴더면 확인 창에 영구 삭제 경고
         });
+        
+        // ★ (2026-11-03 09:34, 49차 점검) 보관함 폴더가 섞여 있으면 그 폴더는 영구 삭제된다고 함께 알림
+        const _daVault = items.some(it => it.isVault) ? `\n${t('vault_folder_delete_permanent_warn', '⚠️ 암호화 폴더는 휴지통으로 이동하지 않고 안의 파일까지 영구 삭제되며 복구할 수 없습니다.')}` : '';
+        if (!await this.confirmDelete(`${t('confirm_delete_all_items','현재 폴더의 모든 항목을 삭제하시겠습니까?')} (${checkboxes.length})\n\n${t('deleted_to_trash','⚠️ 삭제된 항목은 휴지통으로 이동합니다.')}${_daVault}`)) return;
+        if (!await this.confirmDelete((t('delete_all_items_confirm', '정말로 모든 항목을 삭제하시겠습니까?')), t('final_confirm', '⚠️ 최종 확인'))) return;
         
         // confirmDeleteFiles를 건너뛰고 바로 실행 (이미 2번 확인함)
         const hasDirs = items.some(item => item.isDir);
@@ -20280,7 +22040,7 @@ const App = {
         if (hasDirs) {
             try {
                 const paths = items.map(item => item.path);
-                const countRes = await this.api('count_items', { storage_id: this.currentStorage, paths }, 'POST');
+                const countRes = await this.api('count_items', { storage_id: _delSid, paths }, 'POST');   // ★ (2026-11-01 17:19, 40차 점검) 위 _delSid 주석
                 if (countRes.success && countRes.items) {
                     countRes.items.forEach(d => { itemFileCount[d.path] = d.files; itemSizeMap[d.path] = d.size; });
                 }
@@ -20295,18 +22055,19 @@ const App = {
         
         const jobItems = sessionItems.map(item => ({
             path: item.path, name: item.name, isDir: item.isDir,
-            size: item.size || 0, storage_id: this.currentStorage
+            size: item.size || 0, storage_id: _delSid   // ★ (2026-11-01 17:19, 40차 점검) 위 _delSid 주석
         }));
         
-        await this._createJob('delete', jobItems, { storage_id: this.currentStorage }, (session) => {
+        await this._createJob('delete', jobItems, { storage_id: _delSid }, (session, job) => {
             if (session.status === 'cancelled') {
                 if (session.success > 0) this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_cancelled_s', {n: session.totalFiles - session.success - session.failed}, `${session.totalFiles - session.success - session.failed}개 취소됨`)}`, 'warning');
                 else this.toast(t('cancelled','취소되었습니다.'), 'warning');
             } else {
                 // ★ (2026-10-26) 성공·실패 알림을 연달아 띄우면 앞의 것이 바로 덮여 안 보임 → 한 줄로
-                if (session.success > 0 && session.failed > 0) this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
+                // ★ (2026-11-04) 56차 대량 삭제 감지로 멈췄으면 그 이유를 뒤에(_bulkStopNote)
+                if (session.success > 0 && session.failed > 0) this.toast(`${tf('nt_delete_done_s', {n: session.success}, `${session.success}개 삭제 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}${this._bulkStopNote(job)}`, 'warning', this._bulkStopNote(job) ? 8000 : undefined);
                 else if (session.success > 0) this.toast(`${session.success}${t('items_deleted','개 항목이 삭제되었습니다')}`, 'success');
-                else if (session.failed > 0) this.toast(`${session.failed}${t('items_delete_failed','개 항목 삭제 실패')}`, 'error');
+                else if (session.failed > 0) this.toast(`${session.failed}${t('items_delete_failed','개 항목 삭제 실패')}${this._bulkStopNote(job)}`, 'error');
             }
             this.loadFiles();
             this.updateTrashIcon();
@@ -20362,9 +22123,10 @@ const App = {
             _vault: item._vault,
             _uuid: item._uuid,
             _mimeType: item._mimeType,
-            size: item.size
+            size: item.size,
+            _meta: item._meta   // ★ (2026-11-04 01:39, 54차 점검) 보관함 F2 이름 바꾸기도 원래 메타 유지(우클릭 경로와 같게) — 종전엔 빠져 chunked·totalChunks·chunkSize·lastModified 가 지워졌음(재현). 일반 파일은 undefined 라 종전과 같음
         };
-        
+
         // 폴더면 확장자 옵션 숨김, 파일이면 표시
         const extRow = document.getElementById('rename-ext-row');
         const showExtCheckbox = document.getElementById('rename-show-ext');
@@ -20434,6 +22196,21 @@ const App = {
         el.focus(); el.setSelectionRange(0, el.value.length); el.scrollLeft = 0;
     },
 
+    // ★ (2026-11-13 09:19, 110차 BULK-1) 항목마다 요청을 보내는 일괄 작업(이름 변경·잠금·해제)의 속도 맞춤 — 이 갈래로 최근 61초 안에 끝난 요청이 80개면 가장 오래된 것이 61초를 넘길 때까지 기다렸다 보냄
+    //   (서버 제한 IP당 분당 120 과 판정은 그대로, 남는 40개는 다른 화면 요청 몫 — 90 으로 두면 진행 중 다른 요청 25개 중 5개가 막혔음(시험)). 80개 이하면 기다림 없이 종전과 같음 — 종전엔 200개를 바꾸면 112개 뒤 88개가 '요청이 너무 많습니다'로 실패하고 그 뒤 1분 동안 다른 요청(새 폴더 등)도 막혔음(재현)
+    async _bulkPaced(st, fn) {
+        const q = this._bulkPaceTs || (this._bulkPaceTs = []);
+        if (st && st.off) { try { return await fn(); } finally { q.push(Date.now()); } }   // ★ (2026-11-13 09:55, 110차 BULK-1) 이번 일괄 항목이 110개 이하면 종전 그대로(기다림 없음) — 종전에도 성공하던 범위라 1분 기다림을 새로 만들지 않음, 넘을 때만(종전엔 실패하던 범위) 속도 맞춤 / ★ (2026-11-13 11:17, 111차 RGR27-2) 기다리지는 않되 끝난 시각은 기록 — 종전(110차)엔 기록하지 않아 110개 잠금 직후 111개 이름 변경이 앞 110개를 모른 채 보내 78개가 '요청이 너무 많습니다'(재현)
+        for (;;) {
+            const now = Date.now();
+            while (q.length && now - q[0] >= 61000) q.shift();
+            if (q.length < 80) break;
+            if (st && !st.told) { st.told = true; this.toast(t('nt_bulk_pace_wait', '항목이 많아 요청 제한에 걸리지 않게 잠시 기다렸다가 이어서 처리합니다.'), 'info'); }
+            await new Promise(r => setTimeout(r, 61000 - (now - q[0]) + 50));
+        }
+        try { return await fn(); } finally { q.push(Date.now()); }   // 서버가 요청을 센 시각보다 늦은 '끝난 시각'으로 셈
+    },
+
     /** 일괄 이름 변경 실행 — renameFile() 이 일괄 모드일 때 부름 */
     async _renameBatchRun(baseName) {
         const list = this.renameBatch || [];
@@ -20446,8 +22223,10 @@ const App = {
         const inVault = !!(this.vault && this.vault.isVaultView);
         let vaultKey = null;
         const vaultNames = new Set();
+        // ★ (2026-11-01 17:22, 40차 점검) 보관함 일괄 이름 바꾸기가 반복마다 그때의 스토리지·보관함 경로로 보내, 도중에 다른 곳으로 가면 남은 항목이 실패했음 → 시작할 때 잡음
+        const _rbSid = this.currentStorage, _rbVaultPath = inVault ? this.vault.currentVaultPath : null;
         if (inVault) {
-            vaultKey = this.getVaultKey(this.currentStorage, this.vault.currentVaultPath);
+            vaultKey = this.getVaultKey(_rbSid, _rbVaultPath);
             (this.files || []).forEach(f => { if (f && f.name) vaultNames.add(String(f.name).toLowerCase()); });
         }
         const nameFor = (it, n) => {
@@ -20464,6 +22243,7 @@ const App = {
         if (btn) btn.disabled = true;
         if (inp) inp.disabled = true;
         let idx = 0;
+        const _pace = { off: list.length <= 110 };   // ★ (2026-11-13 09:19, 110차 BULK-1) 위 _bulkPaced 안내를 한 번만 / ★ (2026-11-13 09:55) 110개 이하면 종전 그대로
         try {
         for (const it of list) {
             idx++;
@@ -20480,12 +22260,12 @@ const App = {
                         // 대소문자만 다른 자기 이름은 같은 이름으로 보지 않음(★ 2026-10-27 14시)
                         else if (newName.toLowerCase() !== String(it.name).toLowerCase() && vaultNames.has(newName.toLowerCase())) { res = { success: false, code: 'name_exists' }; }
                         else {
-                            const encMeta = await E2ECrypto.encryptMeta(vaultKey, { name: newName, size: it.size, type: it._mimeType || 'application/octet-stream' });
-                            res = await this.api('vault_rename', { storage_id: this.currentStorage, path: this.vault.currentVaultPath, uuid: it._uuid, enc_meta: encMeta });
+                            const encMeta = await E2ECrypto.encryptMeta(vaultKey, Object.assign({}, it._meta || {}, { name: newName, size: it.size, type: it._mimeType || 'application/octet-stream' }));   // ★ (2026-11-01 11:43, 39차 점검) 원래 메타 필드 유지(vaultLoadFiles 주석)
+                            res = await this._bulkPaced(_pace, () => this.api('vault_rename', { storage_id: _rbSid, path: _rbVaultPath, uuid: it._uuid, enc_meta: encMeta }));   // ★ (2026-11-01 17:22, 40차 점검) 위 _rbSid 주석 / ★ (2026-11-13 09:19, 110차 BULK-1) 속도 맞춤
                             if (res && res.success) { vaultNames.delete(String(it.name).toLowerCase()); vaultNames.add(newName.toLowerCase()); }
                         }
                     } else {
-                        res = await this.api('rename', { storage_id: it.storageId || this.currentStorage, path: it.path, new_name: newName });
+                        res = await this._bulkPaced(_pace, () => this.api('rename', { storage_id: it.storageId || this.currentStorage, path: it.path, new_name: newName }));   // ★ (2026-11-13 09:19, 110차 BULK-1) 속도 맞춤
                     }
                 } catch (e) { res = { success: false, error: e && e.message }; }
                 if (res && res.success) { ok++; done = true; }
@@ -20514,6 +22294,7 @@ const App = {
             this._reloadFilesKeepScroll();
             document.querySelectorAll('.file-checkbox:checked').forEach(cb => cb.checked = false);
             this.updateCheckboxSelection();
+            if (ok > 0) this._favRefreshSoon();   // ★ (2026-11-17 15:44, 339차) 일괄 이름 바꾸기 뒤 즐겨찾기 목록도
         }
     },
 
@@ -20575,13 +22356,45 @@ const App = {
                 const path = this.vault.currentVaultPath;
                 const key = this.getVaultKey(storageId, path);
                 if (!key) { this.toast(t('vault_password_wrong'), 'error'); return; }
+                // ★ (2026-11-01 11:43, 39차 점검) 보관함 이름은 암호화 메타에만 있어 서버가 거를 수 없는데, 일괄 이름 바꾸기만 금지 문자를 막아 '../../x.txt' 같은 이름이
+                //   메타에 들어가 선택 ZIP 항목 경로(zip-slip)가 될 수 있었음 → 같은 검사
+                if (/[\\/:*?"<>|]/.test(newName) || newName === '.' || newName === '..') {
+                    this.toast(tf('nt_rename_batch_bad_name', {}, '이름에 \\ / : * ? " < > | 는 쓸 수 없습니다.'), 'error');
+                    return;
+                }
+                // ★ (2026-11-03 09:34, 49차 점검) 같은 보관함 안에 이미 있는 이름이면 거부(일괄 이름 바꾸기와 같은 기준 — 대소문자 무시, 자기 이름의 대소문자만 바꾸는 건 허용).
+                //   이름은 암호화 메타에만 있어 서버가 못 거르는데, 종전엔 단일 이름 바꾸기만 안 막아 같은 이름 파일이 둘 생겼음(재현) — 뒤에 같은 이름으로 '덮어쓰기' 올리면 다른 파일이 지워질 수 있었음
+                {
+                    const _vrLow = newName.toLowerCase();
+                    // ★ (2026-11-13 08:02, 109차 개선 TABS-3) 같은 이름 확인을 업로드처럼 보관함 목록을 새로 받아 풀어 본 이름으로 — 종전엔 이 탭의 this.files(옛 목록)로만 봐, 두 탭에서 서로 다른 파일을 같은 이름으로 바꾸면 같은 이름이 둘 생겼음(재현).
+                    //   목록 받기·풀기가 안 되면 종전대로 this.files 로 확인(막지 않음)
+                    let _vrFiles = null;
+                    if (_vrLow !== String(this.renameOriginal.name || '').toLowerCase()) {
+                        try {
+                            const _vrList = await this.api('vault_list', { storage_id: storageId, path: path }, 'GET');
+                            if (_vrList && _vrList.success && Array.isArray(_vrList.files)) {
+                                _vrFiles = [];
+                                for (const f of _vrList.files) {
+                                    try { if (f && f.enc_meta && f.uuid !== this.renameOriginal._uuid) { const m = await E2ECrypto.decryptMeta(key, f.enc_meta); if (m && m.name) _vrFiles.push({ name: m.name, _uuid: f.uuid }); } } catch (e) { /* 풀기 실패 항목은 건너뜀(업로드와 같음) */ }
+                                }
+                                // ★ (2026-11-13 09:39, 110차 RGR26-1) 평문 파일·평문 폴더·하위 보관함(plain_files) 이름도 비교 — 종전(109차)엔 암호화 파일만 넣어, 109차 전 this.files 기준 검사가 막던 'e1.txt → memo.txt(평문)' 가 통과해 같은 이름이 둘 생겼음(재현)
+                                for (const p of (Array.isArray(_vrList.plain_files) ? _vrList.plain_files : [])) { if (p && p.name) _vrFiles.push({ name: p.name, _uuid: null }); }
+                            }
+                        } catch (e) { _vrFiles = null; }
+                    }
+                    if (_vrLow !== String(this.renameOriginal.name || '').toLowerCase() && (_vrFiles || this.files || []).some(f => f && f !== this.renameOriginal && f._uuid !== this.renameOriginal._uuid && String(f.name || '').toLowerCase() === _vrLow)) {
+                        this.toast(t('name_exists', '같은 이름이 이미 존재합니다.'), 'error');
+                        return;
+                    }
+                }
                 
                 // 새 메타 암호화
-                const meta = {
+                // ★ (2026-11-01 11:43, 39차 점검) 원래 메타(chunked·totalChunks·chunkSize·lastModified)를 유지하고 이름만 바꿈(vaultLoadFiles 주석)
+                const meta = Object.assign({}, this.renameOriginal._meta || {}, {
                     name: newName,
                     size: this.renameOriginal.size,
                     type: this.renameOriginal._mimeType || 'application/octet-stream'
-                };
+                });
                 const encMeta = await E2ECrypto.encryptMeta(key, meta);
                 
                 // 서버에 메타 업데이트
@@ -20612,6 +22425,7 @@ const App = {
                 this.toast(t('toast_renamed'), 'success');
                 closeModal();
                 this._reloadFilesKeepScroll();
+                this._favRefreshSoon();   // ★ (2026-11-17 15:44, 339차) 이름 바꾼 뒤 즐겨찾기 목록도 새 이름으로
                 // 체크박스 해제
                 document.querySelectorAll('.file-checkbox:checked').forEach(cb => cb.checked = false);
                 this.updateCheckboxSelection();
@@ -20674,6 +22488,7 @@ const App = {
         this.searchState.page = page;
         
         // UI 업데이트
+        if (this._renderRAF) { cancelAnimationFrame(this._renderRAF); this._renderRAF = null; }   // ★ (2026-11-13 11:37, 111차 RGR27-4) 폴더 목록을 아직 그리는 중이면 멈춤(loadFiles·renderFiles 의 취소와 같음) — 바로 아래에서 목록을 비우므로 남은 폴더 항목은 쓸모없음. 종전엔 계속 붙어 검색 결과 50줄 아래에 폴더 항목 1만 8천 줄이 섞였음(재현)
         $('#file-list').html(`<div class="empty-msg">🔍 ${t('searching','검색 중...')}</div>`);
         $('#search-pagination').hide();
         
@@ -20706,8 +22521,11 @@ const App = {
             // ★ (2026-10-28 18:04, 소스 점검 4단계) 실패 — 종전엔 목록에 '검색 중...' 이 그대로 남고 상태는 새 값으로 바뀐 채였음
             //   새 검색이었으면 원래 폴더 목록으로, 검색 중이었으면 전 상태(검색어·조건·범위)로 되돌리고 목록에 안내
             this.searchState = _prevSearchState;
-            this._srScopeId = _prevScopeId;
-            $('#filter-storage').val(String(_prevScopeId));
+            // ★ (2026-11-01 01:52, 36차 전체 점검) 범위 칩·✕ 는 doSearch 전에 _srScopeId 를 새 값으로 바꿔 두므로 _prevScopeId 도 새(실패한) 값이었다
+            //   → 검색 결과를 보던 중이면 바꾸기 전 검색의 범위(searchState.storageId)로 되돌림
+            const _revScope = (_wasSearchMode && _prevSearchState.storageId !== undefined) ? (parseInt(_prevSearchState.storageId, 10) || 0) : _prevScopeId;
+            this._srScopeId = _revScope;
+            $('#filter-storage').val(String(_revScope));
             const _pf = _prevSearchState.filters || {};
             const _mb = (v) => { const n = Math.round((parseInt(v, 10) || 0) / 1048576); return n > 0 ? String(n) : ''; };
             $('#filter-type').val(_pf.type || 'all');
@@ -20746,7 +22564,15 @@ const App = {
         // 검색 결과 헤더 표시 — ★ (2026-10-28, 펜닐 선택 05 → 11:15 선택 A) '검색 결과 N개' + 범위·유형·날짜·크기 칩(검색어는 위 검색창), 페이지 표시는 아래 페이지 버튼에 있음
         $('#search-result-header').show();
         this._renderSearchHeader(query, searchStorageId, filters, res.total || 0);
-        
+        // ★ (2026-11-02 14:49, 44차 점검) 서버가 상한(색인 5000·실시간 200)에서 잘랐으면 truncated:true — 종전엔 안내가 없어 전부 찾은 것처럼 보였음(G1#8).
+        //   개수 띠 옆에 작은 안내(다음 검색 때 _renderSearchHeader 가 지움) + 알림은 첫 쪽에서만 한 번. 서버가 limit 를 주면 그 값, 아니면 갈래별 상한
+        if (res.truncated) {
+            const _trN = parseInt(res.limit, 10) || (res.realtime ? 200 : 50000);   // ★ (2026-11-02 16:38, 45차 재확인) 서버 색인 상한 5만에 맞춤
+            const _trMsg = tf('search_truncated', { n: _trN.toLocaleString() }, `검색 결과가 너무 많아 일부가 빠졌을 수 있습니다(최대 ${_trN.toLocaleString()}건까지 찾음) — 검색어를 더 자세히 입력하세요.`);   // ★ (2026-11-02 15:17, 44차 재검토) 서버가 상한에서 자른 뒤 필터를 걸어 '앞 N개만' 은 개수 표시와 안 맞았음 → '빠졌을 수 있음'
+            $('#search-result-header .search-count').append(` <small style="color:var(--fs-warning, #d97706)">${this.escapeHtml(_trMsg)}</small>`);
+            if ((parseInt(page, 10) || 1) === 1) this.toast(_trMsg, 'warning');
+        }
+
         // 결과 렌더링
         this.renderSearchResults(res.results || [], res.unindexed_storages);
         
@@ -20796,6 +22622,8 @@ const App = {
     renderSearchResults(items, unindexedStorages) {
         const list = document.getElementById('file-list');
         list.innerHTML = '';
+        this._lastSearchItems = Array.isArray(items) ? items : [];   // ★ (2026-10-30 14:10) 세부 정보 창이 검색 결과 항목의 날짜 등을 찾을 때 씀
+        if (this._lastBreadcrumb) { try { this.renderBreadcrumb(this._lastBreadcrumb); } catch (e) {} }   // ★ (2026-10-30 14:10) 검색 화면에선 주소창 › ·경로 입력·복사를 빼고 종전 글자 구분으로(검색 결과엔 경로가 없음)
         // ★ (2026-10-28 18:04, 소스 점검 4단계) 결과를 새로 그리면 이전 선택은 비움(폴더 목록 loadFiles 와 같음) —
         //   종전엔 칩으로 조건을 바꿔 결과가 바뀌어도 화면에 없는 항목이 선택된 채 남아 Delete·F2 가 그 항목에 적용될 수 있었음
         this.selectedItems = [];
@@ -20859,6 +22687,10 @@ const App = {
             
             // 파일명에 검색어 하이라이트 적용
             const highlightedName = this.highlightSearchText(filename, searchQuery);
+            // ★ (2026-11-15 14:49, 181차) PC 목록 보기에서 검색 줄은 크기·날짜 두 칸뿐이라 머리줄(수정한 날짜·유형·크기)과 어긋났음(재현: 크기 1056·날짜 1171 / 머리줄 951·1136·1251)
+            //   → 일반 목록과 같은 순서(날짜·유형·크기)·같은 유형 글자로. 바둑판·휴대폰 검색 카드에선 style.css 181차 규칙으로 유형 칸 숨김(종전처럼)
+            const _sExt = (isDir || !filename.includes('.')) ? '' : filename.split('.').pop().toLowerCase();
+            const _sTypeLabel = isDir ? t('type_folder','파일 폴더') : (_sExt ? _sExt.toUpperCase() + ' ' + t('type_file','파일') : t('type_file','파일'));
             
             div.innerHTML = `
                 <div class="file-checkbox">
@@ -20872,8 +22704,9 @@ const App = {
                         <span class="search-path">${this.escapeHtml(folderPath)}</span>
                     </div>
                 </div>
-                <div class="file-size">${isDir ? '' : this.formatSize(item.size || 0)}</div>
                 <div class="file-date">${item.modified || ''}</div>
+                <div class="file-type">${this.escapeHtml(_sTypeLabel)}</div>
+                <div class="file-size">${isDir ? '' : this.formatSize(item.size || 0)}</div>
             `;
             
             // 클릭 이벤트 - PC와 모바일 모두 지원
@@ -20903,6 +22736,7 @@ const App = {
                 e.preventDefault();
                 e.stopPropagation();
                 
+                this._ctxDropChecksIfOutside(div);   // ★ (2026-11-11 22:33, 86차 CTX-1) 위 우클릭과 같음
                 // 선택 안 된 항목 우클릭하면 해당 항목만 선택
                 if (!div.classList.contains('selected')) {
                     document.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
@@ -20991,6 +22825,7 @@ const App = {
             btn.addEventListener('click', () => {
                 const p = parseInt(btn.dataset.page);
                 if (p && p !== currentPage) {
+                    $('#search-input').val(this.searchState.query);   // ★ (2026-11-09 12:03, 57차 Z03-1) 고치다 만 검색칸 글자가 아니라 보던 검색어로 쪽 넘김(다른 재검색 경로와 같게) — 재현
                     this.doSearch(p);
                     // 상단으로 스크롤
                     document.getElementById('file-list').scrollIntoView({ behavior: 'smooth' });
@@ -21061,13 +22896,24 @@ const App = {
         }
         this.currentPath = targetPath;
         
-        const result = await this.loadFiles();
+        // ★ (2026-11-01 17:20, 40차 점검) 목록이 오기 전에 다른 곳으로 가거나 새 loadFiles 가 이 요청을 끊으면(abort) loadFiles 가 {success:false} 를 돌려주는데,
+        //   이를 '경로 없음'으로 보고 사용자가 막 간 위치를 루트로 바꾸고 거짓 경고를 띄웠음 → 요청 시점 위치·회차를 잡아 바뀌었으면 아무것도 안 함
+        const _nsSid = this.currentStorage, _nsPath = this.currentPath;
+        // ★ (2026-11-13 08:10, 109차 NAV2-1) 주소·history 도 간 위치로(54차 공유 알림 '폴더 열기'와 같은 방식, 지금 기록과 같으면 넣지 않음) — 종전엔 검색 결과·'내 공유'에서 위치로 가도 주소가 검색 전 폴더에 남아 새로 고치면 그 폴더가 열리고 '뒤로'가 두 칸 뒤로 갔음(재현). 목록은 종전처럼 캐시 없는 loadFiles()
+        try { const _hs = history.state; if (!(_hs && !_hs.board && String(_hs.storageId) === String(_nsSid) && (_hs.path || '') === (_nsPath || ''))) history.pushState({ storageId: _nsSid, path: _nsPath }, '', `#storage=${_nsSid}&path=${encodeURIComponent(_nsPath || '')}`); } catch (e) {}
+        const _nsP = this.loadFiles();
+        const _nsSeq = this._loadSeq;
+        const result = await _nsP;
         // ★ (2026-10-29 23:35, 24차 점검) 잠금을 푼 보관함 폴더로 들어가면 loadFiles 가 보관함 목록(vaultLoadFiles, 반환값 없음)으로 넘어감 — 정상 진입이므로 경고 없이 끝냄(4회차 재검토)
         if (!result && this.vault && this.vault.isVaultView) return;
         
         if (!result || !result.success) {
+            if ((result && result.stale) || this._loadSeq !== _nsSeq || this.currentStorage !== _nsSid || this.currentPath !== _nsPath) return;   // ★ (2026-11-01 17:20, 40차 점검) 위 주석
             this.currentPath = '';
-            this.toast(t('path_not_found_rebuild', '해당 경로를 찾을 수 없습니다. 인덱스를 재구축해주세요.'), 'warning');
+            try { history.replaceState({ storageId: this.currentStorage, path: '' }, '', `#storage=${this.currentStorage}&path=`); } catch (e) {}   // ★ (2026-11-13 08:10, 109차 NAV2-1) 위에서 넣은 주소를 실제로 연 루트로(못 연 폴더 이름이 주소에 남지 않게)
+            // ★ (2026-11-12 05:46, 94차 SRCH-1) 권한 거부면 그 이유를 — 종전엔 '보기'만 끈 폴더의 검색 결과를 열어도 '경로를 찾을 수 없습니다. 인덱스를 재구축해주세요'(색인 문제가 아님, 재현). 검색 결과 노출 자체는 README 결정 필요
+            const _nsPerm = result && typeof result.error === 'string' && (result.error === t('no_permission_dot', '권한이 없습니다.') || result.error === t('no_read_permission', '이 폴더에 대한 읽기 권한이 없습니다.'));
+            this.toast(_nsPerm ? result.error : t('path_not_found_rebuild', '해당 경로를 찾을 수 없습니다. 인덱스를 재구축해주세요.'), 'warning');
             await this.loadFiles();
             return;
         }
@@ -21372,6 +23218,7 @@ const App = {
         
         // selectedItems에 item 설정 (공유 생성 시 사용)
         this.selectedItems = bulkItems || [item];
+        this._shareTarget = bulkItems ? null : { item, storageId: item.storageId || this.currentStorage };   // ★ (2026-11-13 08:10, 109차 NAV2-5) 창을 열 때 대상·스토리지를 잡아 둠(105차 CNF-3 과 같은 방식) — 종전엔 '생성' 때 선택을 다시 읽어, 창을 연 채 '뒤로' 하면 선택이 비어 "공유할 파일을 선택해주세요"(재현)
         
         // 결과 영역 초기화 (단일/일괄 공용)
         const bulkBox = document.getElementById('share-bulk-result');
@@ -21438,6 +23285,12 @@ const App = {
             storage_id: storageId,
             path: item.path
         }, 'GET');
+        // ★ (2026-11-13 01:31, 108차 SLOW-3) 확인 요청이 연결 실패·시간 초과(서버가 답을 못 줌 — checkAuth 와 같은 판정)면 새 공유 칸을 열지 않고 그 안내만 — 다시 누르면 다시 확인.
+        //   종전엔 '기존 공유 없음'으로 보고 새 공유 칸을 열어 같은 파일에 링크가 하나 더 생겼음(재현: share_check 만 끊고 생성 → fC_1.txt 공유 2개). 서버가 답한 '공유 없음'은 종전 그대로
+        if (res && !res.session_expired && (res.timeout || res.success === undefined)) {
+            this.toast(res.http_status ? t('server_error', '서버 오류') : (res.error || t('err_server_connection', '서버 연결 실패')), 'error');   // ★ (2026-11-13 17:03, 113차 DEF-4) 서버가 JSON 아닌 응답(500·502 HTML 등)으로 답하면 '서버 오류' — 창은 종전(108차)처럼 열지 않음(108차 전처럼 열면 기존 공유가 있는 파일에 링크가 하나 더 생김 — 재현)
+            return;
+        }
         
         if (res.success && res.share) {
             const s = res.share;
@@ -21499,7 +23352,8 @@ const App = {
             return this._createShareBulk(this._shareBulkItems);
         }
         // 체크박스 또는 클릭 선택된 항목 확인
-        const items = this.getSelectedOrCheckedItems();
+        const _st = this._shareTarget;   // ★ (2026-11-13 08:10, 109차 NAV2-5) 창을 열 때 잡은 대상(창에 보이는 파일)을 씀 — 없으면 종전처럼 선택을 읽음
+        const items = _st ? [_st.item] : this.getSelectedOrCheckedItems();
         const item = items[0];
         
         if (!item) {
@@ -21508,18 +23362,37 @@ const App = {
         }
         
         // 검색 결과에서 선택한 경우 해당 스토리지 ID 사용
-        const storageId = item.storageId || this.currentStorage;
-        
-        const res = await this.api('share_create', {
-            storage_id: storageId,
-            path: item.path,
-            expire_days: $('#share-expire').val() || null,
-            password: $('#share-password').val() || null,
-            max_downloads: $('#share-max-downloads').val() || null,
-            share_type: $('input[name="share-type"]:checked').val() || 'download'
-        });
-        
+        const storageId = _st ? _st.storageId : (item.storageId || this.currentStorage);   // ★ (2026-11-13 08:10, 109차 NAV2-5) 창을 연 때의 스토리지(뒤로로 다른 스토리지에 가도 같은 이름 파일로 바뀌지 않게)
+
+        // ★ (2026-11-01 01:52, 36차 전체 점검) 요청 중 '생성'을 또 누르면 같은 파일에 공유 링크가 2개 생겼다(서버는 중복 검사 안 함)
+        //   → 일괄 공유처럼 요청 동안 버튼 잠금, 실패하면 풀기(성공하면 버튼을 숨기고, 창을 다시 열 때 풀림)
+        const _shareBtn = $('#btn-create-share');
+        _shareBtn.prop('disabled', true);
+        let res;
+        // ★ (2026-11-13 01:31, 108차 SLOW-3) 바로 앞 생성이 연결 실패·시간 초과(서버는 만들었을 수 있음)였으면 다시 누를 때 기존 공유부터 확인 — 있으면 그 링크를 보여 주고 새로 만들지 않음.
+        //   종전엔 응답만 잃고 다시 누르면 같은 파일에 공유가 2개 생겼음(재현: share_create 응답만 끊고 다시 생성 → fC_2.txt 공유 2개). 확인도 답이 없으면 그 안내만, 서버가 '없음'이라 하면 종전대로 생성
+        const _shareKey = storageId + ':' + item.path;
+        try {
+            {   // ★ (2026-11-13 08:02, 109차 개선 TABS-2) [생성] 직전에 늘 기존 공유를 다시 확인(108차 SLOW-3 갈래를 늘 탐) — 종전엔 창을 연 때만 확인해, 두 탭에서 같은 파일 공유 창을 열고 둘 다 [생성]하면 링크가 2개 생겼음(재현).
+                //   있으면 그 링크를 보여 줌. 확인이 답을 못 받으면 SLOW-3 경우(앞 생성 응답을 잃음)만 그 안내, 아니면 종전대로 생성
+                const chk = await this.api('share_check', { storage_id: storageId, path: item.path }, 'GET');
+                if (chk && chk.success && chk.share) res = { success: true, url: this.getShareUrl(chk.share.token) };
+                else if (this._shareLostKey === _shareKey && chk && !chk.session_expired && (chk.timeout || chk.success === undefined)) res = chk.http_status ? Object.assign({}, chk, { error: t('server_error', '서버 오류') }) : chk;   // ★ (2026-11-13 17:03, 113차 DEF-4) 안내 문구만(위 창 열 때와 같음)
+            }
+            if (!res) res = await this.api('share_create', {
+                storage_id: storageId,
+                path: item.path,
+                expire_days: $('#share-expire').val() || null,
+                password: $('#share-password').val() || null,
+                max_downloads: $('#share-max-downloads').val() || null,
+                share_type: $('input[name="share-type"]:checked').val() || 'download'
+            });
+        } catch (e) { _shareBtn.prop('disabled', false); throw e; }
+        if (!res || !res.success) _shareBtn.prop('disabled', false);
+        this._shareLostKey = (res && !res.success && !res.session_expired && (res.timeout || res.success === undefined)) ? _shareKey : null;   // ★ (2026-11-13 01:31, 108차 SLOW-3) 답을 못 받았을 때만 기억
+
         if (res.success) {
+            try { if (this._dpCache) this._dpCache.clear(); this._detailsRefresh(); } catch (e) {}   // ★ (2026-10-30 22:44, 재검토) 세부 정보 창 '공유' 줄을 바로(종전엔 다른 폴더에 다녀와야 보였음)
             $('#share-url').val(res.url);
             $('#share-result').show();
             $('#btn-create-share').hide();
@@ -21528,7 +23401,8 @@ const App = {
             
             // 스크롤 유지하면서 해당 파일에 공유 배지 추가
             const shareType = $('input[name="share-type"]:checked').val() || 'download';
-            this._updateShareUI(item.path, true, shareType);
+            if (this.isSearchMode) this._updateShareUI(item.path, true, shareType, storageId);   // ★ (2026-11-13 09:42, 110차 RGR26-2) 검색 결과면 공유한 스토리지 행(data-storage-id)에만 배지 — 종전(109차)엔 다른 스토리지 검색 결과를 공유하면 그 행에 배지가 안 붙었음(재현, 109차 전엔 붙었음). 다른 스토리지의 같은 경로 행에는 안 붙음(109차 의도)
+            else if (String(storageId) === String(this.currentStorage)) this._updateShareUI(item.path, true, shareType);   // ★ (2026-11-13 08:10, 109차 NAV2-5) 지금 보는 스토리지일 때만 목록 배지 — 다른 스토리지의 같은 이름 파일에 배지가 붙지 않게
         } else {
             this.toast(res.error || t('err_share_failed', '공유 생성 실패'), 'error');
         }
@@ -21581,12 +23455,18 @@ const App = {
             try {
                 // 이미 공유 중이면 그 링크를 재사용
                 const chk = await this.api('share_check', { storage_id: storageId, path: f.path }, 'GET');
+                // ★ (2026-11-13 01:31, 108차 SLOW-3) 확인 요청이 연결 실패·시간 초과면 그 항목은 만들지 않고 '실패'로(단일 공유와 같게) — 종전엔 '기존 없음'으로 보고 바로 만들어 중복이 생길 수 있었음
+                if (chk && !chk.session_expired && (chk.timeout || chk.success === undefined)) {
+                    results.push({ name: f.name, path: f.path, error: chk.http_status ? t('server_error', '서버 오류') : (chk.error || t('err_server_connection', '서버 연결 실패')), state: 'fail' });   // ★ (2026-11-13 17:03, 113차 DEF-4) 안내 문구만(위와 같음)
+                    continue;
+                }
                 if (chk && chk.success && chk.share) {
                     results.push({ name: f.name, path: f.path, url: this.getShareUrl(chk.share.token), state: 'exist', type: chk.share.share_type });
                     continue;
                 }
                 const res = await this.api('share_create', Object.assign({ storage_id: storageId, path: f.path }, opts));
                 if (res && res.success) {
+                    try { if (this._dpCache) this._dpCache.clear(); this._detailsRefresh(); } catch (e) {}   // ★ (2026-10-30 22:44, 재검토) 세부 정보 창 '공유' 줄(위 단일 공유와 같음, 다시 그리기는 한 프레임에 한 번)
                     results.push({ name: f.name, path: f.path, url: res.url, state: 'new', type: opts.share_type });
                 } else {
                     results.push({ name: f.name, path: f.path, error: (res && res.error) || t('err_share_failed', '공유 생성 실패'), state: 'fail' });
@@ -21613,12 +23493,13 @@ const App = {
                 `${t('share_bulk_new', '신규')} ${made} · ${t('share_bulk_exist', '기존')} ${kept}` +
                 (bad ? ` · <span style="color:var(--fs-fg-err, #d33);">${t('share_bulk_fail', '실패')} ${bad}</span>` : '') + `</label>` +
                 `<div style="max-height:240px;overflow-y:auto;border:1px solid var(--fs-border-2, #ddd);border-radius:6px;padding:6px;">` +
+                // ★ (2026-11-13 01:08, 108차 ARIA-4) 그림만 있는 복사 단추(📋)에 이름 — 종전엔 이름이 비었음
                 results.map(r => r.url
                     ? `<div style="display:flex;gap:6px;align-items:center;padding:4px 2px;">
                            <span style="flex:0 0 auto;font-size:12px;opacity:.7;">${r.state === 'exist' ? '♻️' : '🔗'}</span>
                            <span style="flex:0 0 34%;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.name)}">${esc(r.name)}</span>
                            <input type="text" readonly value="${esc(r.url)}" style="flex:1;min-width:0;font-size:12px;">
-                           <button type="button" class="btn btn-sm" onclick="App.copyToClipboard(this.previousElementSibling.value)">📋</button>
+                           <button type="button" class="btn btn-sm" onclick="App.copyToClipboard(this.previousElementSibling.value)" aria-label="${t('copy','복사')}">📋</button>
                        </div>`
                     : `<div style="padding:4px 2px;font-size:12px;color:var(--fs-fg-err, #d33);">⚠️ ${esc(r.name)} — ${esc(r.error || '')}</div>`
                 ).join('') +
@@ -21651,10 +23532,17 @@ const App = {
     
     // 클립보드 복사 (HTTP 호환)
     copyToClipboard(text) {
+        // ★ (2026-11-12 10:03, 96차 펜닐 제보 CPY-2) 진단 기록만(동작은 그대로) — 아이폰에서 복사 단추가 알림도 복사도 없다는 제보(PC·크로미움은 정상, 원본부터 같은 코드)의 원인을 실기기에서 가리려고. data/debug_logs 폴더가 있을 때만 서버에 남음
+        const _cpDbg = (ev, d) => { try { this._debugLog && this._debugLog('copy_' + ev, Object.assign({ secure: !!window.isSecureContext, clip: !!(navigator.clipboard && navigator.clipboard.writeText), len: String(text == null ? '' : text).length, ua: (navigator.userAgent || '').slice(0, 120) }, d || {})); } catch (e) {} };
+        _cpDbg('start');
         if (navigator.clipboard && window.isSecureContext) {
+            let _cpSettled = false;
+            setTimeout(() => { if (!_cpSettled) _cpDbg('write_pending_2s'); }, 2000);
             navigator.clipboard.writeText(text).then(() => {
+                _cpSettled = true; _cpDbg('write_ok');
                 this.toast(t('toast_link_copied', '클립보드에 복사되었습니다.'), 'success');
-            }).catch(() => {
+            }).catch((e) => {
+                _cpSettled = true; _cpDbg('write_err', { name: e && e.name, msg: String((e && e.message) || e).slice(0, 120) });
                 this.fallbackCopy(text);
             });
         } else {
@@ -21676,14 +23564,18 @@ const App = {
         textarea.value = text;
         textarea.style.position = 'fixed';
         textarea.style.opacity = '0';
+        textarea.setAttribute('readonly', '');   // ★ (2026-11-12 09:57, 96차 펜닐 제보 CPY-1) iOS 에서 키보드·확대 없이 선택되게(읽기 전용·16px·전체 선택 범위) — 앱 비밀번호 복사(39차)와 같은 쪽
+        textarea.style.fontSize = '16px';
         document.body.appendChild(textarea);
         textarea.select();
+        try { textarea.setSelectionRange(0, textarea.value.length); } catch (e) {}
+        let ok = false;
         try {
-            document.execCommand('copy');
-            this.toast(t('toast_link_copied', '클립보드에 복사되었습니다.'), 'success');
-        } catch (e) {
-            this.toast(t('copy_failed_select', '복사 실패: 직접 선택해서 복사하세요.'), 'error');
-        }
+            ok = document.execCommand('copy');   // ★ (2026-11-12 09:57, 96차 펜닐 제보 CPY-1) 결과를 보고 알림 — 종전엔 복사가 실패(false)해도 '복사되었습니다'가 떴음(재현, 원본부터)
+        } catch (e) { ok = false; }
+        try { this._debugLog && this._debugLog('copy_fallback', { ok: !!ok }); } catch (e) {}   // ★ (2026-11-12 10:03, 96차 펜닐 제보 CPY-2) 위 진단
+        if (ok) this.toast(t('toast_link_copied', '클립보드에 복사되었습니다.'), 'success');
+        else this.toast(t('copy_failed_select', '복사 실패: 직접 선택해서 복사하세요.'), 'error');
         document.body.removeChild(textarea);
     },
     
@@ -21700,10 +23592,11 @@ const App = {
         }
         
         const info = res.info;
+        // ★ (2026-11-01 08:02, 37차 기능 점검 재검토) 하위에 막힌 폴더가 있어 서버가 크기를 숨기면(size=null) '0 B' 대신 '-'
         let html = `
             <tr><td>${t('name','이름')}</td><td>${this.escapeHtml(info.name)}</td></tr>
             <tr><td>${t('type', '유형')}</td><td>${info.is_dir ? t('folder') : t('file')}</td></tr>
-            <tr><td>${t('size','크기')}</td><td>${this.formatSize(info.size)}</td></tr>
+            <tr><td>${t('size','크기')}</td><td>${info.size == null ? '-' : this.formatSize(info.size)}</td></tr>
             <tr><td>${t('modified_date','수정일')}</td><td>${this.escapeHtml(info.modified || '')}</td></tr>
             <tr><td>${t('created_date','생성일')}</td><td>${this.escapeHtml(info.created || '')}</td></tr>
         `;
@@ -21725,6 +23618,7 @@ const App = {
         
         const res = await this.api('storages_all', {}, 'GET');
         if (!res.success) return;
+        this._storagesAllData = res.storages;   // ★ (2026-11-12 22:47, 105차 개선 CNF-5) 삭제 확인 창에 스토리지 이름을 보이려고 목록을 기억
         
         const tbody = $('#storages-table tbody').empty();
         
@@ -21812,7 +23706,8 @@ const App = {
     
     // 스토리지 삭제
     async deleteStorage(id) {
-        if (!await this.confirmDelete(t('confirm_delete_storage', '정말 삭제하시겠습니까?\n이 스토리지의 모든 공유 링크도 삭제됩니다.'), t('delete_storage', '스토리지 삭제'))) return;
+        const _ds = (this._storagesAllData || []).find(s => String(s.id) === String(id));   // ★ (2026-11-12 22:47, 105차 개선 CNF-5) 맨 위에 스토리지 이름을 보임 — 종전엔 문구에 어느 스토리지인지 없었음(목록에 없으면 종전 문구 그대로)
+        if (!await this.confirmDelete((_ds && _ds.name ? `<strong style="overflow-wrap:anywhere;word-break:break-word">${this.escapeHtml(_ds.name)}</strong>\n` : '') + t('confirm_delete_storage', '정말 삭제하시겠습니까?\n이 스토리지의 모든 공유 링크도 삭제됩니다.'), t('delete_storage', '스토리지 삭제'))) return;   // ★ (2026-11-13 00:38, 107차 재검토 RGR23-1) 띄어쓰기 없는 긴 이름이 창 오른쪽에서 잘려 끝(확장자 등)이 안 보였음(재현: 영문 120자, 390~1366 폭) → 이름만 줄바꿈(띄어쓰기에서 먼저, 안 되면 아무 곳에서 — 108차 재검토에서 단어 중간에서 먼저 끊기던 것을 바꿈)
         
         const res = await this.api('storage_delete', { id });
         
@@ -21827,7 +23722,12 @@ const App = {
     
     // 스토리지 모달 표시
     async showStorageModal(storageId = null) {
+        const _smSeq = this._storageModalSeq = (this._storageModalSeq || 0) + 1, _smEl = document.getElementById('modal-add-storage'), _smOpen = () => !!(_smEl && _smEl.style.display && _smEl.style.display !== 'none'), _smWasOpen = _smOpen();   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 사용자 창(showUserForm)과 같음 — 종전엔 저장 뒤 다시 채우는 동안 Esc·X 로 닫으면 읽기가 끝날 때 창이 다시 떴음(재현)
+        const _smStale = () => _smSeq !== this._storageModalSeq || (_smWasOpen && !_smOpen());   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위와 같음
         // 모든 옵션 초기화
+        // ★ (2026-11-03 13:55, 51차 점검) 용량 원래 값(42차)을 요소 속성에 둠 — 이 앱의 $().data(이름, 값) 는 dataset 에 문자열로 넣어 객체가 '[object Object]' 가 돼
+        //   비교가 늘 실패했음(재현: 1.5 GB 스토리지의 설명만 바꿔 저장 → 2 GB). 창을 열 때마다 지워 앞 창의 값이 남지 않게
+        { const _qe = document.getElementById('storage-quota-value'); if (_qe) _qe._fsQuotaOrig = null; }
         $('#storage-id').val(storageId || '');
         $('#storage-modal-title').text(storageId ? t('edit_storage', '스토리지 수정') : t('add_storage', '스토리지 추가'));
         
@@ -21854,6 +23754,7 @@ const App = {
         $('#quota-custom-wrap').hide();
         $('#storage-quota-value').val(100);
         $('#storage-quota-unit').val('1073741824'); // GB
+        $('#storage-quota-value').data('fsQuotaOrig', null);   // ★ (2026-11-02 10:28, 42차 점검) 아래 '용량 직접 설정' 채우기 주석
         $('#storage-used-size').text('');
         $('#storage-calc-usage').prop('checked', false);
         $('#calc-usage-warning').hide();
@@ -21867,11 +23768,13 @@ const App = {
         $('#storage-local-options').show();
         
         // 유저 목록 로드
-        await this.loadPermissionList(storageId);
+        await this.loadPermissionList(storageId, _smStale);   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 늦게 온 응답이면 권한 칸을 그리지 않게 판정을 넘김
+        if (_smStale()) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위 _smStale
         
         // 수정 모드면 기존 데이터 로드
         if (storageId) {
             const res = await this.api('storage_get', { id: storageId }, 'GET');
+            if (_smStale()) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위 _smStale
             if (res.success && res.storage) {
                 const s = res.storage;
                 const type = s.storage_type || 'local';
@@ -21902,14 +23805,16 @@ const App = {
                     // 용량 직접 설정
                     $('input[name="quota-mode"][value="custom"]').prop('checked', true);
                     $('#quota-custom-wrap').show();
-                    if (quota >= 1099511627776) {
-                        const tbVal = Math.round(quota / 1099511627776);
-                        $('#storage-quota-value').val(tbVal > 0 ? tbVal : 1);
+                    // ★ (2026-11-02 10:28, 42차 점검) 1TB 이상이면 TB, 아니면 GB 로 반올림해 채워, 다른 칸만 고쳐 저장해도 용량이 바뀌었음(1100GB→1TB, 1536GB→2TB)
+                    //   → 기본 용량처럼 나누어떨어질 때만 TB, 아니면 GB 로 정확히. GB 로도 안 떨어지면(다른 경로로 정한 값) 반올림해 보이되 값·단위를 안 바꾸면 원래 값 그대로 저장
+                    if (quota % 1099511627776 === 0) {
+                        $('#storage-quota-value').val(quota / 1099511627776);
                         $('#storage-quota-unit').val('1099511627776');
                     } else {
                         const gbVal = Math.round(quota / 1073741824);
                         $('#storage-quota-value').val(gbVal > 0 ? gbVal : 1);
                         $('#storage-quota-unit').val('1073741824');
+                        if (quota % 1073741824 !== 0) { const _qe = document.getElementById('storage-quota-value'); if (_qe) _qe._fsQuotaOrig = { q: quota, v: String(gbVal > 0 ? gbVal : 1), u: '1073741824' }; }
                     }
                 } else {
                     // 무제한
@@ -21984,16 +23889,20 @@ const App = {
     },
     
     // 권한 목록 로드
-    async loadPermissionList(storageId = null) {
+    async loadPermissionList(storageId = null, _isStale = null) {   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) _isStale: showStorageModal 이 넘기는 '늦게 온 응답' 판정(없으면 종전과 같음)
         const usersRes = await this.api('users', {}, 'GET');
         // ★ (2026-10-29 09:42, 20차 점검) 사용자 관리 권한이 없는 부관리자(스토리지 권한만)는 사용자 목록이 403 — 종전엔 여기서 끝나
         //   신규회원 기본 권한 칸이 안 채워진 채(전부 해제) 저장돼 기존 기본 권한이 0 으로 덮였음. 사용자 칸만 비우고 나머지는 계속 불러옴
         //   (사용자별 권한은 빈 목록으로 보내지고 서버는 빈 목록이면 건드리지 않음)
         if (!usersRes.success) usersRes.users = [];
+        if (_isStale && _isStale()) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위 _isStale
         
+        if (!storageId) this._admLoadMark('storage_form', true);   // ★ (2026-11-13 21:10, 116차 개선 RGR29-1) 새 스토리지는 storage_permissions 를 읽지 않음 — 앞서 연 수정 창의 실패 표시만 지움(알림 없음)
         let permissions = [];
         if (storageId) {
             const permRes = await this.api('storage_permissions', { storage_id: storageId }, 'GET');
+            if (_isStale && _isStale()) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위 _isStale
+            this._admLoadMark('storage_form', !!(permRes && permRes.success));   // ★ (2026-11-13 21:10, 116차 개선 RGR29-1) 112차 _admLoadMark 와 같은 방식 — 종전엔 실패하면 안내 없이 모든 사용자 체크가 풀린 채 그려져, 그대로 저장하면 권한이 지워졌음(재현: viewer 2:110 → 2:000)
             if (permRes.success) {
                 permissions = permRes.permissions || [];
             }
@@ -22003,6 +23912,10 @@ const App = {
         this._permUsersData = usersRes.users;
         this._permPermissions = permissions;
         this._permStorageId = storageId;
+        // ★ (2026-11-11 21:12, 84차 STG-1) 권한 줄이 없는 사용자의 체크를 서버 판정(Storage::checkPermission)과 같게 그리려고 스토리지 종류·만든 사람을 받아 둠
+        this._permStorageMeta = null;
+        if (storageId) { try { const _sg = await this.api('storage_get', { id: storageId }, 'GET'); if (_sg && _sg.success && _sg.storage) this._permStorageMeta = { type: String(_sg.storage.storage_type || 'local'), createdBy: parseInt(_sg.storage.created_by) || 0 }; } catch (e) {} }
+        if (_isStale && _isStale()) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위 _isStale
         // 이전 DOM 클리어 후 재렌더링
         $('#perm-user-list').empty();
         this._renderPermissionList();
@@ -22014,10 +23927,17 @@ const App = {
         }
         
         // 스토리지별 신규회원 기본 권한 로드
+        // ★ (2026-11-01 11:44, 39차 점검) 사용자 관리 창(showUsersModal)이 전역 기본 권한을 이 창의 칸에 써 넣고, 직전에 연 다른 스토리지 값도 남아 있어
+        //   storage_get 이 실패하면 그 값이 이 스토리지 것처럼 보였음 → 불러오기 전에 늘 먼저 비움
+        $('#def-perm-visible, #def-perm-webdav, #def-perm-read, #def-perm-download, #def-perm-write, #def-perm-delete, #def-perm-share').prop('checked', false);
         if (storageId) {
             const storageRes = await this.api('storage_get', { id: storageId }, 'GET');
+            if (_isStale && _isStale()) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위 _isStale
             if (storageRes.success && storageRes.storage) {
-                const dp = storageRes.storage.default_permissions || {};
+                let dp = storageRes.storage.default_permissions || {};
+                // ★ (2026-11-11 21:26, 84차 STG-1 보완) 기본 권한이 비어 있으면(새 회원에게 줄을 만들지 않음 → 서버 판정) 공용 폴더(shared)는 실제로 주는 값(보기·DAV·읽기·받기)으로 체크 —
+                //   종전엔 전부 해제로 보여, 다른 칸만 바꿔 저장해도 7칸 0 이 저장돼 그 뒤 가입한 회원이 공용 폴더를 못 썼음(재현). 그 밖의 종류는 종전처럼 전부 해제(실제로도 권한 없음)
+                if ((Array.isArray(dp) ? dp.length === 0 : Object.keys(dp).length === 0) && String(storageRes.storage.storage_type || '') === 'shared') dp = { can_visible: 1, can_visible_webdav: 1, can_read: 1, can_download: 1 };
                 $('#def-perm-visible').prop('checked', !!dp.can_visible);
                 $('#def-perm-webdav').prop('checked', !!dp.can_visible_webdav);
                 $('#def-perm-read').prop('checked', !!dp.can_read);
@@ -22066,7 +23986,7 @@ const App = {
         const fpermSelect = document.getElementById('fperm-user-select');
         if (fpermSelect && this._permUsersData) {
             fpermSelect.innerHTML = this._permUsersData.map(u => 
-                `<option value="${u.id}">${this.escapeHtml(u.username)}${u.role === 'admin' ? ' (관리자)' : ''}</option>`
+                `<option value="${u.id}">${this.escapeHtml(u.username)}${u.role === 'admin' ? ' (' + t('role_admin_short', '관리자') + ')' : ''}</option>`
             ).join('');
         }
         
@@ -22107,12 +24027,13 @@ const App = {
             </div>`;
             html += `<div class="fperm-folder-body" style="display:none;padding:2px 8px 6px 30px;">`;
             users.forEach(p => {
+                // ★ (2026-11-13 01:08, 108차 ARIA-4) 그림만 있는 권한 삭제 단추(🗑️)에 이름 — 종전엔 이름이 비었음(fs-icons 가 이모지를 aria-hidden 그림으로 바꿈)
                 html += `<div class="fperm-user-row" data-idx="${p._idx}" style="display:flex;align-items:center;gap:8px;padding:3px 0;border-bottom:1px solid var(--fs-border, #f0f0f0);font-size:12px;">
                     <span style="width:70px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${this.escapeHtml(p.username)}</span>
                     <span class="fperm-toggle" data-idx="${p._idx}" data-field="can_visible" style="cursor:pointer;" title="${t('visible','표시')}">${p.can_visible ? '✅' : '❌'}</span>
                     <span class="fperm-toggle" data-idx="${p._idx}" data-field="can_read" style="cursor:pointer;" title="${t('read','읽기')}">${p.can_read ? '✅' : '❌'}</span>
                     <span class="fperm-toggle" data-idx="${p._idx}" data-field="can_write" style="cursor:pointer;" title="${t('write','쓰기')}">${p.can_write ? '✅' : '❌'}</span>
-                    <button class="btn btn-sm btn-danger fperm-del-btn" data-idx="${p._idx}" style="padding:0 4px;font-size:10px;line-height:1.4;">🗑️</button>
+                    <button class="btn btn-sm btn-danger fperm-del-btn" data-idx="${p._idx}" aria-label="${t('delete','삭제')}" style="padding:0 4px;font-size:10px;line-height:1.4;">🗑️</button>
                 </div>`;
             });
             html += `<div style="padding:4px 0;">
@@ -22182,7 +24103,7 @@ const App = {
                 if (res.success) {
                     this.toast(t('fperm_delete_success', '폴더 권한이 삭제되었습니다.'), 'success');
                     this.loadFolderPermissions(storageId);
-                }
+                } else this.toast((res && res.error) || t('nt_error_generic', '오류가 발생했습니다.'), 'error');   // ★ (2026-10-31 11:52, 34차 전체 점검) 실패 알림(같은 화면 토글·선택 수정과 같게)
                 return;
             }
             // 폴더에 사용자 추가 (모달)
@@ -22198,7 +24119,7 @@ const App = {
                 if (sel && this._permUsersData) {
                     sel.innerHTML = this._permUsersData
                         .filter(u => !existingUserIds.includes(u.id))
-                        .map(u => `<option value="${u.id}">${this.escapeHtml(u.username)}${u.role === 'admin' ? ' (관리자)' : ''}</option>`)
+                        .map(u => `<option value="${u.id}">${this.escapeHtml(u.username)}${u.role === 'admin' ? ' (' + t('role_admin_short', '관리자') + ')' : ''}</option>`)
                         .join('');
                     if (sel.options.length === 0) {
                         this.toast(t('fperm_all_users_added', '모든 사용자가 이미 추가되어 있습니다.'), 'info');
@@ -22221,7 +24142,7 @@ const App = {
                             App.toast(t('fperm_set_success', '폴더 권한이 설정되었습니다.'), 'success');
                             App._fpermOpenFolders = App._getOpenFolders();
                             App.loadFolderPermissions(storageId);
-                        }
+                        } else App.toast((res && res.error) || t('nt_error_generic', '오류가 발생했습니다.'), 'error');   // ★ (2026-10-31 11:52, 34차 전체 점검) 실패 알림
                     };
                 }
                 document.getElementById('fperm-modal-overlay').style.display = 'block';
@@ -22276,9 +24197,12 @@ const App = {
                 const items = checked.map(p => ({ folder_path: p.folder_path, user_id: p.user_id }));
                 const res = await this.api('folder_permission_remove', { storage_id: storageId, items });
                 if (res.success) {
-                    this.toast(t('fperm_delete_success', '폴더 권한이 삭제되었습니다.'), 'success');
+                    // ★ (2026-11-01 18:00, 40차 재검토) 서버가 건너뛴 항목(자기·관리자 대상, 이미 없음)이 있으면 '삭제됨' 대신 알림 — 종전엔 deleted 수를 안 봤음(검토 발견)
+                    // ★ (2026-11-02 08:58, 41차 점검) 서버는 이미 없는 규칙도 '삭제됨'으로 셈(removeFolderPermission 이 쓰기 결과만 돌려줌) → 안내가 뜨는 건 권한 없음(자기·관리자 대상)·잘못된 항목뿐이라 '이미 없는' 을 문구에서 뺌
+                    if (typeof res.deleted === 'number' && res.deleted < items.length) this.toast(tf('fperm_delete_partial', { n: res.deleted, total: items.length }, `${items.length}개 중 ${res.deleted}개만 삭제했습니다(권한이 없거나 처리할 수 없는 항목은 건너뜀).`), 'warning');
+                    else this.toast(t('fperm_delete_success', '폴더 권한이 삭제되었습니다.'), 'success');
                     this.loadFolderPermissions(storageId);
-                }
+                } else this.toast((res && res.error) || t('nt_error_generic', '오류가 발생했습니다.'), 'error');   // ★ (2026-10-31 11:52, 34차 전체 점검) 실패 알림
                 return;
             }
         };
@@ -22353,7 +24277,9 @@ const App = {
         
         const currentPath = browsePath !== undefined ? browsePath : '';
         const res = await this.api('folder_list_for_perm', { storage_id: storageId, path: currentPath }, 'GET');
-        if (!res.success || !res.folders || res.folders.length === 0) {
+        // ★ (2026-10-31 11:52, 34차 전체 점검) 목록을 못 읽었으면(원격 연결 끊김·폴더가 지워짐) 알림만 — 종전엔 '하위 폴더 없음' 과 같이 봐 그 폴더에 고른 사용자의 전체 권한이 자동으로 추가됐음
+        if (!res || !res.success) { this.toast((res && res.error) || t('cannot_load_info', '정보를 불러올 수 없습니다'), 'error'); return; }
+        if (!res.folders || res.folders.length === 0) {
             if (currentPath === '') {
                 this.toast(t('fperm_no_subfolders', '하위 폴더가 없습니다.'), 'info');
                 return;
@@ -22461,7 +24387,16 @@ const App = {
             $container.empty();
             
             (this._permUsersData || []).forEach(user => {
-                const perm = permissions.find(p => p.user_id === user.id) || {};
+                let perm = permissions.find(p => p.user_id === user.id) || {};
+                // ★ (2026-11-11 21:12, 84차 STG-1) 권한 줄이 없으면 서버가 실제로 주는 값으로 체크 — 종전엔 전부 해제로 보여, 공용 폴더 용량·이름만 바꿔 저장해도 줄 없던 사용자·관리자 모두
+                //   공용 폴더를 잃었음(재현). 서버 규칙: 관리자 → 전부, 공용 폴더(shared) → 보기·DAV 표시·읽기·받기(DAV 는 21:26 보완 — README 1652), 만든 사람(관리자·스토리지 관리 부관리자) → 전부, 그 밖 → 없음(종전과 같음)
+                if (storageId && !permissions.some(p => p.user_id === user.id) && this._permStorageMeta) {
+                    const _m = this._permStorageMeta;
+                    const _isAdm = user.role === 'admin';
+                    const _isCreator = _m.type !== 'shared' && _m.createdBy > 0 && parseInt(user.id) === _m.createdBy && (_isAdm || (user.role === 'sub_admin' && Array.isArray(user.admin_perms) && user.admin_perms.includes('storages')));
+                    if (_isAdm || _isCreator) perm = { can_visible: 1, can_visible_webdav: 1, can_read: 1, can_download: 1, can_write: 1, can_delete: 1, can_share: 1 };
+                    else if (_m.type === 'shared') perm = { can_visible: 1, can_visible_webdav: 1, can_read: 1, can_download: 1, can_write: 0, can_delete: 0, can_share: 0 };
+                }
             const isVisible = storageId ? (perm.can_visible !== undefined ? perm.can_visible : 0) : 0;
             const isVisibleWebdav = storageId ? (perm.can_visible_webdav !== undefined ? perm.can_visible_webdav : isVisible) : 0;
             const canRead = storageId ? (perm.can_read !== undefined ? perm.can_read : 0) : 0;
@@ -22470,6 +24405,7 @@ const App = {
             const canDelete = storageId ? (perm.can_delete !== undefined ? perm.can_delete : 0) : 0;
             const canShare = storageId ? (perm.can_share !== undefined ? perm.can_share : 0) : 0;
             
+            // ★ (2026-11-02 10:32, 42차 점검) '삭제' 권한 칸이 휴지통 '영구삭제' 단추와 같은 키(perm_delete)를 써서 '영구삭제'/'Permanent Delete' 로 보였음 → 이미 있는 perm_delete_label 로
             $container.append(`
                 <div class="permission-row" data-user-id="${user.id}">
                     <span class="perm-user">${this.escapeHtml(user.display_name || user.username)}${user.display_name && user.display_name !== user.username ? ' <span style="color:var(--fs-text-3, #5f6368);font-size:0.9em;">(' + this.escapeHtml(user.username) + ')</span>' : ''}</span>
@@ -22479,7 +24415,7 @@ const App = {
                         <label title="${t('perm_read_tooltip','파일 열기, 미리보기, 정보')}"><input type="checkbox" class="perm-read" ${canRead ? 'checked' : ''}> ${t('perm_read','읽기')}</label>
                         <label title="${t('perm_download_tooltip','파일 다운로드')}"><input type="checkbox" class="perm-download" ${canDownload ? 'checked' : ''}> ${t('perm_download','다운로드')}</label>
                         <label title="${t('perm_write_tooltip','업로드, 새 폴더, 이름변경, 이동, 복사')}"><input type="checkbox" class="perm-write" ${canWrite ? 'checked' : ''}> ${t('perm_write','쓰기')}</label>
-                        <label title="${t('perm_delete_tooltip','파일/폴더 삭제')}"><input type="checkbox" class="perm-delete" ${canDelete ? 'checked' : ''}> ${t('perm_delete','삭제')}</label>
+                        <label title="${t('perm_delete_tooltip','파일/폴더 삭제')}"><input type="checkbox" class="perm-delete" ${canDelete ? 'checked' : ''}> ${t('perm_delete_label','삭제')}</label>
                         <label title="${t('perm_share_tooltip','외부 공유 링크 생성')}"><input type="checkbox" class="perm-share" ${canShare ? 'checked' : ''}> ${t('perm_share','공유')}</label>
                     </div>
                 </div>
@@ -22505,6 +24441,8 @@ const App = {
         const share = $('#bulk-share').is(':checked');
         
         $('.permission-row').each((i, row) => {
+            // ★ (2026-11-03 13:56, 51차 점검) 사용자 검색으로 숨긴 행은 건너뜀 — 종전엔 9명만 보이게 거른 뒤 '삭제' 를 적용해도 숨은 207명 전원에게 들어갔음(재현). 검색이 없으면 종전과 같음
+            if (row.style.display === 'none') return;
             $(row).find('.perm-visible').prop('checked', visible);
             $(row).find('.perm-visible-webdav').prop('checked', visibleWebdav);
             $(row).find('.perm-read').prop('checked', read);
@@ -22537,6 +24475,7 @@ const App = {
     },
     
     async saveStorage() {
+        if (!await this._admLoadFailConfirm('storage_form')) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-1) 위 storage_form 표시가 있을 때만 확인(취소면 저장 안 함, 확인이면 종전처럼 저장)
         const storageId = $('#storage-id').val();
         const type = $('#storage-type').val();
         const name = $('#storage-name').val().trim();
@@ -22561,7 +24500,7 @@ const App = {
         const quotaMode = $('input[name="quota-mode"]:checked').val() || 'unlimited';
         let quota = 0;
         if (quotaMode === 'custom') {
-            const quotaValue = parseInt($('#storage-quota-value').val()) || 0;
+            const quotaValue = parseFloat($('#storage-quota-value').val()) || 0;   // ★ (2026-11-02 10:28, 42차 점검) parseInt 라 1.5TB 가 1TB 로 잘렸음 → 소수도 받아 바이트로 환산(아래 Math.round)
             const quotaUnit = parseInt($('#storage-quota-unit').val()) || 1073741824;
             // 최대 1PB (1048576 TB) 제한 — 오버플로우 방지
             const maxValue = quotaUnit === 1099511627776 ? 1048576 : 1073741824;
@@ -22575,7 +24514,8 @@ const App = {
                 $('#storage-quota-value').focus();
                 return;
             }
-            quota = quotaValue * quotaUnit;
+            quota = Math.max(1, Math.round(quotaValue * quotaUnit));
+            { const _o = (document.getElementById('storage-quota-value') || {})._fsQuotaOrig; if (_o && String($('#storage-quota-value').val()).trim() === _o.v && String($('#storage-quota-unit').val()) === _o.u) quota = _o.q; }   // ★ (2026-11-02 10:28, 42차 점검) 값·단위를 안 고쳤으면 원래 용량 그대로
         } else if (quotaMode === 'disk') {
             quota = -1;
         }
@@ -22633,9 +24573,12 @@ const App = {
                 msg += ` (${t('usage','사용량')}: ${res.used_size_formatted})`;
             }
             this.toast(msg, 'success');
+            const _msSb = document.querySelector('#modal-add-storage .modal-body'), _msSt = _msSb ? _msSb.scrollTop : 0;   // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 아래에서 다시 띄울 때 보던 위치로
             closeModal();
             this.loadStorages();
             this.showStoragesModal();
+            // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 기존 스토리지 수정이면 목록은 위처럼 새로 읽고 수정 창은 다시 띄워 서버에 저장된 값으로 채움(창을 열 때 쓰는 showStorageModal) — 종전엔 저장하면 창이 닫혀 목록으로 돌아갔음. 닫기는 [취소]·[X]. 새로 추가는 종전대로 닫힘
+            if (storageId) { this.showModal('modal-add-storage'); this.showStorageModal(parseInt(storageId)).then(() => { if (_msSb) _msSb.scrollTop = _msSt; }); }
         } else {
             this.toast(res.error, 'error');
         }
@@ -22789,9 +24732,11 @@ const App = {
                 $('#default-quota-value').val(defQuota / 1073741824);
                 $('#default-quota-unit').val('GB');
             } else {
-                $('#default-quota-value').val(Math.round(defQuota / 1048576));
+                $('#default-quota-value').val(defQuota % 1048576 === 0 ? defQuota / 1048576 : parseFloat((defQuota / 1048576).toFixed(4)));   // ★ (2026-11-11 19:42, 81차 SET-2 보완) MB 로 나누어떨어지지 않으면 소수로 보임 — 80차에 소수 MB 를 저장하게 되면서 0.3 MB 가 '0 MB'(=무제한처럼)로 보이고, 0 을 넣어 저장해도 처음 보인 글자와 같아 원래 값이 유지됐음(재현). 정수 MB 는 종전과 같은 표시
+                if (defQuota > 0 && parseFloat($('#default-quota-value').val()) === 0) $('#default-quota-value').val((defQuota / 1048576).toFixed(8).replace(/0+$/, ''));   // ★ (2026-11-11 23:32, 88차 개선 G2-5) 52바이트 이하는 소수 넷째 자리에서도 0 이라 '0 MB'(=무제한처럼)로 보였음(재현) → 소수 여덟째 자리까지(1바이트 = 0.00000095, 지수 표기 없이). 저장 값은 그대로(손대지 않고 저장하면 위 원래 바이트)
                 $('#default-quota-unit').val('MB');
             }
+            { const _dq = document.getElementById('default-quota-value'); if (_dq) _dq._fsQuotaOrig = { v: String($('#default-quota-value').val()), u: String($('#default-quota-unit').val()), b: defQuota }; }   // ★ (2026-11-11 19:11, 80차 SET-2 보완) 보여 준 값(MB 반올림)과 원래 바이트 — 손대지 않고 저장하면 원래 값을 그대로(42차 사용자 용량과 같은 방식)
             
             // 기본 스토리지 권한 로드
             const defPerms = s.default_permissions || {};
@@ -22877,11 +24822,13 @@ const App = {
     
     // 기본 용량 저장
     async saveDefaultQuota() {
-        const val = parseInt($('#default-quota-value').val()) || 0;
+        const val = parseFloat($('#default-quota-value').val()) || 0;   // ★ (2026-11-11 19:04, 80차 SET-2) parseInt 라 1.5 GB 가 1 GB, 0.5 GB 가 0(=무제한)으로 저장됐음(재현) — 42차 사용자·일괄·스토리지 용량과 같게 소수도 받아 바이트로, 0 보다 큰 값은 최소 1 바이트
         const unit = $('#default-quota-unit').val();
-        const bytes = unit === 'GB' ? val * 1073741824 : val * 1048576;
+        let bytes = val > 0 ? Math.max(1, Math.round(unit === 'GB' ? val * 1073741824 : val * 1048576)) : Math.round(unit === 'GB' ? val * 1073741824 : val * 1048576);
+        { const _o = (document.getElementById('default-quota-value') || {})._fsQuotaOrig; if (_o && String($('#default-quota-value').val()).trim() === _o.v && String(unit) === _o.u) bytes = _o.b; }   // ★ (2026-11-11 19:11, 80차 SET-2 보완) 값·단위를 안 고쳤으면 원래 바이트 — 소수 MB(1.5 MB)가 열 때 2 MB 로 반올림돼 그대로 저장하면 바뀌던 것(재현)
         const res = await this.api('settings_update', { default_quota: bytes });
         if (res.success) {
+            { const _dq = document.getElementById('default-quota-value'); if (_dq) _dq._fsQuotaOrig = { v: String($('#default-quota-value').val()).trim(), u: String(unit), b: bytes }; }   // ★ (2026-11-11 19:19, 80차 SET-2 보완) 저장한 값으로 기준을 바꿈 — 같은 창에서 두 번째 저장한 값이 처음 연 때 값으로 되돌아가던 것(재현)
             this.toast(t('toast_saved'), 'success');
         } else {
             this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
@@ -22897,6 +24844,25 @@ const App = {
         if (statusEl) statusEl.textContent = t('config_backup_creating', '⏳ 백업 생성 중...');
         
         // 직접 다운로드 (브라우저가 파일로 저장)
+        // ★ (2026-11-13 16:57, 113차 DEF-3) 넘어가기 전에 지금 세션이 로그인·관리자인지 me 로 확인(요청 1개 늘어남) — 종전엔 세션이 끊긴 뒤(401)·다른 탭에서 관리자 아닌 계정으로 바뀐 뒤(403) 앱 화면이 오류 JSON 페이지로 바뀌었음(재현).
+        //   로그인 안 됨 → api() 401 과 같은 '세션 만료' 안내 뒤 새로 고침, 다른 계정(관리자 아님) → _acctSwitchGuard 와 같은 안내 뒤 새로 고침, 같은 계정인데 관리자 아님 → '관리자 권한이 필요합니다.'. 확인 실패(끊김·JSON 아님)면 종전처럼 내려받기. me 를 토큰보다 먼저 — 로그인 유지 복구가 먼저 일어나야 받은 토큰이 그 세션 것
+        let _me = null;
+        try { const r = await fetch('api.php?action=me', { method: 'GET', credentials: 'same-origin', signal: this._timeoutSignal(15000) }); _me = await r.json(); } catch (e) {}
+        if (_me && _me.success === false) {
+            if (statusEl) statusEl.textContent = '';
+            if (!this.sessionExpired) { this.sessionExpired = true; await this.alert(t('session_expired_relogin', '세션이 만료되었습니다. 다시 로그인해주세요.'), t('session_expired', '세션 만료')); location.reload(); }
+            return;
+        }
+        if (_me && _me.success && _me.user && _me.user.role !== 'admin') {
+            if (statusEl) statusEl.textContent = '';
+            if (this.user && (parseInt(_me.user.id) || 0) !== (parseInt(this.user.id) || 0)) {
+                if (!this._acctSwitchShown) { this._acctSwitchShown = true; try { alert(t('account_switched_reload', '다른 탭에서 다른 계정으로 로그인되었습니다. 이 화면은 이전 계정으로 열려 있어 새로 고칩니다.')); } catch (e) {} location.reload(); }
+                return;
+            }
+            this.toast(t('api_admin_required', '관리자 권한이 필요합니다.'), 'error');
+            return;
+        }
+        await this.refreshCsrfToken();   // ★ (2026-11-13 08:02, 109차 개선 TABS-5) 누르기 전에 지금 세션 토큰을 받음(7차 압축 스트림과 같음) — 종전엔 다른 탭에서 다시 로그인해 토큰이 바뀌면 앱 화면이 오류 JSON 페이지로 바뀌었음(재현). 실패하면 종전 토큰 그대로
         const url = `api.php?action=config_backup&csrf_token=${encodeURIComponent(window.CSRF_TOKEN)}`;
         const a = document.createElement('a');
         a.href = url;
@@ -22907,35 +24873,40 @@ const App = {
         
         if (statusEl) {
             setTimeout(() => {
-                statusEl.innerHTML = `<span style="color:var(--fs-fg-ok, #43a047);">✅ ${t('config_backup_done', '백업 완료')}</span>`;
+                // ★ (2026-11-01 01:52, 36차 전체 점검) 링크 클릭만으로는 성공 여부를 알 수 없는데 늘 '백업 완료'라고 했다 → '내려받기 시작' 문구로
+                statusEl.innerHTML = `<span style="color:var(--fs-fg-ok, #43a047);">📥 ${t('config_backup_started', '백업 파일 내려받기를 시작했습니다. 내려받은 파일을 확인하세요.')}</span>`;
             }, 1000);
         }
     },
     
     // ===== 설정 복원 =====
     async configRestore(file) {
-        if (!file.name.endsWith('.json')) {
+        if (!/\.json$/i.test(file.name)) {   // ★ (2026-11-01 11:45, 39차 점검) 대소문자를 가려 Windows 에서 흔한 BACKUP.JSON 을 거부했음
             this.toast(t('config_restore_json_only', 'JSON 백업 파일만 가능합니다.'), 'error');
             return;
         }
         
-        if (!await this.confirmDelete(
-            t('config_restore_warning', '설정을 복원하면 현재 사용자, 스토리지, 권한 등 모든 설정이 백업 시점으로 덮어씌워집니다.\n\n정말 복원하시겠습니까?'),
-            t('config_restore_title', '⚠️ 설정 복원')
+        // ★ (2026-11-12 22:47, 105차 개선 CNF-5) 단추 글자를 '삭제' → '복원'(빨강 그대로, confirmDanger)으로, 맨 위에 복원할 파일 이름 — 종전엔 설정 복원인데 단추가 '삭제'였고 파일 이름이 없었음
+        if (!await this.confirmDanger(
+            `<strong style="overflow-wrap:anywhere;word-break:break-word">${this.escapeHtml(file.name)}</strong>\n` + t('config_restore_warning', '설정을 복원하면 현재 사용자, 스토리지, 권한 등 모든 설정이 백업 시점으로 덮어씌워집니다.\n\n정말 복원하시겠습니까?'),   // ★ (2026-11-13 00:38, 107차 재검토 RGR23-1) 띄어쓰기 없는 긴 이름이 창 오른쪽에서 잘려 끝(확장자 등)이 안 보였음(재현: 영문 120자, 390~1366 폭) → 이름만 줄바꿈(띄어쓰기에서 먼저, 안 되면 아무 곳에서 — 108차 재검토에서 단어 중간에서 먼저 끊기던 것을 바꿈)
+            t('config_restore_title', '⚠️ 설정 복원'),
+            t('restore', '복원')
         )) return;
         
         const statusEl = document.getElementById('config-backup-status');
         if (statusEl) statusEl.textContent = t('config_restoring', '⏳ 복원 중...');
         
+        let _crStatus = 0;
         try {
             const formData = new FormData();
             formData.append('csrf_token', window.CSRF_TOKEN);
             formData.append('backup_file', file);
             
-            const response = await fetch('api.php?action=config_restore', {
+            const response = await this._csrfFetch(() => { formData.set('csrf_token', window.CSRF_TOKEN); return fetch('api.php?action=config_restore', {   // ★ (2026-11-13 08:02, 109차 개선 TABS-4) 위 _csrfFetch ★(토큰 오류로 거절된 요청만 다시 — 복원은 실행되지 않은 상태)
                 method: 'POST',
                 body: formData
-            });
+            }); });
+            _crStatus = response.status;   // ★ (2026-11-01 11:45, 39차 점검) 아래 catch 에서 보여 줄 HTTP 상태
             
             const res = await response.json();
             
@@ -22950,8 +24921,10 @@ const App = {
                 this.toast(res.error, 'error');
             }
         } catch (e) {
-            if (statusEl) statusEl.innerHTML = `<span style="color:var(--fs-fg-err, #e53935);">❌ ${t('config_restore_failed', '복원 실패')}</span>`;
-            this.toast(t('config_restore_failed', '복원 실패'), 'error');
+            // ★ (2026-11-01 11:45, 39차 점검) 업로드 한도 초과(413)·PHP 오류 페이지처럼 JSON 이 아닌 응답이면 이유 없이 '복원 실패'만 나왔음 → HTTP 상태를 붙임
+            const _crMsg = t('config_restore_failed', '복원 실패') + (_crStatus && _crStatus !== 200 ? ` (HTTP ${_crStatus})` : '');
+            if (statusEl) statusEl.innerHTML = `<span style="color:var(--fs-fg-err, #e53935);">❌ ${this.escapeHtml(_crMsg)}</span>`;
+            this.toast(_crMsg, 'error');
         }
     },
     
@@ -23070,6 +25043,8 @@ const App = {
         document.getElementById('sync-task-id').value = task.id;
         document.getElementById('sync-task-name').value = task.name || '';
         document.getElementById('sync-task-mode').value = task.mode || 'one-way';
+        // ★ (2026-11-04) 목록(storages_all)에 없는 스토리지(홈 등)를 쓰는 작업은 select 가 빈 값이 돼 저장 때 0 으로 바뀌었음 → 편집할 때만 그 번호를 선택지로 넣어 유지(목록 표시와 같은 '#번호')
+        [['sync-source-storage', task.source_storage_id], ['sync-target-storage', task.target_storage_id]].forEach(([selId, sid]) => { const sel = document.getElementById(selId); if (sel && parseInt(sid) > 0 && ![...sel.options].some(o => o.value === String(sid))) { const o = document.createElement('option'); o.value = String(sid); o.textContent = '#' + sid; sel.appendChild(o); } });
         document.getElementById('sync-source-storage').value = task.source_storage_id;
         document.getElementById('sync-target-storage').value = task.target_storage_id;
         document.getElementById('sync-source-path').value = task.source_path || '';
@@ -23107,7 +25082,7 @@ const App = {
             type: schedType,
             time: document.getElementById('sync-schedule-time').value || '03:00',
             dow: parseInt(document.getElementById('sync-schedule-dow').value) || 0,
-            dom: parseInt(document.getElementById('sync-schedule-dom').value) || 1,
+            dom: Math.min(28, Math.max(1, parseInt(document.getElementById('sync-schedule-dom').value) || 1)),   // ★ (2026-11-02 10:30, 42차 점검) 입력칸 max=28 이 클릭 저장이라 강제되지 않아 31(짧은 달에 빠짐)·40(영영 안 돎)이 그대로 저장됐음 → 1~28 로 자름(서버 쪽은 다른 파일 몫)
             hours: parseInt(document.getElementById('sync-schedule-hours').value) || 1
         };
         
@@ -23140,21 +25115,28 @@ const App = {
             this.toast(t('same_source_target', '원본과 대상이 동일합니다.'), 'error'); return;
         }
         
-        const res = await this.api('sync_task_save', data);
+        // ★ (2026-11-02 11:53, 43차 점검) 응답 전 다시 누르면 같은 작업이 둘 생겨(예약·고아 삭제까지) 같은 시각에 두 번 돌았음 → 요청 동안 저장 단추를 잠금(saveStorage 와 같게)
+        if (this._syncTaskSaving) return;
+        this._syncTaskSaving = true;
+        const _stBtn = document.getElementById('btn-save-sync-task');
+        if (_stBtn) _stBtn.disabled = true;
+        let res;
+        try { res = await this.api('sync_task_save', data); }
+        finally { this._syncTaskSaving = false; if (_stBtn) _stBtn.disabled = false; }
+        if (!res) return;
         if (res.success) {
             this.toast(t('toast_saved'), 'success');
             document.getElementById('sync-task-form').style.display = 'none';
             
             // 예약 설정 시 cron 명령어 안내
+            // ★ (2026-11-01 09:43, 38차 점검) 안내 명령의 경로를 브라우저 주소(location.pathname)로 만들어 서버에 없는 경로(php /sync_cron.php 등)가 나왔고,
+            //   Windows 서버에도 늘 crontab·/var/log 를 안내했음 — 화면은 실제 설치 경로를 알 수 없으니 경로를 빼고 편집 화면의 '서버 설정 가이드'를 가리킴
             if (schedEnabled && res.task && res.task.schedule && res.task.schedule.cron) {
-                const cronCmd = `* * * * * php ${location.pathname.replace(/\/[^/]*$/, '')}/sync_cron.php >> /var/log/filestation_sync.log 2>&1`;
                 const logEl = document.getElementById('sync-log');
                 const logContent = document.getElementById('sync-log-content');
                 logEl.style.display = '';
-                logContent.textContent = `⏰ ${t('cron_setup_guide', 'cron 설정 방법')}:\n\n` +
-                    `1. ${t('cron_step1', '서버에서 crontab -e 실행')}\n` +
-                    `2. ${t('cron_step2', '아래 명령어를 추가')}:\n\n` +
-                    `${cronCmd}\n\n` +
+                logContent.textContent = `⏰ ${t('sync_sched_setup_title', '자동 예약을 실제로 실행하려면 서버 설정이 필요합니다')}\n\n` +
+                    `${t('sync_sched_setup_hint', "FileStation 폴더의 sync_cron.php 를 매분 실행하도록 서버에 등록하세요(Windows: 작업 스케줄러, Linux: crontab). 명령과 경로는 작업 편집 화면의 '자동 예약 (cron)' 아래 '서버 설정 가이드'를 펼쳐 확인하세요.")}\n\n` +
                     `💡 ${t('cron_note', '매분 실행되며, 예약 시간이 되면 자동으로 동기화됩니다.')}`;
             }
             
@@ -23170,6 +25152,8 @@ const App = {
         if (res.success) {
             this.toast(t('toast_deleted', '삭제되었습니다.'), 'success');
             await this._loadSyncTasks();
+        } else {
+            this.toast(res.error || t('delete_failed', '삭제 실패'), 'error');   // ★ (2026-11-01 11:44, 39차 점검) 실패해도(권한·세션 만료) 아무 알림이 없었음
         }
     },
     
@@ -23185,7 +25169,7 @@ const App = {
         
         progressEl.style.display = '';
         logEl.style.display = '';
-        logContent.textContent = t('sync_starting', '동기화 시작 중...\n');
+        logContent.textContent = t('sync_starting', '동기화 시작 중...').replace(/\n+$/, '') + '\n';   // ★ (2026-11-03 08:25, 48차 점검) 번역 값엔 줄바꿈이 없어 첫 로그 줄이 '동기화 시작 중...[MKDIR]…' 처럼 붙었음 → 끝 줄바꿈은 코드에서 한 번만
         progressBar.style.width = '0%';
         progressBar.style.background = 'var(--primary,#667eea)';
         progressText.textContent = t('sync_running_status', '실행 중...');
@@ -23196,7 +25180,7 @@ const App = {
             const url = `api.php?action=sync_execute&task_id=${id}&csrf_token=${encodeURIComponent(csrfToken)}`;
             
             this._syncAbortController = new AbortController();
-            const response = await fetch(url, { signal: this._syncAbortController.signal });
+            const response = await this._csrfFetch(() => fetch(url.replace(/csrf_token=[^&]*$/, 'csrf_token=' + encodeURIComponent(this.csrfToken || csrfToken)), { signal: this._syncAbortController.signal }));   // ★ (2026-11-13 08:02, 109차 개선 TABS-4) 위 _csrfFetch ★(처음 주소는 종전과 같음)
             // ★ (2026-10-30 00:51, 25차 — 24차 남은 낮은 것) 서버가 진행 스트림 대신 오류(권한·보안 토큰·요청 제한 등 JSON)로 답하면 이유를 보여 주고 끝냄 —
             //   종전엔 'data:' 줄이 없어 아무 안내 없이 '실행 중...' 으로 멈춰 있었음
             if (!response.ok || !/event-stream/i.test(response.headers.get('content-type') || '')) {
@@ -23214,11 +25198,12 @@ const App = {
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let _syncEnded = false;   // ★ (2026-11-01 11:44, 39차 점검) complete·error 를 받았는지(아래 끝 처리)
             
             while (true) {
                 if (this._syncAborted) {
                     await reader.cancel();
-                    progressText.textContent = '⏹️ 사용자에 의해 중지됨';
+                    progressText.textContent = '⏹️ ' + t('sync_stopped_by_user', '사용자에 의해 중지됨');
                     progressBar.style.background = '#f39c12';
                     break;
                 }
@@ -23242,7 +25227,7 @@ const App = {
                         } else if (msg.type === 'info') {
                             // 동기화 시작 정보
                             const d = msg.data;
-                            progressText.textContent = `총 ${d.totalFiles}개 파일 (${d.totalSizeText})`;
+                            progressText.textContent = tf('sync_total_files', { n: d.totalFiles, s: d.totalSizeText }, `총 ${d.totalFiles}개 파일 (${d.totalSizeText})`);
                         } else if (msg.type === 'progress') {
                             const d = msg.data;
                             progressBar.style.width = d.percent + '%';
@@ -23260,10 +25245,11 @@ const App = {
                                 return bps + 'B/s';
                             };
                             let line1 = `${d.percent}% (${d.current}) | ${fmtSize(d.transferred)} / ${fmtSize(d.totalSize)} | ${fmtSpeed(d.speed)}`;
-                            let line2 = `복사:${s.copied} 업데이트:${s.updated} 삭제:${s.deleted} 건너뜀:${s.skipped} 오류:${s.errors}`;
+                            let line2 = `${t('copied', '복사')}:${s.copied} ${t('updated', '업데이트')}:${s.updated} ${t('deleted', '삭제')}:${s.deleted} ${t('skipped', '건너뜀')}:${s.skipped} ${t('errors', '오류')}:${s.errors}`;   // ★ (2026-10-31 11:52, 34차 전체 점검) 완료 줄처럼 번역
                             let line3 = d.file ? `📄 ${d.file} (${fmtSize(d.fileSize)})` : '';
                             progressText.textContent = line1 + '\n' + line2 + (line3 ? '\n' + line3 : '');
                         } else if (msg.type === 'complete') {
+                            _syncEnded = true;
                             const d = msg.data;
                             const s = d.stats;
                             progressBar.style.width = '100%';
@@ -23273,6 +25259,7 @@ const App = {
                             progressText.textContent = `✅ ${modeName} ${t('sync_complete_label', '완료')} - ${t('copied', '복사')}: ${s.copied}, ${t('updated', '업데이트')}: ${s.updated}, ${t('deleted', '삭제')}: ${s.deleted}, ${t('skipped', '건너뜀')}: ${s.skipped}, ${t('errors', '오류')}: ${s.errors}`;
                             this.toast(`${modeName} ${t('sync_complete_label', '완료')} · ${tf('nt_sync_stats', {c: s.copied, u: s.updated, d: s.deleted, e: s.errors}, `복사 ${s.copied} · 갱신 ${s.updated} · 삭제 ${s.deleted} · 오류 ${s.errors}`)}`, s.errors > 0 ? 'warning' : 'success');
                         } else if (msg.type === 'error') {
+                            _syncEnded = true;
                             progressBar.style.width = '100%';
                             progressBar.style.background = '#e74c3c';
                             progressText.textContent = '❌ ' + msg.data;
@@ -23282,14 +25269,23 @@ const App = {
                     } catch(e) {}
                 }
             }
+            // ★ (2026-11-01 11:44, 39차 점검) 스트림이 시작된 뒤 서버가 도중에 죽으면(치명 오류·시간 초과·연결 끊김) complete·error 없이 끝나 진행 문구에 멈춘 채 아무 안내가 없었음
+            //   → 둘 다 못 받고 끝났으면(사용자 중지 제외) '결과를 알 수 없음'으로 표시·알림
+            if (!_syncEnded && !this._syncAborted) {
+                const _unk = t('sync_result_unknown', '연결이 끊겨 동기화 결과를 알 수 없습니다. 대상 폴더를 확인하세요.');
+                progressBar.style.background = '#e74c3c';
+                progressText.textContent = '⚠️ ' + _unk;
+                logContent.textContent += '\n⚠️ ' + _unk + '\n';
+                this.toast(_unk, 'warning');
+            }
             
             await this._loadSyncTasks();
             
         } catch (e) {
             if (e.name === 'AbortError' || this._syncAborted) {
-                progressText.textContent = '⏹️ 사용자에 의해 중지됨';
+                progressText.textContent = '⏹️ ' + t('sync_stopped_by_user', '사용자에 의해 중지됨');
                 progressBar.style.background = '#f39c12';
-                logContent.textContent += '\n⏹️ 동기화가 중지되었습니다.';
+                logContent.textContent += '\n⏹️ ' + t('sync_stopped_log', '동기화가 중지되었습니다.');
                 this.toast(t('sync_aborted', '동기화가 중지되었습니다.'), 'warning');
             } else {
                 progressText.textContent = '❌ ' + e.message;
@@ -23304,11 +25300,16 @@ const App = {
     
     // 사용자 폼 표시
     async showUserForm(id = null) {
+        const _ufSeq = this._userFormSeq = (this._userFormSeq || 0) + 1, _ufEl = document.getElementById('modal-user-form'), _ufOpen = () => !!(_ufEl && _ufEl.style.display && _ufEl.style.display !== 'none'), _ufWasOpen = _ufOpen();   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 이 창을 여는 차례 번호와 시작할 때 창이 떠 있었는지(저장 뒤 다시 채우기) —
+        //   종전엔 다시 채우는 읽기가 늦게 오면 그사이 X 뒤 연 다른 사용자 창의 칸을 앞 사용자 값으로 덮었고(id=1 창에 viewer 값), Esc·X 로 닫은 창이 읽기가 끝날 때 다시 떴음(재현). 차례가 바뀌었거나 떠 있던 창이 닫혔으면 늦게 온 응답은 버림
+        const _ufStale = () => _ufSeq !== this._userFormSeq || (_ufWasOpen && !_ufOpen());   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위와 같음
+        { const _qe = document.getElementById('user-quota'); if (_qe) _qe._fsQuotaOrig = null; }   // ★ (2026-11-03 13:55, 51차 점검) 스토리지 창과 같음(용량 원래 값)
         $('#user-id').val(id || '');
         $('#user-form-title').text(id ? t('edit_user', '사용자 수정') : t('add_user', '사용자 추가'));
         
         // 역할 목록 로드 (기본 + 커스텀)
         const rolesRes = await this.api('roles', {}, 'GET');
+        if (_ufStale()) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위 _ufStale
         const roleSelect = $('#user-role').empty();
         roleSelect.append(`<option value="user">${t('role_user','일반 사용자')}</option>`);
         roleSelect.append(`<option value="sub_admin">${t('role_sub_admin','부 관리자')}</option>`);
@@ -23321,6 +25322,10 @@ const App = {
         
         if (id) {
             const res = await this.api('users', {}, 'GET');
+            if (_ufStale()) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 위 _ufStale
+            if (!res || !res.success || !Array.isArray(res.users)) { this._admLoadMark('user_form', false); return; }   // ★ (2026-11-13 21:10, 116차 개선 RGR29-1) 112차 _admLoadMark 와 같은 방식 — 종전엔 읽기가 실패하면 여기서 TypeError 로 멈춰, 이미 다시 만든 역할 칸이 'user' 로 보이거나(저장 뒤 다시 채우기)
+            //   앞서 연 사용자 값이 남은 채(열 때) 안내 없이 저장할 수 있었음(재현: viewer 부관리자 → 두 번째 저장에 role user·권한 null). 멈추는 자리는 종전과 같고, 실패 알림 + 저장 때 확인(막지 않음)
+            this._admLoadMark('user_form', !!(rolesRes && rolesRes.success));   // ★ (2026-11-13 21:10, 116차 개선 RGR29-1) 역할 목록 읽기도 실패면 표시(사용자 역할 칸이 목록에 없는 값이 됨). 둘 다 성공이면 표시를 지움(동작 그대로)
             const user = res.users.find(u => u.id === id);
             if (user) {
                 $('#user-username').val(user.username).prop('disabled', true);
@@ -23359,15 +25364,20 @@ const App = {
                 
                 // 용량 설정
                 const quota = user.quota || 0;
+                $('#user-quota').data('fsQuotaOrig', null);   // ★ (2026-11-02 10:28, 42차 점검) 아래 채우기 주석
                 if (quota === 0) {
                     $('#user-quota').val(0);
                     $('#user-quota-unit').val('0');
-                } else if (quota >= 1073741824) {
-                    $('#user-quota').val(Math.round(quota / 1073741824));
+                } else if (quota % 1073741824 === 0) {
+                    // ★ (2026-11-02 10:28, 42차 점검) 1GB 이상이면 GB 로 반올림해 채워, 이름·역할만 고쳐 저장해도 용량이 바뀌었음(1500MB→1GB, 1.5GB→2GB)
+                    //   → 나누어떨어질 때만 GB, 아니면 MB 로 정확히. MB 로도 안 떨어지면 반올림해 보이되 값·단위를 안 바꾸면 원래 값 그대로 저장
+                    $('#user-quota').val(quota / 1073741824);
                     $('#user-quota-unit').val('1073741824');
                 } else {
-                    $('#user-quota').val(Math.round(quota / 1048576));
+                    const _mb = Math.max(1, Math.round(quota / 1048576));
+                    $('#user-quota').val(_mb);
                     $('#user-quota-unit').val('1048576');
+                    if (quota % 1048576 !== 0) { const _qe = document.getElementById('user-quota'); if (_qe) _qe._fsQuotaOrig = { q: quota, v: String(_mb), u: '1048576' }; }
                 }
                 
                 // 역할에 따른 UI 처리
@@ -23381,8 +25391,10 @@ const App = {
             $('#user-role').val('user').prop('disabled', false);
             $('#user-status').val('active');
             $('#user-sso-group').hide();   // ★ (2026-10-29 03:51, 17차) 새 사용자 만들 땐 SSO 연결 칸 숨김
+            this._admLoadMark('user_form', true);   // ★ (2026-11-13 21:10, 116차 개선 RGR29-1) 새 사용자는 읽어 올 값이 없음 — 앞서 연 수정 창의 실패 표시만 지움(알림 없음)
             $('#user-quota').val(0);
             $('#user-quota-unit').val('0');
+            $('#user-quota').data('fsQuotaOrig', null);   // ★ (2026-11-02 10:28, 42차 점검) 편집 창 채우기 주석
             $('#suspend-from').val('');
             $('#suspend-until').val('');
             $('#suspend-reason').val('');
@@ -23422,6 +25434,7 @@ const App = {
     
     // 사용자 저장
     async saveUser() {
+        if (!await this._admLoadFailConfirm('user_form')) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-1) 읽기 실패 표시가 있을 때만 확인(취소면 저장 안 함, 확인이면 종전처럼 저장)
         const id = $('#user-id').val();
         const username = ($('#user-username').val() || '').trim();
         const password = $('#user-password').val() || '';
@@ -23448,13 +25461,15 @@ const App = {
         
         // 비밀번호 입력 시 길이 검증
         if (password && (password.length < 8 || password.length > 72)) {
-            this.toast(t('api_err_password_length', '비밀번호는 8~72자여야 합니다.'), 'error');
+            this.toast(t('api_err_password_length', '비밀번호는 8자 이상, 72바이트 이하여야 합니다(한글은 1자가 3바이트).'), 'error');   // ★ (2026-11-12 10:56, 97차 개선 B2) 문구만 실제 기준(바이트, bcrypt 72바이트)으로 — 종전 '8~72자' 는 한글 30자(90바이트) 거부 때 안내와 맞지 않았음(재현). 받는 기준은 그대로
             return;
         }
         
-        const quotaValue = parseInt($('#user-quota').val()) || 0;
+        // ★ (2026-11-02 10:28, 42차 점검) parseInt 라 0.5 GB 가 0(=무제한)으로 저장됐음(E8#3) → 소수도 받아 바이트로 환산, 0 보다 큰 값은 최소 1 바이트(무제한이 되지 않게)
+        const quotaValue = parseFloat($('#user-quota').val()) || 0;
         const quotaUnit = parseInt($('#user-quota-unit').val()) || 0;
-        const quota = quotaUnit === 0 ? 0 : quotaValue * quotaUnit;
+        let quota = quotaUnit === 0 ? 0 : (quotaValue > 0 ? Math.max(1, Math.round(quotaValue * quotaUnit)) : Math.round(quotaValue * quotaUnit));
+        { const _o = (document.getElementById('user-quota') || {})._fsQuotaOrig; if (_o && quotaUnit !== 0 && String($('#user-quota').val()).trim() === _o.v && String($('#user-quota-unit').val()) === _o.u) quota = _o.q; }   // ★ (2026-11-02 10:28, 42차 점검) 값·단위를 안 고쳤으면 원래 용량 그대로
         const role = $('#user-role').val();
         const status = $('#user-status').val();
         
@@ -23494,8 +25509,11 @@ const App = {
         
         if (res.success) {
             this.toast(t('toast_saved'), 'success');
+            const _muSb = document.querySelector('#modal-user-form .modal-body'), _muSt = _muSb ? _muSb.scrollTop : 0;   // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 아래에서 다시 띄울 때 보던 위치로
             closeModal();
             this.showUsersModal();
+            // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 기존 사용자 수정이면 목록은 위처럼 새로 읽고 수정 창은 다시 띄워 서버에 저장된 값으로 채움(창을 열 때 쓰는 showUserForm, 비밀번호 칸은 비움) — 종전엔 저장하면 창이 닫혀 목록으로 돌아갔음. 닫기는 [취소]·[X]. 새 사용자 추가는 종전대로 닫힘
+            if (id) { this.showModal('modal-user-form'); this.showUserForm(parseInt(id)).then(() => { if (_muSb) _muSb.scrollTop = _muSt; }); }
         } else {
             this.toast(res.error, 'error');
         }
@@ -23503,7 +25521,8 @@ const App = {
     
     // 사용자 삭제
     async deleteUser(id) {
-        if (!await this.confirmDelete((t('confirm_delete_really', '정말 삭제하시겠습니까?')), t('delete_user', '사용자 삭제'))) return;
+        const _du = (this._usersData || []).find(u => String(u.id) === String(id));   // ★ (2026-11-12 22:47, 105차 개선 CNF-5) 맨 위에 사용자 아이디를 보임 — 종전엔 "정말 삭제하시겠습니까?"만 있어 누구인지 문구에 없었음(목록에 없으면 종전 문구 그대로)
+        if (!await this.confirmDelete((_du && _du.username ? `<strong style="overflow-wrap:anywhere;word-break:break-word">${this.escapeHtml(_du.username)}</strong>\n` : '') + (t('confirm_delete_really', '정말 삭제하시겠습니까?')), t('delete_user', '사용자 삭제'))) return;   // ★ (2026-11-13 00:38, 107차 재검토 RGR23-1) 띄어쓰기 없는 긴 이름이 창 오른쪽에서 잘려 끝(확장자 등)이 안 보였음(재현: 영문 120자, 390~1366 폭) → 이름만 줄바꿈(띄어쓰기에서 먼저, 안 되면 아무 곳에서 — 108차 재검토에서 단어 중간에서 먼저 끊기던 것을 바꿈)
         
         const res = await this.api('user_delete', { id });
         
@@ -23632,6 +25651,7 @@ const App = {
         // 사용자 목록 로드
         const usersRes = await this.api('users', {}, 'GET');
         this.qosUsers = usersRes.success ? usersRes.users : [];
+        this._admLoadMark('qos', !!(qosRes.success && rolesRes.success && usersRes.success));   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark) — 설정·역할·사용자 셋 다 성공이어야 성공(하나라도 실패면 그 줄이 빠진 채 저장됨)
         this.qosSettings = qosSettings;
         this.renderQosUsers();
         
@@ -23710,7 +25730,8 @@ const App = {
             const downloadVal = item.querySelector('.qos-download').value;
             const uploadVal = item.querySelector('.qos-upload').value;
             if (downloadVal !== '' || uploadVal !== '') {
-                users[userId] = { download: downloadVal !== '' ? parseInt(downloadVal) : null, upload: uploadVal !== '' ? parseInt(uploadVal) : null };
+                // ★ (2026-11-02 10:30, 42차 점검) parseInt 라 0.5 가 0(=무제한)으로 바뀌어 보관됐음 → 숫자 그대로(parseFloat) 보관하고 저장할 때 정수인지 확인(saveQosSettings)
+                users[userId] = { download: downloadVal !== '' ? parseFloat(downloadVal) : null, upload: uploadVal !== '' ? parseFloat(uploadVal) : null };
             } else {
                 delete users[userId];
             }
@@ -23719,10 +25740,27 @@ const App = {
     
     // QoS 설정 저장
     async saveQosSettings() {
+        if (!await this._admLoadFailConfirm('qos')) return;   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 위와 같음
         const settings = {
             roles: {},
             users: {}
         };
+        
+        // ★ (2026-11-02 10:30, 42차 점검) 속도 제한은 서버가 정수 MB/s 로 저장((int))해 0.5 는 0(=무제한, 사용자별이면 역할 제한까지 덮음)이 됐음 → 정수가 아니면 저장하지 않고 안내
+        {
+            const _qosBad = (v) => v !== '' && v !== null && v !== undefined && !/^\d+$/.test(String(v).trim());
+            let _qosBadEl = null;
+            document.querySelectorAll('#qos-roles-list .qos-item input.qos-download, #qos-roles-list .qos-item input.qos-upload, #qos-users-list .qos-item input.qos-download, #qos-users-list .qos-item input.qos-upload').forEach(function(el) {
+                if (!_qosBadEl && _qosBad(el.value)) _qosBadEl = el;
+            });
+            this._captureQosUserInputs();
+            const _qosUsersBad = Object.keys((this.qosSettings && this.qosSettings.users) || {}).some(uid => { const u = this.qosSettings.users[uid]; return u && ((u.download !== null && u.download !== undefined && _qosBad(u.download)) || (u.upload !== null && u.upload !== undefined && _qosBad(u.upload))); });
+            if (_qosBadEl || _qosUsersBad) {
+                this.toast(t('qos_integer_only', '속도 제한은 0 이상의 정수(MB/s)로 입력하세요.'), 'error');
+                if (_qosBadEl) { try { _qosBadEl.focus(); } catch (e) {} }
+                return;
+            }
+        }
         
         // 역할별 설정 수집 (바닐라 JS)
         document.querySelectorAll('#qos-roles-list .qos-item').forEach(function(item) {
@@ -23746,7 +25784,7 @@ const App = {
         const res = await this.api('qos_save', settings);
         if (res.success) {
             this.toast(t('toast_speed_limit_saved'), 'success');
-            closeModal();
+            // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 종전 closeModal() 을 뺌 — 저장하면 창이 바로 닫혔음. 닫기는 [취소]·[X]. 다시 읽지는 않음(서버는 받은 정수를 그대로 저장해 화면 값과 같고, 다시 읽으면 보던 탭·사용자 검색이 처음으로 돌아감)
         } else {
             this.toast(res.error || t('err_save_failed', '저장 실패'), 'error');
         }
@@ -23758,6 +25796,60 @@ const App = {
         return this.userQos || { download: 0, upload: 0 };
     },
     
+    // ★ (2026-11-03 10:25, 금지 아이디·닉네임 관리 — 펜닐 요청) 사용자 관리 › 🚫 금지 아이디·닉네임 — 목록(✕ 로 지움)·여러 줄 추가
+    async showSignupBlockModal() {
+        $('#modal-signup-block .sb-input').val('');
+        $('#modal-signup-block .sb-count').text('');
+        $('#modal-signup-block .sb-list').html('').hide();
+        this.showModal('modal-signup-block');
+        await this.loadSignupBlocks();
+    },
+
+    async loadSignupBlocks() {
+        const res = await this.api('signup_block_list', {});
+        if (!res || !res.success) { this.toast((res && res.error) || t('error', '오류'), 'error'); return; }
+        this.renderSignupBlocks('id', res.usernames || []);
+        this.renderSignupBlocks('nick', res.nicknames || []);
+    },
+
+    renderSignupBlocks(type, list) {
+        const $sec = $(`#modal-signup-block .sb-section[data-type="${type}"]`);
+        const n = list.length;
+        $sec.find('.sb-count').text(type === 'id'
+            ? tf('signup_block_count_id', `${n}개의 금지 아이디가 있습니다.`, { n })
+            : tf('signup_block_count_nick', `${n}개의 금지 닉네임이 있습니다.`, { n }));
+        this._sbLists = this._sbLists || {};
+        this._sbLists[type] = list.slice();
+        const $ul = $sec.find('.sb-list');
+        if (!n) { $ul.html('').hide(); return; }
+        const delT = this.escapeHtml(t('delete', '삭제'));
+        $ul.html(list.map((v, i) => '<li style="display:inline-flex; align-items:center; gap:4px; padding:2px 6px; border:1px solid var(--border,var(--fs-border-2, #ddd)); border-radius:12px; font-size:13px;">'
+            + '<span>' + this.escapeHtml(v) + '</span>'
+            + '<button type="button" class="sb-del" data-i="' + i + '" title="' + delT + '" style="border:none; background:none; cursor:pointer; color:#c0392b; padding:0 2px; font-size:13px;">✕</button></li>').join('')).css('display', 'flex');
+    },
+
+    async addSignupBlock(type) {
+        const $sec = $(`#modal-signup-block .sb-section[data-type="${type}"]`);
+        const items = String($sec.find('.sb-input').val() || '');
+        if (!items.trim()) { $sec.find('.sb-input').focus(); return; }
+        const $btn = $sec.find('.sb-add').prop('disabled', true);
+        try {
+            const res = await this.api('signup_block_add', { type, items });
+            if (!res || !res.success) { this.toast((res && res.error) || t('error', '오류'), 'error'); return; }
+            $sec.find('.sb-input').val('');
+            if (res.warning) this.toast(res.warning, 'warning');
+            else if (!res.added) this.toast(t('signup_block_already', '이미 목록에 있습니다.'), 'info');
+            else this.toast(tf('signup_block_added', `${res.added || 0}개 추가했습니다.`, { n: res.added || 0 }), 'success');
+            await this.loadSignupBlocks();
+        } finally { $btn.prop('disabled', false); }
+    },
+
+    async removeSignupBlock(type, value) {
+        if (!value) return;
+        const res = await this.api('signup_block_remove', { type, value });
+        if (!res || !res.success) { this.toast((res && res.error) || t('error', '오류'), 'error'); return; }
+        await this.loadSignupBlocks();
+    },
     // 일괄 용량 설정 모달
     showBulkQuotaModal() {
         $('#bulk-quota-target').val('all');
@@ -23769,9 +25861,9 @@ const App = {
     // 일괄 용량 적용
     async applyBulkQuota() {
         const target = $('#bulk-quota-target').val();
-        const quotaValue = parseInt($('#bulk-quota-value').val()) || 0;
+        const quotaValue = parseFloat($('#bulk-quota-value').val()) || 0;   // ★ (2026-11-02 10:28, 42차 점검) 사용자 용량과 같음 — 0.5 GB 가 0(=무제한)으로 모두에게 적용됐음
         const quotaUnit = parseInt($('#bulk-quota-unit').val()) || 0;
-        const quota = quotaUnit === 0 ? 0 : quotaValue * quotaUnit;
+        const quota = quotaUnit === 0 ? 0 : (quotaValue > 0 ? Math.max(1, Math.round(quotaValue * quotaUnit)) : Math.round(quotaValue * quotaUnit));
         
         const targetText = {
             'all': t('all_users', '모든 사용자'),
@@ -23835,6 +25927,7 @@ const App = {
     async showInternalShareModal(item) {
         this.selectedItems = [item];
         const storageId = item.storageId || this.currentStorage;
+        this._ishareTarget = { item, storageId };   // ★ (2026-11-13 08:10, 109차 NAV2-5) 창을 열 때 대상·스토리지를 잡아 둠 — 종전엔 '공유' 때 selectedItems[0] 을 다시 읽어, 창을 연 채 '뒤로' 하면 선택이 비어 아무 반응이 없었음(재현)
         const isDir = item.is_dir || item.isDir;
         
         $('#ishare-filename').text(item.path);
@@ -23923,10 +26016,11 @@ const App = {
                 );
                 if (existing.length > 0) {
                     const permLabels = { read: '👁️ ' + t('perm_read', '읽기'), write: '✏️ ' + t('perm_write_label', '쓰기'), full: '🔓 ' + t('perm_full', '전체') };
+                    // ★ (2026-11-13 01:08, 108차 ARIA-4) 그림만 있는 공유 해제 단추(✕)에 이름 — 종전엔 이름이 비었음
                     let html = existing.map(s => `
                         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:var(--fs-surface-2, #f5f5f5);border-radius:6px;margin-bottom:4px;">
                             <span>👤 ${this.escapeHtml(s.shared_with_display || s.shared_with_name)} — ${permLabels[s.permission] || s.permission}</span>
-                            <button class="btn btn-sm btn-danger" onclick="App.deleteInternalShare(${s.id})" style="font-size:11px;padding:2px 8px;">✕</button>
+                            <button class="btn btn-sm btn-danger" onclick="App.deleteInternalShare(${s.id})" aria-label="${t('delete_share','공유 삭제')}" style="font-size:11px;padding:2px 8px;">✕</button>
                         </div>
                     `).join('');
                     $('#ishare-existing-list').html(html);
@@ -23962,10 +26056,11 @@ const App = {
             return;
         }
         
-        const item = this.selectedItems[0];
+        const _it = this._ishareTarget;   // ★ (2026-11-13 08:10, 109차 NAV2-5) 창을 열 때 잡은 대상·스토리지를 씀(없으면 종전처럼)
+        const item = _it ? _it.item : this.selectedItems[0];
         if (!item) return;
         
-        const storageId = item.storageId || this.currentStorage;
+        const storageId = _it ? _it.storageId : (item.storageId || this.currentStorage);
         
         const res = await this.api('internal_share_create', {
             storage_id: storageId,
@@ -23984,6 +26079,7 @@ const App = {
     },
     
     async deleteInternalShare(id) {
+        if (!await this.confirmDelete(t('confirm_delete_share', '공유를 삭제하시겠습니까?'), t('delete_share', '공유 삭제'))) return;   // ★ (2026-11-03 08:07, 48차 점검) 링크 공유 삭제(deleteShare)와 같게 확인 창 — 종전엔 ✕ 한 번에 바로 지워졌음(재현)
         const res = await this.api('internal_share_delete', { id });
         if (res.success) {
             this.toast(t('toast_deleted'), 'success');
@@ -24013,7 +26109,13 @@ const App = {
     _renderInternalSharesList(res, containerId, modalId, isAdmin) {
         const container = $(`#${containerId}`);
         
-        if (!res.success || !res.shares || res.shares.length === 0) {
+        // ★ (2026-11-02 11:55, 43차 점검) 못 받았을 때도 '공유 항목이 없습니다'로 그렸음 → 실패면 이유를 보여 줌(showSharesModal 과 같은 방식, 아래 공유받은 목록도 같음)
+        if (!res || !res.success) {
+            container.html(`<div class="text-center" style="padding:30px;color:var(--fs-fg-err, #e74c3c);">⚠️ ${this.escapeHtml((res && res.error) || t('list_load_failed', '목록을 불러올 수 없습니다.'))}</div>`);
+            this.showModal(modalId);
+            return;
+        }
+        if (!res.shares || res.shares.length === 0) {
             container.html(`<div style="text-align:center;padding:30px;color:var(--fs-text-3, #999);">📭 ${t('ishare_no_shares', '공유 항목이 없습니다')}</div>`);
             this.showModal(modalId);
             return;
@@ -24072,6 +26174,7 @@ const App = {
     },
     
     async deleteInternalShareFromList(id, isAdmin) {
+        if (!await this.confirmDelete(t('confirm_delete_share', '공유를 삭제하시겠습니까?'), t('delete_share', '공유 삭제'))) return;   // ★ (2026-11-03 08:07, 48차 점검) 링크 공유 삭제(deleteShare)와 같게 확인 창 — 종전엔 ✕ 한 번에 바로 지워졌음(재현)
         const res = await this.api('internal_share_delete', { id });
         if (res.success) {
             this.toast(t('toast_deleted'), 'success');
@@ -24087,7 +26190,12 @@ const App = {
         const res = await this.api('internal_shares_with_me');
         const container = $('#shared-with-me-list');
         
-        if (!res.success || !res.shares || res.shares.length === 0) {
+        if (!res || !res.success) {   // ★ (2026-11-02 11:55, 43차 점검) _renderInternalSharesList 주석과 같음
+            container.html(`<div class="text-center" style="padding:30px;color:var(--fs-fg-err, #e74c3c);">⚠️ ${this.escapeHtml((res && res.error) || t('list_load_failed', '목록을 불러올 수 없습니다.'))}</div>`);
+            this.showModal('modal-shared-with-me');
+            return;
+        }
+        if (!res.shares || res.shares.length === 0) {
             container.html(`<div style="text-align:center;padding:30px;color:var(--fs-text-3, #5f6368);">📭 ${t('ishare_no_shared', '공유받은 항목이 없습니다')}</div>`);
             this.showModal('modal-shared-with-me');
             return;
@@ -24236,8 +26344,9 @@ const App = {
     // 드롭된 파일 처리 (uploadToInternalShare의 중복 체크 로직 재사용)
     async _ishHandleDroppedFiles(fileArray, shareId, subPath) {
         const listRes = await this.api('internal_share_list_folder', { id: shareId, sub_path: subPath });
-        const existingNames = new Set((listRes.items || []).map(f => f.name));
-        const duplicates = fileArray.filter(file => existingNames.has(file.name));
+        // ★ (2026-11-02 08:58, 41차 점검) 맥에서 고른 파일 이름은 NFD(자모 분리)라 같은 NFC 이름을 다른 이름으로 봐 확인 없이 겉보기 같은 파일이 하나 더 생겼음 → 비교할 때만 normalize('NFC'), 보내는 이름은 그대로
+        const existingNames = new Set((listRes.items || []).map(f => String(f.name).normalize('NFC')));
+        const duplicates = fileArray.filter(file => existingNames.has(String(file.name).normalize('NFC')));
         if (duplicates.length > 0) {
             this._showIShareDuplicateModal(duplicates, fileArray, shareId, subPath);
         } else {
@@ -24285,8 +26394,9 @@ const App = {
             
             // 현재 폴더 내 기존 파일명 가져오기
             const listRes = await this.api('internal_share_list_folder', { id: shareId, sub_path: subPath });
-            const existingNames = new Set((listRes.items || []).map(f => f.name));
-            const duplicates = fileArray.filter(file => existingNames.has(file.name));
+            // ★ (2026-11-02 08:58, 41차 점검) 맥에서 고른 파일 이름은 NFD(자모 분리)라 같은 NFC 이름을 다른 이름으로 봐 확인 없이 겉보기 같은 파일이 하나 더 생겼음 → 비교할 때만 normalize('NFC'), 보내는 이름은 그대로
+            const existingNames = new Set((listRes.items || []).map(f => String(f.name).normalize('NFC')));
+            const duplicates = fileArray.filter(file => existingNames.has(String(file.name).normalize('NFC')));
             
             if (duplicates.length > 0) {
                 // 중복 모달 표시
@@ -24322,6 +26432,9 @@ const App = {
         
         // 중복 모달 닫고 공유 모달 복원하는 헬퍼
         const closeDupAndRestore = () => {
+            // ★ (2026-11-01 01:53, 36차 전체 점검) 중복 창을 열 때 showModal 이 스택에 넣은 'modal-shared-with-me' 를 빼지 않아 쌓였고,
+            //   나중에 X 로 닫으면 그 창이 다시 떠 여러 번 닫아야 했다 → 여기서 짝을 맞춰 꺼냄
+            if (this.modalStack.length && this.modalStack[this.modalStack.length - 1] === 'modal-shared-with-me') this.modalStack.pop();
             $('#modal-duplicate').hide();
             this.showModal('modal-shared-with-me', false);
         };
@@ -24355,6 +26468,7 @@ const App = {
     
     async _executeIShareUpload(files, duplicateAction, shareId, subPath) {
         let success = 0, fail = 0, skipped = 0; let _isLastErr = "";
+        const _rlUser = this.user && this.user.username;   // ★ (2026-11-12 04:30, 92차 개선 RL429-1) 아래 429 다시 보내기는 올리기를 시작한 계정 그대로일 때만(로그아웃·다른 계정이면 멈춤 — 파일마다 잡으면 다시 로그인한 계정으로 이어 갔음, 시험)
         
         // 청크 크기 (일반 업로드와 동일: PC 10MB, 모바일 2MB)
         const isMobile = window.innerWidth <= 1024;
@@ -24391,7 +26505,7 @@ const App = {
                     let info = `${i+1}/${totalFiles}: ${file.name}\n${fmtSize(uploaded)} / ${fmtSize(file.size)} (${pct}%)${speedStr}`;
                     if (totalFiles > 1) info += `\n${t('filedrop_total', '전체')} ${overall.toFixed(0)}%`;
                     if (statusEl) statusEl.textContent = info;
-                });
+                }, _rlUser);   // ★ (2026-11-12 04:30, 92차 개선 RL429-1)
                 if (r.success) {
                     if (r.skipped) skipped++; else success++;
                 } else {
@@ -24414,11 +26528,11 @@ const App = {
     },
     
     // 내부 공유: 파일 1개를 청크로 분할 전송 (검증된 서버 uploadChunk 코어 재사용)
-    async _uploadIShareChunked(file, duplicateAction, shareId, subPath, chunkSize, PARALLEL, onProgress) {
+    async _uploadIShareChunked(file, duplicateAction, shareId, subPath, chunkSize, PARALLEL, onProgress, _rlUser) {   // ★ (2026-11-12 04:30, 92차 개선 RL429-1) _rlUser: 올리기를 시작한 계정
         const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
         const uploadId = 'ishare_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
         
-        const uploadOneChunk = async (chunkIndex) => {
+        const uploadOneChunk = async (chunkIndex, rl429 = 0) => {   // ★ (2026-11-12 04:30, 92차 개선 RL429-1) rl429: 요청 제한(429) 다시 보내기 횟수
             const start = chunkIndex * chunkSize;
             const end = Math.min(start + chunkSize, file.size);
             const blob = file.slice(start, end);
@@ -24431,12 +26545,17 @@ const App = {
             fd.append('totalChunks', totalChunks);
             fd.append('totalSize', file.size);
             fd.append('uploadId', uploadId);
-            fd.append('lastModified', file.lastModified || 0);
+            fd.append('lastModified', Math.floor((file.lastModified || 0) / 1000));   // ★ (2026-11-03 08:05, 48차 점검) 초 단위(일반 업로드와 같게) — 종전 밀리초 그대로라 수정 시각이 2446년으로 저장됐음
             fd.append('duplicateAction', duplicateAction);
             fd.append('chunk', blob, file.name);
             fd.append('csrf_token', this.csrfToken);
             
             const res = await fetch('api.php?action=internal_share_chunk_upload', { method: 'POST', body: fd, credentials: 'same-origin' });
+            // ★ (2026-11-12 04:30, 92차 개선 RL429-1) 업로드 요청 제한(IP당 분당 1000건, 서버 한도는 그대로)에 걸리면 잠시 기다렸다 같은 조각을 다시 보냄(90차 RGR9-N2 탐색기 업로드와 같은 5·10·15·20·20·20초) — 종전엔 바로 실패로 쳐, 같은 분에 다른 업로드 900건이 있으면 300개 중 200개가 '요청이 너무 많습니다'로 실패했음(재현)
+            if (res.status === 429 && rl429 < 6 && this.user && this.user.username === _rlUser) {
+                await new Promise(r => setTimeout(r, Math.min(5000 * (rl429 + 1), 20000)));
+                if (this.user && this.user.username === _rlUser) return uploadOneChunk(chunkIndex, rl429 + 1);
+            }
             return await res.json();
         };
         
@@ -24503,7 +26622,13 @@ const App = {
     
     // 공유 폴더 내 파일 삭제
     async deleteInInternalShare(shareId, itemPath, currentSubPath) {
-        if (!confirm(t('confirm_delete', '삭제하시겠습니까?'))) return;
+        // ★ (2026-11-12 22:47, 105차 개선 CNF-5) 앱 확인 창으로 바꾸고 맨 위에 파일 이름을 보임(동작은 같음) — 종전엔 브라우저 기본 창 "정말 삭제하시겠습니까?"에 무엇을 지우는지 없었음
+        // ★ (2026-11-13 00:13, 107차 개선 W2) 보관함(암호화 폴더)이거나 그 안 항목이면(서버 목록의 in_vault — 휴지통 없이 영구 삭제) '영구 삭제' 제목·경고·단추로 — 종전엔 일반 '삭제' 확인만 나왔음(재현). 그 밖은 아래 종전 창 그대로
+        const _ishDelIt = (this._ishBrowseItems || []).find(x => x && x.path === itemPath);
+        if (_ishDelIt && _ishDelIt.in_vault) {
+            if (!await this.confirmDanger(`<strong style="overflow-wrap:anywhere;word-break:break-word">${this.escapeHtml(String(itemPath || '').split('/').pop())}</strong>\n${t('confirm_delete', '삭제하시겠습니까?')}\n<span style="color: var(--fs-fg-err, #c62828);">${_ishDelIt.is_dir ? t('vault_folder_delete_permanent_warn', '⚠️ 암호화 폴더는 휴지통으로 이동하지 않고 안의 파일까지 영구 삭제되며 복구할 수 없습니다.') : t('perm_delete_warn', '⚠️ 영구 삭제되며 복구할 수 없습니다.')}</span>`, t('permanent_delete', '영구 삭제'), t('permanent_delete', '영구 삭제'))) return;   // ★ (2026-11-13 00:38, 107차 재검토 RGR23-1) 띄어쓰기 없는 긴 이름이 창 오른쪽에서 잘려 끝(확장자 등)이 안 보였음(재현: 영문 120자, 390~1366 폭) → 이름만 줄바꿈(띄어쓰기에서 먼저, 안 되면 아무 곳에서 — 108차 재검토에서 단어 중간에서 먼저 끊기던 것을 바꿈)
+        } else
+        if (!await this.confirmDelete(`<strong style="overflow-wrap:anywhere;word-break:break-word">${this.escapeHtml(String(itemPath || '').split('/').pop())}</strong>\n${t('confirm_delete', '삭제하시겠습니까?')}`)) return;   // ★ (2026-11-13 00:38, 107차 재검토 RGR23-1) 띄어쓰기 없는 긴 이름이 창 오른쪽에서 잘려 끝(확장자 등)이 안 보였음(재현: 영문 120자, 390~1366 폭) → 이름만 줄바꿈(띄어쓰기에서 먼저, 안 되면 아무 곳에서 — 108차 재검토에서 단어 중간에서 먼저 끊기던 것을 바꿈)
         
         const res = await this.api('internal_share_delete_file', { id: shareId, sub_path: itemPath });
         if (res.success) {
@@ -24560,11 +26685,14 @@ const App = {
     
 
     async removeSharedWithMe(id) {
+        if (!await this.confirmDelete(t('confirm_delete_share', '공유를 삭제하시겠습니까?'), t('delete_share', '공유 삭제'))) return;   // ★ (2026-11-03 08:07, 48차 점검) 링크 공유 삭제(deleteShare)와 같게 확인 창 — 종전엔 ✕ 한 번에 바로 지워졌음(재현)
         const res = await this.api('internal_share_delete', { id });
         if (res.success) {
             this.toast(t('toast_deleted'), 'success');
             this.showSharedWithMe();
             this.updateSharedWithMeBadge();
+        } else {
+            this.toast(res.error || t('delete_failed', '삭제 실패'), 'error');   // ★ (2026-11-01 11:44, 39차 점검) 실패해도 아무 알림이 없었음
         }
     },
     
@@ -24712,12 +26840,14 @@ const App = {
                 if (filter === 'unlimited') return !s.expire_at;
                 if (filter === 'expiring') {
                     if (!s.expire_at) return false;
-                    const r = new Date(s.expire_at).getTime() - now;
+                    const r = new Date(typeof s.expire_at === 'string' ? s.expire_at.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : s.expire_at).getTime() - now;   // ★ (2026-11-10 10:29, 62차 D9) 옛 Safari 에서 NaN → '곧 만료' 필터가 0건이었음
                     return r > 0 && r < 3 * 86400000;
                 }
                 if (!s.expire_at) return false;
                 // 원래 설정 기간 역산 (expire_at - created_at)
-                const totalDays = (new Date(s.expire_at) - new Date(s.created_at)) / 86400000;
+                // ★ (2026-11-02 10:30, 42차 점검) 서버가 만료 시각을 먼저 정하고 password_hash 뒤 created_at 을 적어 1초 밀리면 86399초 → 0.99999일 → '1시간 이하'로
+                //   분류됐음(비밀번호 1일 공유의 약 6%) → 분 단위로 반올림해 비교(이미 저장된 공유도 받아 줌)
+                const totalDays = Math.round((new Date(typeof s.expire_at === 'string' ? s.expire_at.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : s.expire_at) - new Date(typeof s.created_at === 'string' ? s.created_at.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : s.created_at)) / 60000) / 1440;   // ★ (2026-11-10 10:29, 62차 D9) 옛 Safari 에서 NaN → 기간 필터 모두 0건이었음
                 if (filter === 'hour') return totalDays < 1;
                 if (filter === '1') return totalDays >= 1 && totalDays < 2;
                 if (filter === '7') return totalDays >= 2 && totalDays <= 7;
@@ -24755,7 +26885,7 @@ const App = {
             let expireClass = '';
             let expireIcon = '⏰';
             if (s.expire_at) {
-                const remaining = new Date(s.expire_at) - now;
+                const remaining = new Date(typeof s.expire_at === 'string' ? s.expire_at.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : s.expire_at) - now;   // ★ (2026-11-10 10:29, 62차 D9) 옛 Safari 에서 NaN → 남은 시간이 '(NaNm)' 로 보였음
                 if (remaining <= 0) {
                     expireClass = 'expire-expired';
                     expireIcon = '❌';
@@ -24778,21 +26908,22 @@ const App = {
             const isDir = s.is_dir || s.file_path.endsWith('/');
             const shareIcon = isDir ? '📁' : this.getFileIcon(fileName);
             
+            // ★ (2026-11-13 01:08, 108차 ARIA-4·7) 공유 카드의 삭제 단추(🗑️ 그림만)·고름 칸·주소 칸에 이름(aria-label)만 더함 — 종전엔 이름이 비어 화면 낭독기가 "단추"·"체크 상자"로만 읽었음(재현: axe button-name·label). 모양·동작 그대로
             container.append(`
                 <div class="share-card" data-share-id="${s.id}">
                     <div class="share-card-header">
-                        <input type="checkbox" class="share-check" data-id="${s.id}" onclick="event.stopPropagation();App._updateSharesDeleteBtn();">
+                        <input type="checkbox" class="share-check" data-id="${s.id}" aria-label="${this.escapeHtml(fileName)}" onclick="event.stopPropagation();App._updateSharesDeleteBtn();">
                         <span class="share-file-icon">${shareIcon}</span>
                         <div class="share-file-info">
                             <div class="share-file-name share-file-name-link" role="button" tabindex="0" title="${this.escapeHtml(s.file_path)}" onclick="App._gotoShareLocation(${s.id})" onkeydown="if(event.key==='Enter'){event.preventDefault();App._gotoShareLocation(${s.id});}">${this.escapeHtml(fileName)}</div>
                             <div class="share-file-path">${this.escapeHtml(s.file_path)}</div>
                         </div>
                         <span class="share-link-icon" title="${t('shared','공유됨')}">🔗</span>
-                        <button class="btn btn-sm btn-danger share-delete-btn" onclick="App.deleteShare(${s.id})">🗑️</button>
+                        <button class="btn btn-sm btn-danger share-delete-btn" onclick="App.deleteShare(${s.id})" aria-label="${t('delete_share','공유 삭제')}">🗑️</button>
                     </div>
                     <div class="share-card-body">
                         <div class="share-url-row">
-                            <input type="text" class="share-url-input" value="${shareUrl}" readonly>
+                            <input type="text" class="share-url-input" value="${shareUrl}" readonly aria-label="${t('share_link','공유 링크')}">
                             <button class="btn btn-sm btn-primary" onclick="App.copyUrl('${s.token}')">${t('copy','복사')}</button>
                             <a href="${shareUrl}" target="_blank" class="btn btn-sm">${t('open_link','🔗 열기')}</a>
                         </div>
@@ -24801,7 +26932,7 @@ const App = {
                             ${creatorHtml}
                             <span>📅 ${this.formatDate(s.created_at)}</span>
                             <span class="${expireClass}">${expireIcon} ${expireText}</span>
-                            <span>📥 ${downloadText}${t('times','회')}</span>
+                            <span>${shareType === 'filedrop' ? '📤' : '📥'} ${downloadText}${t('times','회')}</span><!-- ★ (2026-11-15 17:59, 200차) 파일 드롭은 이 횟수가 받는 쪽이 올린 횟수(ShareManager 가 download_count 로 셈) — 종전엔 내려받기 그림이라 '8회 받음'처럼 보였음(재현) → 업로드 그림만 바꿈(숫자·제한은 그대로) -->
                             <span>${t('password','비밀번호')}: ${s.has_password ? '🔒' : t('none','없음')}</span>
                         </div>
                     </div>
@@ -24833,9 +26964,16 @@ const App = {
         if (!await this.confirmDelete(tf('confirm_delete_shares', { count: ids.length }, `${ids.length}개 공유를 삭제하시겠습니까?`), t('delete_shares','공유 삭제'))) return;
         
         let success = 0;
-        for (const id of ids) {
-            const res = await this.api('share_delete', { id });
-            if (res.success) success++;
+        // ★ (2026-11-11 22:02, 85차 SHA-1) 200개씩 한 요청으로(share_delete ids) — 종전엔 공유마다 요청을 보내 분당 요청 제한(120)에 걸려 654개 중 551개가 이유 없이 실패하고
+        //   1분 동안 로그인 등 다른 요청도 막혔음(재현). 서버가 ids 를 모르는 옛 판이면(deleted 칸 없음) 종전처럼 하나씩
+        for (let _i = 0; _i < ids.length; _i += 200) {
+            const _chunk = ids.slice(_i, _i + 200);
+            const _br = await this.api('share_delete', { ids: _chunk });
+            if (_br && typeof _br.deleted === 'number') { success += _br.deleted; continue; }
+            for (const id of _chunk) {
+                const res = await this.api('share_delete', { id });
+                if (res.success) success++;
+            }
         }
         
         if (success > 0) {
@@ -24847,11 +26985,13 @@ const App = {
             //   로그인 상태로 새로고침 없이 있으면 지운 공유의 🔗 배지가 그대로 남았다.
             this._reloadFilesKeepScroll();
         }
+        // ★ (2026-11-01 11:44, 39차 점검) 하나도 못 지우거나 일부 실패해도 알림이 없었음 → 실패 수를 알림
+        if (success < ids.length) this.toast(`${t('delete_failed', '삭제 실패')}: ${ids.length - success}${t('count_failed', '개 실패')}`, 'error');
     },
     
     formatDate(dateStr) {
         if (!dateStr) return '-';
-        const d = new Date(dateStr);
+        const d = new Date(typeof dateStr === 'string' ? dateStr.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : dateStr);   // ★ (2026-11-10 10:29, 62차 D9) 옛 Safari 는 못 읽어 아래 그대로 돌려주기(초까지)로 빠졌음
         if (isNaN(d.getTime())) return dateStr;
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
     },
@@ -24919,6 +27059,7 @@ const App = {
                 this._updateShareUI(path, false);
             }
             this.updateShareBadges();
+            try { if (this._dpCache) this._dpCache.clear(); this._detailsRefresh(); } catch (e) {}   // ★ (2026-11-01 01:04, 35차 전체 점검) 만들기 쪽만 캐시를 비워 지운 뒤에도 세부 정보 창에 '공유 링크 있음'이 남았음 → 같게 비우고 다시 그림
         } else {
             this.toast(res.error, 'error');
         }
@@ -25073,6 +27214,8 @@ const App = {
     // 오래된 로그 삭제
     async deleteOldLogs() {
         const days = parseInt($('#log-delete-days').val()) || 30;
+        if (parseInt($('#log-delete-days').val()) === 0) { this.toast(t('invalid_number', '올바른 숫자를 입력하세요.'), 'error'); return; }   // ★ (2026-11-11 23:30, 88차 개선 G1-2) 0(·0.5 처럼 0 으로 읽히는 값)도 음수처럼 안내만 하고 보내지 않음 — 종전엔 0 이 '|| 30' 으로 30일로 바뀌어 '30일 이전 로그 삭제' 확인 뒤 지워졌음(재현: 0 → days:30 전송). 빈 칸(기본 30)은 종전 그대로
+        if (days <= 0) { this.toast(t('invalid_number', '올바른 숫자를 입력하세요.'), 'error'); return; }   // ★ (2026-11-11 22:02, 85차 LOGV-1) 활동 로그 지우기(clearActivityLogs)와 같게 1 미만은 막음 — 종전엔 -1 이 서버에서 '--1 days'(=1일 전)로 읽혀 하루 넘은 로그인 기록이 모두 지워졌음(재현, 되돌릴 수 없음)
         
         if (!await this.confirmDelete(tf('confirm_delete_logs_older', {days: days}, '{days}일 이전 로그를 삭제하시겠습니까?'), t('delete_old_logs', '오래된 로그 삭제'))) return;
         
@@ -25219,6 +27362,7 @@ const App = {
             <div class="modal-body" style="overflow-y:auto;">${content}</div>
         `;
         document.body.appendChild(modal);
+        App._ariaDialog(modal);   // ★ (2026-11-13 01:06, 108차 ARIA-1) 알림 창(.modal 없음)도 같은 표시
         modal.querySelector('.modal-close').focus();
     },
     
@@ -25243,7 +27387,9 @@ const App = {
                 let badge = '';
                 const badgeHours = b.new_badge_hours ?? 24;
                 if (badgeHours > 0 && b.latest_post_at) {
-                    const latestTime = new Date(b.latest_post_at).getTime();
+                    // ★ (2026-11-01 11:47, 39차 점검) 'Y-m-d H:i:s'(공백 구분)는 표준 Date 형식이 아니라 옛 Safari 에서 Invalid Date → 배지가 안 나왔음 → 'T' 로 바꿔 지역 시각으로 해석(뜻은 같음).
+                    //   서버·브라우저 시간대가 다를 때의 어긋남은 서버가 시간대를 붙여 줘야 해 그대로 둠(보고서 참고)
+                    const latestTime = new Date(String(b.latest_post_at).replace(/^(\d{4}-\d{2}-\d{2}) (\d)/, '$1T$2')).getTime();
                     const cutoff = Date.now() - (badgeHours * 3600000);
                     if (latestTime > cutoff) {
                         badge = '<span style="display:inline-block;background:#e74c3c;color:#fff;font-size:9px;font-weight:700;padding:1px 4px;border-radius:8px;margin-left:4px;vertical-align:top;line-height:14px;">N</span>';
@@ -25272,7 +27418,7 @@ const App = {
         this.boardInlineMode = true;
         
         if (addHistory) {
-            history.pushState({ board: boardId }, '', `#board=${boardId}`);
+            if (!(history.state && String(history.state.board) === String(boardId) && history.state.post == null)) history.pushState({ board: boardId }, '', `#board=${boardId}`);   // ★ (2026-11-13 08:10, 109차 NAV2-3) 같은 게시판 목록을 다시 누르면 쌓지 않음(위 loadFiles 주석)
         }
         
         // 파일 영역 숨기고 게시판 뷰 표시
@@ -25307,6 +27453,7 @@ const App = {
         // 파일 항목 수 숨기기 (카피라이트는 유지)
         const statusSelection = document.getElementById('status-selection');
         if (statusSelection) statusSelection.style.display = 'none';
+        try { this._detailsRefresh(); } catch (e) {}   // ★ (2026-10-30 14:10) 게시판 화면에선 세부 정보 창 숨김
         
         // 스토리지 활성 표시 제거
         $('#storage-list a').removeClass('active');
@@ -25354,6 +27501,7 @@ const App = {
         // 파일 항목 수 복원
         const statusSelection = document.getElementById('status-selection');
         if (statusSelection) statusSelection.style.display = '';
+        try { this._detailsRefresh(); } catch (e) {}   // ★ (2026-10-30 14:10) 게시판에서 나오면 세부 정보 창 다시
         
         // 사이드바 게시판 활성 표시 제거
         document.querySelectorAll('.board-sidebar-item').forEach(el => {
@@ -25396,10 +27544,14 @@ const App = {
         const searchType = this._boardSearchType || 'title_content';
         const typeEl = document.getElementById('board-search-type');
         if (typeEl) typeEl.value = searchType;
+        // ★ (2026-11-01 11:45, 39차 점검) 요청 번호·대상 확인 없이 await 뒤 바로 그려, 응답이 늦게 온 쪽(앞 글·목록)이 지금 화면을 덮거나 게시판을 나간 뒤 파일 화면의
+        //   탭 제목을 게시판 이름으로 바꿨음 → 목록·글 보기가 같은 번호를 올리고, await 뒤 번호가 바뀌었거나 게시판 화면이 아니면 그리지 않음
+        const _bSeq = this._boardReqSeq = (this._boardReqSeq || 0) + 1;
         const res = await this.api('board_posts', { board_id: this.currentBoardId, page: this.currentBoardPage, search, search_type: searchType }, 'GET');
+        if (_bSeq !== this._boardReqSeq || !this.boardInlineMode) return;
         
         if (!res.success) {
-            listEl.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-fg-err, #e74c3c);">${this.escapeHtml(res.error || 'Error')}</div>`;
+            listEl.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-fg-err, #e74c3c);">${this.escapeHtml(res.error || t('unknown_error', '알 수 없는 오류'))}</div>`;   // ★ (2026-11-02 10:32, 42차 점검) 서버가 error 없이 실패하면 영어 'Error' 고정 → 이미 있는 unknown_error
             this._boardRenderAdminBar(false);
             return;
         }
@@ -25421,7 +27573,7 @@ const App = {
         if (board.perm_write === 'all' || isAdmin) {
             writeBtn.style.display = '';
         } else {
-            writeBtn.style.display = 'none';
+            writeBtn.style.setProperty('display', 'none', 'important');   // ★ (2026-11-11 19:39, 81차 BRP-1) 'important' — 폭 1024px 이하(휴대폰·좁은 창)는 style.css 의 display:inline-flex !important 가 인라인 none 을 이겨, 쓰기 권한 없는 게시판에도 글쓰기 단추가 보이고 눌렸음(재현, 등록은 서버가 거부). 위 '' 는 이 값도 지움
         }
         
         if (!res.posts?.length) {
@@ -25433,7 +27585,7 @@ const App = {
         }
         
         // 관리자 전용 하단 액션 바 (게시판관리 = 선택 글 일괄 삭제)
-        this._boardRenderAdminBar(isAdmin);
+        this._boardRenderAdminBar(this._boardCanModerate());
         
         listEl.innerHTML = `
             <table class="board-table">
@@ -25462,14 +27614,14 @@ const App = {
                         // (공지는 저장 시 is_notice와 is_pinned가 함께 설정되므로 둘 다 확인)
                         const isNoticePost = !!(p.is_notice || p.is_pinned);
                         // 체크박스 셀: 행 onclick(글 열기)이 같이 발동하지 않도록 이벤트 전파를 막는다
-                        const checkCell = isAdmin
+                        const checkCell = this._boardCanModerate()
                             ? `<td class="board-col-check" onclick="event.stopPropagation();">${isNoticePost ? '' : `<input type="checkbox" class="board-post-check" value="${p.id}" onclick="event.stopPropagation();App.boardUpdateCheckAllState();">`}</td>`
                             : '';
                         let titleHtml = search ? this._hlHtml(p.title, search, 'board-highlight') : this.escapeHtml(p.title);   // ★ (20차) 강조는 원래 글자 기준
                         const titleColor = (p.is_notice && noticeColor) ? ` style="color:${noticeColor}"` : '';
                         return `<tr class="board-postlist-row${rowCls}" onclick="App.viewBoardPost(${p.id})">
                             ${checkCell}
-                            <td class="board-col-num">${isPinned ? `<span class="board-pin-label">공지</span>` : (p.num || '')}</td>
+                            <td class="board-col-num">${isPinned ? `<span class="board-pin-label">${this.escapeHtml(t('board_pin_label', '공지'))}</span>` : (p.num || '')}</td>
                             <td class="board-col-title">${pinIcon}<strong class="fs-noico"${titleColor}>${titleHtml}</strong>${noticeBadge}${attachIcon}${commentBadge}</td>
                             <td class="board-col-author">${this.escapeHtml(p.author_name || '')}</td>
                             <td class="board-col-date">${dateStr}</td>
@@ -25521,7 +27673,7 @@ const App = {
     },
 
     // 게시글 읽기
-    async viewBoardPost(postId, addHistory = true) {
+    async viewBoardPost(postId, addHistory = true, noCount = false, focusCommentId = null) {   // ★ (2026-11-12 15:20, 99차 BRDW-1) noCount — 다시 그리기만 조회수를 안 셈(api.php board_post_view 주석 참고)
         const listEl = document.getElementById('board-inline-list');
         const emptyEl = document.getElementById('board-inline-empty');
         const detailEl = document.getElementById('board-inline-detail');
@@ -25530,7 +27682,7 @@ const App = {
         const toolbar = document.getElementById('board-inline-toolbar');
         
         if (addHistory) {
-            history.pushState({ board: this.currentBoardId, post: postId }, '', `#board=${this.currentBoardId}&post=${postId}`);
+            if (!(history.state && String(history.state.board) === String(this.currentBoardId) && String(history.state.post) === String(postId))) history.pushState({ board: this.currentBoardId, post: postId }, '', `#board=${this.currentBoardId}&post=${postId}`);   // ★ (2026-11-13 08:10, 109차 NAV2-3) 같은 글이면 쌓지 않음(위 loadFiles 주석)
         }
         
         listEl.style.display = 'none';
@@ -25542,8 +27694,9 @@ const App = {
         detailEl.style.display = 'block';
         
         // 툴바: 검색/글쓰기/글 수 숨기기 (하단 페이지네이션 쪽에 표시)
+        // ★ (2026-11-15 17:28, 195차) 휴대폰 CSS 의 '.toolbar-right { display:flex !important }' 가 이 숨김을 덮어 휴대폰에선 글 보기·글쓰기 중에도 검색·글쓰기 단추가 남았음(재현, PC 는 숨음) → 숨김만 important 로(되돌리는 style.display = '' 는 그대로 지워짐)
         const toolbarRight = toolbar.querySelector('.toolbar-right');
-        if (toolbarRight) toolbarRight.style.display = 'none';
+        if (toolbarRight) toolbarRight.style.setProperty('display', 'none', 'important');
         const toolbarCenter = toolbar.querySelector('.toolbar-center');
         if (toolbarCenter) toolbarCenter.style.display = 'none';
         
@@ -25558,19 +27711,30 @@ const App = {
         this._replyFiles = [];
         this._editFiles = [];
         
-        const res = await this.api('board_post_view', { post_id: postId }, 'GET');
+        const _bSeq = this._boardReqSeq = (this._boardReqSeq || 0) + 1;   // ★ (2026-11-01 11:45, 39차 점검) loadBoardPosts 주석 참고 — 늦게 온 글 응답은 그리지 않음
+        const res = await this.api('board_post_view', noCount ? { post_id: postId, no_count: 1 } : { post_id: postId }, 'GET');   // ★ (2026-11-12 15:20, 99차 BRDW-1) 종전엔 늘 조회수 +1
+        if (_bSeq !== this._boardReqSeq || !this.boardInlineMode) return;
         if (!res.success || !res.post) {
-            detailEl.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-fg-err, #e74c3c);">${t('board_post_not_found', '게시글을 찾을 수 없습니다.')}</div>`;
+            detailEl.innerHTML = `<div style="text-align:center;padding:30px;color:var(--fs-fg-err, #e74c3c);">${this.escapeHtml((!res.success && typeof res.error === 'string' && res.error) ? res.error : t('board_post_not_found', '게시글을 찾을 수 없습니다.'))}</div>`;   // ★ (2026-11-12 02:52, 91차 BRD-1) 서버가 이유(권한 없음 등)를 주면 그 문구 — 종전엔 읽기가 막힌 글도 '게시글을 찾을 수 없습니다'(재현)
             return;
         }
         
         const p = res.post;
+        // ★ (2026-11-01 11:45, 39차 점검) 주소의 board 와 글의 실제 게시판이 다르면(손으로 고친 주소·옛 링크·옮긴 글) 본문 [img:] 그림·댓글 첨부 주소와 댓글 저장의 board_id 가
+        //   화면 게시판 번호를 써 404·'권한 없음'이 났음 → 글의 게시판으로 맞추고 주소도 고침
+        if (p.board_id != null && String(p.board_id) !== String(this.currentBoardId)) {
+            this.currentBoardId = parseInt(p.board_id, 10) || p.board_id;
+            if (res.board) this.currentBoardData = res.board;
+            this.currentBoardPage = 1; this._boardSearchQuery = '';   // ★ (2026-11-01 12:30, 39차 점검 재검토) 이전 게시판의 쪽 번호·검색어가 남아 글 아래 목록이 비던 것, 사이드바 표시도 맞춤
+            document.querySelectorAll('.board-sidebar-item').forEach(el => { el.classList.toggle('active', parseInt(el.dataset.boardId) === this.currentBoardId); });
+            try { history.replaceState({ board: this.currentBoardId, post: postId }, '', `#board=${this.currentBoardId}&post=${postId}`); } catch (e) {}
+        }
         // ★ 탭 제목 = 글 제목 (2026-08-17). 목록으로 돌아가면 loadBoardPosts가 게시판 이름으로 덮는다.
         this._setDocTitle(p.title || '');
         const board = res.board || this.currentBoardData || {};
         const isAdmin = (this.user?.role === 'admin' || this.user?.role === 'sub_admin');
         const isMine = p.author_id == this.user?.id;
-        const canEdit = isMine || isAdmin;
+        const canEdit = isMine || this._boardCanModerate();   // ★ (2026-11-17 13:43, 326차) 남의 글은 관리자·'시스템 설정' 권한 부관리자만(서버와 같은 기준)
         const allowComment = board.allow_comment !== false;
         
         // 공지 읽음 처리
@@ -25591,7 +27755,10 @@ const App = {
         // [img:파일명] 또는 [img:파일명:옵션] 태그를 실제 이미지로 변환
         // 옵션: w=너비, a=정렬(left/center/right), m=왼쪽여백
         const attachments = p.attachments || [];
-        contentHtml = contentHtml.replace(/\[img:([^:\]]+)((?::[^:\]]+)*)\]/g, (match, fileName, optStr) => {
+        // ★ (2026-11-01 11:46, 39차 점검) HTML 문자열 전체에 정규식을 돌려 속성값 안의 [img:a.png] 도 <div …><img …> 로 바뀌어, 그 따옴표가 원래 속성을 닫아
+        //   마크업이 깨졌음(원래 그림 src 가 사라지고 속성 글자가 보임) → 태그(<…>)는 그대로 건너뛰고 태그 밖 글자에서만 바꿈
+        contentHtml = contentHtml.replace(/(<[^>]*>)|\[img:([^:\]]+)((?::[^:\]]+)*)\]/g, (match, tagStr, fileName, optStr) => {
+            if (tagStr) return tagStr;
             const att = attachments.find(a => a.name === fileName);
             if (att && att.file) {
                 // 옵션 파싱
@@ -25637,7 +27804,7 @@ const App = {
         
         // 공지 뱃지
         const detailNoticeColor = p.notice_color || '';
-        const noticeBadge = p.is_notice ? `<span style="background:#f59f00;color:#212529;font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:6px;">🔔 공지</span>` : '';
+        const noticeBadge = p.is_notice ? `<span style="background:#f59f00;color:#212529;font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;margin-left:6px;">🔔 ${this.escapeHtml(t('board_pin_label', '공지'))}</span>` : '';
         
         let actionsHtml = '';
         if (canEdit) {
@@ -25668,6 +27835,8 @@ const App = {
                 }
             };
             flatten();
+            // ★ (2026-11-13 10:47, 111차 BRD-1) 알림에서 연 댓글(focusCommentId)이 있으면 그 댓글이 있는 쪽으로 — id 가 없거나 지워진 댓글이면 종전처럼 위에서 정한 쪽(다른 글이면 1쪽)
+            if (focusCommentId) { const _fi = flatList.findIndex(c => String(c.id) === String(focusCommentId) && !c.is_deleted); if (_fi >= 0) this.boardCommentPage = Math.floor(_fi / cmtPerPage) + 1; }
             // ★ (2026-10-29 18:21, 22차 점검) 쪽수는 실제로 자르는 목록(삭제 표시 포함 flatList) 기준 — 종전엔 삭제 안 된 댓글 수로만 세어,
             //   삭제된 댓글이 있으면 마지막 쪽 뒤에 남은 댓글이 어느 쪽에도 안 보였음
             const cmtTotalPages = Math.max(1, Math.ceil(flatList.length / cmtPerPage));
@@ -25680,7 +27849,7 @@ const App = {
             // 모든 대댓글은 depth 1로 통일 (계단식 방지, @멘션으로 대상 구분)
             const commentRows = pageComments.map((c, idx) => {
                 const isDeleted = c.is_deleted;
-                const canDelete = !isDeleted && (c.author_id == this.user?.id || isAdmin);
+                const canDelete = !isDeleted && (c.author_id == this.user?.id || this._boardCanModerate());
                 const canReply = !isDeleted && c.depth < 3;
                 const isReply = c.depth > 0;
                 
@@ -25730,7 +27899,7 @@ const App = {
                                 editMediaHtml += `<p><video controls playsinline src="${dlUrl}" style="max-width:100%;border-radius:6px;"></video></p>`;
                             }
                         } else {
-                            const sizeStr = att.size > 1048576 ? (att.size/1048576).toFixed(1)+'MB' : (att.size/1024).toFixed(0)+'KB';
+                            const sizeStr = this.formatSize(att.size || 0);   // ★ (2026-11-02 19:34, 47차 점검) 1KB 미만이 '0KB' 로 보였고 같은 화면의 글 첨부(formatSize)와 표기가 달랐음
                             attachFileHtml += `<span style="position:relative;display:inline-flex;align-items:center;margin:4px 4px 4px 0;"><a href="${dlUrl}" style="display:inline-flex;align-items:center;gap:4px;padding:4px ${canDelete ? '28px' : '10px'} 4px 10px;background:var(--theme-hover,var(--fs-surface-2, #f0f0f0));border-radius:4px;font-size:12px;color:var(--theme-text,var(--fs-text, #333));text-decoration:none;">📦 ${this.escapeHtml(att.name)} <span style="color:var(--fs-text-3, #999);">(${sizeStr})</span></a>${canDelete ? `<button onclick="event.preventDefault();event.stopPropagation();App.deleteCommentAttachment(${c.id},${p.id},${this._jsArg(att.file)})" style="position:absolute;top:50%;right:4px;transform:translateY(-50%);background:none;border:none;color:var(--fs-text-3, #999);font-size:14px;cursor:pointer;padding:0 2px;" title="${t('delete','삭제')}">×</button>` : ''}</span>`;
                         }
                     });
@@ -25778,11 +27947,12 @@ const App = {
                 let cmtEnd = Math.min(cmtTotalPages, cmtStart + cmtNavCount - 1);
                 if (cmtEnd - cmtStart + 1 < cmtNavCount) cmtStart = Math.max(1, cmtEnd - cmtNavCount + 1);
                 
-                if (this.boardCommentPage > 1) cmtPaginHtml += `<a href="#" onclick="App.boardCommentPage=${this.boardCommentPage - 1};App.viewBoardPost(${p.id});return false;">‹</a>`;
+                // ★ (2026-11-01 11:46, 39차 점검) 댓글 쪽 넘기기·댓글 삭제·수정 취소가 같은 #board=X&post=Y 를 pushState 로 계속 쌓아 '뒤로'를 넘긴 쪽 수만큼 눌러야 했음 → 기록을 쌓지 않음(false)
+                if (this.boardCommentPage > 1) cmtPaginHtml += `<a href="#" onclick="App.boardCommentPage=${this.boardCommentPage - 1};App.viewBoardPost(${p.id}, false, true);return false;">‹</a>`;
                 for (let i = cmtStart; i <= cmtEnd; i++) {
-                    cmtPaginHtml += `<a href="#" class="${i === this.boardCommentPage ? 'active' : ''}" onclick="App.boardCommentPage=${i};App.viewBoardPost(${p.id});return false;">${i}</a>`;
+                    cmtPaginHtml += `<a href="#" class="${i === this.boardCommentPage ? 'active' : ''}" onclick="App.boardCommentPage=${i};App.viewBoardPost(${p.id}, false, true);return false;">${i}</a>`;
                 }
-                if (this.boardCommentPage < cmtTotalPages) cmtPaginHtml += `<a href="#" onclick="App.boardCommentPage=${this.boardCommentPage + 1};App.viewBoardPost(${p.id});return false;">›</a>`;
+                if (this.boardCommentPage < cmtTotalPages) cmtPaginHtml += `<a href="#" onclick="App.boardCommentPage=${this.boardCommentPage + 1};App.viewBoardPost(${p.id}, false, true);return false;">›</a>`;
                 cmtPaginHtml += '</div>';
             }
             
@@ -25848,12 +28018,14 @@ const App = {
         
         // ★ (2026-10-29 20:12, 23차 점검) 목록 화면과 같은 검색 조건으로 불러옴 — 종전엔 검색해서 연 글 아래 목록이 검색 조건 없이 불려
         //   쪽 번호는 검색 결과 기준인데 내용은 전체 글이라 엉뚱한 글이 보였음(검색어 강조만 남음)
+        const _bSeq = this._boardReqSeq;   // ★ (2026-11-01 11:45, 39차 점검) loadBoardPosts 주석 참고 — 그사이 다른 글·목록으로 갔거나 게시판을 나갔으면 그리지 않음
         const res = await this.api('board_posts', { 
             board_id: this.currentBoardId, 
             page: this.currentBoardPage || 1,
             search: this._boardSearchQuery ?? '',
             search_type: this._boardSearchType || 'title_content'
         }, 'GET');
+        if (_bSeq !== this._boardReqSeq || !this.boardInlineMode || !container.isConnected) return;
         if (!res.success) return;
         
         const posts = res.posts || [];
@@ -25886,7 +28058,7 @@ const App = {
             const dateStr = (p.created_at || '').substring(0, 10);
             
             html += `<tr class="board-postlist-row${rowCls}" onclick="App.viewBoardPost(${p.id})" data-post-id="${p.id}">
-                <td class="board-col-num">${isPinned ? '<span class="board-pin-label">공지</span>' : (p.num || '')}</td>
+                <td class="board-col-num">${isPinned ? '<span class="board-pin-label">' + this.escapeHtml(t('board_pin_label', '공지')) + '</span>' : (p.num || '')}</td>
                 <td class="board-col-title">${isCurrent ? '▶ ' : ''}${isPinned ? '📌 ' : ''}<strong class="fs-noico">${title}</strong>${commentCount}${p.attachments?.length ? ' <span class="board-attach-icon">📎</span>' : ''}</td>
                 <td class="board-col-author">${this.escapeHtml(p.author_name || '')}</td>
                 <td class="board-col-date">${dateStr}</td>
@@ -25905,7 +28077,7 @@ const App = {
             <input type="text" id="board-detail-search" placeholder="${t('search','검색...')}" value="${this.escapeHtml(this._boardSearchQuery || '')}" style="width:160px;height:30px;font-size:12px;padding:5px 10px 5px 26px;border:1px solid var(--theme-border,var(--border,var(--fs-border-2, #ddd)));border-radius:14px;outline:none;background:var(--theme-hover,var(--bg-secondary,var(--fs-surface-2, #f8f9fa)));color:var(--theme-text,var(--fs-text, #333));" onkeyup="if(event.key==='Enter'){App._boardSearchQuery=this.value;App.currentBoardPage=1;App.boardShowList();}">
         </div>`;
         if (canWrite) {
-            html += `<button id="btn-board-detail-write" class="btn btn-primary btn-board-write" onclick="App.showBoardWriteForm()">✏️ ${t('write','글쓰기')}</button>`;
+            html += `<button id="btn-board-detail-write" class="btn btn-primary btn-board-write" onclick="App.showBoardWriteForm()">✏️ ${t('board_write_btn','글쓰기')}</button>`;   // ★ (2026-11-02 10:32, 42차 점검) write 값('쓰기'/'Write', 폴더 권한 칸용)이 나와 '글쓰기' 단추가 '쓰기'로 보였음 → 새 키
         }
         html += `</div>`;
         
@@ -25957,6 +28129,12 @@ const App = {
     // ===== 게시판관리 (관리자 전용, 선택 글 일괄 삭제) =====
 
     // 하단 오른쪽 액션 바 렌더 (show=false면 비움)
+    /** ★ (2026-11-17 13:43, 326차) 남의 글·댓글을 고치고 지울 수 있는지 — 관리자, 또는 '시스템 설정' 권한 부관리자(api.php fsBoardCanModerate 와 같은 기준) */
+    _boardCanModerate() {
+        const u = this.user || {};
+        return u.role === 'admin' || (u.role === 'sub_admin' && Array.isArray(u.admin_perms) && u.admin_perms.includes('system_settings'));
+    },
+
     _boardRenderAdminBar(show) {
         const bar = document.getElementById('board-admin-actions');
         if (!bar) return;
@@ -25991,6 +28169,9 @@ const App = {
             this.toast(t('board_select_first', '삭제할 게시글을 선택하세요.'), 'warning');
             return;
         }
+        // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 게시판은 확인 창 '전'에 잡음(선택 삭제 _delSid 와 같은 방식) — 종전엔 창이 뜬 채 '뒤로'로 다른 게시판에 가면
+        //   확인 뒤 그 게시판 번호로 보내 서버가 아무것도 안 지우고 "0개 삭제됨" 성공 알림이 나왔음(재현: 게시판 B 글 2개 확인 → A 로 뒤로 → 0개)
+        const _delBid = this.currentBoardId;
 
         const ok = await this.confirmDelete(
             tf('board_delete_n_confirm', {n: ids.length}, '{n}개의 게시글을 삭제하시겠습니까?')
@@ -26001,7 +28182,7 @@ const App = {
         if (btn) btn.disabled = true;
         try {
             const res = await this.api('board_posts_delete', {
-                board_id: this.currentBoardId,
+                board_id: _delBid,   // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 위 _delBid 주석
                 post_ids: ids
             });
             if (!res || !res.success) {
@@ -26047,7 +28228,7 @@ const App = {
         const postId = document.getElementById('board-post-edit-id').value;
         if (postId) {
             // 수정 모드 → 해당 글로 돌아가기
-            this.viewBoardPost(parseInt(postId));
+            this.viewBoardPost(parseInt(postId), false, true);   // ★ (2026-11-01 11:46, 39차 점검) 위 댓글 쪽 넘기기 주석과 같음 — 기록을 쌓지 않음
         } else {
             // 새 글 모드 → 목록으로
             this.boardShowList();
@@ -26160,9 +28341,21 @@ const App = {
                 for (const file of files) {
                     if (file.type.startsWith('image/')) {
                         nativeEvt.preventDefault();
+                        editor._fsImgPasteAt = Date.now();   // ★ (2026-11-11 16:58, 76차 BRD-1 보완) 이 그림은 아래 처리기가 넣음 — 편집기 자체 붙여넣기(paste 이벤트)가 같은 그림을 또 넣어 이 처리기 결과를 바꿔치기하지 않게(아래 editor.on('paste'))
                         evt.data.preventDefault();
                         const reader = new FileReader();
                         reader.onload = (ev) => {
+                            // ★ (2026-11-11 16:40, 76차 BRD-1) 64KB 넘는 그림은 첨부 대기 파일로 넣고 자리표시(data-pending-key)로 — 종전엔 data: 주소로 본문에만 넣어 저장 때 서버(sanitizeHtml 64KB 한도)가 주소를 떼어 '작성되었습니다' 뒤 빈 그림만 남았음(재현). 64KB 이하는 종전 그대로
+                            if (String(ev.target.result).length > 65536) {
+                                const _n0 = this._boardPendingFiles.length;
+                                this.uploadBoardFiles([file]);   // 허용 확장자 검사·첨부 목록 표시까지 첨부 단추와 같은 길
+                                const _pf = this._boardPendingFiles.length > _n0 ? this._boardPendingFiles[this._boardPendingFiles.length - 1] : null;
+                                if (!_pf) return;   // 확장자 거부(알림은 uploadBoardFiles 가 띄움)
+                                editor.insertHtml(
+                                    `<p><img src="${ev.target.result}" alt="${this.escapeHtml(file.name)}" data-pending-name="${this.escapeHtml(file.name)}"${_pf._fsPk ? ` data-pending-key="${_pf._fsPk}"` : ''} style="max-width:100%;" /></p>`
+                                );
+                                return;
+                            }
                             editor.insertHtml(
                                 `<p><img src="${ev.target.result}" alt="${this.escapeHtml(file.name)}" style="max-width:100%;" /></p>`
                             );
@@ -26182,11 +28375,23 @@ const App = {
                 for (const item of items) {
                     if (item.type.startsWith('image/')) {
                         nativeEvt.preventDefault();
+                        editor._fsImgPasteAt = Date.now();   // ★ (2026-11-11 16:58, 76차 BRD-1 보완) 이 그림은 아래 처리기가 넣음 — 편집기 자체 붙여넣기(paste 이벤트)가 같은 그림을 또 넣어 이 처리기 결과를 바꿔치기하지 않게(아래 editor.on('paste'))
                         evt.data.preventDefault();
                         const file = item.getAsFile();
                         if (!file) return;
                         const reader = new FileReader();
                         reader.onload = (ev) => {
+                            // ★ (2026-11-11 16:40, 76차 BRD-1) 64KB 넘는 그림은 첨부 대기 파일로 넣고 자리표시(data-pending-key)로 — 종전엔 data: 주소로 본문에만 넣어 저장 때 서버(sanitizeHtml 64KB 한도)가 주소를 떼어 '작성되었습니다' 뒤 빈 그림만 남았음(재현). 64KB 이하는 종전 그대로
+                            if (String(ev.target.result).length > 65536) {
+                                const _n0 = this._boardPendingFiles.length;
+                                this.uploadBoardFiles([file]);   // 허용 확장자 검사·첨부 목록 표시까지 첨부 단추와 같은 길
+                                const _pf = this._boardPendingFiles.length > _n0 ? this._boardPendingFiles[this._boardPendingFiles.length - 1] : null;
+                                if (!_pf) return;   // 확장자 거부(알림은 uploadBoardFiles 가 띄움)
+                                editor.insertHtml(
+                                    `<p><img src="${ev.target.result}" alt="${this.escapeHtml(file.name)}" data-pending-name="${this.escapeHtml(file.name)}"${_pf._fsPk ? ` data-pending-key="${_pf._fsPk}"` : ''} style="max-width:100%;" /></p>`
+                                );
+                                return;
+                            }
                             editor.insertHtml(
                                 `<p><img src="${ev.target.result}" alt="${this.escapeHtml(file.name)}" style="max-width:100%;" /></p>`
                             );
@@ -26196,6 +28401,11 @@ const App = {
                     }
                 }
             });
+            // ★ (2026-11-11 16:58, 76차 BRD-1 보완) 위 처리기가 방금(1초 안) 맡은 그림 붙여넣기·끌어 놓기면 편집기 자체 처리를 취소 — 종전엔 둘 다 그림을 넣어 나중 것이 앞 것을 바꿔치기(고치기 화면에서는 편집기 쪽이 나중이라 큰 그림이 빈 그림, 확장자 거부 때도 data: 그림이 들어감 — 재현). 위 처리기가 맡지 않은 붙여넣기(글·표·파일 아닌 것)는 그대로
+            editor.on('paste', (pe) => {
+                const _at = editor._fsImgPasteAt || 0;
+                if (_at && Date.now() - _at < 1000 && pe.data && pe.data.dataTransfer && pe.data.dataTransfer.getFilesCount() > 0) { editor._fsImgPasteAt = 0; pe.cancel(); }
+            }, null, null, 1);
         });
         
         // 에디터 파괴 시 프리셋 바/배지 정리
@@ -26207,6 +28417,27 @@ const App = {
             this._ckeSelectedImg = null;
             this._ckeActiveEditor = null;
         });
+    },
+    
+    // ★ (2026-11-02 19:34, 47차 점검) 편집기 본문의 그림(image2 위젯)을 지울 땐 위젯째 — 종전엔 <img> 만 지워 빈 위젯이 남고, 본문을 읽을 때(getData) image2 가 TypeError 를 내 '등록'이 아무 반응 없었고,
+    //   취소 뒤 다음 글쓰기는 편집기를 못 붙여 빈 본문으로 저장됐음(첨부 ✕ 재현). 위젯이 아니면 감싼 요소(.cke_widget_wrapper)나 그림만
+    _boardEdRemoveImg(img) {
+        try {
+            const ed = this._boardEditor;
+            if (ed && ed.widgets && window.CKEDITOR) { const w = ed.widgets.getByElement(new CKEDITOR.dom.element(img)); if (w) { ed.widgets.del(w); return; } }
+        } catch (e) {}
+        const wrap = img.closest && img.closest('.cke_widget_wrapper');
+        (wrap || img).remove();
+    },
+    // ★ (2026-11-02 19:34, 47차 점검) 넣기 전에 커서를 선택된 위젯(방금 넣은 그림) 뒤로 — image2 가 넣은 위젯을 선택된 채 두어, '삽입'을 잇달아 누르면 다음 것이 앞 그림을 바꿔치기했음(그림1→그림2→동영상 이면 동영상만 남음 재현)
+    _boardEdPrepInsert() {
+        try {
+            const ed = this._boardEditor; if (!ed || !ed.widgets || !window.CKEDITOR) return;
+            let w = ed.widgets.focused || (ed.widgets.selected && ed.widgets.selected[0]);
+            if (!w) { const _sel = ed.getSelection(); const _el = _sel && _sel.getSelectedElement(); if (_el) w = ed.widgets.getByElement(_el); }   // ★ (2026-11-02 19:37, 47차 점검) '삽입' 링크는 편집기 밖이라 누르면 포커스가 빠져 focused 가 비는데, 선택은 그대로 위젯을 가리켜 바꿔치기됐음(재현) → 지금 선택된 요소의 위젯도 봄
+            if (!w || !w.wrapper) return;
+            const r = ed.createRange(); r.moveToPosition(w.wrapper, CKEDITOR.POSITION_AFTER_END); r.select();
+        } catch (e) {}
     },
     
     _getBoardContent() {
@@ -26222,7 +28453,7 @@ const App = {
         // <video ... src="...">...</video> 패턴
         html = html.replace(/<video([^>]*)src="([^"]*)"([^>]*)>[\s\S]*?<\/video>/gi, (match, before, src, after) => {
             const allAttrs = before + after;
-            const fname = decodeURIComponent(src.split('file=').pop() || 'video');
+            let fname; try { fname = decodeURIComponent(src.split('file=').pop() || 'video'); } catch (e) { fname = src.split('file=').pop() || 'video'; }   // ★ (2026-10-31 11:52, 34차 전체 점검) 잘못된 % 표기면 원문(종전엔 URIError 로 수정 창이 멈춤)
             const safeFn = fname.replace(/[<>&"']/g, '');
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="8" fill="#1a1a2e"/><polygon points="140,60 140,120 190,90" fill="#fff" opacity="0.8"/><text x="160" y="160" text-anchor="middle" fill="#aaa" font-size="11" font-family="sans-serif">🎬 ${safeFn}</text></svg>`;
             const placeholder = 'data:image/svg+xml,' + encodeURIComponent(svg);
@@ -26247,7 +28478,7 @@ const App = {
         });
         // <video><source src="..."></video> 패턴
         html = html.replace(/<video[^>]*>[\s]*<source[^>]*src="([^"]*)"[^>]*>[\s]*<\/video>/gi, (match, src) => {
-            const fname = decodeURIComponent(src.split('file=').pop() || 'video');
+            let fname; try { fname = decodeURIComponent(src.split('file=').pop() || 'video'); } catch (e) { fname = src.split('file=').pop() || 'video'; }   // ★ (2026-10-31 11:52, 34차 전체 점검) 잘못된 % 표기면 원문(종전엔 URIError 로 수정 창이 멈춤)
             const safeFn = fname.replace(/[<>&"']/g, '');
             const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="8" fill="#1a1a2e"/><polygon points="140,60 140,120 190,90" fill="#fff" opacity="0.8"/><text x="160" y="160" text-anchor="middle" fill="#aaa" font-size="11" font-family="sans-serif">🎬 ${safeFn}</text></svg>`;
             const placeholder = 'data:image/svg+xml,' + encodeURIComponent(svg);
@@ -26311,7 +28542,7 @@ const App = {
                 + 'white-space:nowrap;';
             
             const presets = [
-                ['25%', 0.25], ['50%', 0.5], ['75%', 0.75], ['100%', 1.0], ['원본', 'original']
+                ['25%', 0.25], ['50%', 0.5], ['75%', 0.75], ['100%', 1.0], [t('quality_original', '원본'), 'original']   // ★ (2026-11-01 01:05, 35차 전체 점검) 한국어 고정 문구 → t()
             ];
             presets.forEach(([label, ratio]) => {
                 const btn = document.createElement('button');
@@ -26535,6 +28766,7 @@ const App = {
     
     _initCmtCKEditor(textareaId, initialContent) {
         if (typeof CKEDITOR === 'undefined') return;
+        if (!document.getElementById(textareaId)) return;   // ★ (2026-11-11 10:44, 72차 재검토) 댓글을 끈 게시판은 댓글 칸이 없어 CKEditor 가 null → TypeError 로 그 뒤(자막 연결·iOS 전체화면·글 아래 목록)가 실행되지 않았음(원본부터)
         
         // 기존 인스턴스 정리
         this._destroyCmtEditor(textareaId);
@@ -26787,7 +29019,7 @@ const App = {
         writeToolbar.style.display = '';
         // 검색/글쓰기/글 수 숨기기
         const wr = writeToolbar.querySelector('.toolbar-right');
-        if (wr) wr.style.display = 'none';
+        if (wr) wr.style.setProperty('display', 'none', 'important');   // ★ (2026-11-15 17:28, 195차) 휴대폰 CSS(display:flex !important)에 덮이지 않게 — 위 글 보기와 같음
         const wc = writeToolbar.querySelector('.toolbar-center');
         if (wc) wc.style.display = 'none';
         document.getElementById('board-inline-form').style.display = 'block';
@@ -26822,7 +29054,7 @@ const App = {
 
     // 글 수정
     async editBoardPost(postId) {
-        const res = await this.api('board_post_view', { post_id: postId }, 'GET');
+        const res = await this.api('board_post_view', { post_id: postId, no_count: 1 }, 'GET');   // ★ (2026-11-12 15:20, 99차 BRDW-1) 수정 화면 열기는 조회수 안 셈 — 종전엔 +1(재현)
         if (!res.success || !res.post) return;
         
         this.showBoardWriteForm(postId);
@@ -26847,7 +29079,7 @@ const App = {
             const att = attachments.find(a => a.name === fileName);
             if (att && att.file) {
                 const sizeAttr = size ? ` width="${size}"` : '';
-                return `<img src="api.php?action=board_post_download&board_id=${this.currentBoardId}&post_id=${postId}&file=${encodeURIComponent(att.file)}" alt="${fileName}"${sizeAttr}>`;
+                return `<img src="api.php?action=board_post_download&board_id=${this.currentBoardId}&post_id=${postId}&file=${encodeURIComponent(att.file)}" alt="${this.escapeHtml(fileName)}"${sizeAttr}>`;   // ★ (2026-11-01 11:47, 39차 점검) alt 를 escape 하지 않았음(첨부 이름은 클라이언트가 보낸 값 그대로 저장됨 — 옆 글 보기는 escape 함)
             }
             return match;
         });
@@ -26870,15 +29102,25 @@ const App = {
         try {
         const postId = document.getElementById('board-post-edit-id').value;
         const title = document.getElementById('board-post-title').value.trim();
-        const content = this._getBoardContent().replace(/<img[^>]*src="blob:[^"]*"[^>]*>/gi, '');
+        // ★ (2026-11-02 19:34, 47차 점검) 본문 읽기(편집기 getData)가 예외면 종전엔 요청 없이 조용히 끝났음 → 알림
+        let _bpContent;
+        try { _bpContent = this._getBoardContent(); } catch (e) { console.error(e); this.toast(t('err_board_editor_read', '본문을 읽지 못했습니다. 편집기를 닫았다가 다시 열어 주세요.'), 'error'); return; }
+        const content = _bpContent.replace(/<img[^>]*src="blob:[^"]*"[^>]*>/gi, '');
         const isNotice = document.getElementById('board-post-notice').checked;
         const isPinned = isNotice ? true : false; // 공지 = 자동 상단고정
         const noticeColor = isNotice ? (document.getElementById('board-notice-color')?.value || '') : '';
         
         if (!title) { this.toast(t('enter_title','제목을 입력하세요.'), 'warning'); return; }
+        // ★ (2026-11-13 10:56, 111차 BRD-3) 저장을 시작한 게시판 번호·편집기를 잡아 두고 이 저장의 모든 요청에 씀(105차 CNF-3 과 같은 방식) — 종전엔 await 마다 this.currentBoardId 를 새로 읽어,
+        //   첨부를 올리는 도중 다른 게시판을 누르거나 저장소로 나가면 남은 첨부·본문 그림 연결이 '권한이 없습니다'로 빠졌음(재현). 옮기지 않았으면 값은 종전과 같음
+        const _bid = this.currentBoardId, _bEd = this._boardEditor;
+        const _bStill = () => this.boardInlineMode && String(this.currentBoardId) === String(_bid);
+        const _bpSF = this._boardPendingStorageFiles, _bpPF = this._boardPendingFiles, _bpDel = this._boardPendingDeletes;   // ★ (2026-11-13 21:10, 116차 개선 DELCHK-1) 저장을 시작할 때의 대기 목록(스토리지 첨부·PC 첨부·첨부 삭제)을 잡아 두고 아래가 이 배열을 씀 —
+        //   종전엔 await 마다 this 의 값을 다시 읽어, 저장 도중 같은 게시판에서 [글쓰기]·취소로 목록이 새 [] 가 되면 진행 표시 줄이 TypeError 로 멈춰 PC 첨부·본문 그림 연결·알림이 모두 빠졌음(재현).
+        //   대기 목록은 넣고 빼는 것이 모두 같은 배열 안에서(push·splice) 일어나므로 옮기지 않은 저장은 종전과 같은 내용. 다 쓴 뒤 비우는 것은 그 목록이 아직 이 저장의 것일 때만(새 초안 목록은 건드리지 않음)
         
         const data = {
-            board_id: this.currentBoardId,
+            board_id: _bid,
             title, content,
             is_pinned: isPinned,
             is_notice: isNotice,
@@ -26892,19 +29134,20 @@ const App = {
             const fileInput = document.getElementById('board-file-input');
             const savedPostId = res.post_id || postId;
             const uploadedFiles = {}; // name -> server file
+            const uploadedByKey = {}; // ★ (2026-11-02 11:52, 43차 점검) 대기 파일 고유 표식(_fsPk) -> server file — 이름 열쇠만 쓰면 같은 이름 그림 여러 장이 본문에서 모두 마지막 파일을 가리켰음
             const _attErrs = [];   // ★ (2026-10-29 23:35, 24차 점검) 첨부 실패는 모아서 마지막 알림에 — 알림 칸이 하나라 바로 뒤 '작성되었습니다'에 덮여 안 보였음(4회차 재검토)
             
             // 스토리지에서 선택한 pending 파일 → 서버에 복사
-            if (this._boardPendingStorageFiles?.length) {
-                const total = this._boardPendingStorageFiles.length;
+            if (_bpSF?.length) {   // ★ (2026-11-13 21:10, 116차 개선 DELCHK-1) 위 _bpSF
+                const total = _bpSF.length;
                 for (let si = 0; si < total; si++) {
-                    const sf = this._boardPendingStorageFiles[si];
+                    const sf = _bpSF[si];
                     const pct = Math.round((si / total) * 100);
                     this._showBoardUploadProgress(sf.file_name, pct);
                     
                     try {
                         const sRes = await this.api('board_attach_from_storage', {
-                            board_id: this.currentBoardId,
+                            board_id: _bid,
                             post_id: savedPostId,
                             storage_id: sf.storage_id,
                             file_path: sf.file_path,
@@ -26919,16 +29162,17 @@ const App = {
                         _attErrs.push(`${sf.file_name}: ${e.message || t('attach_failed', '첨부 실패')}`);
                     }
                 }
-                this._showBoardUploadProgress(this._boardPendingStorageFiles[total - 1].file_name, 100);
-                this._boardPendingStorageFiles = [];
+                this._showBoardUploadProgress(_bpSF[total - 1].file_name, 100);
+                if (this._boardPendingStorageFiles === _bpSF) this._boardPendingStorageFiles = [];   // ★ (2026-11-13 21:10, 116차 개선 DELCHK-1) 위 _bpSF
             }
             
-            if (this._boardPendingFiles?.length) {
-                for (const file of this._boardPendingFiles) {
+            if (_bpPF?.length) {   // ★ (2026-11-13 21:10, 116차 개선 DELCHK-1) 위 _bpSF
+                for (const file of _bpPF) {
                     try {
-                        const res = await this._boardUploadChunked(file, savedPostId, this.currentBoardId);
+                        const res = await this._boardUploadChunked(file, savedPostId, _bid);
                         if (res && res.success) {
                             uploadedFiles[file.name] = res.file;
+                            if (file._fsPk) uploadedByKey[file._fsPk] = res.file;   // ★ (2026-11-02 11:52, 43차 점검) 위 uploadedByKey 주석
                         } else {
                             _attErrs.push(`${file.name}: ${res?.error || t('upload_failed', '업로드 실패')}`);
                         }
@@ -26936,26 +29180,46 @@ const App = {
                         _attErrs.push(`${file.name}: ${e.message || t('upload_failed', '업로드 실패')}`);
                     }
                 }
-                this._boardPendingFiles = [];
+                if (this._boardPendingFiles === _bpPF) this._boardPendingFiles = [];   // ★ (2026-11-13 21:10, 116차 개선 DELCHK-1) 위 _bpSF
             }
             
             // 삭제 대기열 처리 (수정 모드에서 X 눌렀던 파일들)
-            if (this._boardPendingDeletes?.length) {
-                for (const del of this._boardPendingDeletes) {
-                    await this.api('board_post_delete_file', { post_id: del.post_id, file: del.file });
+            if (_bpDel?.length) {   // ★ (2026-11-13 21:10, 116차 개선 DELCHK-1) 위 _bpSF
+                for (const del of _bpDel) {
+                    // ★ (2026-11-02 11:52, 43차 점검) 결과를 안 봐 실패해도(첨부는 그대로 남음) '수정되었습니다'만 떴음 → 실패는 끝 알림에 함께
+                    const _dr = await this.api('board_post_delete_file', { post_id: del.post_id, file: del.file });
+                    if (!_dr || !_dr.success) _attErrs.push(`${del.file}: ${(_dr && _dr.error) || t('delete_failed', '삭제 실패')}`);
                 }
-                this._boardPendingDeletes = [];
+                if (this._boardPendingDeletes === _bpDel) this._boardPendingDeletes = [];   // ★ (2026-11-13 21:10, 116차 개선 DELCHK-1) 위 _bpSF
             }
             
             // 에디터 본문에서 pending 이미지를 실제 URL로 교체 후 다시 저장
             if (Object.keys(uploadedFiles).length > 0) {
-                let updatedContent = this._getBoardContent();
+                let updatedContent = (_bStill() && this._boardEditor === _bEd) ? this._getBoardContent() : _bpContent;   // ★ (2026-11-13 10:56, 111차 BRD-3) 옮겼으면 처음 읽은 본문으로 — 그사이 편집기가 없어졌거나 다른 글쓰기 편집기로 바뀌었을 수 있음(그 글 내용을 이 글에 쓰지 않게)
                 // blob URL 제거
                 updatedContent = updatedContent.replace(/<img[^>]*src="blob:[^"]*"[^>]*>/gi, '');
+                // ★ (2026-11-02 11:52, 43차 점검) 먼저 고유 표식(data-pending-key)이 달린 자리표시를 그 파일 주소로 채움 — 같은 이름 첨부가 여럿이어도 각자 자기 파일로.
+                //   표식이 없는 자리(예전 방식)는 아래 이름 기준 처리가 그대로 맡음
+                for (const [pk, serverFile] of Object.entries(uploadedByKey)) {
+                    const realUrl = `api.php?action=board_post_download&board_id=${_bid}&post_id=${savedPostId}&file=${encodeURIComponent(serverFile)}`;
+                    updatedContent = updatedContent.replace(new RegExp(`<img[^>]*\\sdata-pending-key="${pk}"[^>]*>`, 'gi'), (match) => {
+                        if (/\sdata-video-pending="/i.test(match)) {
+                            return match.replace(/\sdata-pending-key="[^"]*"/i, '').replace(/\sdata-video-pending="[^"]*"/i, () => ` data-video-src="${realUrl}"`);
+                        }
+                        const styleMatch = match.match(/style="([^"]*)"/i);
+                        const existingStyle = styleMatch ? styleMatch[1] : 'max-width:100%;';
+                        const widthMatch = match.match(/\bwidth="(\d+)"/i);
+                        const widthAttr = widthMatch ? ` width="${widthMatch[1]}"` : '';
+                        const nameMatch = match.match(/\sdata-pending-name="([^"]*)"/i);   // 편집기가 이미 엔티티로 바꿔 둔 값이라 그대로 씀
+                        return `<img src="${realUrl}" alt="${nameMatch ? nameMatch[1] : ''}"${widthAttr} style="${existingStyle}">`;
+                    });
+                }
                 for (const [name, serverFile] of Object.entries(uploadedFiles)) {
-                    const realUrl = `api.php?action=board_post_download&board_id=${this.currentBoardId}&post_id=${savedPostId}&file=${encodeURIComponent(serverFile)}`;
+                    const realUrl = `api.php?action=board_post_download&board_id=${_bid}&post_id=${savedPostId}&file=${encodeURIComponent(serverFile)}`;
                     // data-pending-name으로 삽입된 이미지를 실제 URL로 교체 (기존 style 보존)
-                    const regex = new RegExp(`<img[^>]*data-pending-name="${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*>`, 'gi');
+                    // ★ (2026-10-31 12:03, 34차 전체 점검) 편집기가 내보내는 속성값은 & < > " 가 엔티티로 바뀌므로 escapeHtml 한 이름으로 찾음(아래 동영상 자리표시와 같게)
+                    //   — 종전엔 'R&D.png' 같은 이름이면 못 찾아 data: 그림이 그대로 저장되고 큰 그림은 서버가 src 를 떼어 빈 그림이 됐음
+                    const regex = new RegExp(`<img[^>]*data-pending-name="(?:${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|${this.escapeHtml(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/&#39;/g, "(?:&#39;|')")})"[^>]*>`, 'gi');
                     updatedContent = updatedContent.replace(regex, (match) => {
                         // 기존 style 및 width 속성 추출
                         const styleMatch = match.match(/style="([^"]*)"/i);
@@ -26970,27 +29234,36 @@ const App = {
                     updatedContent = updatedContent.replace(_vRe, (match) => match.replace(/\sdata-video-pending="[^"]*"/i, () => ` data-video-src="${realUrl}"`));
                     // data:base64 src도 교체 (fallback)
                     updatedContent = updatedContent.replace(/(src="data:image\/[^"]+")([^>]*alt=")([^"]*")/gi, (match, srcPart, altPre, altVal) => {
-                        const altName = altVal.replace('"', '');
+                        const altName = altVal.replace('"', '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');   // ★ (2026-10-31 12:03, 34차 전체 점검) alt 의 엔티티를 되돌려 비교
                         if (uploadedFiles[altName]) {
-                            const url = `api.php?action=board_post_download&board_id=${this.currentBoardId}&post_id=${savedPostId}&file=${encodeURIComponent(uploadedFiles[altName])}`;
+                            const url = `api.php?action=board_post_download&board_id=${_bid}&post_id=${savedPostId}&file=${encodeURIComponent(uploadedFiles[altName])}`;
                             return `src="${url}"${altPre}${altVal}`;
                         }
                         return match;
                     });
                 }
                 // 업데이트된 본문 다시 저장
-                await this.api('board_post_save', {
-                    board_id: this.currentBoardId,
+                // ★ (2026-11-02 11:52, 43차 점검) 결과를 안 봐, 실패하면 본문에서 새로 넣은 그림·동영상이 빠진 채 '작성되었습니다'(성공)만 떴음 → 실패는 끝 알림에 경고로
+                const _r2 = await this.api('board_post_save', {
+                    board_id: _bid,
                     post_id: parseInt(savedPostId),
                     title, content: updatedContent,
                     is_pinned: isPinned, is_notice: isNotice, notice_color: noticeColor
                 });
+                if (!_r2 || !_r2.success) _attErrs.push(`${t('board_body_media_save_failed', '본문 그림·동영상 저장 실패')}: ${(_r2 && _r2.error) || t('nt_error_generic', '오류가 발생했습니다.')}`);
             }
             
             if (fileInput) fileInput.value = '';
             
             if (_attErrs.length) this.toast(`${postId ? t('post_updated','수정되었습니다') : t('post_created','작성되었습니다')} · ⚠️ ${_attErrs.join(' / ')}`, 'warning', 10000);   // ★ (2026-10-29 23:35, 24차 점검)
             else this.toast(postId ? t('post_updated','수정되었습니다') : t('post_created','작성되었습니다'), 'success');
+            if (!_bStill() || (this._boardEditor && this._boardEditor !== _bEd)) {   // ★ (2026-11-13 15:57, 112차 RGR28-1) 같은 게시판이라도 그사이 새 글쓰기(다른 편집기)를 열었으면 옮긴 것과 같이 — 종전엔 새로 연 편집기를 없애고 목록으로 바꿔 쓰던 초안이 사라졌음(재현). 편집기가 그대로거나 없으면(취소) 종전과 같음
+                // ★ (2026-11-13 10:56, 111차 BRD-3) 다른 게시판·저장소로 옮겼으면 그 화면을 건드리지 않음(이 글의 편집기만 정리) — 종전엔 옮긴 화면을 목록·글 보기로 바꾸고 새로 연 편집기도 없앴음
+                if (this._boardEditor && this._boardEditor === _bEd) { try { this._boardEditor.destroy(); } catch(e) {} this._boardEditor = null; }
+                this.loadBoardSidebar();
+                this.loadBoardUnreadCounts();
+                return;
+            }
             // 에디터 정리
             if (this._boardEditor) {
                 try { this._boardEditor.destroy(); } catch(e) {}
@@ -26998,7 +29271,7 @@ const App = {
             }
             if (postId) {
                 // 수정 → 해당 글로 돌아가기
-                this.viewBoardPost(parseInt(postId));
+                this.viewBoardPost(parseInt(postId), true, true);   // ★ (2026-11-12 15:20, 99차 BRDW-1) 수정 저장 뒤 다시 보기는 조회수 안 셈
             } else {
                 // 새 글 → 목록
                 this.loadBoardPosts();
@@ -27077,14 +29350,18 @@ const App = {
 
     // 댓글 수정 저장
     async saveEditComment(commentId, postId) {
+        if (this._cmtSaving[`edit-input-${commentId}`]) return;   // ★ (2026-11-02 11:51, 43차 점검) _cmtSaving 주석(saveBoardComment 위)
         const content = this._getCmtEditorData(`edit-input-${commentId}`);
         const textOnly = content.replace(/<[^>]*>/g, '').trim();
         const hasMedia = /<(img|video)\b/i.test(content);
         const hasFiles = this._editFiles && this._editFiles.length > 0;
         if (!textOnly && !hasMedia && !hasFiles) return;
-        
-        this._destroyCmtEditor(`edit-input-${commentId}`);
-        
+        this._cmtSaving[`edit-input-${commentId}`] = true;
+        this._cmtSaveBtnLock(`edit-input-${commentId}`, true);
+        try {
+
+        // ★ (2026-11-04 01:39, 54차 점검) 편집기 정리는 저장 성공 갈래로 옮김(아래 res.success) — 종전엔 응답 전에 없애, 서버 거부·네트워크 오류면 편집기 없이 HTML 태그가 든 맨 입력칸만 남았음(재현)
+
         const filesToUpload = hasFiles ? [...this._editFiles] : [];
         const progressId = `edit-input-${commentId}`;
         
@@ -27094,15 +29371,17 @@ const App = {
         formData.append('comment_id', commentId);
         formData.append('content', content || '');
         formData.append('csrf_token', this.csrfToken || '');
-        formData.append('board_id', this.currentBoardId);
+        const _cbid = this.currentBoardId;   // ★ (2026-11-13 10:56, 111차 BRD-3) 저장을 시작한 게시판 번호를 잡아 둠(saveBoardPost 주석) — 종전엔 첨부마다 새로 읽어 옮기면 남은 첨부가 '권한이 없습니다'로 빠졌음(재현)
+        formData.append('board_id', _cbid);
         if (hasFiles) formData.append('has_pending_files', '1');   // ★ (2026-10-30 02:21, 26차 재검토) 뒤따르는 조각 업로드가 본문 그림·동영상 자리를 채우게(새 댓글과 같게 — 서버가 자리표시를 남김)
         
         try {
             const res = await this._fetchWithProgress(
                 'api.php?action=board_comment_edit', formData, null
             );
-            
+
             if (res.success) {
+                this._destroyCmtEditor(`edit-input-${commentId}`);   // ★ (2026-11-04 01:39, 54차 점검) 위 주석 — 성공했을 때만 정리(다시 그리기 전)
                 // 파일 청크 업로드
                 if (filesToUpload.length > 0) {
                     this._showCmtUploadProgress(progressId, 0);
@@ -27110,15 +29389,23 @@ const App = {
                     for (let fi = 0; fi < filesToUpload.length; fi++) {
                         const file = filesToUpload[fi];
                         this._showCmtUploadProgress(progressId, Math.round((fi / filesToUpload.length) * 50));
-                        const uploadRes = await this._commentUploadChunked(file, commentId, this.currentBoardId, progressId);
-                        if (!uploadRes?.success) _cmtErrs.push(`${file.name}: ${uploadRes?.error || t('upload_failed', '업로드 실패')}`);
+                        // ★ (2026-10-31 13:39, 34차 후속 개선) 네트워크 끊김·JSON 아닌 응답(413 HTML 등)으로 예외가 나면 나머지 파일·입력칸 정리·새로고침이 모두 건너뛰어져
+                        //   다시 '등록'하면 같은 댓글이 하나 더 생겼음 — 파일별 try/catch 로 실패를 모음(글 저장과 같게)
+                        try {
+                            const uploadRes = await this._commentUploadChunked(file, commentId, _cbid, progressId);
+                            if (!uploadRes?.success) _cmtErrs.push(`${file.name}: ${uploadRes?.error || t('upload_failed', '업로드 실패')}`);
+                        } catch (e) {
+                            _cmtErrs.push(`${file.name}: ${e.message || t('upload_failed', '업로드 실패')}`);
+                        }
                     }
                     this._hideCmtUploadProgress(progressId);
                     if (_cmtErrs.length) this.toast(_cmtErrs.join(' / '), 'error', 10000);
                 }
                 
+                if (!(this.boardInlineMode && String(this.currentBoardId) === String(_cbid) && String(this._boardCommentPostId) === String(postId))) return;   // ★ (2026-11-13 15:57, 112차 RGR28-1) 같은 게시판의 다른 글로 옮겼어도 그 화면을 둠 — 종전엔 주소는 새 글인데 화면은 앞 글로 되돌려 그렸음(재현)
+                // ★ (2026-11-13 10:56, 111차 BRD-3) 다른 게시판·저장소로 옮겼으면 그 화면(새로 연 글·입력칸)을 건드리지 않음 — 종전엔 이 글로 되돌려 그렸음
                 this._editFiles = [];
-                await this.viewBoardPost(postId, false);
+                await this.viewBoardPost(postId, false, true);   // ★ (2026-11-12 15:20, 99차 BRDW-1) 다시 그리기 — 조회수 안 셈
                 requestAnimationFrame(() => {
                     const el = document.querySelector(`.cmt-item[data-id="${commentId}"]`);
                     if (el) {
@@ -27134,6 +29421,10 @@ const App = {
         } catch(e) {
             this._hideCmtUploadProgress(progressId);
             this.toast(e && e.message ? tf('nt_error_with', {msg: e.message}, `오류: ${e.message}`) : t('nt_error_generic', '오류가 발생했습니다.'), 'error');
+        }
+        } finally {
+            delete this._cmtSaving[`edit-input-${commentId}`];   // ★ (2026-11-02 11:51, 43차 점검) _cmtSaving 주석
+            this._cmtSaveBtnLock(`edit-input-${commentId}`, false);
         }
     },
 
@@ -27193,7 +29484,7 @@ const App = {
         if (!preview) return;
         const nonMedia = this._replyFiles.filter(f => {
             const ext = f.name.split('.').pop().toLowerCase();
-            return !['jpg','jpeg','png','gif','webp','bmp','svg','mp4','webm','ogg','mov','avi','mkv'].includes(ext);
+            return !['jpg','jpeg','png','gif','webp','bmp','svg','mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp'].includes(ext);   // ★ (2026-11-01 11:47, 39차 점검) 편집기 삽입(_insertFileToEditor) 동영상 목록과 맞춤 — wmv·ts 등이 편집기 자리표시와 칩에 함께 나와 칩 × 로 빼도 자리표시가 남았음
         });
         if (nonMedia.length === 0) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
         preview.style.display = 'flex';
@@ -27206,28 +29497,34 @@ const App = {
     
     // 답글 저장
     async saveBoardReply(parentId, postId) {
+        if (this._cmtSaving[`reply-input-${parentId}`]) return;   // ★ (2026-11-02 11:51, 43차 점검) _cmtSaving 주석(saveBoardComment 위)
         const content = this._getCmtEditorData(`reply-input-${parentId}`);
         const textOnly = content.replace(/<[^>]*>/g, '').trim();
         if (!textOnly && this._replyFiles.length === 0) return;
-        
-        this._destroyCmtEditor(`reply-input-${parentId}`);
-        
+        this._cmtSaving[`reply-input-${parentId}`] = true;
+        this._cmtSaveBtnLock(`reply-input-${parentId}`, true);
+        try {
+
+        // ★ (2026-11-04 01:39, 54차 점검) 편집기 정리는 저장 성공 갈래로 옮김(saveEditComment 주석과 같음) — 종전엔 응답 전에 없애 실패하면 HTML 태그가 든 맨 입력칸만 남았음
+
         const filesToUpload = [...this._replyFiles];
         const hasFiles = filesToUpload.length > 0;
         const progressId = `reply-input-${parentId}`;
         
         const formData = new FormData();
         formData.append('post_id', postId);
-        formData.append('board_id', this.currentBoardId);
+        const _cbid = this.currentBoardId;   // ★ (2026-11-13 10:56, 111차 BRD-3) 저장을 시작한 게시판 번호를 잡아 둠(saveBoardPost 주석) — 종전엔 첨부마다 새로 읽어 옮기면 남은 첨부가 '권한이 없습니다'로 빠졌음(재현)
+        formData.append('board_id', _cbid);
         formData.append('parent_id', parentId);
         formData.append('content', content || '');
         formData.append('csrf_token', this.csrfToken || '');
         if (hasFiles) formData.append('has_pending_files', '1');
-        
+
         try {
             const res = await this.api('board_comment_save', formData);
-            
+
             if (res.success) {
+                this._destroyCmtEditor(`reply-input-${parentId}`);   // ★ (2026-11-04 01:39, 54차 점검) 위 주석 — 성공했을 때만 정리(다시 그리기 전)
                 const savedCommentId = res.comment_id;
                 
                 if (hasFiles && savedCommentId) {
@@ -27236,16 +29533,24 @@ const App = {
                     for (let fi = 0; fi < filesToUpload.length; fi++) {
                         const file = filesToUpload[fi];
                         if (progressId) this._showCmtUploadProgress(progressId, Math.round((fi / filesToUpload.length) * 50));
-                        const uploadRes = await this._commentUploadChunked(file, savedCommentId, this.currentBoardId, progressId);
-                        if (!uploadRes?.success) _cmtErrs.push(`${file.name}: ${uploadRes?.error || t('upload_failed', '업로드 실패')}`);
+                        // ★ (2026-10-31 13:39, 34차 후속 개선) 네트워크 끊김·JSON 아닌 응답(413 HTML 등)으로 예외가 나면 나머지 파일·입력칸 정리·새로고침이 모두 건너뛰어져
+                        //   다시 '등록'하면 같은 댓글이 하나 더 생겼음 — 파일별 try/catch 로 실패를 모음(글 저장과 같게)
+                        try {
+                            const uploadRes = await this._commentUploadChunked(file, savedCommentId, _cbid, progressId);
+                            if (!uploadRes?.success) _cmtErrs.push(`${file.name}: ${uploadRes?.error || t('upload_failed', '업로드 실패')}`);
+                        } catch (e) {
+                            _cmtErrs.push(`${file.name}: ${e.message || t('upload_failed', '업로드 실패')}`);
+                        }
                     }
                     this._hideCmtUploadProgress(progressId);
                     if (_cmtErrs.length) this.toast(_cmtErrs.join(' / '), 'error', 10000);
                 }
                 
+                if (!(this.boardInlineMode && String(this.currentBoardId) === String(_cbid) && String(this._boardCommentPostId) === String(postId))) return;   // ★ (2026-11-13 15:57, 112차 RGR28-1) 같은 게시판의 다른 글로 옮겼어도 그 화면을 둠 — 종전엔 주소는 새 글인데 화면은 앞 글로 되돌려 그렸음(재현)
+                // ★ (2026-11-13 10:56, 111차 BRD-3) 다른 게시판·저장소로 옮겼으면 그 화면(새로 연 글·입력칸)을 건드리지 않음 — 종전엔 이 글로 되돌려 그렸음
                 this._replyFiles = [];
                 const newCommentId = res.comment_id;
-                await this.viewBoardPost(postId, false);
+                await this.viewBoardPost(postId, false, true);   // ★ (2026-11-12 15:20, 99차 BRDW-1) 다시 그리기 — 조회수 안 셈
                 requestAnimationFrame(() => {
                     const target = newCommentId 
                         ? document.querySelector(`.cmt-item[data-id="${newCommentId}"]`)
@@ -27264,6 +29569,10 @@ const App = {
         } catch(e) {
             this._hideCmtUploadProgress(progressId);
             this.toast(e && e.message ? tf('nt_error_with', {msg: e.message}, `오류: ${e.message}`) : t('nt_error_generic', '오류가 발생했습니다.'), 'error');
+        }
+        } finally {
+            delete this._cmtSaving[`reply-input-${parentId}`];   // ★ (2026-11-02 11:51, 43차 점검) _cmtSaving 주석
+            this._cmtSaveBtnLock(`reply-input-${parentId}`, false);
         }
     },
 
@@ -27303,7 +29612,7 @@ const App = {
         // 이미지/동영상은 에디터에 삽입되므로, 그 외 파일만 미리보기에 표시
         const nonMediaFiles = this._commentFiles.filter(f => {
             const ext = f.name.split('.').pop().toLowerCase();
-            return !['jpg','jpeg','png','gif','webp','bmp','svg','mp4','webm','ogg','mov','avi','mkv'].includes(ext);
+            return !['jpg','jpeg','png','gif','webp','bmp','svg','mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp'].includes(ext);   // ★ (2026-11-01 11:47, 39차 점검) 편집기 삽입(_insertFileToEditor) 동영상 목록과 맞춤 — wmv·ts 등이 편집기 자리표시와 칩에 함께 나와 칩 × 로 빼도 자리표시가 남았음
         });
         if (nonMediaFiles.length === 0) {
             preview.style.display = 'none';
@@ -27345,7 +29654,10 @@ const App = {
                 editor.insertHtml(`<img src="${vPlaceholder}" data-video-pending="${this.escapeHtml(file.name)}" style="max-width:320px;border-radius:6px;" />`);
             }
         };
-        reader.readAsDataURL(file);
+        // ★ (2026-10-31 13:39, 34차 후속 개선) 동영상은 자리표시(SVG)만 넣는데도 파일 전체를 data URL 로 읽어 메모리를 크게 먹고 큰 파일은 실패해
+        //   자리표시가 안 생겼음 — 동영상은 읽지 않고 바로 넣고, 그림만 읽음
+        if (isVideo) reader.onload({ target: { result: '' } });
+        else reader.readAsDataURL(file);
     },
     
     // 수정용 첨부파일 미리보기 + 이미지 자동 삽입
@@ -27374,7 +29686,7 @@ const App = {
         if (!preview) return;
         const nonMedia = this._editFiles.filter(f => {
             const ext = f.name.split('.').pop().toLowerCase();
-            return !['jpg','jpeg','png','gif','webp','bmp','svg','mp4','webm','ogg','mov','avi','mkv'].includes(ext);
+            return !['jpg','jpeg','png','gif','webp','bmp','svg','mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp'].includes(ext);   // ★ (2026-11-01 11:47, 39차 점검) 편집기 삽입(_insertFileToEditor) 동영상 목록과 맞춤 — wmv·ts 등이 편집기 자리표시와 칩에 함께 나와 칩 × 로 빼도 자리표시가 남았음
         });
         if (nonMedia.length === 0) { preview.style.display = 'none'; preview.innerHTML = ''; return; }
         preview.style.display = 'flex';
@@ -27417,6 +29729,7 @@ const App = {
             // CSRF 에러 시 토큰 갱신 후 1회 재시도
             if (res.csrf_error || res.error === 'CSRF token mismatch' || (res.error && res.error.includes('보안 토큰'))) {
                 await this.refreshCsrfToken();
+                if (await this._acctSwitchGuard()) return { success: false, error: t('account_switched_reload', '다른 탭에서 다른 계정으로 로그인되었습니다. 이 화면은 이전 계정으로 열려 있어 새로 고칩니다.') };   // ★ (2026-11-11 22:04, 85차 RGR4-1)
                 // FormData에서 csrf_token 교체
                 const newFd = new FormData();
                 for (const [key, value] of formData.entries()) {
@@ -27441,13 +29754,13 @@ const App = {
             bar = document.createElement('div');
             bar.id = containerId + '-progress';
             bar.style.cssText = 'margin:6px 0;font-size:12px;color:var(--fs-text-2, #666);';
-            bar.innerHTML = `<div style="display:flex;align-items:center;gap:6px;"><div class="spinner-small"></div><span class="cmt-progress-text">업로드 중...</span></div><div style="margin-top:3px;height:3px;background:var(--fs-surface-3, #e0e0e0);border-radius:2px;overflow:hidden;"><div class="cmt-progress-bar" style="width:0%;height:100%;background:var(--primary,#667eea);border-radius:2px;transition:width 0.3s;"></div></div>`;
+            bar.innerHTML = `<div style="display:flex;align-items:center;gap:6px;"><div class="spinner-small"></div><span class="cmt-progress-text">${this.escapeHtml(t('status_uploading', '업로드 중...'))}</span></div><div style="margin-top:3px;height:3px;background:var(--fs-surface-3, #e0e0e0);border-radius:2px;overflow:hidden;"><div class="cmt-progress-bar" style="width:0%;height:100%;background:var(--primary,#667eea);border-radius:2px;transition:width 0.3s;"></div></div>`;
             container.parentElement.insertBefore(bar, container.nextSibling);
         }
         bar.style.display = 'block';
         const text = bar.querySelector('.cmt-progress-text');
         const barEl = bar.querySelector('.cmt-progress-bar');
-        if (text) text.textContent = `업로드 중... ${percent}%`;
+        if (text) text.textContent = `${t('status_uploading', '업로드 중...')} ${percent}%`;   // ★ (2026-11-01 01:05, 35차 전체 점검) 한국어 고정 문구 → t()
         if (barEl) barEl.style.width = percent + '%';
     },
 
@@ -27505,11 +29818,24 @@ const App = {
         return { success: false, error: t('upload_failed', '업로드 실패') };
     },
 
+    // ★ (2026-11-02 11:51, 43차 점검) 댓글·답글·댓글 수정 저장이 요청(첨부 업로드 포함) 동안 잠기지 않아, 다시 누르면 같은 댓글이 하나 더 생기고 첨부도 두 번 올라갔음
+    //   → 입력칸별 '저장 중' 표시 + 그 입력칸의 등록/저장 단추를 잠그고 finally 에서 풂(글 저장 saveBoardPost 와 같게)
+    _cmtSaving: {},
+    _cmtSaveBtnLock(inputId, lock) {
+        const ta = document.getElementById(inputId);
+        const btn = ta && ta.parentElement ? ta.parentElement.querySelector('.cmt-write-btns .btn-primary') : null;
+        if (btn) btn.disabled = !!lock;
+    },
+
     async saveBoardComment(postId) {
+        if (this._cmtSaving['board-comment-input']) return;   // ★ (2026-11-02 11:51, 43차 점검) 위 _cmtSaving 주석
         const content = this._getCmtEditorData('board-comment-input');
         const textOnly = content.replace(/<[^>]*>/g, '').trim();
         if (!textOnly && this._commentFiles.length === 0) return;
-        
+        this._cmtSaving['board-comment-input'] = true;
+        this._cmtSaveBtnLock('board-comment-input', true);
+        try {
+
         const filesToUpload = [...this._commentFiles];
         const hasFiles = filesToUpload.length > 0;
         const progressId = 'board-comment-input';
@@ -27517,7 +29843,8 @@ const App = {
         // 텍스트만 먼저 저장 (파일 없이)
         const formData = new FormData();
         formData.append('post_id', postId);
-        formData.append('board_id', this.currentBoardId);
+        const _cbid = this.currentBoardId;   // ★ (2026-11-13 10:56, 111차 BRD-3) 저장을 시작한 게시판 번호를 잡아 둠(saveBoardPost 주석) — 종전엔 첨부마다 새로 읽어 옮기면 남은 첨부가 '권한이 없습니다'로 빠졌음(재현)
+        formData.append('board_id', _cbid);
         formData.append('content', content || '');
         formData.append('csrf_token', this.csrfToken || '');
         // hasFiles면 빈 content도 허용하도록 플래그
@@ -27536,13 +29863,21 @@ const App = {
                     for (let fi = 0; fi < filesToUpload.length; fi++) {
                         const file = filesToUpload[fi];
                         if (progressId) this._showCmtUploadProgress(progressId, Math.round((fi / filesToUpload.length) * 50));
-                        const uploadRes = await this._commentUploadChunked(file, savedCommentId, this.currentBoardId, progressId);
-                        if (!uploadRes?.success) _cmtErrs.push(`${file.name}: ${uploadRes?.error || t('upload_failed', '업로드 실패')}`);
+                        // ★ (2026-10-31 13:39, 34차 후속 개선) 네트워크 끊김·JSON 아닌 응답(413 HTML 등)으로 예외가 나면 나머지 파일·입력칸 정리·새로고침이 모두 건너뛰어져
+                        //   다시 '등록'하면 같은 댓글이 하나 더 생겼음 — 파일별 try/catch 로 실패를 모음(글 저장과 같게)
+                        try {
+                            const uploadRes = await this._commentUploadChunked(file, savedCommentId, _cbid, progressId);
+                            if (!uploadRes?.success) _cmtErrs.push(`${file.name}: ${uploadRes?.error || t('upload_failed', '업로드 실패')}`);
+                        } catch (e) {
+                            _cmtErrs.push(`${file.name}: ${e.message || t('upload_failed', '업로드 실패')}`);
+                        }
                     }
                     this._hideCmtUploadProgress(progressId);
                     if (_cmtErrs.length) this.toast(_cmtErrs.join(' / '), 'error', 10000);
                 }
                 
+                if (!(this.boardInlineMode && String(this.currentBoardId) === String(_cbid) && String(this._boardCommentPostId) === String(postId))) return;   // ★ (2026-11-13 15:57, 112차 RGR28-1) 같은 게시판의 다른 글로 옮겼어도 그 화면을 둠 — 종전엔 주소는 새 글인데 화면은 앞 글로 되돌려 그렸음(재현)
+                // ★ (2026-11-13 10:56, 111차 BRD-3) 다른 게시판·저장소로 옮겼으면 그 화면(새로 연 글·입력칸)을 건드리지 않음 — 종전엔 이 글로 되돌려 그렸음
                 const cmtEditor = this._cmtEditors['board-comment-input'];
                 if (cmtEditor) { cmtEditor.setData(''); } else {
                     const input = document.getElementById('board-comment-input');
@@ -27556,7 +29891,7 @@ const App = {
                 
                 this.boardCommentPage = 9999;
                 const newCommentId = res.comment_id;
-                await this.viewBoardPost(postId, false);
+                await this.viewBoardPost(postId, false, true);   // ★ (2026-11-12 15:20, 99차 BRDW-1) 다시 그리기 — 조회수 안 셈
                 requestAnimationFrame(() => {
                     const target = newCommentId 
                         ? document.querySelector(`.cmt-item[data-id="${newCommentId}"]`)
@@ -27576,6 +29911,10 @@ const App = {
             this._hideCmtUploadProgress(progressId);
             this.toast(e && e.message ? tf('nt_error_with', {msg: e.message}, `오류: ${e.message}`) : t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
+        } finally {
+            delete this._cmtSaving['board-comment-input'];   // ★ (2026-11-02 11:51, 43차 점검) _cmtSaving 주석
+            this._cmtSaveBtnLock('board-comment-input', false);
+        }
     },
 
     // 댓글 삭제
@@ -27594,7 +29933,7 @@ const App = {
                 content: `<div style="text-align:center;padding:12px 0;font-size:14px;color:var(--theme-text,var(--fs-text, #333));">${t('comment_delete_done','댓글이 삭제되었습니다.')}</div>`,
                 buttons: [{ text: t('ok','확인'), value: true, class: 'btn-primary' }]
             });
-            this.viewBoardPost(postId);
+            this.viewBoardPost(postId, false, true);   // ★ (2026-11-01 11:46, 39차 점검) 위 댓글 쪽 넘기기 주석과 같음 — 기록을 쌓지 않음
         }
     },
 
@@ -27606,7 +29945,7 @@ const App = {
         });
         if (res.success) {
             this.toast(t('file_deleted','파일이 삭제되었습니다.'), 'success');
-            this.viewBoardPost(postId, false);
+            this.viewBoardPost(postId, false, true);   // ★ (2026-11-12 15:20, 99차 BRDW-1) 다시 그리기 — 조회수 안 셈
         } else {
             this.toast(res.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
@@ -27665,6 +30004,7 @@ const App = {
 
     // 게시판 추가/수정 폼
     async showBoardEditForm(boardId = null) {
+        const _beSeq = this._boardEditSeq = (this._boardEditSeq || 0) + 1, _beEl = document.getElementById('modal-board-edit'), _beOpen = () => !!(_beEl && _beEl.style.display && _beEl.style.display !== 'none'), _beWasOpen = _beOpen();   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 사용자 창(showUserForm)과 같음 — 종전엔 저장 뒤 다시 채우는 동안 Esc·X 로 닫으면 읽기가 끝날 때 창이 다시 떴음(재현)
         document.getElementById('board-edit-id').value = boardId || '';
         document.getElementById('board-edit-name').value = '';
         document.getElementById('board-edit-icon').value = '📋';
@@ -27685,6 +30025,7 @@ const App = {
         if (boardId) {
             titleEl.textContent = `📋 ${t('edit_board','게시판 수정')}`;
             const res = await this.api('board_manage_list', {}, 'GET');
+            if (_beSeq !== this._boardEditSeq || (_beWasOpen && !_beOpen())) return;   // ★ (2026-11-13 21:10, 116차 개선 RGR29-2·3) 늦게 온 응답(다른 차례이거나 떠 있던 창이 닫힘)은 버림
             const board = (res.boards || []).find(b => b.id === boardId);
             if (board) {
                 document.getElementById('board-edit-name').value = board.name || '';
@@ -27726,10 +30067,20 @@ const App = {
             new_badge_hours: parseInt(document.getElementById('board-edit-new-badge-hours').value) ?? 24,
         };
         
-        const res = await this.api('board_save', data);
+        // ★ (2026-11-02 11:53, 43차 점검) 응답 전 다시 누르면 같은 게시판이 둘 생겼음 → 요청 동안 저장 단추를 잠금
+        if (this._boardSettingsSaving) return;
+        this._boardSettingsSaving = true;
+        const _bsBtn = document.querySelector('#modal-board-edit button[onclick^="App.saveBoardSettings"]');
+        if (_bsBtn) _bsBtn.disabled = true;
+        let res;
+        try { res = await this.api('board_save', data); }
+        finally { this._boardSettingsSaving = false; if (_bsBtn) _bsBtn.disabled = false; }
+        if (!res) return;
         if (res.success) {
             this.toast(t('saved','저장되었습니다.'), 'success');
-            this.hideModal('modal-board-edit');
+            // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 기존 게시판 수정이면 창을 열어 두고 서버에 저장된 값으로 다시 채움(창을 열 때 쓰는 showBoardEditForm) — 종전엔 저장하면 닫혔음. 닫기는 [취소]·[X]. 새 게시판 추가는 종전대로 닫힘(열어 두면 다시 저장할 때 또 만들어짐)
+            if (data.id) this.showBoardEditForm(parseInt(data.id, 10));
+            else this.hideModal('modal-board-edit');
             this.loadBoardManageList();
             this.loadBoardSidebar();
         } else {
@@ -27745,6 +30096,8 @@ const App = {
             this.toast(t('board_deleted','게시판이 삭제되었습니다.'), 'success');
             this.loadBoardManageList();
             this.loadBoardSidebar();
+        } else {
+            this.toast(res.error || t('delete_failed', '삭제 실패'), 'error');   // ★ (2026-11-01 11:47, 39차 점검) 실패(권한 없는 부관리자 403 등)해도 아무 표시가 없었음
         }
     },
 
@@ -27759,39 +30112,47 @@ const App = {
         this._insertMediaToContent(fileName);
     },
     
-    _insertMediaToContent(fileName) {
+    _insertMediaToContent(fileName, attIdx) {
         const ext = fileName.split('.').pop().toLowerCase();
         const isImg = this._isImageFile(fileName);
         const isVideo = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp'].includes(ext);
         if (!isImg && !isVideo) return;
         
         const postId = document.getElementById('board-post-edit-id').value;
-        const att = this.boardTempAttachments.find(a => a.name === fileName);
+        // ★ (2026-11-02 11:52, 43차 점검) 목록에서 누른 그 항목(attIdx)을 씀 — 이름으로 찾으면 같은 이름 첨부 중 늘 첫 번째가 들어갔음. 대기 파일은 고유 표식(pk)으로 찾고 자리표시에 data-pending-key 로 남김
+        const _byIdx = (typeof attIdx === 'number') ? this.boardTempAttachments[attIdx] : null;
+        const att = (_byIdx && _byIdx.name === fileName) ? _byIdx : this.boardTempAttachments.find(a => a.name === fileName);
         let src = '';
         if (att && att.file && postId) {
             src = `api.php?action=board_post_download&board_id=${this.currentBoardId}&post_id=${postId}&file=${encodeURIComponent(att.file)}`;
         } else if (att && att.pending) {
             // pending 파일은 data URL로 변환 후 CKEditor에 삽입
-            const pendingFile = this._boardPendingFiles.find(f => f.name === fileName);
+            const pendingFile = (att.pk && this._boardPendingFiles.find(f => f._fsPk === att.pk)) || this._boardPendingFiles.find(f => f.name === fileName);
+            const _pkAttr = pendingFile && pendingFile._fsPk ? ` data-pending-key="${pendingFile._fsPk}"` : '';
             if (pendingFile) {
                 const reader = new FileReader();
                 reader.onload = (e) => {
                     if (this._boardEditor) {
                         if (isImg) {
+                            this._boardEdPrepInsert();   // ★ (2026-11-02 19:34, 47차 점검)
                             this._boardEditor.insertHtml(
-                                `<p><img src="${e.target.result}" alt="${this.escapeHtml(fileName)}" data-pending-name="${this.escapeHtml(fileName)}" style="max-width:100%;" /></p>`
+                                `<p><img src="${e.target.result}" alt="${this.escapeHtml(fileName)}" data-pending-name="${this.escapeHtml(fileName)}"${_pkAttr} style="max-width:100%;" /></p>`
                             );
                         } else {
                             const safeName = fileName.replace(/[<>&"']/g, '');
                             const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="8" fill="#1a1a2e"/><polygon points="140,60 140,120 190,90" fill="#fff" opacity="0.8"/><text x="160" y="160" text-anchor="middle" fill="#aaa" font-size="11" font-family="sans-serif">🎬 ${safeName}</text></svg>`;
                             const vPlaceholder = 'data:image/svg+xml,' + encodeURIComponent(svg);
+                            this._boardEdPrepInsert();   // ★ (2026-11-02 19:34, 47차 점검)
                             this._boardEditor.insertHtml(
-                                `<img src="${vPlaceholder}" data-video-pending="${this.escapeHtml(fileName)}" style="max-width:320px;border-radius:6px;" />`
+                                `<img src="${vPlaceholder}" data-video-pending="${this.escapeHtml(fileName)}"${_pkAttr} style="max-width:320px;border-radius:6px;" />`
                             );
                         }
                     }
                 };
-                reader.readAsDataURL(pendingFile);
+                // ★ (2026-10-31 13:39, 34차 후속 개선) 동영상은 자리표시(SVG)만 넣는데도 파일 전체를 data URL 로 읽어 메모리를 크게 먹고 큰 파일은 실패해
+                //   자리표시가 안 생겼음 — 동영상은 읽지 않고 바로 넣고, 그림만 읽음
+                if (isVideo) reader.onload({ target: { result: '' } });
+                else reader.readAsDataURL(pendingFile);
                 this.renderBoardAttachments(postId || null);
                 return;
             }
@@ -27801,11 +30162,13 @@ const App = {
         
         if (this._boardEditor) {
             if (isImg) {
+                this._boardEdPrepInsert();   // ★ (2026-11-02 19:34, 47차 점검)
                 this._boardEditor.insertHtml(`<img src="${src}" alt="${this.escapeHtml(fileName)}" style="max-width:100%;" />`);
             } else {
                 const safeName = fileName.replace(/[<>&"']/g, '');
                 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" rx="8" fill="#1a1a2e"/><polygon points="140,60 140,120 190,90" fill="#fff" opacity="0.8"/><text x="160" y="160" text-anchor="middle" fill="#aaa" font-size="11" font-family="sans-serif">🎬 ${safeName}</text></svg>`;
                 const vPlaceholder = 'data:image/svg+xml,' + encodeURIComponent(svg);
+                this._boardEdPrepInsert();   // ★ (2026-11-02 19:34, 47차 점검)
                 this._boardEditor.insertHtml(`<img src="${vPlaceholder}" data-video-src="${src}" style="max-width:320px;border-radius:6px;" />`);
             }
         }
@@ -27830,18 +30193,23 @@ const App = {
             }
         }
         
+        // ★ (2026-11-02 11:52, 43차 점검) 대기 파일마다 고유 표식(_fsPk)을 달아 첨부 목록 항목·본문 자리표시(data-pending-key)·저장 때 치환을 이름이 아니라 이 표식으로 짝 지음
+        //   — 같은 이름 그림 두 장(붙여넣은 image.png 등)을 넣으면 본문 자리가 모두 한 파일로 채워졌음
+        const _pk = () => 'p' + Date.now().toString(36) + '_' + (this._boardPkSeq = (this._boardPkSeq || 0) + 1);
         if (postId) {
             // 수정 모드: pending에 저장 (저장 시 업로드)
             Array.from(files).forEach(file => {
+                try { file._fsPk = _pk(); } catch (e) {}
                 this._boardPendingFiles.push(file);
-                this.boardTempAttachments.push({ name: file.name, size: file.size, pending: true });
+                this.boardTempAttachments.push({ name: file.name, size: file.size, pending: true, pk: file._fsPk });
             });
             this.renderBoardAttachments(postId);
         } else {
             // 새 글: pending에 저장
             Array.from(files).forEach(file => {
+                try { file._fsPk = _pk(); } catch (e) {}
                 this._boardPendingFiles.push(file);
-                this.boardTempAttachments.push({ name: file.name, size: file.size, pending: true });
+                this.boardTempAttachments.push({ name: file.name, size: file.size, pending: true, pk: file._fsPk });
             });
             this.renderBoardAttachments(null);
         }
@@ -27944,7 +30312,7 @@ const App = {
             const isVideo = ['mp4','webm','ogg','mov','avi','mkv','wmv','flv','ts','m2ts','mts','mpg','mpeg','m4v','3gp'].includes(ext);
             const escapedName = this._jsArg(a.name);   // ★ (2026-10-29 02:36, 16차) onclick 안 JS 문자열로 안전하게(_jsArg)
             // ★ (2026-10-29 21:36, 24차 점검) 스토리지에서 고른 대기 항목은 저장 전엔 파일 내용이 없어 '삽입'이 늘 오류였음 → 버튼을 안 그림(저장 뒤 수정 화면에선 삽입 가능)
-            const insertBtn = ((isImg || isVideo) && !(a.pending && a.from_storage)) ? `<a href="#" onclick="App._insertMediaToContent(${escapedName});return false;" style="color:var(--fs-primary-text, var(--primary,#667eea));font-size:11px;white-space:nowrap;">삽입</a>` : '';
+            const insertBtn = ((isImg || isVideo) && !(a.pending && a.from_storage)) ? `<a href="#" onclick="App._insertMediaToContent(${escapedName}, ${i});return false;" style="color:var(--fs-primary-text, var(--primary,#667eea));font-size:11px;white-space:nowrap;">${t('board_insert_media', '삽입')}</a>` : '';   // ★ (2026-11-01 01:05, 35차 전체 점검) 한국어 고정 문구 → t()
             
             return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:var(--bg-tertiary,var(--fs-surface-2, #f8f9fa));border-radius:4px;margin-bottom:4px;font-size:13px;">
                 <span>📎 ${this.escapeHtml(a.name)}</span>
@@ -27968,11 +30336,13 @@ const App = {
         if (att.pending) {
             // 새 글의 pending 파일 — 즉시 제거
             // ★ (2026-10-30 00:51, 25차 — 24차 남은 낮은 것) 스토리지에서 고른 항목이면 PC 대기 목록은 건드리지 않음 — 종전엔 같은 이름의 PC 첨부가 함께 빠졌음
-            const pendingIdx = att.from_storage ? -1 : this._boardPendingFiles.findIndex(f => f.name === att.name);
+            // ★ (2026-11-02 11:52, 43차 점검) 고유 표식(pk)이 있으면 그 파일을 뺌 — 이름으로 찾으면 같은 이름 첨부 중 다른 것이 빠졌음
+            const pendingIdx = att.from_storage ? -1 : (att.pk ? this._boardPendingFiles.findIndex(f => f._fsPk === att.pk) : this._boardPendingFiles.findIndex(f => f.name === att.name));
             if (pendingIdx >= 0) this._boardPendingFiles.splice(pendingIdx, 1);
             // 스토리지 pending도 제거
             if (att.from_storage && this._boardPendingStorageFiles) {
-                const sIdx = this._boardPendingStorageFiles.findIndex(f => f.file_name === att.name);
+                // ★ (2026-11-04 01:39, 54차 점검) 고유 표식(spk)이 있으면 그 항목을 뺌 — 종전엔 이름만 봐서 다른 폴더의 같은 이름 파일 둘 중 둘째 줄을 ✕ 하면 첫째가 빠지고 지운 쪽이 첨부됐음(재현: a/same.txt·b/same.txt 중 b ✕ → 저장 때 b 첨부)
+                const sIdx = att.spk ? this._boardPendingStorageFiles.findIndex(f => f._spk === att.spk) : this._boardPendingStorageFiles.findIndex(f => f.file_name === att.name);
                 if (sIdx >= 0) this._boardPendingStorageFiles.splice(sIdx, 1);
             }
         } else if (postId && att.file) {
@@ -27985,11 +30355,36 @@ const App = {
             try {
                 const editorDoc = this._boardEditor.document && this._boardEditor.document.$;
                 if (editorDoc) {
+                    // ★ (2026-11-01 01:53, 36차 전체 점검) 부분 문자열 비교라 'photo.png' 를 지우면 'my_photo.png' 그림까지 지워졌고,
+                    //   동영상 자리표시는 이름이 src 가 아니라 data-video-src 에 있어 남았다 → 주소의 file= 값을 꺼내 정확히 같을 때만, data-video-src 도 같은 방식으로
+                    const _fileParam = (u) => { try { return u ? new URL(u, location.href).searchParams.get('file') : null; } catch (e) { return null; } };
                     const imgs = editorDoc.querySelectorAll('img');
                     imgs.forEach(img => {
-                        if (img.src.includes(encodeURIComponent(att.file)) || img.src.includes(att.file)) {
-                            img.remove();
+                        if (_fileParam(img.getAttribute('src')) === att.file || _fileParam(img.getAttribute('data-video-src')) === att.file) {
+                            this._boardEdRemoveImg(img);   // ★ (2026-11-02 19:34, 47차 점검) 위젯째
                         }
+                    });
+                }
+            } catch(e) {}
+        }
+        // ★ (2026-11-01 01:04, 35차 전체 점검) PC 대기 첨부는 att.file 이 없어 위 정리가 안 돌아, '삽입'해 둔 그림(data URL)·동영상 자리표시가 본문에 남아 저장됐음 →
+        //   대기 항목이면 data-pending-name / data-video-pending 이 같은 요소도 지움(같은 이름의 PC 대기 파일이 아직 남아 있으면 그대로 둠)
+        if (this._boardEditor && att.pending && !att.from_storage && !this._boardPendingFiles.some(f => f.name === att.name)) {
+            try {
+                const editorDoc = this._boardEditor.document && this._boardEditor.document.$;
+                if (editorDoc) {
+                    editorDoc.querySelectorAll('img[data-pending-name], img[data-video-pending]').forEach(img => {
+                        if (img.getAttribute('data-pending-name') === att.name || img.getAttribute('data-video-pending') === att.name) this._boardEdRemoveImg(img);   // ★ (2026-11-02 19:34, 47차 점검) 위젯째
+                    });
+                }
+            } catch(e) {}
+        } else if (this._boardEditor && att.pending && !att.from_storage && att.pk) {
+            // ★ (2026-11-02 11:52, 43차 점검) 같은 이름 대기 파일이 남아 있어도, 지운 항목 자신의 자리표시(data-pending-key)는 지움
+            try {
+                const editorDoc = this._boardEditor.document && this._boardEditor.document.$;
+                if (editorDoc) {
+                    editorDoc.querySelectorAll('img[data-pending-key]').forEach(img => {
+                        if (img.getAttribute('data-pending-key') === att.pk) this._boardEdRemoveImg(img);   // ★ (2026-11-02 19:34, 47차 점검) 위젯째
                     });
                 }
             } catch(e) {}
@@ -28039,10 +30434,11 @@ const App = {
         this._storagePickerSid = storageId;
         
         const listEl = document.getElementById('storage-picker-list');
-        listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">로딩 중...</div>';
+        // ★ (2026-11-01 01:05, 35차 전체 점검) 한국어 고정 문구 → t()(로딩 중·오류·비어있음)
+        listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">' + this.escapeHtml(t('loading', '로딩 중...')) + '</div>';
         
         const res = await this.api('files', { storage_id: storageId, path: this._storagePickerPath, show_hidden: this._isShowHidden() ? 1 : 0 }, 'GET');   // ★ (2026-10-28) '숨긴 항목 표시'를 켜면 폴더 선택 창에도 숨긴 폴더
-        if (!res.success) { listEl.innerHTML = '<div style="color:var(--fs-fg-err, #e74c3c);">오류</div>'; return; }
+        if (!res.success) { listEl.innerHTML = '<div style="color:var(--fs-fg-err, #e74c3c);">' + this.escapeHtml(t('storage_picker_error', '오류')) + '</div>'; return; }
         
         // 브레드크럼
         const bcEl = document.getElementById('storage-picker-breadcrumb');
@@ -28058,7 +30454,7 @@ const App = {
         
         const files = res.items || res.files || [];
         if (!files.length) {
-            listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">비어있음</div>';
+            listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">' + this.escapeHtml(t('storage_picker_empty', '비어있음')) + '</div>';
             return;
         }
         
@@ -28104,7 +30500,7 @@ const App = {
     
     _updateStoragePickerCount() {
         const cnt = this._storagePickerSelected.size;
-        document.getElementById('storage-picker-count').textContent = cnt ? `${cnt}개 선택됨` : '';
+        document.getElementById('storage-picker-count').textContent = cnt ? tf('storage_picker_selected', { n: cnt }, '{n}개 선택됨') : '';   // ★ (2026-11-01 01:05, 35차 전체 점검) 한국어 고정 문구 → t()
     },
     
     _getFileIcon(name) {
@@ -28151,13 +30547,15 @@ const App = {
             
             // pending 목록에 추가 (저장 시에 서버 복사)
             if (!this._boardPendingStorageFiles) this._boardPendingStorageFiles = [];
+            const _spk = 's' + Date.now().toString(36) + '_' + (this._boardPkSeq = (this._boardPkSeq || 0) + 1);   // ★ (2026-11-04 01:39, 54차 점검) 대기 항목·목록 항목 짝 표식(removeBoardAttachment 주석). 서버로는 보내지 않음
             this._boardPendingStorageFiles.push({
                 storage_id: _pickSid,
                 file_path: _pickPath,
                 file_name: info.name,
-                size: info.size
+                size: info.size,
+                _spk
             });
-            this.boardTempAttachments.push({ name: info.name, size: info.size, pending: true, from_storage: true });
+            this.boardTempAttachments.push({ name: info.name, size: info.size, pending: true, from_storage: true, spk: _spk });
             added++;
         }
         
@@ -28191,9 +30589,17 @@ const App = {
         listEl.innerHTML = '';
         
         // 데이터 저장
-        this.trashData = res.success ? (res.items || []) : [];
+        this.trashData = (res && res.success) ? (res.items || []) : [];
         
-        if (!res.success || !res.items?.length) {
+        // ★ (2026-11-02 11:55, 43차 점검) 못 받았을 때(서버 오류·시간 초과·요청 제한)도 '휴지통이 비어있습니다'로 그려, 지운 파일이 이미 없어진 줄 알 수 있었음
+        //   → 실패면 그 이유를 목록 자리에 보여 줌(showSharesModal 과 같은 방식)
+        if (!res || !res.success) {
+            listEl.style.display = 'block';
+            emptyMsg.style.display = 'none';
+            listEl.innerHTML = `<div class="text-center" style="padding:30px;color:var(--fs-fg-err, #e74c3c);">⚠️ ${this.escapeHtml((res && res.error) || t('list_load_failed', '목록을 불러올 수 없습니다.'))}</div>`;
+            countEl.textContent = '';
+            sizeEl.textContent = '';
+        } else if (!res.items?.length) {
             listEl.style.display = 'none';
             emptyMsg.style.display = 'block';
             countEl.textContent = `0${t('count_items','개 항목')}`;
@@ -28203,18 +30609,20 @@ const App = {
             emptyMsg.style.display = 'none';
             
             let totalSize = 0;
+            let _trHtml = '';   // ★ (2026-11-02 14:56, 44차 점검) 항목마다 innerHTML += 로 그때까지 HTML 전체를 다시 직렬화·파싱해 항목 수의 제곱으로 느렸음(휴지통 300개 약 2초, G3#7) → 문자열을 모아 끝에 한 번 넣음(같은 HTML)
             res.items.forEach(item => {
                 totalSize += item.size || 0;
                 const icon = item.is_dir ? this.getFolderIcon() : this.getFileIcon(item.name);   // ★ (2026-10-27 16시, 펜닐) 폴더도 탐색기와 같은 폴더 그림(종전 📁 → 검은 선 그림이라 칸을 꽉 채워 파일 아이콘보다 커 보였음)
                 
-                listEl.innerHTML += `
+                // ★ (2026-11-13 17:07, 113차 DEF-5) 관리자 휴지통 고름 칸에 이름(파일 이름 — 공유 목록 .share-check 와 같은 방식) — 종전엔 낭독기에 이름 없는 체크 상자였음
+                _trHtml += `
                     <div class="trash-item" data-id="${item.id}">
-                        <label class="trash-item-check"><input type="checkbox" class="trash-check" data-id="${item.id}" onchange="App.updateTrashSelection(true)"></label>
+                        <label class="trash-item-check"><input type="checkbox" class="trash-check" data-id="${item.id}" aria-label="${this.escapeHtml(item.name)}" onchange="App.updateTrashSelection(true)"></label>
                         <div class="trash-item-icon">${icon}</div>
                         <div class="trash-item-info">
                             <div class="trash-item-name" title="${this.escapeHtml(item.name)}">${this.escapeHtml(item.name)}</div>
                             <div class="trash-item-meta">
-                                <span class="trash-item-path" title="[${this.escapeHtml(item.storage_name || '')}] ${this.escapeHtml(item.original_path)}">📂 <strong>${this.escapeHtml(item.storage_name || '')}</strong> / ${this.escapeHtml(item.original_path)}</span>
+                                <span class="trash-item-path" title="[${this.escapeHtml(this._storageDisplayName(item.storage_name))}] ${this.escapeHtml(item.original_path)}">📂 <strong>${this.escapeHtml(this._storageDisplayName(item.storage_name))}</strong> / ${this.escapeHtml(item.original_path)}</span>
                             </div>
                             <div class="trash-item-details">
                                 <span>👤 ${this.escapeHtml(item.deleted_by_name || '-')}</span>
@@ -28223,12 +30631,13 @@ const App = {
                             </div>
                         </div>
                         <div class="trash-item-actions">
-                            <button class="btn btn-sm btn-primary" onclick="App.restoreTrash('${item.id}', true)" title="${t('restore','복원')}">↩️</button>
+                            ${item.can_restore === false ? '' : `<button class="btn btn-sm btn-primary" onclick="App.restoreTrash('${item.id}', true)" title="${t('restore','복원')}">↩️</button>`}<!-- ★ (2026-11-14 22:28, 141차) 쓸 수 없는 스토리지(남의 '내 파일') 항목은 복원이 늘 실패 → 단추 감춤 -->
                             <button class="btn btn-sm btn-danger" onclick="App.deleteTrashItem('${item.id}', true)" title="${t('perm_delete','영구삭제')}">🗑️</button>
                         </div>
                     </div>
                 `;
             });
+            listEl.innerHTML = _trHtml;
             
             countEl.textContent = `${res.items.length}${t('count_items','개 항목')}`;
             sizeEl.textContent = this.formatSize(totalSize);
@@ -28257,9 +30666,17 @@ const App = {
         listEl.innerHTML = '';
         
         // 데이터 저장
-        this.myTrashData = res.success ? (res.items || []) : [];
+        this.myTrashData = (res && res.success) ? (res.items || []) : [];
         
-        if (!res.success || !res.items?.length) {
+        // ★ (2026-11-02 11:55, 43차 점검) 못 받았을 때(서버 오류·시간 초과·요청 제한)도 '휴지통이 비어있습니다'로 그려, 지운 파일이 이미 없어진 줄 알 수 있었음
+        //   → 실패면 그 이유를 목록 자리에 보여 줌(showSharesModal 과 같은 방식)
+        if (!res || !res.success) {
+            listEl.style.display = 'block';
+            emptyMsg.style.display = 'none';
+            listEl.innerHTML = `<div class="text-center" style="padding:30px;color:var(--fs-fg-err, #e74c3c);">⚠️ ${this.escapeHtml((res && res.error) || t('list_load_failed', '목록을 불러올 수 없습니다.'))}</div>`;
+            countEl.textContent = '';
+            sizeEl.textContent = '';
+        } else if (!res.items?.length) {
             listEl.style.display = 'none';
             emptyMsg.style.display = 'block';
             countEl.textContent = `0${t('count_items','개 항목')}`;
@@ -28269,18 +30686,19 @@ const App = {
             emptyMsg.style.display = 'none';
             
             let totalSize = 0;
+            let _trHtml = '';   // ★ (2026-11-02 14:56, 44차 점검) 항목마다 innerHTML += 로 그때까지 HTML 전체를 다시 직렬화·파싱해 항목 수의 제곱으로 느렸음(휴지통 300개 약 2초, G3#7) → 문자열을 모아 끝에 한 번 넣음(같은 HTML)
             res.items.forEach(item => {
                 totalSize += item.size || 0;
                 const icon = item.is_dir ? this.getFolderIcon() : this.getFileIcon(item.name);   // ★ (2026-10-27 16시, 펜닐) 폴더도 탐색기와 같은 폴더 그림(종전 📁 → 검은 선 그림이라 칸을 꽉 채워 파일 아이콘보다 커 보였음)
                 
-                listEl.innerHTML += `
+                _trHtml += `
                     <div class="trash-item" data-id="${item.id}">
-                        <label class="trash-item-check"><input type="checkbox" class="my-trash-check" data-id="${item.id}" onchange="App.updateTrashSelection(false)"></label>
+                        <label class="trash-item-check"><input type="checkbox" class="my-trash-check" data-id="${item.id}" aria-label="${this.escapeHtml(item.name)}" onchange="App.updateTrashSelection(false)"></label><!-- ★ (2026-11-13 17:16, 113차 DEF-5) 내 휴지통 고름 칸에도 파일 이름을 이름으로(관리자 휴지통 .trash-check 와 같은 방식) — 종전엔 이름이 비었음 -->
                         <div class="trash-item-icon">${icon}</div>
                         <div class="trash-item-info">
                             <div class="trash-item-name" title="${this.escapeHtml(item.name)}">${this.escapeHtml(item.name)}</div>
                             <div class="trash-item-meta">
-                                <span class="trash-item-path" title="[${this.escapeHtml(item.storage_name || '')}] ${this.escapeHtml(item.original_path)}">📂 <strong>${this.escapeHtml(item.storage_name || '')}</strong> / ${this.escapeHtml(item.original_path)}</span>
+                                <span class="trash-item-path" title="[${this.escapeHtml(this._storageDisplayName(item.storage_name))}] ${this.escapeHtml(item.original_path)}">📂 <strong>${this.escapeHtml(this._storageDisplayName(item.storage_name))}</strong> / ${this.escapeHtml(item.original_path)}</span>
                             </div>
                             <div class="trash-item-details">
                                 <span>🕐 ${item.deleted_at}</span>
@@ -28294,6 +30712,7 @@ const App = {
                     </div>
                 `;
             });
+            listEl.innerHTML = _trHtml;
             
             countEl.textContent = `${res.items.length}${t('count_items','개 항목')}`;
             sizeEl.textContent = this.formatSize(totalSize);
@@ -28389,12 +30808,12 @@ const App = {
             const name = String(item.name || item.id || '');
             const icon = isDir ? this.getFolderIcon() : this.getFileIcon(name);
             const meta = isDir ? t('folder', '폴더') : this.formatSize(item.size || 0);
-            const loc = item.original_path ? `[${item.storage_name || ''}] ${item.original_path}` : '';
+            const loc = item.original_path ? `[${this._storageDisplayName(item.storage_name)}] ${item.original_path}` : '';
             let locLine = '';
             if (item.original_path) {
                 const _op = String(item.original_path).replace(/\\/g, '/');
                 const _dir = _op.includes('/') ? _op.slice(0, _op.lastIndexOf('/')) : '';
-                locLine = `<span style="display:block;font-size:11px;color:var(--fs-text-3, #888);">📂 ${this.escapeHtml(item.storage_name || '')} / ${this.escapeHtml(_dir)}</span>`;
+                locLine = `<span style="display:block;font-size:11px;color:var(--fs-text-3, #888);">📂 ${this.escapeHtml(this._storageDisplayName(item.storage_name))} / ${this.escapeHtml(_dir)}</span>`;
             }
             return `<div class="fs-del-row"${loc ? ` title="${this.escapeHtml(loc)}"` : ''}>
                 <span class="fs-del-idx">${idx + 1}.</span><span class="fs-del-icon">${icon}</span><span class="fs-del-name">${this.escapeHtml(name)}${locLine}</span><span class="fs-del-meta">${this.escapeHtml(meta)}</span>
@@ -28437,7 +30856,7 @@ const App = {
                 </div>
             </div>
             <div style="background: var(--fs-surface-2, #f5f5f5); padding: 8px 12px; border-radius: 6px; margin-bottom: 12px; font-size: 12px; word-break: break-all;">
-                <span style="color: var(--fs-text-3, #888);">${t('trash_restore_location', '복구 위치')}</span><br>📂 <strong>${this.escapeHtml(item.storage_name || '')}</strong> / ${this.escapeHtml(item.original_path || '')}
+                <span style="color: var(--fs-text-3, #888);">${t('trash_restore_location', '복구 위치')}</span><br>📂 <strong>${this.escapeHtml(this._storageDisplayName(item.storage_name))}</strong> / ${this.escapeHtml(item.original_path || '')}
             </div>
             ${this._trashRestoreNoticeHtml()}
         `;
@@ -28465,7 +30884,7 @@ const App = {
             else if (session.success > 0) this.toast(t('toast_restored', '복구 완료'), 'success');
             else this.toast(t('restore_failed', '복구 실패'), 'error');
             if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
-            this.loadFiles();
+            if (!this.isSearchMode) this.loadFiles();   // ★ (2026-11-10 14:53, 64차 N1) 검색 결과를 보는 중이면 목록을 폴더로 바꾸지 않음(39차 _restoreActiveJobs·붙여넣기와 같게) — 종전엔 검색 띠는 남은 채 목록만 폴더 내용이 됐음(재현)
             this.updateTrashIcon();
             this.loadStorageQuotaMini(this.currentStorage);
         });
@@ -28545,7 +30964,8 @@ const App = {
             const sessionItems = [{
                 id: id,
                 name: item.name,
-                size: item.size || 0
+                size: item.size || 0,
+                is_dir: item.is_dir || false   // ★ (2026-11-02 11:53, 43차 점검) 서버(JobManager executeTrashDelete)는 is_dir 가 참일 때만 폴더 진행률을 만드는데 단일 영구삭제만 빠져 큰 폴더가 0/1 로 멈춘 듯 보였음 → 여러 개·비우기와 같게
             }];
             
             await this._createJob('trash_delete', sessionItems, {}, (session) => {
@@ -28700,12 +31120,19 @@ const App = {
     // 선택 항목 복구
     async restoreSelectedTrash(isAdmin) {
         const cls = isAdmin ? '.trash-check:checked' : '.my-trash-check:checked';
-        const ids = [...document.querySelectorAll(cls)].map(cb => cb.dataset.id);
+        let ids = [...document.querySelectorAll(cls)].map(cb => cb.dataset.id);
         if (!ids.length) return;
 
         const trashList = isAdmin ? this.trashData : this.myTrashData;
         const trashMap = {};
         trashList.forEach(item => { trashMap[item.id] = item; });
+        // ★ (2026-11-15 00:31, 147차) 전체 휴지통에서 복원할 수 없는 항목(남의 '내 파일' — 141차 can_restore)은 늘 '쓰기 권한이 없습니다'로 실패해 'N개 실패'가 났음
+        //   → 빼고 복구하고 확인 창에 뺀 개수를 알림. 모두 그런 항목이면 알림만. 일반 사용자 내 휴지통·복원 검사는 그대로
+        const rsSkipped = isAdmin ? ids.filter(id => trashMap[id] && trashMap[id].can_restore === false).length : 0;
+        if (rsSkipped) {
+            ids = ids.filter(id => !(trashMap[id] && trashMap[id].can_restore === false));
+            if (!ids.length) { this.toast(t('trash_restore_none_allowed', '복원할 수 있는 항목이 없습니다. 다른 사용자의 \'내 파일\' 항목은 복원할 수 없습니다. (영구 삭제는 됩니다)'), 'warning'); return; }
+        }
 
         // ★ (2026-10-29 00:56, 펜닐) 개별 삭제 확인창처럼 목록·'폴더 N개 · 파일 N개'·복구 안내 — 종전엔 'N개 항목을 복구하시겠습니까?' 한 줄
         const rsItems = ids.map(id => trashMap[id] || { id: id, name: id });
@@ -28718,6 +31145,7 @@ const App = {
                     <div style="margin-bottom: 12px; font-size: 14px;">
                         ${tf('trash_restore_n_html', {n: ids.length}, '<strong>{n}개</strong> 항목을 복구하시겠습니까?')}
                         ${rsp.kindsHtml}
+                        ${rsSkipped ? `<div style="margin-top:6px;color:var(--fs-text-3, #888);font-size:13px;">${this.escapeHtml(tf('trash_restore_skipped_n', {n: rsSkipped}, '다른 사용자의 \'내 파일\' 항목 {n}개는 복원할 수 없어 빼고 복구합니다.'))}</div>` : ''}
                     </div>
                     ${rsp.listHtml}
                     ${this._trashRestoreNoticeHtml()}
@@ -28749,7 +31177,7 @@ const App = {
             } else if (session.failed === 0) this.toast(`${session.success}${t('items_restored','개 항목을 복구했습니다')}`, 'success');
             else this.toast(`${tf('nt_restore_done_s', {n: session.success}, `${session.success}개 복구 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
             if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
-            this.loadFiles();
+            if (!this.isSearchMode) this.loadFiles();   // ★ (2026-11-10 14:53, 64차 N1) 위 restoreTrash 주석과 같음
             this.updateTrashIcon();
             this.loadAllStorageQuotas();
         });
@@ -28840,12 +31268,18 @@ const App = {
     },
 
     async restoreAllTrash(isAdmin = false) {
-        const trashList = isAdmin ? this.trashData : this.myTrashData;
+        let trashList = isAdmin ? this.trashData : this.myTrashData;
         const itemCount = trashList.length;
-        
+
         if (itemCount === 0) {
             this.toast(t('trash_empty', '휴지통이 비어있습니다.'), 'info');
             return;
+        }
+        // ★ (2026-11-15 00:31, 147차) 위 restoreSelectedTrash 와 같음 — 전체 휴지통에서 복원할 수 없는 항목(can_restore false)은 빼고 복구(확인 창의 '(N개 항목)'도 뺀 뒤 개수)
+        const raSkipped = isAdmin ? trashList.filter(it => it && it.can_restore === false).length : 0;
+        if (raSkipped) {
+            trashList = trashList.filter(it => !(it && it.can_restore === false));
+            if (!trashList.length) { this.toast(t('trash_restore_none_allowed', '복원할 수 있는 항목이 없습니다. 다른 사용자의 \'내 파일\' 항목은 복원할 수 없습니다. (영구 삭제는 됩니다)'), 'warning'); return; }
         }
         
         const title = isAdmin ? t('restore_all_trash_admin', '↩️ 전체 휴지통 복구') : t('restore_all_trash', '↩️ 휴지통 전체 복구');
@@ -28854,8 +31288,9 @@ const App = {
         const raP = this._trashConfirmParts(trashList);
         const content = `
             <div style="margin-bottom: 12px; font-size: 14px;">
-                ${isAdmin ? t('confirm_restore_all_all_trash', '전체 휴지통의 모든 항목을 복구하시겠습니까?') : t('confirm_restore_all_trash', '휴지통의 모든 항목을 복구하시겠습니까?')} (${tf('items_n_fmt', {n: itemCount}, '{n}개 항목')})
+                ${isAdmin ? t('confirm_restore_all_all_trash', '전체 휴지통의 모든 항목을 복구하시겠습니까?') : t('confirm_restore_all_trash', '휴지통의 모든 항목을 복구하시겠습니까?')} (${tf('items_n_fmt', {n: trashList.length}, '{n}개 항목')})
                 ${raP.kindsHtml}
+                ${raSkipped ? `<div style="margin-top:6px;color:var(--fs-text-3, #888);font-size:13px;">${this.escapeHtml(tf('trash_restore_skipped_n', {n: raSkipped}, '다른 사용자의 \'내 파일\' 항목 {n}개는 복원할 수 없어 빼고 복구합니다.'))}</div>` : ''}
             </div>
             ${raP.listHtml}
             ${this._trashRestoreNoticeHtml()}
@@ -28893,7 +31328,7 @@ const App = {
                 else this.toast(`${tf('nt_restore_done_s', {n: session.success}, `${session.success}개 복구 완료`)}, ${tf('nt_failed_s', {n: session.failed}, `${session.failed}개 실패`)}`, 'warning');
                 if (isAdmin) this.showTrashModal(); else this.showMyTrashModal();
                 this.updateTrashIcon();
-                this.loadFiles();
+                if (!this.isSearchMode) this.loadFiles();   // ★ (2026-11-10 14:53, 64차 N1) 위 restoreTrash 주석과 같음
                 this.loadAllStorageQuotas();
             });
             
@@ -28932,6 +31367,7 @@ const App = {
     
     _startTrashPolling() {
         if (this._trashPollTimer) clearInterval(this._trashPollTimer);
+        this._installPollResumeOnVisible();   // ★ (2026-11-01 07:18, 37차 기능 점검) 다시 보이면 한 번 갱신
         this._trashPollTimer = setInterval(() => {
             if (!document.hidden) {
                 this.updateTrashIcon();
@@ -28978,8 +31414,9 @@ const App = {
         const searchBtn = $('#btn-bulk-delete-search');
         searchBtn.prop('disabled', true).text((t('searching_btn', '🔄 검색 중...')));
         
+        const _bdSid = this.currentStorage;   // ★ (2026-11-01 17:19, 40차 점검) 검색한 스토리지를 기억해 삭제도 그 스토리지로(bulkDeleteExecute 주석)
         const res = await this.api('bulk_search', {
-            storage_id: this.currentStorage,
+            storage_id: _bdSid,
             path: this.currentPath,
             patterns: patterns,
             scope: scope,
@@ -28996,6 +31433,7 @@ const App = {
         
         const listEl = document.getElementById('bulk-delete-list');
         listEl.innerHTML = '';
+        this._bulkDelSid = _bdSid;   // ★ (2026-11-01 17:19, 40차 점검) 지금 목록(체크 상자)이 어느 스토리지 검색 결과인지
         
         if (res.items.length === 0) {
             this.toast(t('no_matching_items', '조건에 맞는 항목이 없습니다.'), 'info');
@@ -29007,11 +31445,12 @@ const App = {
         const methodText = res.method === 'index' ? t('index_search', '⚡ 인덱스 검색') : t('file_scan', '📂 파일 스캔');
         $('#bulk-delete-count').html(`(${res.items.length} ${t('found','발견')}) <small style="color:var(--fs-text-3, #888)">${methodText}</small>`);
         
+        let _bdHtml = '';   // ★ (2026-11-02 14:56, 44차 점검) 항목마다 innerHTML += 로 그때까지 HTML 전체를 다시 직렬화·파싱해 항목 수의 제곱으로 느렸음(휴지통 300개 약 2초, G3#7) → 문자열을 모아 끝에 한 번 넣음(같은 HTML)
         res.items.forEach((item, idx) => {
             const icon = item.is_dir ? '📁' : '📄';
             const size = item.is_dir ? t('folder') : this.formatSize(item.size);
             
-            listEl.innerHTML += `
+            _bdHtml += `
                 <div class="bulk-delete-item">
                     <label>
                         <input type="checkbox" class="bulk-delete-check" data-path="${this.escapeHtml(item.path)}" checked>
@@ -29023,9 +31462,15 @@ const App = {
                 </div>
             `;
         });
+        listEl.innerHTML = _bdHtml;
         
         $('#bulk-delete-results').show();
         this.toast(`${res.items.length}${t('items_found','개 항목 발견')}`, 'success');
+        // ★ (2026-11-02 10:31, 42차 점검) 서버 검색이 1000건에서 조용히 잘려 '전부 지움'이 앞 1000개만 지웠음 — 서버가 truncated:true 를 주면 안내(서버 쪽은 FileManager 담당, 안 주면 종전과 같음)
+        if (res.truncated) {
+            $('#bulk-delete-count').append(` <small style="color:var(--fs-warning, #d97706)">${this.escapeHtml(tf('bulk_search_truncated', { n: res.items.length }, `${res.items.length}개까지만 찾았습니다 — 지운 뒤 다시 검색하세요.`))}</small>`);
+            this.toast(tf('bulk_search_truncated', { n: res.items.length }, `${res.items.length}개까지만 찾았습니다 — 지운 뒤 다시 검색하세요.`), 'warning');
+        }
     },
     
     async bulkDeleteExecute() {
@@ -29035,26 +31480,29 @@ const App = {
             return;
         }
         
-        if (!await this.confirmDelete(`${t('confirm_delete_selected','선택한 항목을 삭제하시겠습니까?')} (${checkboxes.length})\n\n${t('deleted_to_trash','⚠️ 삭제된 항목은 휴지통으로 이동합니다.')}`)) {
-            return;
-        }
-        
+        // ★ (2026-11-01 17:19, 40차 점검) 경로는 검색한 스토리지 기준인데 삭제는 누를 때(확인 창 뒤)의 currentStorage 로 보내, 결과·확인 창을 띄운 채 뒤로 가기로
+        //   스토리지가 바뀌면 그 경로들을 다른 스토리지에서 삭제했음 → 검색 때 기억한 스토리지와 확인 전 체크 목록을 씀
+        const _bdSid = (this._bulkDelSid !== undefined && this._bulkDelSid !== null) ? this._bulkDelSid : this.currentStorage;
         const paths = [];
         checkboxes.forEach(cb => {
             paths.push(cb.dataset.path);
         });
         
+        if (!await this.confirmDelete(`${t('confirm_delete_selected','선택한 항목을 삭제하시겠습니까?')} (${checkboxes.length})\n\n${t('deleted_to_trash','⚠️ 삭제된 항목은 휴지통으로 이동합니다.')}`)) {
+            return;
+        }
+        
         this.toast(t('status_deleting', '삭제 중...'), 'info');
         
         const res = await this.api('bulk_delete', {
-            storage_id: this.currentStorage,
+            storage_id: _bdSid,   // ★ (2026-11-01 17:19, 40차 점검) 위 _bdSid 주석
             paths: paths
         });
         
         if (res.success) {
             this.toast(tf('nt_delete_done_s', {n: res.deleted}, `${res.deleted}개 삭제 완료`) + (res.failed > 0 ? `, ${tf('nt_failed_s', {n: res.failed}, `${res.failed}개 실패`)}` : ''), res.failed > 0 ? 'warning' : 'success');
             $('#bulk-delete-results').hide();
-            await this.loadFiles();
+            if (this.isSearchMode && this.searchState.query) await this._reSearchKeepScroll(); else await this.loadFiles();   // ★ (2026-11-10 15:24, 64차 보완) 검색 중이면 지금 검색어로 다시 검색(일반 삭제 17609 와 같게) — N1 은 건너뛰기만 해 지운 파일이 결과에 남았음(재현), 검색 중이 아니면 종전처럼 폴더 목록
             this.updateTrashIcon();
         } else {
             this.toast(res.error || t('err_delete_failed', '삭제 실패'), 'error');
@@ -29077,14 +31525,16 @@ const App = {
         const usersRes = _afCanUsers ? await this.api('users', {}, 'GET') : { success: false };
         if (usersRes.success) {
             const select = document.getElementById('activity-filter-user');
-            select.innerHTML = `<option value="">${t('all','전체')}</option>`;
+            let _alHtml = `<option value="">${t('all','전체')}</option>`;   // ★ (2026-11-02 14:56, 44차 점검) 항목마다 innerHTML += 로 그때까지 HTML 전체를 다시 직렬화·파싱해 항목 수의 제곱으로 느렸음(휴지통 300개 약 2초, G3#7) → 문자열을 모아 끝에 한 번 넣음(같은 HTML)
             (usersRes.users || []).forEach(u => {
-                select.innerHTML += `<option value="${u.id}">${this.escapeHtml(u.display_name || u.username)}${u.display_name && u.display_name !== u.username ? ' (' + this.escapeHtml(u.username) + ')' : ''}</option>`;
+                _alHtml += `<option value="${u.id}">${this.escapeHtml(u.display_name || u.username)}${u.display_name && u.display_name !== u.username ? ' (' + this.escapeHtml(u.username) + ')' : ''}</option>`;
             });
+            select.innerHTML = _alHtml;
         }
         
         // 필터 초기화
-        this.resetActivityFilters();
+        // ★ (2026-11-01 11:47, 39차 점검) 필터 초기화가 이미 목록을 불러오는데 바로 아래에서 또 불러 같은 목록을 두 번 요청했음 → 초기화는 칸만 비우고 아래 한 번만
+        this.resetActivityFilters(true);
         
         // 로그 로드
         await this.loadActivityLogs();
@@ -29146,7 +31596,9 @@ const App = {
                 if (!isAuthType) {
                     const filename = log.filename || '';
                     let dirPath = log.path || '';
-                    const storageName = log.storage_name || '';
+                    // ★ (2026-11-03 14:01, 51차 점검) 기본 스토리지 이름은 사이드바(translateStorageName)처럼 화면 언어로 — 종전엔 영어 화면에서도 '[내 파일]' 로 나왔음(기록엔 종류가 없어 이름만으로 판정)
+                    const _lsn = log.storage_name || '';
+                    const storageName = (_lsn === '내 파일' || _lsn === 'My Files') ? t('my_files', 'My Files') : ((_lsn === '공유 폴더' || _lsn === 'Shared Folder') ? t('shared_folder', 'Shared Folder') : _lsn);
                     
                     // path가 filename을 포함하면 디렉토리 부분만 추출
                     if (filename && dirPath) {
@@ -29226,6 +31678,7 @@ const App = {
             'copy': t('act_copy','📋 복사'),
             'share_create': t('act_share_create','🔗 공유 생성'),
             'share_delete': t('act_share_delete','🔗 공유 삭제'),
+            'share_update': t('act_share_update','🔗 공유 권한 변경'), // ★ (2026-11-04) 55차 S4 — 내부 공유 권한 변경 기록
             'share_access': t('act_share_access','👁️ 공유 접근'),
             'extract': t('act_extract', '📦 압축 해제 (ZIP)'),
             'compress': t('act_compress','🗜️ 압축 (ZIP)'),
@@ -29239,28 +31692,31 @@ const App = {
         return labels[type] || type;
     },
     
-    resetActivityFilters() {
+    resetActivityFilters(noLoad) {
         $('#activity-filter-user').val('');
         $('#activity-filter-type').val('');
         $('#activity-filter-from').val('');
         $('#activity-filter-to').val('');
         $('#activity-filter-search').val('');
+        if (noLoad === true) return;   // ★ (2026-11-01 11:47, 39차 점검) 창 열기에서는 불러오기를 한 번만(위 주석)
         this.loadActivityLogs(1);
     },
     
     async clearActivityLogs() {
         const days = await this.promptInput(t('delete_old_logs_prompt', '며칠 이전 로그를 삭제할까요?'), t('enter_period', '기간 입력'));
         if (days === null || days === '') return;
-        if (isNaN(days) || parseInt(days) <= 0) {
+        if (isNaN(days) || !(parseInt(days) > 0)) {   // ★ (2026-11-12 22:47, 105차 개선 CNF-6) 공백만 넣은 값(parseInt NaN)도 같은 안내 — 종전엔 통과해 'NaN-NaN-NaN' 날짜로 보내 서버가 거부했음
             this.toast(t('invalid_number', '올바른 숫자를 입력하세요.'), 'error');
             return;
         }
         
-        if (!await this.confirmDelete(tf('confirm_delete_logs_older', {days: days}, '{days}일 이전 로그를 삭제하시겠습니까?'), t('delete_old_logs', '기간 삭제'))) return;
+        // ★ (2026-11-12 22:47, 105차 개선 CNF-6) 확인 문구에 실제로 쓸 날 수(parseInt)를 보임(로그인 기록 기간 삭제 deleteOldLogs 와 같게) — 종전엔 입력 글자 그대로라 '1e3'·'1.9' 는 "1e3일·1.9일 이전"으로 보이고 실제로는 1일 기준으로 지웠음
+        if (!await this.confirmDelete(tf('confirm_delete_logs_older', {days: parseInt(days)}, '{days}일 이전 로그를 삭제하시겠습니까?'), t('delete_old_logs', '기간 삭제'))) return;
         
         const date = new Date();
         date.setDate(date.getDate() - parseInt(days));
-        const beforeDate = date.toISOString().split('T')[0];
+        // ★ (2026-11-01 01:04, 35차 전체 점검) toISOString 은 UTC 라 한국 0~9시엔 하루 앞 날짜가 갔음 → 로컬 날짜로(_localTodayYmd 와 같은 방식)
+        const beforeDate = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
         
         const res = await this.api('activity_logs_clear', { before_date: beforeDate });
         
@@ -29367,7 +31823,7 @@ const App = {
             
             // 년도별
             if (keyName === 'year') {
-                label = key + t('year', '년');
+                label = tf('stats_year_label', { y: key }, key + '년');   // ★ (2026-11-02 10:32, 42차 점검) key + t('year') 라 영어가 '2026Year' 로 붙었음 → 자리표시자 문구로
             }
             
             // 배지 표시
@@ -29511,7 +31967,7 @@ const App = {
         // ⚠️ 이 키(_dismissedNotifications['index-rebuild'])는 _checkIndexRebuildNotify 읽기와 반드시 일치해야 함(회귀 주의).
         this._dismissedNotifications = this._dismissedNotifications || {};
         this._dismissedNotifications['index-rebuild'] = Date.now();
-        this.api('user_preferences_save', { dismissed_notifications: this._dismissedNotifications }).catch(() => {});
+        this.api('user_preferences_save', { dismiss_notification: { id: 'index-rebuild', ts: this._dismissedNotifications['index-rebuild'] } }).catch(() => {});   // ★ (2026-11-03 23:38, 53차 점검) 한 항목만(X 닫기와 같음)
         this.removeHeaderNotification('index-rebuild');
         
         // 인덱스 통계 로드
@@ -29738,7 +32194,7 @@ const App = {
             this.removeHeaderNotification('index-rebuild');
             if (this._dismissedNotifications) {
                 delete this._dismissedNotifications['index-rebuild'];
-                this.api('user_preferences_save', { dismissed_notifications: this._dismissedNotifications }).catch(() => {});
+                this.api('user_preferences_save', { dismiss_notification: { id: 'index-rebuild', remove: true } }).catch(() => {});   // ★ (2026-11-03 23:38, 53차 점검) 한 항목만 지움(X 닫기와 같음)
             }
             
         } catch (e) {
@@ -29833,6 +32289,16 @@ const App = {
     
     async loadDeletedUsers() {
         const res = await this.api('deleted_users', {}, 'GET');
+        // ★ (2026-11-15 10:23, 175차) 역할 이름표를 여기서도 읽음 — 51차는 사용자 관리 창이 만든 이름표(_usersRoleMap)를 썼는데, 사용자 관리를 먼저 열지 않으면
+        //   비어 있어 사용자 정의 역할이 'custom_long_role_…'·'custom__1' 같은 내부 값으로 보였음(재현). 사용자 관리와 같은 방식, 실패하면 종전 그대로
+        try {
+            const _drRoles = await this.api('roles', {}, 'GET');
+            if (_drRoles && _drRoles.success && Array.isArray(_drRoles.roles)) {
+                const _drMap = { 'admin': t('admin', '관리자'), 'sub_admin': t('sub_admin', '부관리자'), 'user': t('user') };
+                _drRoles.roles.forEach(r => { if (r && r.value) _drMap[r.value] = r.name; });
+                this._usersRoleMap = _drMap;
+            }
+        } catch (e) {}
         const tbody = document.getElementById('deleted-users-tbody');
         const table = tbody ? tbody.closest('table') : null;
         const wrapper = document.querySelector('#modal-deleted-users .deleted-users-wrapper');
@@ -29840,7 +32306,15 @@ const App = {
         
         if (tbody) tbody.innerHTML = '';
         
-        if (!res.success || !res.users?.length) {
+        // ★ (2026-11-02 11:55, 43차 점검) 못 받았을 때도 '기록이 없습니다'로 그렸음 → 실패면 표 자리에 이유를 보여 줌(showSharesModal 과 같은 방식)
+        if (!res || !res.success) {
+            if (wrapper) wrapper.style.display = '';
+            if (table) table.style.display = '';
+            if (emptyMsg) emptyMsg.style.display = 'none';
+            if (tbody) tbody.innerHTML = `<tr><td colspan="99" style="text-align:center;padding:30px;color:var(--fs-fg-err, #e74c3c);">⚠️ ${this.escapeHtml((res && res.error) || t('list_load_failed', '목록을 불러올 수 없습니다.'))}</td></tr>`;
+            return;
+        }
+        if (!res.users?.length) {
             // wrapper 전체를 숨겨야 flex 레이아웃에서 빈 공간을 차지하지 않음
             if (wrapper) wrapper.style.display = 'none';
             if (emptyMsg) emptyMsg.style.display = 'block';
@@ -29882,10 +32356,11 @@ const App = {
             const deletedByDisplay = user.deleted_by_display || user.deleted_by || '-';
             
             const cellStyle = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+            // ★ (2026-11-03 14:00, 51차 점검) 역할 칸을 사용자 표와 같은 이름으로(기본 역할 + 사용자 관리에서 읽은 사용자 정의 역할) — 종전엔 'sub_admin' 같은 저장값이 그대로 보였음
             const tr = document.createElement('tr');
             tr.innerHTML = `
                 <td style="${cellStyle}" title="${this.escapeHtml(user.username)}">${this.escapeHtml(user.username)}</td>
-                <td style="${cellStyle}">${this.escapeHtml(user.role || 'user')}</td>
+                <td style="${cellStyle}">${this.escapeHtml((Object.assign({ admin: t('admin', '관리자'), sub_admin: t('sub_admin', '부관리자'), user: t('user') }, this._usersRoleMap || {}))[user.role || 'user'] || user.role || 'user')}</td>
                 <td style="${cellStyle}">${user.created_at || '-'}</td>
                 <td class="${deleteTypeClass}">${deleteTypeText}</td>
                 <td style="${cellStyle}">${user.deleted_at || '-'}</td>
@@ -30101,7 +32576,10 @@ const App = {
             const pwMsg = res.temp_password 
                 ? `\n${t('temp_password', '임시 비밀번호')}: ${res.temp_password}`
                 : '';
-            await this.alert(t('restore_user_success', '계정이 복원되었습니다.') + pwMsg, t('restore_user', '계정 복원'));
+            // ★ (2026-11-01 17:59, 40차 재검토) 보관 폴더를 못 되돌린 경고(warning)도 보여 줌 — 이때 삭제 기록은 보관 위치와 함께 남는데, 경고 없이 '파일까지 영구 삭제'를 누르면
+            //   그 사용자의 실제 파일(보관 폴더)이 지워질 수 있었음(검토 발견). alert 는 HTML 로 그리므로 서버 문구는 escape
+            const warnMsg = res.warning ? `\n\n⚠️ ${this.escapeHtml(String(res.warning))}` : '';
+            await this.alert(t('restore_user_success', '계정이 복원되었습니다.') + pwMsg + warnMsg, t('restore_user', '계정 복원'));
             this.loadDeletedUsers();
         } else {
             this.toast(res.error || t('restore_user_failed', '복원 실패'), 'error');
@@ -30210,11 +32688,25 @@ const App = {
         }
     },
     
+    // ★ (2026-11-13 14:58, 112차 ADMUI-1) 관리자 설정 창 8개(보안·백신·업로드·랜섬웨어·SSO·QoS·공지·약관)를 열 때 서버 읽기 결과를 창별로 기억 — 종전엔 읽기가 실패해도 안내 없이 화면 기본값이 남아,
+    //   그대로 저장하면 실제 설정을 기본값으로 덮었음(재현: 읽기 요청을 끊고 열어 저장 → 보안 꺼짐·QoS 0/0·약관 빈 본문 등). 실패면 오류 알림(공지는 기존 알림이 있어 noToast), 성공이면 표시를 지움.
+    //   저장은 막지 않고 표시가 있을 때만 확인 창(확인하면 종전처럼 저장 — 39차 원칙). 읽기가 정상이면 표시가 없어 동작 그대로
+    _admLoadMark(key, ok, noToast) {
+        if (!this._admLoadFail) this._admLoadFail = {};
+        this._admLoadFail[key] = !ok;
+        if (!ok && !noToast) this.toast(t('adm_settings_load_fail', '설정을 불러오지 못했습니다.'), 'error');
+    },
+    async _admLoadFailConfirm(key) {
+        if (!(this._admLoadFail && this._admLoadFail[key])) return true;
+        return await this.confirmDanger(t('adm_settings_load_fail_save_confirm', '설정을 불러오지 못한 상태입니다. 저장하면 지금 화면 값(기본값일 수 있음)으로 덮어씁니다. 저장할까요?'), t('warning', '경고'), t('save', '저장'));
+    },
+    
     // ===== 약관 관리 =====
     async showTermsModal() {
         this.showModal('modal-terms');
         
         const res = await this.api('terms', {}, 'GET');
+        this._admLoadMark('terms', !!(res && res.success));   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark)
         if (res.success) {
             $('#terms-enabled').prop('checked', res.terms?.enabled === true);
             $('#terms-content').val(res.terms?.content || '');
@@ -30227,6 +32719,7 @@ const App = {
     },
     
     async saveTerms() {
+        if (!await this._admLoadFailConfirm('terms')) return;   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 위와 같음
         const enabled = $('#terms-enabled').is(':checked');
         const content = $('#terms-content').val();
         
@@ -30259,6 +32752,7 @@ const App = {
         
         const res = await this.api('notice_settings', {}, 'GET');
         if (res.success) {
+            this._admLoadMark('notice', true);   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark)
             // 팝업 목록 로드
             this.noticePopups = res.popups || [];
             
@@ -30304,6 +32798,7 @@ const App = {
         } else {
             this.noticePopups = [];
             this.renderPopupList();
+            this._admLoadMark('notice', false, true);   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark) — 알림은 아래 기존 것만(중복 안 함)
             this.toast(t('err_notice_load'), 'error');
         }
     },
@@ -30326,7 +32821,8 @@ const App = {
         if (tableWrapper) tableWrapper.style.display = 'block';
         
         this.noticePopups.forEach((popup, index) => {
-            const now = new Date().toISOString().split('T')[0];
+            // ★ (2026-10-31 13:39, 34차 후속 개선) '오늘'을 UTC 로 계산해 한국 시간 0~9시에 하루 어긋났음(서버는 서버 시간 date('Y-m-d')) — 로컬 날짜로
+            const now = this._localTodayYmd();
             let status = 'inactive';
             let statusText = t('inactive', '비활성');
             
@@ -30401,7 +32897,9 @@ const App = {
         }
         
         const newIndex = this.noticePopups.length;
-        this.noticePopups.push({
+        // ★ (2026-11-01 01:54, 36차 전체 점검) 새로 추가한 뒤 저장 없이 취소·X 하면 빈 팝업이 목록에 남아 다음 '저장' 때 모두에게 떴다
+        //   → 추가한 항목을 기억해 두고 closePopupEditModal 에서 편집 저장 전이면 뺌(항목 객체엔 표시를 넣지 않음 — 서버로 저장되므로)
+        const _newPopup = {
             enabled: true,
             title: t('new_notice', '새 공지사항'),
             content: '',
@@ -30413,7 +32911,9 @@ const App = {
             width: this.noticeSettings.defaultWidth,
             height: this.noticeSettings.defaultHeight,
             bg_color: '#667eea'
-        });
+        };
+        this.noticePopups.push(_newPopup);
+        this._newPopupObj = _newPopup;
         
         this.renderPopupList();
         // 바로 편집 모달 열기
@@ -30424,6 +32924,7 @@ const App = {
     openPopupEditModal(index) {
         const popup = this.noticePopups[index];
         if (!popup) return;
+        if (this._newPopupObj && this._newPopupObj !== popup) this._newPopupObj = null;   // ★ (2026-11-01 01:54, 36차 전체 점검) 다른 팝업 편집이면 '새로 추가' 표시 해제
         
         document.getElementById('popup-edit-index').value = index;
         document.getElementById('popup-edit-title').textContent = index === this.noticePopups.length - 1 && !popup.content ? (t('il_add_new_popup', '📝 새 팝업 추가')) : (t('il_edit_popup', '📝 팝업 편집'));
@@ -30503,6 +33004,7 @@ const App = {
         }
         
         this.popupEditImageData = null;   // ★ (22차) 다음 편집은 '그대로'에서 시작
+        this._newPopupObj = null;   // ★ (2026-11-01 01:54, 36차 전체 점검) 편집을 저장했으니 취소로 빼지 않음
         this.closePopupEditModal();
         this.toastResponsive(
             t('popup_modified', '팝업이 수정되었습니다. 저장 버튼을 눌러 적용하세요.'),
@@ -30513,9 +33015,22 @@ const App = {
     
     // 팝업 편집 모달 닫고 공지 설정으로 돌아가기
     closePopupEditModal() {
+        // ★ (2026-11-01 01:54, 36차 전체 점검) 새로 추가하고 편집 저장 없이 닫으면 그 항목을 뺌
+        if (this._newPopupObj) {
+            const _ni = this.noticePopups.indexOf(this._newPopupObj);
+            if (_ni !== -1) this.noticePopups.splice(_ni, 1);
+            this._newPopupObj = null;
+        }
         $('#modal-popup-edit').hide();
         $('#modal-notice').show();
         this.renderPopupList();
+        // ★ (2026-11-04 01:39, 54차 점검) 취소·편집 저장으로 닫으면 편집 창을 열 때 쌓인 'modal-notice' 를 스택에서 뺌 — 종전엔 남아 공지 설정 X 를 두 번 눌러야 닫혔음(재현).
+        //   편집 창 X 는 이 함수(onclick) 다음에 전역 .modal-close 처리기의 closeModal 이 스택을 꺼내므로, 클릭 처리가 다 끝난 뒤(setTimeout 0) 그때도 남아 있을 때만 뺌
+        setTimeout(() => {
+            const _ms = this.modalStack;
+            const _nm = document.getElementById('modal-notice');
+            if (_ms.length && _ms[_ms.length - 1] === 'modal-notice' && _nm && _nm.style.display !== 'none') _ms.pop();
+        }, 0);
     },
     
     popupEditImageData: '',
@@ -30635,6 +33150,7 @@ const App = {
     },
     
     async saveNotice() {
+        if (!await this._admLoadFailConfirm('notice')) return;   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 위와 같음
         // 배치 설정 수집
         const layoutEl = document.getElementById('popup-layout');
         const widthEl = document.getElementById('popup-default-width');
@@ -30687,7 +33203,10 @@ const App = {
             if (res.success && res.preferences) {
                 // 시계 스타일 적용
                 if (res.preferences.clock_style !== undefined) {
-                    const clockStyle = res.preferences.clock_style.toString();
+                    let clockStyle = res.preferences.clock_style.toString();
+                    // ★ (2026-11-12 19:50, 103차 개선 X3) 시계 메뉴에 없는 값은 기본(0, 끄기)으로 — 종전엔 'x"]' 면 아래 선택자가 오류를 내 뒤의 정렬·숨긴 항목·보기·EQ 적용을 모두 건너뛰고,
+                    //   그 값이 이 브라우저에 남아 새로 고칠 때마다 initTheme 에서 멈춰 스토리지가 안 열렸음(재현). 서버 값은 그대로 둠
+                    if (!document.querySelector('.clock-style-item[data-clock="' + CSS.escape(clockStyle) + '"]')) clockStyle = '0';
                     localStorage.setItem('clock_style', clockStyle);
                     $('.clock-style-item').removeClass('active');
                     $(`.clock-style-item[data-clock="${clockStyle}"]`).addClass('active');
@@ -30697,7 +33216,11 @@ const App = {
                     }
                 }
                 // 알림 dismiss 상태 복원 (없으면 빈 객체로 — 로드 완료 표시 겸 반복 로드 방지)
-                this._dismissedNotifications = res.preferences.dismissed_notifications || {};
+                // ★ (2026-11-01 11:37, 39차 점검) 서버가 빈 기록 {} 를 PHP 빈 배열로 저장해 [] 로 돌려주면 JS 배열이 들어가,
+                //   이후 arr['index-rebuild'] = ts 를 넣어도 JSON.stringify(배열) 이 [] 라 닫음 기록이 서버에 영영 저장되지 않았음
+                //   → 배열이거나 객체가 아니면 빈 객체로 바꿈(서버 쪽 정규화는 api.php 담당).
+                const _dn = res.preferences.dismissed_notifications;
+                this._dismissedNotifications = (_dn && typeof _dn === 'object' && !Array.isArray(_dn)) ? _dn : {};
                 // 정렬 설정 복원 (서버 → localStorage)
                 if (res.preferences.sort_settings) {
                     const local = JSON.parse(localStorage.getItem('fs_sort_settings') || '{}');
@@ -30720,6 +33243,22 @@ const App = {
                     const merged = { ...res.preferences.view_settings, ...local };
                     localStorage.setItem('fs_view_settings', JSON.stringify(merged));
                 }
+                // ★ (2026-11-12 18:53, 102차 개선 CFG-1) 합친 보기·정렬을 지금 스토리지에 다시 적용 — 종전엔 showMain 이 먼저 이 브라우저 값(새 기기면 빈 값)으로 첫 목록을 그리고,
+                //   여기서는 서버 값을 합치기만 해 새 기기·빈 브라우저 첫 목록이 격자·이름순이었음(새로 고쳐야 맞음, PC·폰 재현). 값이 달라졌을 때만 적용하고 목록을 다시 읽음(같으면 요청 0)
+                try {
+                    const _sid = this.currentStorage;
+                    if (_sid && !this.vault?.isVaultView) {
+                        const _vs = JSON.parse(localStorage.getItem('fs_view_settings') || '{}') || {};
+                        const _ss = (JSON.parse(localStorage.getItem('fs_sort_settings') || '{}') || {})[_sid];
+                        // ★ (2026-11-12 19:54, 103차 개선 X3) 비교도 _restoreStorageSettings 와 같은 기본값 규칙으로(정상 값은 종전과 같은 결과) — 모르는 값을 기본값으로 쓰게 한 뒤 비교만 원래 값으로 하면
+                        //   이상한 값이 있는 계정은 로그인 때마다 목록을 한 번 더 읽었음(시험에서 files 1 → 2)
+                        const _v0 = _vs[_sid] === 'list' ? 'list' : 'grid', _b0 = (_ss && ['name', 'date', 'size', 'type'].includes(_ss.sortBy)) ? _ss.sortBy : 'name', _o0 = (_ss && _ss.sortOrder === 'desc') ? 'desc' : 'asc';
+                        if (_v0 !== this.viewMode || _b0 !== this.sortBy || _o0 !== this.sortOrder) {
+                            this._restoreStorageSettings(_sid);
+                            this._reloadFilesKeepScroll();
+                        }
+                    }
+                } catch (e) {}
                 // ★ (2026-10-11) 이퀄라이저(음악용·동영상용 따로, 한 묶음으로 저장) — 계정 값과 이 브라우저 값 중 나중에 바꾼 쪽으로 맞추고(브라우저 쪽이 새것이면 계정에 올림),
                 //   이후 바꾸면 계정에도 저장(fs-eq.js 가 0.7초 모아서 한 번). 서버는 형식·범위를 다시 검사한다(api.php user_preferences_save).
                 try {
@@ -30745,6 +33284,12 @@ const App = {
         this.showPopups(res.popups || [], res.settings || {});
     },
     
+    // ★ (2026-10-31 13:39, 34차 후속 개선) 공지 배너·팝업의 '오늘'(YYYY-MM-DD)을 로컬 날짜로 — toISOString 은 UTC 라 0~9시(KST)에 전날이 됐음
+    _localTodayYmd() {
+        const d = new Date();
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    },
+    
     showBanner(banner) {
         // 기존 배너 제거
         const oldBanner = document.querySelector('.top-banner');
@@ -30753,12 +33298,17 @@ const App = {
         if (!banner || !banner.enabled || !banner.content) return;
         
         // 기간 체크
-        const today = new Date().toISOString().split('T')[0];
+        // ★ (2026-10-31 13:39, 34차 후속 개선) '오늘'을 UTC 로 계산해 한국 시간 0~9시에 하루 어긋났음(서버는 서버 시간 date('Y-m-d')) — 로컬 날짜로
+        const today = this._localTodayYmd();
         if (banner.start_date && banner.start_date > today) return; // 시작일 전
         if (banner.end_date && banner.end_date < today) return; // 종료일 후
         
         // 오늘 닫기 체크
-        const dismissKey = 'banner_dismissed_' + (banner.content || '').substring(0, 20);
+        let _bh = 0; { const _bk = String(banner.content || ''); for (let i = 0; i < _bk.length; i++) _bh = (_bh * 31 + _bk.charCodeAt(i)) | 0; }   // ★ (2026-11-11 19:39, 81차 BRP-3) 기억 키에 내용 전체로 만든 값을 더함(53차 팝업과 같은 방식) — 종전엔 앞 20글자만이라 '오늘 하루 보지 않기' 뒤 앞부분이 같은 새 배너도 그날 숨었음(재현)
+        // ★ (2026-11-12 19:45, 103차 개선 X2) 기억 키에 계정 번호를 붙임(102차 CFG-2 처럼 계정별) — 종전엔 계정 구분이 없어 같은 브라우저에서 앞 계정이 '오늘 하루 보지 않기'로 닫으면
+        //   다음 계정도 그날 이 배너를 못 봤음(재현). 업그레이드 당일 이미 닫은 배너는 옛 키(번호 없음)를 안 읽어 한 번 다시 보일 수 있음(하루 한 번, 다시 닫으면 끝)
+        const _nu = (this.user && this.user.id != null) ? 'u' + this.user.id + '_' : '';
+        const dismissKey = 'banner_dismissed_' + _nu + (banner.content || '').substring(0, 20) + '_h' + (_bh >>> 0).toString(36);
         const dismissed = localStorage.getItem(dismissKey);
         if (dismissed === today) return;
         
@@ -30807,7 +33357,8 @@ const App = {
         closeBtn.onclick = () => {
             // 체크박스가 체크되어 있으면 오늘 하루 숨김
             if (checkbox.checked) {
-                localStorage.setItem(dismissKey, new Date().toISOString().split('T')[0]);
+                // ★ (2026-10-31 13:39, 34차 후속 개선) '오늘'을 UTC 로 계산해 한국 시간 0~9시에 하루 어긋났음(서버는 서버 시간 date('Y-m-d')) — 로컬 날짜로
+                localStorage.setItem(dismissKey, this._localTodayYmd());
             }
             bannerDiv.style.display = 'none';
             setTimeout(() => bannerDiv.remove(), 100);
@@ -30846,12 +33397,26 @@ const App = {
         let currentY = startY;
         let rowHeight = 0;
         let colCount = 0;
+        let shownCount = 0;   // ★ (2026-11-03 23:38, 53차 점검) 좁은 화면에서 실제로 보이는 팝업 순서(겹쳐 쌓기용)
+        // ★ (2026-11-15 08:12, 163차) 배치 자리를 '앞 팝업들의 실제 크기 합'으로 — 종전엔 칸 번호 × (자기 폭 + 간격)이라 앞 팝업이 더 넓으면(높으면) 뒤 팝업이 겹쳐
+        //   본문을 가렸음(재현: 700·350 폭 가로 배치 → 30px 겹침). 크기가 모두 같으면 종전과 같은 자리. 오늘 닫은 팝업도 종전처럼 자리를 차지(번호 기준 그대로)
+        const _pw = popups.map(pp => pp.width || defaultWidth);
+        const _phs = popups.map(pp => pp.height || defaultHeight);
+        const _perRow = (layout === 'grid-2x2' || layout === 'grid-2xN') ? 2 : 3;
+        const _sumW = (from, to) => { let s = 0; for (let j = from; j < to; j++) s += _pw[j] + gap; return s; };
+        const _rowsH = (rows) => { let s = 0; for (let r = 0; r < rows; r++) { let m = 0; for (let j = r * _perRow; j < Math.min((r + 1) * _perRow, popups.length); j++) m = Math.max(m, _phs[j]); s += m + gap; } return s; };
         
         popups.forEach((popup, index) => {
             // 오늘 닫기 체크
-            const dismissKey = 'popup_dismissed_' + (popup.title || '').substring(0, 20) + '_' + index;
+            // ★ (2026-11-03 23:38, 53차 점검) 기억 키에 순번 대신 제목·내용으로 만든 값을 씀 — 관리자가 앞 팝업을 끄면 순번이 바뀌어 오늘 닫은 팝업이 다시 떴음(재현)
+            let _ph = 0; const _pk = String(popup.title || '') + '\n' + String(popup.content || '') + '\n' + String(popup.image_url || '') + '\n' + String(popup.image_data || '');   // ★ (2026-11-04 00:19, 53차 재검토) 파일로 올린 그림도 구분(검토 발견)
+            for (let i = 0; i < _pk.length; i++) _ph = (_ph * 31 + _pk.charCodeAt(i)) | 0;
+            // ★ (2026-11-12 19:45, 103차 개선 X2) 기억 키에 계정 번호를 붙임(배너와 같음) — 종전엔 앞 계정이 오늘 닫은 팝업이 같은 브라우저의 다음 계정에게도 안 떴음(재현)
+            const _nu = (this.user && this.user.id != null) ? 'u' + this.user.id + '_' : '';
+            const dismissKey = 'popup_dismissed_' + _nu + (popup.title || '').substring(0, 20) + '_h' + (_ph >>> 0).toString(36);
             const dismissed = localStorage.getItem(dismissKey);
-            if (dismissed === new Date().toISOString().split('T')[0]) return;
+            // ★ (2026-10-31 13:39, 34차 후속 개선) '오늘'을 UTC 로 계산해 한국 시간 0~9시에 하루 어긋났음(서버는 서버 시간 date('Y-m-d')) — 로컬 날짜로
+            if (dismissed === this._localTodayYmd()) return;
             
             const popupWidth = popup.width || defaultWidth;
             const popupHeight = popup.height || defaultHeight;
@@ -30865,28 +33430,39 @@ const App = {
             } else if (layout === 'vertical') {
                 // 세로 배치 (1열)
                 posX = startX;
-                posY = startY + index * (popupHeight + gap);
-            } else if (layout === 'grid-2x2' || layout === 'grid-2xN') {
-                // 격자 배치 (2열)
-                const col = index % 2;
-                const row = Math.floor(index / 2);
-                posX = startX + col * (popupWidth + gap);
-                posY = startY + row * (popupHeight + gap);
+                posY = startY; for (let j = 0; j < index; j++) posY += _phs[j] + gap;
             } else {
-                // 가로 배치 (기본) - 3개 단위로 줄바꿈
-                const col = index % 3;
-                const row = Math.floor(index / 3);
-                posX = startX + col * (popupWidth + gap);
-                posY = startY + row * (popupHeight + gap);
+                // 격자 배치 (2열) / 가로 배치 (기본) - 3개 단위로 줄바꿈
+                const row = Math.floor(index / _perRow);
+                posX = startX + _sumW(row * _perRow, index);
+                posY = startY + _rowsH(row);
             }
+            
+            // ★ (2026-11-03 23:38, 53차 점검) 화면 안으로 — 종전엔 화면 크기를 보지 않아 휴대폰(390px)에서 2번째 팝업부터 통째로 화면 밖이라 보이지도·닫지도 못했음(재현).
+            //   좁은 화면(600px 이하)은 폭을 화면에 맞추고 가운데에 조금씩 비켜 겹쳐 쌓음(나중 팝업이 위 — 닫으면 다음 것이 보임). 넓은 화면은 정해진 배치를 그대로 두고 넘친 것만 안으로
+            let boxW = popupWidth, boxH = popupHeight;
+            if (viewWidth <= 600) {
+                boxW = Math.min(popupWidth, viewWidth - 16);
+                posX = Math.round((viewWidth - boxW) / 2) + Math.min(shownCount, 4) * 6;
+                posY = startY + Math.min(shownCount, 4) * 24;
+            }
+            boxH = Math.min(boxH, Math.max(160, viewHeight - 16));
+            boxW = Math.min(boxW, Math.max(200, viewWidth - 16));
+            posX = Math.max(8, Math.min(posX, viewWidth - boxW - 8));
+            posY = Math.max(8, Math.min(posY, viewHeight - boxH - 8));
+            shownCount++;
             
             // DOM으로 생성
             const popupDiv = document.createElement('div');
             popupDiv.className = 'notice-popup';
             popupDiv.style.left = posX + 'px';
             popupDiv.style.top = posY + 'px';
-            popupDiv.style.width = popupWidth + 'px';
-            popupDiv.style.height = popupHeight + 'px';
+            popupDiv.style.width = boxW + 'px';
+            popupDiv.style.height = boxH + 'px';
+            // ★ (2026-11-15 08:12, 163차) 관리 화면의 폭(200~800px)을 그대로 — 스타일 max-width 400·min-width 300 때문에 401px 이상·300px 미만 폭은 무시됐음(재현: 700 → 400).
+            //   폭은 위에서 이미 화면 안으로 줄였음
+            popupDiv.style.maxWidth = 'none';
+            popupDiv.style.minWidth = '0';
             
             // 헤더
             const header = document.createElement('div');
@@ -30959,7 +33535,8 @@ const App = {
             // 닫기 이벤트
             const closePopup = () => {
                 if (checkbox.checked) {
-                    localStorage.setItem(dismissKey, new Date().toISOString().split('T')[0]);
+                    // ★ (2026-10-31 13:39, 34차 후속 개선) '오늘'을 UTC 로 계산해 한국 시간 0~9시에 하루 어긋났음(서버는 서버 시간 date('Y-m-d')) — 로컬 날짜로
+                    localStorage.setItem(dismissKey, this._localTodayYmd());
                 }
                 popupDiv.style.opacity = '0';
                 setTimeout(() => popupDiv.remove(), 200);
@@ -30980,7 +33557,22 @@ const App = {
         
         let isDragging = false;
         let startX, startY, startLeft, startTop;
-        
+
+        // ★ (2026-10-31 13:40, 34차 후속 개선) 팝업마다 document 에 mousemove·mouseup 을 붙이고 떼지 않아, 팝업을 지워도(닫기·다시 그리기)
+        //   리스너와 팝업 요소가 계속 남았음 — mousedown 때 붙이고 mouseup 때 뗌
+        const onMove = (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+            popup.style.left = (startLeft + dx) + 'px';
+            popup.style.top = (startTop + dy) + 'px';
+        };
+        const onUp = () => {
+            isDragging = false;
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+        };
+
         header.addEventListener('mousedown', (e) => {
             isDragging = true;
             startX = e.clientX;
@@ -30989,18 +33581,8 @@ const App = {
             startLeft = rect.left;
             startTop = rect.top;
             popup.style.zIndex = 10000;
-        });
-        
-        document.addEventListener('mousemove', (e) => {
-            if (!isDragging) return;
-            const dx = e.clientX - startX;
-            const dy = e.clientY - startY;
-            popup.style.left = (startLeft + dx) + 'px';
-            popup.style.top = (startTop + dy) + 'px';
-        });
-        
-        document.addEventListener('mouseup', () => {
-            isDragging = false;
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
         });
     },
     
@@ -31022,6 +33604,7 @@ const App = {
         
         try {
             const res = await this.api('antivirus_settings', {}, 'GET');
+            this._admLoadMark('antivirus', !!(res && res.success));   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark)
             
             if (res.success) {
                 const s = res.settings || {};
@@ -31062,6 +33645,9 @@ const App = {
                 if (statsEl) {
                     const filtered = dateFrom || dateTo ? ` (${t('filter_applied','필터 적용')})` : '';
                     statsEl.innerHTML = tf('il_av_stats', {total: res.total, filtered: filtered, clean: res.clean_count, threats: res.threat_count}, `총 ${res.total}건${filtered} · 정상: ${res.clean_count}건 · 위협: ${res.threat_count}건`);
+                    // ★ (2026-11-12 10:46, 97차 개선 C4) 96차 AV-2 뒤 '검사 오류로 차단'(바이러스 아님)은 정상·위협 어디에도 안 세어 '정상+위협'이 '전체'보다 작았음(재현: 총 1 · 정상 0 · 위협 0) → 나머지를 그 이름으로 덧붙여 보여 줌(표시만, 셈·판정은 그대로). 나머지가 없으면 종전과 같은 글
+                    const avErrN = (Number(res.total) || 0) - (Number(res.clean_count) || 0) - (Number(res.threat_count) || 0);
+                    if (avErrN > 0) statsEl.innerHTML += tf('il_av_stats_err', {count: avErrN}, ` · 검사 오류 차단: ${avErrN}건`);
                 }
                 
                 // 로그 목록
@@ -31194,6 +33780,7 @@ const App = {
     },
     
     async saveAntivirusSettings() {
+        if (!await this._admLoadFailConfirm('antivirus')) return;   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 위와 같음
         const settings = {
             engine: $('#antivirus-engine').val() || 'disabled',
             max_size: parseInt($('#antivirus-max-size').val() || '100'),
@@ -31207,7 +33794,7 @@ const App = {
             
             if (res.success) {
                 this.toastResponsive(t('antivirus_saved', '백신 설정이 저장되었습니다'), t('antivirus_saved_short', '백신 설정 저장됨'), 'success');
-                closeModal();
+                this.showAntivirusModal();   // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 종전 closeModal() 대신 창을 열 때 쓰는 함수로 서버에 저장된 값을 다시 채움(예: 최대 크기 -7 → 0) — 종전엔 저장하면 바로 닫혔음. 닫기는 [취소]·[X]
             } else {
                 this.toast(res.error || t('err_save_failed', '저장 실패'), 'error');
             }
@@ -31220,6 +33807,7 @@ const App = {
     async loadUploadSettings() {
         try {
             const res = await this.api('get_upload_settings', {}, 'GET');
+            this._admLoadMark('upload', !!(res && res.success));   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark)
             if (res.success) {
                 const s = res.settings || {};
                 // 모드 설정
@@ -31239,6 +33827,7 @@ const App = {
     },
     
     async saveUploadSettings() {
+        if (!await this._admLoadFailConfirm('upload')) return;   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 위와 같음
         const mode = document.querySelector('input[name="upload-mode"]:checked').value;
         const res = await this.api('save_upload_settings', {
             mode: mode,
@@ -31250,7 +33839,7 @@ const App = {
         
         if (res.success) {
             this.toast(t('settings_saved', '설정이 저장되었습니다.'), 'success');
-            this.hideModal('modal-upload-settings');
+            this.loadUploadSettings();   // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 종전 hideModal 대신 창을 열 때 쓰는 함수로 서버에 저장된 값을 다시 채움(예: 최대 크기 -3 → 0) — 종전엔 저장하면 바로 닫혔음. 닫기는 [취소]·[X]
         } else {
             this.toast(res.error || t('nt_settings_save_failed', '설정 저장 실패'), 'error');
         }
@@ -31262,13 +33851,14 @@ const App = {
         
         try {
             const res = await this.api('ransomware_settings', {}, 'GET');
+            this._admLoadMark('ransomware', !!(res && res.success));   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark)
             
             if (res.success) {
                 const s = res.settings || {};
                 
                 // 의심 확장자 차단
                 $('#ransomware-block-extensions').prop('checked', s.block_extensions || false);
-                $('#ransomware-blocked-extensions').val(s.blocked_extensions || '.encrypted, .locked, .crypto, .crypt, .locky, .cerber, .zepto, .thor, .aaa, .zzz');
+                $('#ransomware-blocked-extensions').val(s.blocked_extensions ?? '.encrypted, .locked, .crypto, .crypt, .locky, .cerber, .zepto, .thor, .aaa, .zzz');   // ★ (2026-11-11 19:04, 80차 SET-1) 비워 저장한 목록('')은 빈 채로 — 종전엔 || 라 빈 값을 기본 목록으로 채워 보여, 다른 칸만 바꿔 저장해도 기본값으로 덮어써졌음(재현). 저장한 적 없으면(없음·null) 종전처럼 기본 목록
                 $('#ransomware-block-random-ext').prop('checked', s.block_random_ext || false);
                 
                 // 대량 작업 감지
@@ -31282,7 +33872,7 @@ const App = {
                 $('#ransomware-versioning').prop('checked', s.versioning || false);
                 $('#ransomware-version-days').val(s.version_days ?? 7);
                 $('#ransomware-max-versions').val(s.max_versions ?? 10);
-                $('#ransomware-version-exclude').val(s.version_exclude || '.tmp, .log, .bak');
+                $('#ransomware-version-exclude').val(s.version_exclude ?? '.tmp, .log, .bak');   // ★ (2026-11-11 19:04, 80차 SET-1) 위와 같음
                 
                 // 파일 내용 검사
                 $('#ransomware-content-check').prop('checked', s.content_check || false);
@@ -31297,6 +33887,7 @@ const App = {
     },
     
     async saveRansomwareSettings() {
+        if (!await this._admLoadFailConfirm('ransomware')) return;   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 위와 같음
         const settings = {
             // 의심 확장자 차단
             block_extensions: $('#ransomware-block-extensions').is(':checked'),
@@ -31327,7 +33918,7 @@ const App = {
             
             if (res.success) {
                 this.toastResponsive((t('il_ransomware_saved', '랜섬웨어 방지 설정이 저장되었습니다')), t('settings_saved', '설정 저장됨'), 'success');
-                closeModal();
+                this.showRansomwareModal();   // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 종전 closeModal() 대신 창을 열 때 쓰는 함수로 서버에 저장된 값을 다시 채움(예: 감지 시간 0 → 10) — 종전엔 저장하면 바로 닫혔음. 닫기는 [취소]·[X]
             } else {
                 this.toast(res.error || t('err_save_failed', '저장 실패'), 'error');
             }
@@ -31422,6 +34013,7 @@ const App = {
         if (bruteSelectAll) bruteSelectAll.checked = false;
         
         const res = await this.api('security_settings', {}, 'GET');
+        this._admLoadMark('security', !!(res && res.success));   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 읽기 결과 표시(위 _admLoadMark)
         
         if (res.success) {
             const s = res.settings || {};
@@ -31439,6 +34031,12 @@ const App = {
             $('#security-allow-ip-only').prop('checked', s.allow_ip_only || false);
             
             // IP/국가 목록
+            // ★ (2026-11-01 11:47, 39차 점검) 목록에 '0' 같은 값이 있으면 서버 array_filter 로 키에 빈자리가 생겨 JSON 객체({"1":"KR"})로 와 .join 에서 TypeError →
+            //   보안 설정 창이 중간에 멈췄음 → 배열이 아니면 값만 꺼내 씀(서버 정규화는 api.php 담당)
+            const _secList = (v) => Array.isArray(v) ? v : ((v && typeof v === 'object') ? Object.values(v) : []);
+            s.allowed_ips = _secList(s.allowed_ips); s.blocked_ips = _secList(s.blocked_ips);
+            s.allowed_countries = _secList(s.allowed_countries); s.blocked_countries = _secList(s.blocked_countries);
+            s.admin_ips = _secList(s.admin_ips);
             $('#security-allowed-ips').val((s.allowed_ips || []).join('\n'));
             $('#security-blocked-ips').val((s.blocked_ips || []).join('\n'));
             $('#security-allowed-countries').val((s.allowed_countries || []).join(','));
@@ -31549,14 +34147,15 @@ const App = {
         });
         
         // 허용 국가 표시
+        // ★ (2026-11-01 11:47, 39차 점검) 저장된 국가 값에 '"'·']' 가 있으면 선택자가 SyntaxError 를 던져 창이 멈췄음 → 아래 4곳 CSS.escape
         allowedCountries.forEach(code => {
-            const btn = document.querySelector(`.country-btn[data-code="${code}"]`);
+            const btn = document.querySelector(`.country-btn[data-code="${CSS.escape(String(code))}"]`);
             if (btn) btn.classList.add('selected');
         });
         
         // 차단 국가 표시
         blockedCountries.forEach(code => {
-            const btn = document.querySelector(`.country-btn[data-code="${code}"]`);
+            const btn = document.querySelector(`.country-btn[data-code="${CSS.escape(String(code))}"]`);
             if (btn) btn.classList.add('blocked');
         });
     },
@@ -31577,23 +34176,32 @@ const App = {
             // 허용 국가 버튼에 selected 클래스
             const codes = allowedInput.split(',').map(c => c.trim().toUpperCase()).filter(c => c);
             codes.forEach(code => {
-                const btn = document.querySelector(`.country-btn[data-code="${code}"]`);
+                const btn = document.querySelector(`.country-btn[data-code="${CSS.escape(String(code))}"]`);
                 if (btn) btn.classList.add('selected');
             });
         } else {
             // 차단 국가 버튼에 blocked 클래스
             const codes = blockedInput.split(',').map(c => c.trim().toUpperCase()).filter(c => c);
             codes.forEach(code => {
-                const btn = document.querySelector(`.country-btn[data-code="${code}"]`);
+                const btn = document.querySelector(`.country-btn[data-code="${CSS.escape(String(code))}"]`);
                 if (btn) btn.classList.add('blocked');
             });
         }
     },
     
     // 국가 입력창 동기화
-    syncCountryInput(mode) {
+    syncCountryInput(mode, code, on) {
         const className = mode === 'allowed' ? 'selected' : 'blocked';
         const targetInput = mode === 'allowed' ? '#security-allowed-countries' : '#security-blocked-countries';
+        // ★ (2026-11-01 09:42, 38차 점검) 버튼 표시만 모아 입력칸을 통째로 덮어써, 직접 친 코드·버튼에 없는 코드(T1·XX 등)가 말없이 빠졌음 —
+        //   누른 코드가 오면 입력칸의 기존 목록에서 그 코드 하나만 넣거나 뺌(나머지·순서는 그대로)
+        if (code) {
+            const _up = String(code).toUpperCase();
+            const _list = String($(targetInput).val() || '').split(',').map(c => c.trim()).filter(c => c && c.toUpperCase() !== _up);
+            if (on) _list.push(_up);
+            $(targetInput).val(_list.join(','));
+            return;
+        }
         
         const selectedCodes = [];
         document.querySelectorAll(`.country-btn.${className}`).forEach(btn => {
@@ -31622,6 +34230,7 @@ const App = {
     },
     
     async saveSecuritySettings() {
+        if (!await this._admLoadFailConfirm('security')) return;   // ★ (2026-11-13 14:58, 112차 ADMUI-1) 위와 같음
         // 텍스트 필드에서 배열로 변환
         const parseList = (val, separator = '\n') => {
             return val.split(/[\n,]/).map(x => x.trim()).filter(x => x);
@@ -31692,7 +34301,7 @@ const App = {
                 t('security_saved_short', '보안 설정 저장됨'),
                 'success'
             );
-            closeModal();
+            this.showSecurityModal();   // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 종전 closeModal() 대신 창을 열 때 쓰는 함수로 서버에 저장된 값을 다시 채움(예: 캐시 0 → 24, IP 목록 정리) — 종전엔 저장하면 바로 닫혔음. 닫기는 [취소]·[X]
         } else {
             this.toast(res.error, 'error');
         }
@@ -31885,6 +34494,7 @@ const App = {
             let html = '<table class="table table-sm">';
             html += `<thead><tr><th class="log-checkbox"><input type="checkbox" id="bruteforce-log-select-all-inner"></th><th>IP</th><th>${t('th_user','사용자')}</th><th>${t('th_attempts','시도')}</th><th>${t('th_last_attempt','마지막 시도')}</th><th>${t('th_action','작업')}</th></tr></thead><tbody>`;
             
+            // ★ (2026-11-03 09:21, 49차 점검) 시도 배지의 빨간색 기준을 설정의 최대 시도 수로(서버 max_attempts — 없으면 종전 5)
             res.logs.forEach((log, idx) => {
                 const ip = this.escapeHtml(log.ip || '');
                 // ★ (2026-10-29 02:36, 16차) onclick 인자는 _jsArg 로(종전엔 " 를 안 막아 신뢰 프록시 설정 때 X-Forwarded-For 글자로 속성을 깰 수 있었음)
@@ -31892,7 +34502,7 @@ const App = {
                     <td class="log-checkbox"><input type="checkbox" class="bruteforce-log-checkbox" data-ip="${ip}"></td>
                     <td><code>${ip || '-'}</code></td>
                     <td>${this.escapeHtml(log.username || '-')}</td>
-                    <td><span class="badge ${log.attempts >= 5 ? 'badge-danger' : 'badge-warning'}">${log.attempts || 0}${t('il_count_times', '회')}</span></td>
+                    <td><span class="badge ${log.attempts >= (parseInt(res.max_attempts, 10) > 0 ? parseInt(res.max_attempts, 10) : 5) ? 'badge-danger' : 'badge-warning'}">${log.attempts || 0}${t('il_count_times', '회')}</span></td>
                     <td>${this.escapeHtml(log.last_attempt || '-')}</td>
                     <td><button class="btn btn-sm btn-outline" onclick="App.unlockIP(${this._jsArg(log.ip || '')})">${t('il_unlock', '🔓 해제')}</button></td>
                 </tr>`;
@@ -32066,7 +34676,9 @@ const App = {
                 btn.addEventListener('click', async () => {
                     const position = btn.dataset.position;
                     if (!position) return;
-                    
+                    // ★ (2026-10-31 13:40, 34차 후속 개선) 저장 실패 때 화면을 되돌리지 않아 새로고침하면 옛 위치로 돌아갔음 — 바꾸기 전 위치를 기억해 실패 시 복원(표시 켜기·끄기와 같게)
+                    const prevPosition = window.LABEL_POSITION || 'top-right';
+
                     // 1. 즉시 UI 하이라이트
                     this._iconMgrHighlightLabelPosBtn(position);
                     
@@ -32084,6 +34696,11 @@ const App = {
                         // dirty 플래그 켜서 모달 닫을 때 파일 리스트도 리렌더
                         this._iconMgrDirty = true;
                     } else {
+                        // 저장 실패 → 화면도 되돌림
+                        this._iconMgrHighlightLabelPosBtn(prevPosition);
+                        this._applyLabelPosition(prevPosition);
+                        window.LABEL_POSITION = prevPosition;
+                        this._iconMgrRenderList();
                         this.toast(res?.error || t('nt_icon_label_pos_failed', '라벨 위치 저장 실패'), 'error');
                     }
                 });
@@ -32132,7 +34749,8 @@ const App = {
                 // 중복 체크: 이미 등록된 확장자인지 확인
                 const allExts = this._iconMgrCollectAllExts();
                 if (allExts.includes(ext)) {
-                    if (!await this.confirmWarning(`.${ext} 확장자는 이미 등록되어 있습니다.\n\n기존 아이콘 매핑이 변경됩니다. 계속하시겠습니까?`, '중복 확장자', '계속')) {
+                    // ★ (2026-11-01 01:54, 36차 전체 점검) 번역 없이 한국어로 고정돼 영어 화면에서도 한국어로 나왔다 → t()/tf()
+                    if (!await this.confirmWarning(tf('icon_ext_dup_confirm', {ext: ext}, `.${ext} 확장자는 이미 등록되어 있습니다.\n\n기존 아이콘 매핑이 변경됩니다. 계속하시겠습니까?`), t('icon_ext_dup_title', '중복 확장자'), t('btn_continue', '계속'))) {
                         return;
                     }
                 }
@@ -32188,7 +34806,8 @@ const App = {
                 const file = e.target.files[0];
                 const preview = $('#icon-change-preview');
                 if (!file) { 
-                    preview.html('클릭하여 선택').css('color', '#aaa');
+                    // ★ (2026-10-31 13:36, 34차 후속 개선) '클릭하여 선택' 이 영어 화면에도 한국어로 나오던 것 — t() 로
+                    preview.text(t('click_to_select', '클릭하여 선택')).css('color', '#aaa');
                     $('#btn-icon-change-apply').prop('disabled', true);
                     return; 
                 }
@@ -32196,7 +34815,8 @@ const App = {
                 // 최대 크기 체크
                 const maxSize = file.name.toLowerCase().endsWith('.svg') ? 102400 : 524288;
                 if (file.size > maxSize) {
-                    preview.html(`<span style="color:var(--fs-fg-err, #d32f2f);">파일이 너무 큽니다<br>(최대 ${maxSize/1024}KB)</span>`);
+                    // ★ (2026-11-01 01:54, 36차 전체 점검) 번역 없이 한국어로 고정돼 영어 화면에서도 한국어로 나왔다 → t()/tf()
+                    preview.html(`<span style="color:var(--fs-fg-err, #d32f2f);">${t('file_too_large', '파일이 너무 큽니다.')}<br>(${tf('icon_max_kb', {kb: maxSize/1024}, '최대 {kb}KB')})</span>`);
                     $('#btn-icon-change-apply').prop('disabled', true);
                     return;
                 }
@@ -32210,7 +34830,7 @@ const App = {
                     $('#btn-icon-change-apply').prop('disabled', false);
                 };
                 reader.onerror = () => {
-                    preview.html('<span style="color:var(--fs-fg-err, #d32f2f);">파일 읽기 실패</span>');
+                    preview.html(`<span style="color:var(--fs-fg-err, #d32f2f);">${t('err_file_read', '파일 읽기 실패')}</span>`);   // ★ (2026-11-01 01:54, 36차 전체 점검) 번역 없이 한국어로 고정돼 영어 화면에서도 한국어로 나왔다 → t()/tf()
                     $('#btn-icon-change-apply').prop('disabled', true);
                 };
                 reader.readAsDataURL(file);
@@ -32463,7 +35083,7 @@ const App = {
         
         // HWP/HWPX - 인라인 SVG만 있고 파일 없음 → path 없이 이모지 대체
         if (bm.inline_exts && bm.inline_exts.indexOf(ext) !== -1) {
-            return { path: null, name: ext.toUpperCase() + ' (인라인)', source: 'inline' };
+            return { path: null, name: ext.toUpperCase() + ' (' + t('im_inline', '인라인') + ')', source: 'inline' };
         }
         
         // ★ (2026-10-27) 윈도우 11 느낌 확장자별 그림이 있으면 파일 목록처럼 그 그림(라벨 없음) — 분류는 _iconMgrClassify 가 code_map 으로 종전처럼
@@ -32485,7 +35105,7 @@ const App = {
         if (bm.emoji_exts && bm.emoji_exts.indexOf(ext) !== -1) {
             // 실제 이모지 문자 가져오기 (emoji_map이 있으면)
             const emojiChar = (bm.emoji_map && bm.emoji_map[ext]) || '';
-            return { path: null, name: emojiChar || '(이모지)', source: 'emoji', emoji: emojiChar };
+            return { path: null, name: emojiChar || '(' + t('im_emoji', '이모지') + ')', source: 'emoji', emoji: emojiChar };
         }
         
         // 기본 아이콘: default.svg 파일 사용 (갤러리/서버와 일관)
@@ -32495,15 +35115,15 @@ const App = {
     // 출처(source) 문자열을 한국어로 변환
     _iconMgrSourceLabel(source) {
         const map = {
-            'builtin': '기본',
-            'archive': '압축 라벨형',
-            'subtitle': '자막 라벨형',
-            'inline': '인라인',
-            'emoji': '이모지',
-            'default': '기본',
-            'default-mapped': '기본 (매핑됨)',
-            'user': '사용자',
-            'archive-mapped': '라벨형 매핑',
+            'builtin': t('im_src_builtin', '기본'),
+            'archive': t('im_src_archive', '압축 라벨형'),
+            'subtitle': t('im_src_subtitle', '자막 라벨형'),
+            'inline': t('im_inline', '인라인'),
+            'emoji': t('im_emoji', '이모지'),
+            'default': t('im_src_builtin', '기본'),
+            'default-mapped': t('im_src_default_mapped', '기본 (매핑됨)'),
+            'user': t('im_src_user', '사용자'),
+            'archive-mapped': t('im_src_archive_mapped', '라벨형 매핑'),
         };
         return map[source] || source || '-';
     },
@@ -32529,16 +35149,16 @@ const App = {
         } else {
             // 기본 폴더 (인라인 SVG — ★ 2026-10-26 파일 목록과 같은 선 그림)
             iconHtml = `<svg viewBox="0 0 48 48" width="32" height="32" stroke="#a8740a" stroke-width="2" stroke-linejoin="round"><path fill="#e9a922" d="M6 37V11a3 3 0 0 1 3-3h9l4 5h17a3 3 0 0 1 3 3v21a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/><path fill="#ffcc4d" d="M6 19.5h36V37a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3z"/></svg>`;
-            iconName = '(기본 폴더)';
+            iconName = '(' + t('im_default_folder', '기본 폴더') + ')';
             iconSource = 'default';
         }
         
         // 변경 버튼 + (커스텀 설정된 경우만) 초기화 버튼
         const resetBtn = hasCustom 
-            ? `<button type="button" class="btn btn-sm" data-reset-folder="1" style="color:var(--fs-fg-err, #d32f2f);" title="기본 폴더 아이콘으로 복원">🔄 초기화</button>`
+            ? `<button type="button" class="btn btn-sm" data-reset-folder="1" style="color:var(--fs-fg-err, #d32f2f);" title="${this.escapeHtml(t('im_restore_folder_tip', '기본 폴더 아이콘으로 복원'))}">🔄 ${this.escapeHtml(t('im_reset', '초기화'))}</button>`
             : '';
         const customBadge = hasCustom 
-            ? '<span style="color:var(--fs-fg-err, #d32f2f); font-size:12px; margin-left:6px;" title="사용자 변경됨">🎨</span>'
+            ? '<span style="color:var(--fs-fg-err, #d32f2f); font-size:12px; margin-left:6px;" title="' + this.escapeHtml(t('im_customized', '사용자 변경됨')) + '">🎨</span>'
             : '';
         
         return `
@@ -32547,12 +35167,12 @@ const App = {
                     ${iconHtml}
                 </div>
                 <div style="flex:1; min-width:0;">
-                    <div style="font-weight:bold; font-family:monospace; font-size:14px;">📁 폴더 ${customBadge}</div>
-                    <div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:2px;">${this.escapeHtml(iconName)} <span style="color:var(--fs-text-4, #5f6368);">(${this.escapeHtml(this._iconMgrSourceLabel(iconSource))})</span> · 모든 폴더에 적용</div>
+                    <div style="font-weight:bold; font-family:monospace; font-size:14px;">📁 ${this.escapeHtml(t('im_folder', '폴더'))} ${customBadge}</div>
+                    <div style="color:var(--fs-text-3, #888); font-size:11px; margin-top:2px;">${this.escapeHtml(iconName)} <span style="color:var(--fs-text-4, #5f6368);">(${this.escapeHtml(this._iconMgrSourceLabel(iconSource))})</span> · ${this.escapeHtml(t('im_all_folders', '모든 폴더에 적용'))}</div>
                 </div>
                 <div style="display:flex; gap:6px;">
                     ${resetBtn}
-                    <button type="button" class="btn btn-sm btn-primary" data-change-folder="1">🎨 변경</button>
+                    <button type="button" class="btn btn-sm btn-primary" data-change-folder="1">🎨 ${this.escapeHtml(t('im_change', '변경'))}</button>
                 </div>
             </div>
         `;
@@ -32601,6 +35221,7 @@ const App = {
         
         // user 추가분
         if (data.user_map) Object.keys(data.user_map).forEach(e => set.add(e));
+        set.delete('__folder');   // ★ (2026-10-31 12:03, 34차 전체 점검) 폴더 아이콘 설정 키는 확장자가 아님 — 종전엔 '.__folder' 행이 따로 생겼음
         
         return Array.from(set).sort();
     },
@@ -32632,6 +35253,7 @@ const App = {
         listEl.empty();
         
         let shown = 0;
+        let shownExt = 0; // ★ (2026-11-04) 개수 표시는 확장자 행만 셈(폴더 행 제외) — shown 은 '결과 없음' 판정용 그대로
         const htmlParts = [];
         
         // 특수 행: 폴더 아이콘 (리스트 최상단 고정 - 검색/필터 영향 없음)
@@ -32660,6 +35282,7 @@ const App = {
             }
             
             shown++;
+            shownExt++;
             const icon = this._iconMgrGetEffectiveIcon(ext);
             const isCustomized = !!userMap[ext];
             const isUserAdded = isCustomized && !builtinSet.has(ext);
@@ -32690,8 +35313,8 @@ const App = {
             
             const customBadge = isCustomized 
                 ? (isUserAdded 
-                    ? '<span style="color:var(--fs-fg-info, #1976d2); font-size:12px; margin-left:6px;" title="사용자 추가 확장자">➕</span>' 
-                    : '<span style="color:var(--fs-fg-err, #d32f2f); font-size:12px; margin-left:6px;" title="사용자 변경됨">🎨</span>')
+                    ? '<span style="color:var(--fs-fg-info, #1976d2); font-size:12px; margin-left:6px;" title="' + this.escapeHtml(t('im_user_added', '사용자 추가 확장자')) + '">➕</span>' 
+                    : '<span style="color:var(--fs-fg-err, #d32f2f); font-size:12px; margin-left:6px;" title="' + this.escapeHtml(t('im_customized', '사용자 변경됨')) + '">🎨</span>')
                 : '';
             
             // 버튼:
@@ -32714,13 +35337,13 @@ const App = {
                 // 이미 default 매핑이면 아이콘 제거 버튼 숨김
                 const clearPart = isAlreadyDefault 
                     ? '' 
-                    : `<button type="button" class="btn btn-sm" data-clear-ext="${this.escapeHtml(ext)}" style="color:var(--fs-text-3, #888);" title="전용 아이콘 제거, 기본 아이콘(default)으로 표시">🚫 아이콘 제거</button>`;
-                actionBtn = clearPart + `<button type="button" class="btn btn-sm" data-remove-ext="${this.escapeHtml(ext)}" style="color:var(--fs-fg-err, #d32f2f);" title="사용자 추가 확장자 완전 삭제">🗑️ 삭제</button>`;
+                    : `<button type="button" class="btn btn-sm" data-clear-ext="${this.escapeHtml(ext)}" style="color:var(--fs-text-3, #888);" title="${this.escapeHtml(t('im_clear_tip', '전용 아이콘 제거, 기본 아이콘(default)으로 표시'))}">🚫 ${this.escapeHtml(t('im_clear', '아이콘 제거'))}</button>`;
+                actionBtn = clearPart + `<button type="button" class="btn btn-sm" data-remove-ext="${this.escapeHtml(ext)}" style="color:var(--fs-fg-err, #d32f2f);" title="${this.escapeHtml(t('im_remove_ext_tip', '사용자 추가 확장자 완전 삭제'))}">🗑️ ${this.escapeHtml(t('delete', '삭제'))}</button>`;
             } else if (isCustomized) {
-                actionBtn = `<button type="button" class="btn btn-sm" data-reset-ext="${this.escapeHtml(ext)}" style="color:var(--fs-fg-err, #d32f2f);" title="사용자 변경 취소, 기본 아이콘으로 되돌림">🔄 초기화</button>`;
+                actionBtn = `<button type="button" class="btn btn-sm" data-reset-ext="${this.escapeHtml(ext)}" style="color:var(--fs-fg-err, #d32f2f);" title="${this.escapeHtml(t('im_reset_ext_tip', '사용자 변경 취소, 기본 아이콘으로 되돌림'))}">🔄 ${this.escapeHtml(t('im_reset', '초기화'))}</button>`;
             } else if (!isInline) {
                 // 기본 내장 확장자 → 아이콘 제거(기본 파일 아이콘으로 변경)
-                actionBtn = `<button type="button" class="btn btn-sm" data-clear-ext="${this.escapeHtml(ext)}" style="color:var(--fs-text-3, #888);" title="전용 아이콘 제거, 기본 아이콘(default)으로 표시">🚫 아이콘 제거</button>`;
+                actionBtn = `<button type="button" class="btn btn-sm" data-clear-ext="${this.escapeHtml(ext)}" style="color:var(--fs-text-3, #888);" title="${this.escapeHtml(t('im_clear_tip', '전용 아이콘 제거, 기본 아이콘(default)으로 표시'))}">🚫 ${this.escapeHtml(t('im_clear', '아이콘 제거'))}</button>`;
             }
             
             htmlParts.push(`
@@ -32734,20 +35357,20 @@ const App = {
                     </div>
                     <div style="display:flex; gap:6px;">
                         ${actionBtn}
-                        <button type="button" class="btn btn-sm btn-primary" data-change-ext="${this.escapeHtml(ext)}">🎨 변경</button>
+                        <button type="button" class="btn btn-sm btn-primary" data-change-ext="${this.escapeHtml(ext)}">🎨 ${this.escapeHtml(t('im_change', '변경'))}</button>
                     </div>
                 </div>
             `);
         });
         
         if (shown === 0) {
-            listEl.html('<div style="padding:40px; text-align:center; color:var(--fs-text-3, #aaa);">검색 결과가 없습니다.</div>');
+            listEl.html('<div style="padding:40px; text-align:center; color:var(--fs-text-3, #aaa);">' + this.escapeHtml(t('im_no_results', '검색 결과가 없습니다.')) + '</div>');
         } else {
             // 문자열로 한 번에 추가 (커스텀 $ 함수의 append는 문자열 전용)
             listEl.html(htmlParts.join(''));
         }
         
-        countEl.text(`${shown} / ${allExts.length}`);
+        countEl.text(`${shownExt} / ${allExts.length}`);
         
         // 버튼 이벤트 (이벤트 위임)
         listEl.find('[data-change-ext]').on('click', (e) => {
@@ -32769,7 +35392,7 @@ const App = {
         
         // 폴더 아이콘 초기화 버튼
         listEl.find('[data-reset-folder]').on('click', async () => {
-            if (!await this.confirm('폴더 아이콘을 기본값(노란 폴더)으로 복원하시겠습니까?', '기본값 복원')) return;
+            if (!await this.confirm(t('im_confirm_reset_folder', '폴더 아이콘을 기본값(노란 폴더)으로 복원하시겠습니까?'), t('im_restore_default', '기본값 복원'))) return;
             const res = await this.api('icon_manager&op=set_folder_icon', { icon: '' }, 'POST');
             if (res && res.success) {
                 this.toast(t('nt_icon_folder_reset', '폴더 아이콘 기본값으로 복원됨'), 'success');
@@ -32782,7 +35405,7 @@ const App = {
         // 초기화 버튼 (기본 아이콘으로 복원 - 기존 확장자용)
         listEl.find('[data-reset-ext]').on('click', async (e) => {
             const ext = e.currentTarget.dataset.resetExt;
-            if (!await this.confirm(`.${ext}의 사용자 설정을 초기화하고 기본 아이콘으로 복원하시겠습니까?`, '기본값 복원')) return;
+            if (!await this.confirm(tf('im_confirm_reset_ext', { ext }, `.${ext}의 사용자 설정을 초기화하고 기본 아이콘으로 복원하시겠습니까?`), t('im_restore_default', '기본값 복원'))) return;
             const res = await this.api('icon_manager&op=remove_mapping', { ext }, 'POST');
             if (res && res.success) {
                 this.toast(tf('nt_icon_ext_reset', {ext: ext}, `.${ext} 기본 아이콘으로 복원됨`), 'success');
@@ -32795,7 +35418,7 @@ const App = {
         // 삭제 버튼 (사용자 추가 확장자 완전 제거 - 리스트에서도 사라짐)
         listEl.find('[data-remove-ext]').on('click', async (e) => {
             const ext = e.currentTarget.dataset.removeExt;
-            if (!await this.confirmDelete(`.${ext} 확장자를 완전히 삭제하시겠습니까?\n(리스트에서 사라집니다)`, '확장자 삭제')) return;
+            if (!await this.confirmDelete(tf('im_confirm_remove_ext', { ext }, `.${ext} 확장자를 완전히 삭제하시겠습니까?\n(리스트에서 사라집니다)`), t('im_remove_ext', '확장자 삭제'))) return;
             const res = await this.api('icon_manager&op=remove_mapping', { ext }, 'POST');
             if (res && res.success) {
                 this.toast(tf('nt_icon_ext_deleted', {ext: ext}, `.${ext} 삭제됨`), 'success');
@@ -32810,7 +35433,7 @@ const App = {
         //   user_map에 "default"로 매핑되어 파일 아이콘이 기본 이미지로 표시됨
         listEl.find('[data-clear-ext]').on('click', async (e) => {
             const ext = e.currentTarget.dataset.clearExt;
-            if (!await this.confirm(`.${ext}의 전용 아이콘을 제거하고 기본 아이콘으로 표시하시겠습니까?`, '아이콘 제거')) return;
+            if (!await this.confirm(tf('im_confirm_clear', { ext }, `.${ext}의 전용 아이콘을 제거하고 기본 아이콘으로 표시하시겠습니까?`), t('im_clear', '아이콘 제거'))) return;
             const res = await this.api('icon_manager&op=set_mapping', { ext, icon: 'default' }, 'POST');
             if (res && res.success) {
                 this.toast(tf('nt_icon_ext_set_default', {ext: ext}, `.${ext} 기본 아이콘으로 변경됨`), 'success');
@@ -32830,7 +35453,7 @@ const App = {
         const isFolder = (ext === '__folder');
         
         // 타이틀: 확장자면 ".hwp", 폴더면 "폴더"
-        $('#icon-change-ext').text(isFolder ? '📁 폴더' : '.' + ext);
+        $('#icon-change-ext').text(isFolder ? '📁 ' + t('im_folder', '폴더') : '.' + ext);
         
         // 라벨 옵션 섹션 숨김/표시 (폴더는 라벨 개념 없음)
         //   🏷️ 라벨 처리 라디오 그룹 박스를 ID로 직접 참조 (안정적)
@@ -32856,20 +35479,20 @@ const App = {
         }
         
         // 정보 (이모지면 출처를 'emoji'가 아닌 '이모지'로 한국어 표시)
-        let info = '새 확장자';
+        let info = t('im_new_ext', '새 확장자');
         if (currentIcon) {
             const sourceLabel = {
-                'builtin': '기본',
-                'archive': '압축 라벨형',
-                'subtitle': '자막 라벨형',
-                'inline': '인라인',
-                'emoji': '이모지',
-                'default': '기본',
-                'user': '사용자',
-                'archive-mapped': '라벨형 매핑'
+                'builtin': t('im_src_builtin', '기본'),
+                'archive': t('im_src_archive', '압축 라벨형'),
+                'subtitle': t('im_src_subtitle', '자막 라벨형'),
+                'inline': t('im_inline', '인라인'),
+                'emoji': t('im_emoji', '이모지'),
+                'default': t('im_src_builtin', '기본'),
+                'user': t('im_src_user', '사용자'),
+                'archive-mapped': t('im_src_archive_mapped', '라벨형 매핑')
             }[currentIcon.source] || currentIcon.source || '-';
             const nameLabel = currentIcon.source === 'emoji' 
-                ? (currentIcon.emoji ? `(이모지)` : '(이모지)')
+                ? ('(' + t('im_emoji', '이모지') + ')')
                 : (currentIcon.name || '-');
             info = `아이콘: ${this.escapeHtml(nameLabel)} | 출처: ${this.escapeHtml(sourceLabel)}`;
         }
@@ -32877,7 +35500,8 @@ const App = {
         
         // 초기화
         $('#icon-change-file').val('');
-        $('#icon-change-preview').html('클릭하여 선택').css('color', '#aaa');
+        // ★ (2026-10-31 13:36, 34차 후속 개선) '클릭하여 선택' 이 영어 화면에도 한국어로 나오던 것 — t() 로
+        $('#icon-change-preview').text(t('click_to_select', '클릭하여 선택')).css('color', '#aaa');
         $('#btn-icon-change-apply').prop('disabled', true);
         
         // 옵션 초기화 (매번 모달 열 때 기본값으로)
@@ -32934,12 +35558,12 @@ const App = {
             const isLabel = name.indexOf('archive_') === 0;
             // 라벨형 아이콘 미리보기: 우측 상단에 "라벨" 표시
             const labelBadge = isLabel 
-                ? `<span style="position:absolute; top:2px; right:2px; background:#ffd54f; color:#333; font-size:7px; font-weight:bold; padding:1px 3px; border-radius:2px;" title="라벨형 - 확장자가 자동 표시됨">라벨</span>`
+                ? `<span style="position:absolute; top:2px; right:2px; background:#ffd54f; color:#333; font-size:7px; font-weight:bold; padding:1px 3px; border-radius:2px;" title="${this.escapeHtml(t('im_label_tip', '라벨형 - 확장자가 자동 표시됨'))}">${this.escapeHtml(t('im_label', '라벨'))}</span>`
                 : '';
             // 커스텀 아이콘 삭제 버튼 (좌상단)
             //   클릭 시 stopPropagation으로 카드 선택 이벤트 차단
             const deleteBtn = isCustom
-                ? `<button type="button" class="icon-gallery-delete-btn" data-delete-icon="${this.escapeHtml(name)}" title="아이콘 삭제" style="position:absolute; top:2px; left:2px; width:18px; height:18px; padding:0; border:none; background:#d32f2f; color:#fff; border-radius:50%; cursor:pointer; font-size:10px; line-height:18px; font-weight:bold;">×</button>`
+                ? `<button type="button" class="icon-gallery-delete-btn" data-delete-icon="${this.escapeHtml(name)}" title="${this.escapeHtml(t('im_delete_icon', '아이콘 삭제'))}" style="position:absolute; top:2px; left:2px; width:18px; height:18px; padding:0; border:none; background:#d32f2f; color:#fff; border-radius:50%; cursor:pointer; font-size:10px; line-height:18px; font-weight:bold;">×</button>`
                 : '';
             return `
                 <div class="icon-gallery-card" data-gallery-name="${this.escapeHtml(name)}" data-gallery-custom="${isCustom ? '1' : '0'}" 
@@ -32953,7 +35577,7 @@ const App = {
         };
         
         if (custom.length + builtin.length === 0) {
-            galleryEl.html('<div style="grid-column:1/-1; padding:20px; text-align:center; color:var(--fs-text-3, #aaa);">아이콘이 없습니다.</div>');
+            galleryEl.html('<div style="grid-column:1/-1; padding:20px; text-align:center; color:var(--fs-text-3, #aaa);">' + this.escapeHtml(t('im_no_icons', '아이콘이 없습니다.')) + '</div>');
             return;
         }
         
@@ -32967,7 +35591,7 @@ const App = {
             e.stopPropagation();
             e.preventDefault();
             const name = e.currentTarget.dataset.deleteIcon;
-            if (!await this.confirmDelete(`"${name}" 아이콘을 삭제하시겠습니까?\n\n이 아이콘을 사용하던 확장자는 기본 아이콘으로 표시됩니다 (확장자 자체는 유지).`, '아이콘 삭제')) return;
+            if (!await this.confirmDelete(tf('im_confirm_delete_icon', { name }, `"${name}" 아이콘을 삭제하시겠습니까?\n\n이 아이콘을 사용하던 확장자는 기본 아이콘으로 표시됩니다 (확장자 자체는 유지).`), t('im_delete_icon', '아이콘 삭제'))) return;
             
             const res = await this.api('icon_manager&op=delete_custom', { name }, 'POST');
             if (res && res.success) {
@@ -33021,7 +35645,7 @@ const App = {
         if (!ext) return;
         
         const applyBtn = $('#btn-icon-change-apply');
-        applyBtn.prop('disabled', true).text('적용 중...');
+        applyBtn.prop('disabled', true).text(t('im_applying', '적용 중...'));
         
         try {
             let iconName;
@@ -33063,16 +35687,16 @@ const App = {
                 // 'keep' 또는 __folder는 아무 라벨 파라미터도 안 보냄 → detectAndReplaceLabel 호출 안 됨 → 원본 유지
                 
                 const csrfToken = this.csrfToken || window.CSRF_TOKEN || '';
-                const resp = await fetch(`api.php?action=icon_manager&op=upload`, {
+                const resp = await this._csrfFetch(() => fetch(`api.php?action=icon_manager&op=upload`, {   // ★ (2026-11-13 08:02, 109차 개선 TABS-4) 위 _csrfFetch ★(처음 토큰은 종전과 같음)
                     method: 'POST',
-                    headers: { 'X-CSRF-Token': csrfToken },
+                    headers: { 'X-CSRF-Token': this.csrfToken || csrfToken },
                     body: fd,
                     credentials: 'same-origin'
-                });
+                }));
                 const ures = await resp.json();
                 if (!ures || !ures.success) {
                     this.toast(ures?.error || t('nt_upload_failed', '업로드 실패'), 'error');
-                    applyBtn.prop('disabled', false).text('✅ 적용');
+                    applyBtn.prop('disabled', false).text('✅ ' + t('im_apply', '적용'));
                     return;
                 }
                 iconName = ures.name;  // 서버가 archive_ 접두어 붙였을 수 있음
@@ -33101,7 +35725,7 @@ const App = {
                     const cres = await this.api('icon_manager&op=clone_from_gallery', cloneParams, 'POST');
                     if (!cres || !cres.success) {
                         this.toast(cres?.error || t('nt_icon_copy_failed', '아이콘 복사 실패'), 'error');
-                        applyBtn.prop('disabled', false).text('✅ 적용');
+                        applyBtn.prop('disabled', false).text('✅ ' + t('im_apply', '적용'));
                         return;
                     }
                     iconName = cres.name;
@@ -33111,7 +35735,7 @@ const App = {
                 }
             } else {
                 this.toast(t('nt_icon_select', '파일 또는 아이콘을 선택하세요.'), 'warning');
-                applyBtn.prop('disabled', false).text('✅ 적용');
+                applyBtn.prop('disabled', false).text('✅ ' + t('im_apply', '적용'));
                 return;
             }
             
@@ -33126,15 +35750,12 @@ const App = {
             //   폴더 경로에선 이 경고 스킵 (폴더엔 라벨 개념 없음)
             if (ext !== '__folder' && typeof iconName === 'string' && iconName.indexOf('archive_') === 0 && !labelModeForMap) {
                 const proceed = await this.confirmWarning(
-                    `선택한 아이콘 이름이 라벨형 형식(archive_*)입니다.\n` +
-                    `"CSS 오버레이" 외의 옵션을 골라도 라벨이 계속 표시됩니다.\n\n` +
-                    `라벨 없이 쓰려면 새 이미지를 업로드하거나 다른 아이콘을 선택하세요.\n\n` +
-                    `그대로 진행하시겠습니까?`,
-                    '라벨형 아이콘 주의',
-                    '그대로 진행'
+                    t('im_label_warn_body', "선택한 아이콘 이름이 라벨형 형식(archive_*)입니다.\n\"CSS 오버레이\" 외의 옵션을 골라도 라벨이 계속 표시됩니다.\n\n라벨 없이 쓰려면 새 이미지를 업로드하거나 다른 아이콘을 선택하세요.\n\n그대로 진행하시겠습니까?"),
+                    t('im_label_warn_title', '라벨형 아이콘 주의'),
+                    t('im_proceed', '그대로 진행')
                 );
                 if (!proceed) {
-                    applyBtn.prop('disabled', false).text('✅ 적용');
+                    applyBtn.prop('disabled', false).text('✅ ' + t('im_apply', '적용'));
                     return;
                 }
             }
@@ -33165,7 +35786,7 @@ const App = {
             console.error('Apply change error:', e);
             this.toast(t('nt_icon_apply_error', '적용 중 오류가 발생했습니다.'), 'error');
         } finally {
-            applyBtn.prop('disabled', false).text('✅ 적용');
+            applyBtn.prop('disabled', false).text('✅ ' + t('im_apply', '적용'));
         }
     },
     
@@ -33582,8 +36203,8 @@ const App = {
                             <th>WebDAV</th>
                             <td><span class="status-ok">${t('il_status_active', '✅ 활성')}</span></td>
                             <td style="font-size:12px;color:var(--fs-text-3, #888);">
-                                <code style="user-select:all;cursor:pointer;" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavUrl)}');App.toast('${t('nt_copied','복사되었습니다.')}','success')">${this.escapeHtml(webdavUrl)}</code>
-                                ${webdavExternal !== webdavUrl ? `<br><code style="user-select:all;cursor:pointer;color:var(--fs-text-2, #666);" onclick="navigator.clipboard.writeText('${this.escapeHtml(webdavExternal)}');App.toast('${t('nt_copied','복사되었습니다.')}','success')">${this.escapeHtml(webdavExternal)}</code> <small>(${t('il_external','외부')})</small>` : ''}
+                                <code style="user-select:all;cursor:pointer;" data-cp="${this.escapeHtml(webdavUrl)}" onclick="navigator.clipboard.writeText(this.dataset.cp);App.toast('${t('nt_copied','복사되었습니다.')}','success')">${this.escapeHtml(webdavUrl)}</code>
+                                ${webdavExternal !== webdavUrl ? `<br><code style="user-select:all;cursor:pointer;color:var(--fs-text-2, #666);" data-cp="${this.escapeHtml(webdavExternal)}" onclick="navigator.clipboard.writeText(this.dataset.cp);App.toast('${t('nt_copied','복사되었습니다.')}','success')">${this.escapeHtml(webdavExternal)}</code> <small>(${t('il_external','외부')})</small>` : ''}
                             </td>
                         </tr>
                     </table>
@@ -33621,6 +36242,8 @@ const App = {
             $('#rt-toggle').removeClass('active');
         } else {
             const interval = parseInt($('#rt-interval').val()) * 1000;
+            // ★ (2026-11-01 01:06, 35차 전체 점검) 타이머 주기는 시작 때 한 번 정하는데 속도 계산은 매번 지금 고른 값으로 나눠, 도중에 간격을 바꾸면 속도가 틀렸음 → 시작 때 쓴 주기를 저장해 계산에 씀
+            this._rtIntervalSec = interval / 1000;
             this.updateRealtimeStats();
             this.realtimeInterval = setInterval(() => this.updateRealtimeStats(), interval);
             $('#rt-status').text(t('il_stop', '⏸️ 중지'));
@@ -33663,7 +36286,7 @@ const App = {
             
             // 네트워크 속도 계산
             if (this.prevNetStats) {
-                const interval = parseInt($('#rt-interval').val());
+                const interval = this._rtIntervalSec || parseInt($('#rt-interval').val());   // ★ (2026-11-01 01:06, 35차 전체 점검) 시작 때 주기로
                 const rxSpeed = Math.max(0, (rx - this.prevNetStats.rx) / interval);
                 const txSpeed = Math.max(0, (tx - this.prevNetStats.tx) / interval);
                 $('#rt-rx-speed').text(this.formatSize(rxSpeed) + '/s');
@@ -33675,7 +36298,7 @@ const App = {
             const diskRead = s.disk?.read || 0;
             const diskWrite = s.disk?.write || 0;
             if (this.prevDiskStats) {
-                const interval = parseInt($('#rt-interval').val());
+                const interval = this._rtIntervalSec || parseInt($('#rt-interval').val());   // ★ (2026-11-01 01:06, 35차 전체 점검) 시작 때 주기로
                 const readSpeed = Math.max(0, (diskRead - this.prevDiskStats.read) / interval);
                 const writeSpeed = Math.max(0, (diskWrite - this.prevDiskStats.write) / interval);
                 $('#rt-disk-read').text(this.formatSize(readSpeed) + '/s');
@@ -33786,9 +36409,15 @@ const App = {
     
     // 내 계정 정보 로드
     async loadMyAccountInfo() {
+        const _maiName = this.user ? (this.user.display_name || '') : '', _maiMail = this.user ? (this.user.email || '') : '';   // ★ (2026-11-12 02:28, 90차 RGR9-F1) 요청 보낼 때 값 — 응답 전에 이름을 바꿔 저장까지 끝냈으면 늦은 응답이 옛 이름으로 되돌리지 않게(재현) / ★ (2026-11-12 03:33, 91차 RGR10-N2) 아래 두 줄은 같은 계정 응답일 때만 — 다른 탭에서 다른 계정으로 로그인된 뒤 열면 그 계정 이름·메일이 칸·this.user 에 들어갔음(재현)
         const res = await this.api('my_account_info', {}, 'GET');
         
         if (res.success) {
+            // ★ (2026-11-12 01:46, 90차 RGR9-N1) 다른 기기·탭에서 바뀐 이름·메일로 입력 칸과 this.user 를 맞춤(칸을 아직 안 고쳤을 때만) — 89차 SET-1 뒤, 먼저 열어 둔 화면에서 옛 이름을 일부러 다시 넣고 저장하면 '저장됨'인데 보내지 않았음(재현)
+            if (this.user && res.username === this.user.username && typeof res.display_name === 'string' && (this.user.display_name || '') === _maiName && $('#settings-display-name').val() === _maiName) { this.user.display_name = res.display_name; $('#settings-display-name').val(res.display_name);
+                $('#user-name .welcome-name').text(this.user.display_name || this.user.username);   // ★ (2026-11-12 11:02, 97차 개선 B4) 머리줄 이름도 같은 값으로 — 종전엔 먼저 열어 둔 화면에서 설정 창을 열면 카드·입력 칸·this.user 는 다른 기기에서 바꾼 새 이름인데 머리줄만 로그인 때 이름으로 남았음(재현, 저장·새로 고침 전까지). 글자만 바꿈(text)
+            }
+            if (this.user && res.username === this.user.username && typeof res.email === 'string' && (this.user.email || '') === _maiMail && $('#settings-email').val() === _maiMail) { this.user.email = res.email; $('#settings-email').val(res.email); }
             $('#my-info-username').text(res.username || '-');
             $('#my-info-displayname').text(res.display_name || '-');
             $('#my-info-email').text(res.email || '-');
@@ -33860,7 +36489,7 @@ const App = {
         try {
             const res = await this.api('totp_settings', {}, 'GET');
             if (res.success && res.settings) {
-                $('#totp-issuer').val(res.settings.issuer || '');
+                $('#totp-issuer').val(res.settings.issuer ?? '');   // ★ (2026-11-14 21:18, 133차) 발급자 '0' 도 칸에 그대로
                 $('#totp-key-masked').text(res.settings.encryption_key_masked || '-');
                 if (res.settings.generated_at) {
                     $('#totp-key-generated').text(`${t('generated_at','생성일')}: ${res.settings.generated_at}`);
@@ -33935,8 +36564,17 @@ const App = {
             return;
         }
         
-        const res = await this.api('2fa_enable', { code });
-        
+        // ★ (2026-11-02 08:57, 41차 점검) 2FA 켜기가 세션만으로 됐음(남이 자기 OTP 앱으로 켜서 주인을 잠글 수 있음) → 켜기 전에 현재 비밀번호를 물어 함께 보냄.
+        //   SSO 연결 계정(sso_provider)은 로컬 비밀번호가 없을 수 있어 비워 두면 '' 로 보내고 판정은 서버(Auth::enable2FA)에 맡김
+        let password = await this.promptPassword(t('enter_password_verify', '본인 확인을 위해 현재 비밀번호를 입력하세요:'));
+        if (password === null) return;   // ★ (2026-11-02 09:45, 41차 재검토) 취소면 멈춤(SSO 계정도)
+        if (!password) {
+            if (!this.user?.sso_provider) { this.toast(t('password_required', '비밀번호를 입력하세요.'), 'warning'); return; }   // ★ (2026-11-02 12:19, 43차 재검토) 위 메일 변경과 같음
+            password = '';
+        }
+
+        const res = await this.api('2fa_enable', { code, password });
+
         if (res.success) {
             this.toastResponsive(
                 t('2fa_enabled_msg', '2단계 인증이 활성화되었습니다!'),
@@ -33944,6 +36582,8 @@ const App = {
                 'success'
             );
             
+            // ★ (2026-11-01 11:48, 39차 점검) WebDAV 안내(showWebDAVGuide)가 보는 this.user['2fa_enabled'] 를 갱신하지 않아, 켠 직후 안내가 '로그인 비밀번호 사용'으로 반대로 나왔음 → 맞춤
+            if (this.user) this.user['2fa_enabled'] = true;
             // 백업 코드 표시
             $('#twofa-setup-section').hide();
             this.show2FABackupCodes(res.backup_codes);
@@ -33964,14 +36604,14 @@ const App = {
     // 2FA 비활성화
     async disable2FA() {
         const password = await this.promptPassword(t('enter_password', '비밀번호를 입력하세요:'));
-        if (!password) return;
+        if (password === null) return;   // ★ (2026-11-04 01:46, 54차 점검) 취소(null)만 멈추고 빈 칸('')은 보냄 — 로컬 비밀번호가 없는 SSO 계정은 서버가 OTP 만으로 끄게 됐는데(Auth.php disable2FA) 종전 !password 는 빈 칸이면 요청도 안 보내 화면에서 끌 수 없었음. 일반 계정은 서버가 '비밀번호가 올바르지 않습니다'로 거부(종전과 같은 결과)
         
         const code = await this.promptInput(t('enter_2fa_code', '인증 앱의 6자리 코드를 입력하세요 (또는 백업 코드):'), t('2fa_code_input', '2FA 코드 입력'));
         if (!code) return;
         
-        if (!await this.confirmDelete(t('confirm_disable_2fa', '정말 2단계 인증을 해제하시겠습니까?'), t('disable_2fa', '2FA 해제'))) return;
+        if (!await this.confirmDanger(t('confirm_disable_2fa', '정말 2단계 인증을 해제하시겠습니까?'), t('disable_2fa', '2FA 해제'), t('disable_2fa', '2FA 해제'))) return;   // ★ (2026-11-12 22:47, 105차 개선 CNF-5) 단추 글자 '삭제' → 제목과 같은 '2단계 인증 비활성화'(빨강 그대로) — 종전엔 2FA 해제인데 단추가 '삭제'였음
         
-        const res = await this.api('2fa_disable', { password, code });
+        const res = await this.api('2fa_disable', { password, code: String(code).trim() });   // ★ (2026-11-12 22:16, 105차 개선 CNF-4) 앞뒤 공백을 빼고 보냄(백업 코드 재생성·로그인 2FA 와 같게) — 종전엔 붙여 넣기·자동 완성으로 뒤에 공백이 붙으면 '인증 코드가 올바르지 않습니다'(재현: "063240 "). 서버 판정은 그대로
         
         if (res.success) {
             this.toastResponsive(
@@ -33979,6 +36619,7 @@ const App = {
                 (t('il_2fa_disabled', '2FA 해제 완료')),
                 'success'
             );
+            if (this.user) this.user['2fa_enabled'] = false;   // ★ (2026-11-01 11:48, 39차 점검) 위 enable2FA 와 같음
             this.load2FAStatus();
         } else {
             this.toast(res.error || t('unlock_failed', '해제 실패'), 'error');
@@ -33988,11 +36629,15 @@ const App = {
     // 백업 코드 재생성
     async regenerateBackupCodes() {
         const password = await this.promptPassword(t('enter_password', '비밀번호를 입력하세요:'));
-        if (!password) return;
+        if (password === null) return;   // ★ (2026-11-04 01:46, 54차 점검) disable2FA 주석과 같음 — 빈 칸도 보냄(SSO 계정은 서버가 OTP 만으로 재생성, 일반 계정은 서버가 거부)
         
+        // ★ (2026-11-02 08:57, 41차 점검) 비밀번호만으로 새 백업 코드를 받아 그 코드로 2FA 를 끌 수 있었음(16차 'OTP 필수' 우회) → 인증 앱의 지금 6자리도 물어 code 로 보냄(백업 코드는 받지 않음 — 서버와 약속)
+        const code = await this.promptInput(t('enter_2fa_otp_only', '인증 앱의 6자리 코드를 입력하세요 (백업 코드는 안 됨):'), t('2fa_code_input', '2FA 코드 입력'));
+        if (!code) return;
+
         if (!await this.confirmWarning((t('il_confirm_regen_backup', '새 백업 코드를 생성하면 기존 코드는 사용할 수 없습니다. 계속하시겠습니까?')), t('regenerate_backup_codes', '백업 코드 재생성'), t('regenerate', '재생성'))) return;
-        
-        const res = await this.api('2fa_regenerate_backup', { password });
+
+        const res = await this.api('2fa_regenerate_backup', { password, code: String(code).trim() });
         
         if (res.success) {
             this.toastResponsive(
@@ -34018,7 +36663,12 @@ const App = {
             $('#setting-auto-approve').prop('checked', res.settings.auto_approve === true);
             $('#setting-home-share').prop('checked', res.settings.home_share_enabled !== false);
             $('#setting-password-reset').prop('checked', res.settings.password_reset_enabled === true);
+            // ★ (2026-11-03 13:58, 51차 점검) 목록에 없는 저장값(예: 90분)은 그 값을 선택지로 더해 보임 — 종전엔 빈칸으로 보이고 다른 칸만 바꿔 저장해도 60 으로 덮였음(재현)
+            { const _sv = String(res.settings.session_timeout ?? 60), _se = document.getElementById('setting-session-timeout');
+              if (_se && !Array.from(_se.options).some(o => o.value === _sv)) { const _o = document.createElement('option'); _o.value = _sv; _o.textContent = _sv + ' ' + t('unit_minutes', '분'); _se.appendChild(_o); } }
             $('#setting-session-timeout').val(String(res.settings.session_timeout ?? 60));   // ★ (2026-10-29 21:11, 24차 점검) 0(제한 없음)도 그대로 — 종전 '|| 60' 은 0 을 60 으로 보였음
+            { const _jv = String(res.settings.max_concurrent_jobs ?? '5'), _je = document.getElementById('setting-max-concurrent-jobs');   // ★ (2026-11-03 13:59, 51차 점검) 위 세션 시간과 같음(목록 밖 저장값)
+              if (_je && !Array.from(_je.options).some(o => o.value === _jv)) { const _o = document.createElement('option'); _o.value = _jv; _o.textContent = _jv; _je.appendChild(_o); } }
             $('#setting-max-concurrent-jobs').val(res.settings.max_concurrent_jobs ?? '5');
             $('#setting-external-url').val(res.settings.external_url || '');
             $('#setting-auto-index').prop('checked', res.settings.auto_index === true);
@@ -34140,7 +36790,11 @@ const App = {
             
             // 썸네일 설정 로드
             $('#setting-thumbnail-enabled').prop('checked', settings.thumbnail_enabled !== false);
+            { const _tv = String(settings.thumbnail_size || '200'), _te = document.getElementById('setting-thumbnail-size');   // ★ (2026-11-03 13:58, 51차 점검) 위 세션 시간과 같음(예: 250px)
+              if (_te && !Array.from(_te.options).some(o => o.value === _tv)) { const _o = document.createElement('option'); _o.value = _tv; _o.textContent = _tv + 'px'; _te.appendChild(_o); } }
             $('#setting-thumbnail-size').val(settings.thumbnail_size || '200');
+            { const _pe = document.getElementById('setting-seek-purge-enabled'), _pd = document.getElementById('setting-seek-purge-days');   // ★ (2026-11-13 18:17, 114차 펜닐 요청 — 재생바 장면 자동 지우기) 옛 설정(키 없음)이면 꺼짐·30일, 꺼져 있으면 일수 칸 흐리게
+              if (_pe && _pd) { _pe.checked = settings.seek_purge_enabled === true; _pd.value = String(settings.seek_purge_days || 30); _pd.disabled = !_pe.checked; } }
             $('#setting-ffmpeg-path').val(settings.ffmpeg_path || '');
             $('#setting-ffprobe-path').val(settings.ffprobe_path || '');
             // ★ (2026-08-24) 하드웨어 가속 방식 — 기본값 ''(자동)이라 미설정 환경은 종전과 동일
@@ -34282,6 +36936,8 @@ const App = {
             bg_fit: $('#bg-fit').val() || 'cover',
             thumbnail_enabled: $('#setting-thumbnail-enabled').is(':checked'),
             thumbnail_size: parseInt($('#setting-thumbnail-size').val()) || 200,
+            seek_purge_enabled: $('#setting-seek-purge-enabled').is(':checked'),   // ★ (2026-11-13 18:17, 114차 펜닐 요청 — 재생바 장면 자동 지우기)
+            seek_purge_days: (v => Number.isNaN(v) ? 30 : v)(parseInt($('#setting-seek-purge-days').val(), 10)),   // ★ (2026-11-13 18:17, 114차 펜닐 요청 — 재생바 장면 자동 지우기) 빈 칸·문자는 30, 범위(1~3650)는 서버가 맞춤
             ffmpeg_path: $('#setting-ffmpeg-path').val().trim(),
             ffprobe_path: $('#setting-ffprobe-path').val().trim(),
             hw_accel_mode: $('#setting-hw-accel-mode').val(),
@@ -34326,6 +36982,17 @@ const App = {
             }
             document.title = siteName;
             this._baseDocTitle = siteName;   // ★ 기준 제목 갱신 (파일명 접미사에 옛 이름이 남지 않게)
+            // ★ (2026-11-01 01:06, 35차 전체 점검) OnlyOffice 켜기·끄기를 저장해도 onlyofficeEnabled·onlyofficePdfEnabled 가 새로고침 전까지 옛 값이라 메뉴·PDF 열기가 그대로였음 → 저장 뒤 서버 값으로 다시 읽음
+            this.loadOnlyOfficeConfig();
+            // ★ (2026-11-12 09:16, 96차 SYS-1) 썸네일 켜기·크기와 상태줄 카피라이트도 저장한 값으로(위 OnlyOffice 와 같은 방식) — 종전엔 새로고침 전까지 옛 값이라 끈 뒤 썸네일 요청이 404, 켠 뒤엔 썸네일 0개, 카피라이트는 옛 글자(재현)
+            this.api('site_settings_get', {}, 'GET').then(sr => {
+                if (!sr || !sr.success || !sr.settings) return;
+                this.siteSettings = sr.settings;
+                this.thumbnailEnabled = sr.settings.thumbnail_enabled !== false;
+                this.thumbnailSize = sr.settings.thumbnail_size || 200;
+                const sc = document.getElementById('status-copyright');
+                if (sc) { if (sr.settings.copyright) { sc.textContent = sr.settings.copyright; sc.style.display = ''; } else sc.style.display = 'none'; }
+            }).catch(() => {});
             
             // 경로가 변경되었으면 알림
             if (pathRes.message) {
@@ -34337,7 +37004,7 @@ const App = {
                     'success'
                 );
             }
-            closeModal();
+            this.showSystemSettingsModal();   // ★ (2026-11-13 19:57, 115차 펜닐 요청 — 저장 뒤 창 유지) 종전 closeModal() 대신 창을 열 때 쓰는 함수로 서버에 저장된 값을 다시 채움(예: 114차 장면 보관 일수 0 → 1, 사이트 이름 앞뒤 빈칸) — 종전엔 저장하면 바로 닫혔음. 닫기는 [취소]·[X]
         } else {
             this.toast(res.error || siteRes.error || t('err_save_failed', '저장 실패'), 'error');
         }
@@ -34366,7 +37033,7 @@ const App = {
     
     // WebDAV 접속 안내
     showWebDAVGuide() {
-        const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+        const isKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
         const proto = location.protocol;
         const host = location.host;
         // ★ (2026-10-29 11:23, 20차 점검) 하위 폴더 설치(예: /fs/)도 맞게 — 종전엔 '/mydav.php'(사이트 맨 위)로 고정이라 하위 폴더에 설치하면 틀린 주소를 안내했음
@@ -34545,7 +37212,7 @@ const App = {
 
     async detectNetworkEnv() {
         const panel = document.getElementById('network-share-panel');
-        const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+        const isKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
         panel.innerHTML = `<div style="text-align:center;padding:20px;color:var(--fs-text-3, #999);">${t('loading','로딩 중...')}</div>`;
         
         let res;
@@ -34773,7 +37440,7 @@ const App = {
         if (res.success) {
             if (res.warning && res.cmd) {
                 // Windows: 수동 명령 안내
-                const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+                const isKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
                 this.toast(isKo ? '설정 저장됨. 관리자 CMD에서 아래 명령 실행 필요' : 'Settings saved. Run command in admin CMD', 'warning');
                 alert((isKo ? '관리자 CMD에서 실행하세요:\n\n' : 'Run in admin CMD:\n\n') + res.cmd);
             } else {
@@ -34786,13 +37453,14 @@ const App = {
     },
     
     async removeNetworkShare(shareName) {
-        if (!confirm(t('confirm_remove_share', `"${shareName}" 공유를 삭제하시겠습니까?`))) return;
+        // ★ (2026-11-12 22:47, 105차 개선 CNF-5) 앱 확인 창으로 바꾸고 맨 위에 공유 이름을 보임(동작은 같음: 확인=삭제, 취소=그만둠) — 종전엔 lang 문구에 이름이 없어 "공유를 삭제하시겠습니까?"만 나와 어느 공유인지 알 수 없었음
+        if (!await this.confirmDelete(`<strong style="overflow-wrap:anywhere;word-break:break-word">${this.escapeHtml(shareName)}</strong>\n${t('confirm_remove_share', '공유를 삭제하시겠습니까?')}`)) return;   // ★ (2026-11-13 00:38, 107차 재검토 RGR23-1) 띄어쓰기 없는 긴 이름이 창 오른쪽에서 잘려 끝(확장자 등)이 안 보였음(재현: 영문 120자, 390~1366 폭) → 이름만 줄바꿈(띄어쓰기에서 먼저, 안 되면 아무 곳에서 — 108차 재검토에서 단어 중간에서 먼저 끊기던 것을 바꿈)
         
         const res = await this._networkShareApi('network_share_remove', { share_name: shareName });
         
         if (res.success) {
             if (res.warning && res.message) {
-                const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+                const isKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
                 this.toast(isKo ? '설정 제거됨. CMD에서 수동 삭제 필요' : 'Settings removed. Manual delete needed', 'warning');
                 alert(res.message);
             } else {
@@ -34805,7 +37473,7 @@ const App = {
     },
     
     async syncSambaUsers() {
-        const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+        const isKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
         const statusEl = document.getElementById('smb-sync-status');
         if (statusEl) statusEl.textContent = isKo ? '동기화 중...' : 'Syncing...';
         
@@ -34843,9 +37511,9 @@ const App = {
             from_name: $('#setting-smtp-from-name').val().trim()
         };
         
-        if (!smtp.host || !smtp.user) {
+        if (!smtp.host) {   // ★ (2026-11-11 18:03, 78차 NTF-1) 사용자명 없는 SMTP(인증 없는 릴레이)도 시험 발송 — 43차에 서버는 사용자명 없이 시험하게 고쳤는데 화면 검사가 그 앞에서 막아 요청이 가지 않았음(재현). 받는 주소는 아래 검사가 그대로 확인
             this.toastResponsive(
-                (t('il_smtp_info_msg', 'SMTP 서버와 사용자명을 입력하세요.')),
+                (t('il_smtp_info_msg', 'SMTP 서버 주소를 입력하세요.')),   // ★ (2026-11-11 23:32, 88차 개선 G2-3) 문구만 — 78차에 조건을 서버 주소만 보게 바꿨는데 '서버와 사용자명을 입력하세요' 그대로였음(재현). 조건은 그대로
                 (t('il_smtp_info_title', 'SMTP 정보 필요')),
                 'warning'
             );
@@ -35017,19 +37685,33 @@ const App = {
     async saveSettings() {
         const displayName = $('#settings-display-name').val();
         const email = $('#settings-email').val();
-        
+
+        // ★ (2026-11-02 11:56, 43차 점검) 메일 변경이 세션만으로 돼, 잠깐 얻은 세션으로 메일을 바꾼 뒤 비밀번호 찾기로 계정을 가져갈 수 있었음
+        //   → 일반 사용자 메일 변경(change_email)은 저장 전에 현재 비밀번호를 물어 { email, password } 로 보냄(2FA 켜기 enable2FA 와 같은 방식 — 서버 판정은 api 담당).
+        //   취소하면 아무것도 저장하지 않음. SSO 연결 계정은 로컬 비밀번호가 없을 수 있어 비워 두면 '' 로 보내고 판정은 서버에 맡김
+        let emailPw = null;
+        if (email !== (this.user.email || '') && this.user.role !== 'admin') {
+            emailPw = await this.promptPassword(t('enter_password_verify', '본인 확인을 위해 현재 비밀번호를 입력하세요:'));
+            if (emailPw === null) return;
+            if (!emailPw) {
+                if (!this.user?.sso_provider) { this.toast(t('password_required', '비밀번호를 입력하세요.'), 'warning'); return; }   // ★ (2026-11-02 12:19, 43차 재검토) 비워 두고 확인하면 아무 반응 없이 끝났음(검토 발견)
+                emailPw = '';
+            }
+        }
+
         // 표시 이름 변경
-        const res = await this.api('change_display_name', {
+        // ★ (2026-11-12 01:11, 89차 SET-1) 칸을 안 바꿨으면 보내지 않음 — 종전엔 메일만 바꿔도 창을 연 때(로그인 때) 이름을 늘 보내, 다른 기기·탭에서 먼저 바꾼 표시 이름이 옛 이름으로 되돌아갔음(재현, 원본부터)
+        const res = displayName === (this.user.display_name || '') ? { success: true } : await this.api('change_display_name', {
             display_name: displayName
         });
-        
+
         // 이메일 변경 (관리자는 user_update, 일반 사용자는 change_email)
         let emailRes = { success: true };
         if (email !== (this.user.email || '')) {
             if (this.user.role === 'admin') {
                 emailRes = await this.api('user_update', { id: this.user.id, email });
             } else {
-                emailRes = await this.api('change_email', { email });
+                emailRes = await this.api('change_email', { email, password: emailPw });   // ★ (2026-11-02 11:56, 43차 점검) 위 주석
             }
         }
         
@@ -35043,7 +37725,14 @@ const App = {
             if (emailRes.success) this.toast(t('toast_saved'), 'success');
             else this.toast(emailRes.error || t('save_failed', '저장 실패'), 'error');
         } else {
-            this.toast(res.error, 'error');
+            // ★ (2026-11-01 11:48, 39차 점검) 표시 이름만 거부돼도 메일 결과를 무시해, 메일은 이미 바뀌었는데 화면·this.user 는 옛 값이고 메일 실패 이유도 안 보였음
+            //   → 메일이 바뀌었으면 화면에 반영하고, 메일도 실패했으면 그 이유도 알림
+            if (email !== (this.user.email || '') && emailRes.success) {
+                this.user.email = email;
+                $('#my-info-email').text(this.user.email || '-');
+            }
+            // ★ (2026-11-01 12:30, 39차 점검 재검토) 알림을 연달아 띄우면 뒤 것이 앞 것을 지워 표시 이름 오류가 안 보였음 → 하나로 합침
+            this.toast(emailRes.success ? res.error : (res.error + ' / ' + (emailRes.error || t('save_failed', '저장 실패'))), 'error');
         }
     },
     
@@ -35114,6 +37803,16 @@ const App = {
     // 모달 스택 (이전 모달로 돌아가기 위함)
     modalStack: [],
     
+    // ★ (2026-11-13 01:06, 108차 ARIA-1) 창에 role="dialog" 와 제목(머리줄 h2·h3) 연결(aria-labelledby)만 더함 — 종전엔 창 54개 모두 role·이름이 없어 화면 낭독기가 '대화 상자'·제목을 못 알렸음(재현). 모양·동작·포커스 그대로, aria-modal 은 넣지 않음(README 1734 포커스 결정과 묶여 결정 필요)
+    _ariaDialog(m, baseId) {
+        if (!m || m.hasAttribute('role')) return;
+        m.setAttribute('role', 'dialog');
+        const h = m.querySelector('.modal-header h2, .modal-header h3');
+        if (!h) return;
+        if (!h.id && (m.id || baseId)) h.id = (m.id || baseId) + '-title';
+        if (h.id) m.setAttribute('aria-labelledby', h.id);
+    },
+
     showModal(id, pushToStack = true) {
         // 열려있는 드롭다운 메뉴 닫기 + body에서 원위치 복원
         document.querySelectorAll('.toolbar-action-menu.show, .sort-dropdown-menu.show').forEach(m => {
@@ -35174,6 +37873,7 @@ const App = {
         // 대상 모달 표시 (flex 레이아웃 유지)
         const targetModal = _targetModalEl;
         if (targetModal) {
+            this._ariaDialog(targetModal);   // ★ (2026-11-13 01:06, 108차 ARIA-1) 나중에 만드는 창(WebDAV 안내 등)도 띄울 때 표시
             // 이미 표시 중이면 display 재설정 스킵 (깜빡임 방지)
             if (!_targetAlreadyShown) {
                 targetModal.style.display = 'flex';
@@ -35236,7 +37936,7 @@ const App = {
                     if (_f) _f.classList.toggle('show-bar', visible);
                     if (_z) _z.classList.toggle('show-bar', visible);
                 };
-                _setBars(true);
+                _setBars(!(this._textEditorMode && modal.querySelector('#np-editor-root')));   // ★ (2026-11-11 16:25, 76차 MOB-1) 텍스트 편집 중엔 머리줄을 숨긴 채로 — 종전엔 가로(몰입)에서 머리줄 ✕ 가 편집기 '저장' 자리에 겹쳐, 저장을 누르면 '닫으시겠습니까' 가 떴음(재현). 그 밖의 미리보기는 그대로 보임
                 // ★ (2026-10-21 밤) 재생 중에 가로로 돌려 몰입 모드에 들어왔는데 플레이어 조작부가 이미 숨어 있으면 헤더·푸터도 숨긴 채(엇갈림 방지) — 탭하면 함께 보임
                 {
                     const _sw = modal.querySelector('.video-player-wrap.fsvs-on');
@@ -35267,6 +37967,10 @@ const App = {
         const toggleBars = (e) => {
             if (!modal.classList.contains('preview-immersive')) return;
             if (e.target.closest('button, a, input, select, .modal-close')) return;
+            if (e.target.closest('#np-editor-root textarea')) {   // ★ (2026-11-11 16:25, 76차 MOB-1) 편집기 글 칸을 탭(커서 옮기기)할 때마다 머리줄이 켜졌다 꺼지며 '저장' 위를 덮던 것 — 글 칸 탭은 켜지 않고 숨기기만(도구 줄 빈 곳 탭은 종전대로 토글)
+                ['.modal-header', '.preview-footer', '#preview-image-zoom-bar'].forEach(s => { const el = modal.querySelector(s); if (el) el.classList.remove('show-bar'); });   // ★ (2026-11-11 16:44, 76차 MOB-1 보완) 도구 줄로 불러낸 머리줄은 글 칸을 탭하면 다시 숨음(원본과 같은 숨김 동작)
+                return;
+            }
             // ★ (2026-10-21 밤) 새 껍데기(스킨) 영상이 재생 중이면 헤더·푸터는 플레이어 조작부와 한 몸(아래 _immSkinIdle) — 플레이어 안 탭은 플레이어가 처리하고,
             //   틀 밖(영상 양옆 여백 등) 탭은 플레이어에 보이기/숨기기를 요청(fsvs-wakenow/fsvs-hidenow). [재검토 실측] 종전엔 헤더·푸터를 따로 뒤집어
             //   영상을 탭하면 플레이어는 나타나는데 헤더는 숨는 식으로 엇갈렸다. 멈춤 중·이미지·PDF 등은 종전 토글.
@@ -35481,7 +38185,10 @@ const App = {
         if (!mediaEl || !('wakeLock' in navigator)) return;  // 미지원 브라우저
         try {
             if (mediaEl._wakeLock) return;  // 이미 획득됨
-            mediaEl._wakeLock = await navigator.wakeLock.request('screen');
+            // ★ (2026-10-31 14:09, 34차 후속 개선) 기다리는 사이 정지되거나 영상이 빠지면 받은 잠금을 바로 풂(음악 플레이어와 같은 경쟁 — 정지했는데 화면이 계속 켜져 있던 것)
+            const _mwl = await navigator.wakeLock.request('screen');
+            if (mediaEl.paused || !mediaEl.isConnected || mediaEl._wakeLock) { try { _mwl.release(); } catch(e) {} return; }
+            mediaEl._wakeLock = _mwl;
             // Wake Lock이 시스템에 의해 풀릴 수 있음 (탭 숨김, 최소화 등)
             mediaEl._wakeLock.addEventListener('release', () => {
                 mediaEl._wakeLock = null;
@@ -35493,7 +38200,9 @@ const App = {
                         !mediaEl.paused && 
                         !mediaEl._wakeLock) {
                         try {
-                            mediaEl._wakeLock = await navigator.wakeLock.request('screen');
+                            const _mwl2 = await navigator.wakeLock.request('screen');
+                            if (mediaEl.paused || !mediaEl.isConnected || mediaEl._wakeLock) { try { _mwl2.release(); } catch(e) {} return; }   // ★ (2026-10-31 14:09, 34차 후속 개선)
+                            mediaEl._wakeLock = _mwl2;
                             mediaEl._wakeLock.addEventListener('release', () => {
                                 mediaEl._wakeLock = null;
                             });
@@ -35564,6 +38273,7 @@ const App = {
                 this._showPreviewTimer = null;
             }
             this._pendingPreviewItem = null;
+            try { this._pdfJsCleanup(); } catch (e) {}   // ★ (2026-11-01 11:41, 39차 점검) PDF.js 문서·워커·Observer 정리
 
             // ★ 폴더 동영상 플레이리스트 패널 핸들러 정리 (메모리 누수 방지)
             if (this._fsVpEscHandler) {
@@ -35620,6 +38330,9 @@ const App = {
                 this._vaultArchiveVaultPath = null;
             }
             this._isVaultArchive = false;
+            // ★ (2026-11-01 01:07, 35차 전체 점검) 압축 목록([ ] 이동용)을 비우지 않아, 압축 갤러리를 본 뒤 평범한 사진 미리보기에서도 [ ] 가 예전 압축으로 넘어갔음 → 닫을 때 비움
+            this._folderArchiveFiles = null;
+            this._currentArchiveIdx = null;
             
             // 텍스트 에디터 상태 리셋
             this._textEditorMode = false;
@@ -35772,6 +38485,8 @@ const App = {
                     }
                     // 자막 타이머 정리
                     if (v._subTimer) clearInterval(v._subTimer);
+                    if (v._subFsHandler) { document.removeEventListener('fullscreenchange', v._subFsHandler); document.removeEventListener('webkitfullscreenchange', v._subFsHandler); v._subFsHandler = null; }   // ★ (2026-11-11 23:44, 88차 PLY-1) 자막 전체화면 처리기도 뗌 — 떼는 코드가 위에서 멈춘 자막 타이머 안에만 있어, 자막 있는 영상을 열고 닫거나 넘길 때마다 document 에 2개씩 쌓이고 닫힌 영상·자막이 메모리에 남았음(재현)
+                    if (v._hlsDebugTimer) { clearInterval(v._hlsDebugTimer); v._hlsDebugTimer = null; }   // ★ (2026-11-01 01:57, 36차 전체 점검) HLS 상태 점검 5초 타이머가 창을 닫거나 다른 파일로 가도 남아 쌓였다(떼어진 video·hls 붙잡음) → 함께 정리
                     
                     // ★ blob URL 명시적 revoke (MediaSource blob 해제)
                     // removeAttribute('src')는 blob URL을 revoke하지 않으므로 재생 계속됨
@@ -35908,9 +38623,14 @@ const App = {
                     this.api('vault_preview_cleanup', cleanupData).catch(() => {});
                 }, 300000); // 5분 후 삭제
             }
+            // ★ (2026-11-01 08:02, 37차 기능 점검 재검토) 갤러리 사진별 임시 파일도 5분 뒤 정리
+            if (this._vaultGalleryTemps && this._vaultGalleryTemps.length) {
+                const _gts = this._vaultGalleryTemps; this._vaultGalleryTemps = [];
+                setTimeout(() => { _gts.forEach(d => this.api('vault_preview_cleanup', d).catch(() => {})); }, 300000);
+            }
             // vault 갤러리 이미지 캐시 초기화
             if (this.galleryImages) {
-                this.galleryImages.forEach(img => { if (img._tempUrl) img._tempUrl = null; });
+                this.galleryImages.forEach(img => { if (img._tempUrl) img._tempUrl = null; img._galTempId = null; });
             }
             
             // 모달 위치/크기 인라인 스타일 초기화 (저장된 값은 localStorage에 유지됨)
@@ -35925,6 +38645,9 @@ const App = {
                     modal.style.height = '';
                     const mbody = modal.querySelector('.modal-body');
                     if (mbody) mbody.style.height = '';
+                    // ★ (2026-11-12 23:42, 106차 펜닐 제보 VFIT) 크기 조정 때 붙인 flex:none 도 지움 — 종전엔 높이만 지워, 아무 미리보기나 한 번 크기를 바꾼 뒤 닫고 동영상을 열면
+                    //   body 높이가 내용(영상)에 따라 커져 플레이어가 모달 아래로 넘쳤음(재현: 1366x768 에서 body 614 > 자리 535, 모달 크기를 살짝 바꿔야 맞춰짐)
+                    if (mbody) mbody.style.flex = '';
                     // preview-content 인라인 스타일 초기화 (리사이즈 시 설정된 것)
                     const pc = modal.querySelector('#preview-content');
                     if (pc) {
@@ -35981,7 +38704,20 @@ const App = {
     showConfirmModal(options) {
         return new Promise((resolve, reject) => {
             const { title = t('confirm'), content = '', buttons = [] } = options;
-            
+
+            // ★ (2026-11-02 10:25, 42차 점검) 확인 창이 겹쳐 열리면(EXIF 더블클릭 등) 앞 창의 window 캡처 keydown 처리기 참조를 덮어써
+            //   아무도 못 떼어 이후 Enter·Space 가 전부 막히고 다음 창 Enter 가 옛 단추를 눌렀음 → 새로 열기 전에 앞 처리기를 떼고 앞 약속은 false(취소)로 끝냄
+            if (this.confirmModalKeyHandler) {
+                window.removeEventListener('keydown', this.confirmModalKeyHandler, true);
+                this.confirmModalKeyHandler = null;
+            }
+            if (this.confirmModalResolve) {
+                const _prevResolve = this.confirmModalResolve;
+                this.confirmModalResolve = null;
+                this.confirmModalReject = null;
+                try { _prevResolve(false); } catch (e) {}
+            }
+
             // resolve/reject 함수 저장
             this.confirmModalResolve = resolve;
             this.confirmModalReject = reject;
@@ -36042,12 +38778,16 @@ const App = {
             };
             
             let lastButton = null;
+            const _cnfOpenedAt = performance.now();   // ★ (2026-11-12 22:16, 105차 개선 CNF-1) 창이 뜬 시각 — 아래 단추 클릭에서 씀
             btnList.forEach((btn, index) => {
                 const button = document.createElement('button');
                 button.className = `btn ${btn.class || 'btn-secondary'}`;
                 if (btn.danger) button.classList.add('btn-danger');
                 button.textContent = btn.text;
-                button.onclick = () => {
+                button.onclick = (ev) => {
+                    // ★ (2026-11-12 22:16, 105차 개선 CNF-1) 창이 뜬 지 350ms 안의 마우스·터치 클릭은 무시(키보드·코드 클릭은 detail 0 이라 그대로) — 종전엔 1차 단추를 더블클릭하면
+                    //   같은 자리에 뜬 '최종 확인' 단추까지 눌려 휴지통 비우기·선택 영구 삭제가 한 번에 끝났음(재현: 휴지통 20 → 1). 사람이 창을 읽고 누르는 데는 350ms 보다 오래 걸려 평소 클릭은 같음
+                    if (ev && ev.isTrusted && ev.detail > 0 && performance.now() - _cnfOpenedAt < 350) return;
                     hideConfirmModal();
                     this._confirmRestoreFocus();   // ★ (2026-10-06) resolve 전에 — 2단계 확인이 이어질 때 다음 창이 올바른 '연 버튼'을 본다
                     this.confirmModalResolve = null;
@@ -36072,6 +38812,10 @@ const App = {
                     e.preventDefault();
                     e.stopPropagation();
                     e.stopImmediatePropagation();
+                    if (e.repeat) return;   // ★ (2026-11-12 22:16, 105차 개선 CNF-1) 누르고 있을 때의 자동 반복은 무시(막고 끝냄) — 종전엔 Enter 를 누르고 있으면 1차·최종 확인이 모두 넘어가 휴지통이 비워졌음(재현: 8 → 1). 한 번씩 누르는 Enter·Space 는 같음
+                    // ★ (2026-11-12 19:08, 102차 KBD-1) 포커스가 확인 창 안의 단추(×·취소·삭제)면 그 단추를 누름 — 종전엔 Tab 으로 '취소'·'×'를 골라 Enter·Space 를 눌러도
+                    //   오른쪽 '삭제'가 실행됐음(휴지통 비우기는 '취소'에서 Enter 두 번이면 영구 삭제, 재현). 창 틀·창 밖 포커스는 지금처럼 오른쪽 단추(README 3500 규칙)
+                    if (e.target && e.target.tagName === 'BUTTON' && confirmModal.contains(e.target)) { e.target.click(); return; }
                     if (lastButton) lastButton.click();
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
@@ -36126,6 +38870,9 @@ const App = {
     
     // 확인 모달 취소 (X 버튼 또는 ESC)
     confirmModalCancel() {
+        // ★ (2026-11-01 01:55, 36차 전체 점검) 비밀번호·입력 창(promptPassword/promptInput)을 X·closeModal 로 닫으면 Promise 가 안 끝나고 window 캡처 keydown 처리기가 남아
+        //   다음 창의 Enter 를 가로채(숨은 확인 창이 눌리는 등) 문제가 됐다 → 등록된 prompt 취소를 먼저 불러 처리기 제거·null 로 끝냄
+        if (this._promptCancel) { const _pc = this._promptCancel; this._promptCancel = null; try { _pc(); } catch (e) {} }
         if (this.confirmModalResolve) {
             this.confirmModalResolve(false);
         }
@@ -36325,21 +39072,28 @@ const App = {
             
             const doConfirm = () => {
                 const val = document.getElementById('prompt-password-input')?.value;
-                document.removeEventListener('keydown', keyHandler);
+                window.removeEventListener('keydown', keyHandler, true);
+                if (this._promptCancel === doCancel) this._promptCancel = null;   // ★ (2026-11-01 01:55, 36차 전체 점검) 끝났으니 등록 해제
                 hideModal();
-                resolve(val || null);
+                resolve(typeof val === 'string' ? val : null);   // ★ (2026-11-02 09:45, 41차 재검토) 빈 입력은 '' , 취소는 null 로 구분(2FA 켜기의 SSO 계정 '취소'가 켜기로 진행되던 것). 다른 호출부는 모두 !password 로 봐 동작 같음
             };
             
             const doCancel = () => {
-                document.removeEventListener('keydown', keyHandler);
+                window.removeEventListener('keydown', keyHandler, true);
+                if (this._promptCancel === doCancel) this._promptCancel = null;   // ★ (2026-11-01 01:55, 36차 전체 점검) 끝났으니 등록 해제
                 hideModal();
                 resolve(null);
             };
+            this._promptCancel = doCancel;   // ★ (2026-11-01 01:55, 36차 전체 점검) X·closeModal(confirmModalCancel) 이 이 창을 취소할 수 있게 등록
             
             const keyHandler = (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     e.stopImmediatePropagation();
+                    if (e.repeat) return;   // ★ (2026-11-12 22:16, 105차 개선 CNF-1) 확인 창과 같게 자동 반복 Enter 는 무시 — 종전엔 앞 창에서 누르고 있던 Enter 가 이 창을 빈 값으로 넘겼음
+                    // ★ (2026-11-12 19:42, 103차 개선 X1) 포커스가 이 창 안의 단추(×·취소·확인)면 그 단추를 누름(102차 KBD-1 확인 창과 같은 원칙) — 종전엔 Tab 으로 '취소'·'×'를 골라
+                    //   Enter 를 눌러도 '확인'으로 끝났음(입력 'abc' → "abc", 재현). 입력칸·창 틀 포커스는 지금처럼 확인
+                    if (e.target && e.target.tagName === 'BUTTON' && confirmModal.contains(e.target)) { e.target.click(); return; }
                     doConfirm();
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
@@ -36357,10 +39111,13 @@ const App = {
             const confirmBtn = document.createElement('button');
             confirmBtn.className = 'btn btn-primary';
             confirmBtn.textContent = t('confirm');
-            confirmBtn.onclick = doConfirm;
+            const _cnfOpenedAt = performance.now();   // ★ (2026-11-12 22:16, 105차 개선 CNF-1) 확인 창과 같게 뜬 지 350ms 안의 마우스·터치 '확인' 클릭은 무시 — 종전엔 앞 창 단추 더블클릭의 두 번째 클릭이 이 창을 빈 값으로 넘겼음
+            confirmBtn.onclick = (ev) => { if (ev && ev.isTrusted && ev.detail > 0 && performance.now() - _cnfOpenedAt < 350) return; doConfirm(); };
             footer.appendChild(confirmBtn);
             
-            document.addEventListener('keydown', keyHandler);
+            // ★ (2026-10-31 12:03, 34차 전체 점검) window 캡처로 받음 — 종전엔 문서의 'Enter 막기'(캡처)에 먼저 걸려 Enter 로 확인이 안 됐고,
+            //   막기를 풀면 아래 모달의 확인 단추까지 눌렸음(전역 Enter 처리). 여기서 먼저 받아 멈추면 둘 다 생기지 않음
+            window.addEventListener('keydown', keyHandler, true);
             
             // 모달 표시
             confirmOverlay.style.display = 'flex';
@@ -36421,7 +39178,8 @@ const App = {
             };
             
             const doCancel = () => {
-                document.removeEventListener('keydown', keyHandler);
+                window.removeEventListener('keydown', keyHandler, true);
+                if (this._promptCancel === doCancel) this._promptCancel = null;   // ★ (2026-11-01 01:55, 36차 전체 점검) 끝났으니 등록 해제
                 hideModal();
                 resolve(null);
             };
@@ -36429,15 +39187,21 @@ const App = {
             const doConfirm = () => {
                 const input = document.getElementById('prompt-text-input');
                 const value = input ? input.value : '';
-                document.removeEventListener('keydown', keyHandler);
+                window.removeEventListener('keydown', keyHandler, true);
+                if (this._promptCancel === doCancel) this._promptCancel = null;   // ★ (2026-11-01 01:55, 36차 전체 점검) 끝났으니 등록 해제
                 hideModal();
                 resolve(value);
             };
+            this._promptCancel = doCancel;   // ★ (2026-11-01 01:55, 36차 전체 점검) X·closeModal(confirmModalCancel) 이 이 창을 취소할 수 있게 등록
             
             const keyHandler = (e) => {
                 if (e.key === 'Enter') {
                     e.preventDefault();
                     e.stopImmediatePropagation();
+                    if (e.repeat) return;   // ★ (2026-11-12 22:16, 105차 개선 CNF-1) 확인 창과 같게 자동 반복 Enter 는 무시 — 종전엔 앞 창에서 누르고 있던 Enter 가 이 창을 빈 값으로 넘겼음
+                    // ★ (2026-11-12 19:42, 103차 개선 X1) 포커스가 이 창 안의 단추(×·취소·확인)면 그 단추를 누름(102차 KBD-1 확인 창과 같은 원칙) — 종전엔 Tab 으로 '취소'·'×'를 골라
+                    //   Enter 를 눌러도 '확인'으로 끝났음(입력 'abc' → "abc", 재현). 입력칸·창 틀 포커스는 지금처럼 확인
+                    if (e.target && e.target.tagName === 'BUTTON' && confirmModal.contains(e.target)) { e.target.click(); return; }
                     doConfirm();
                 } else if (e.key === 'Escape') {
                     e.preventDefault();
@@ -36455,10 +39219,13 @@ const App = {
             const confirmBtn = document.createElement('button');
             confirmBtn.className = 'btn btn-primary';
             confirmBtn.textContent = t('confirm');
-            confirmBtn.onclick = doConfirm;
+            const _cnfOpenedAt = performance.now();   // ★ (2026-11-12 22:16, 105차 개선 CNF-1) 확인 창과 같게 뜬 지 350ms 안의 마우스·터치 '확인' 클릭은 무시 — 종전엔 앞 창 단추 더블클릭의 두 번째 클릭이 이 창을 빈 값으로 넘겼음
+            confirmBtn.onclick = (ev) => { if (ev && ev.isTrusted && ev.detail > 0 && performance.now() - _cnfOpenedAt < 350) return; doConfirm(); };
             footer.appendChild(confirmBtn);
             
-            document.addEventListener('keydown', keyHandler);
+            // ★ (2026-10-31 12:03, 34차 전체 점검) window 캡처로 받음 — 종전엔 문서의 'Enter 막기'(캡처)에 먼저 걸려 Enter 로 확인이 안 됐고,
+            //   막기를 풀면 아래 모달의 확인 단추까지 눌렸음(전역 Enter 처리). 여기서 먼저 받아 멈추면 둘 다 생기지 않음
+            window.addEventListener('keydown', keyHandler, true);
             
             // 모달 표시
             confirmOverlay.style.display = 'flex';
@@ -36516,6 +39283,7 @@ const App = {
         fileList.addEventListener('dragover', e => {
             const item = e.target.closest('.file-item[data-is-dir="true"]');
             if (!item) return;
+            if (!this._ddInternal) return;   // ★ (2026-11-11 23:06, 87차 DND-3) 바탕화면 파일을 끌어오면 폴더를 강조하지 않음(놓으면 24차 의도대로 지금 폴더에 올라가는데, 폴더가 강조돼 그 안에 올라가는 것처럼 보였음 — 재현). 업로드는 위 file-area 처리 그대로
             e.preventDefault();
             e.dataTransfer.dropEffect = e.ctrlKey ? 'copy' : 'move';
             item.classList.add('drag-over');
@@ -36811,7 +39579,8 @@ const App = {
         
         const res = await this.api('detailed_info', {
             storage_id: storageId,
-            path: item.path
+            path: item.path,
+            show_hidden: this._isShowHidden() ? 1 : 0   // ★ (2026-10-30 23:01, 펜닐 요청) 폴더 '내용' 개수를 목록에 보이는 기준으로(서버 countVisibleItems)
         }, 'GET');
         
         if (!res.success) {
@@ -36969,6 +39738,14 @@ const App = {
         return this.escapeHtml(JSON.stringify(String(v ?? '')));
     },
     
+    // ★ (2026-11-03 21:40, 52차 점검) 기본 스토리지 이름(내 파일·공유 폴더)을 화면 언어로 — 사이드바 translateStorageName 과 같은 기준(종류가 없는 기록용, 이름만으로)
+    _storageDisplayName(n) {
+        const v = String(n || '');
+        if (v === '내 파일' || v === 'My Files') return t('my_files', 'My Files');
+        if (v === '공유 폴더' || v === 'Shared Folder') return t('shared_folder', 'Shared Folder');
+        return v;
+    },
+
     escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = text;
@@ -36979,6 +39756,16 @@ const App = {
         //   호출 341곳 중 340곳이 innerHTML 경유이고, 엔티티는 텍스트 노드에서도
         //   디코드되므로 텍스트 문맥의 화면 표기는 전혀 달라지지 않는다(검증 완료).
         return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    },
+    
+    // ★ (2026-11-02 15:17, 44차 재검토) 지금 시각(ct)에 맞은 cue 들을 한 덩어리 글자로 — 여럿 맞으면 바로 지금 끝나는 cue(끝=다음 시작 경계)는 빼고,
+    //   태그를 뺀 글자가 같은 줄은 한 번만(ASS 레이어 중복). 하나만 맞으면 종전과 같음(끝 시각 포함)
+    _subJoinCues(hits, ct, sk, ek, sep) {
+        if (!hits || !hits.length) return '';
+        const live = hits.length > 1 ? hits.filter(c => ct < c[ek]) : hits;
+        const out = [], seen = new Set();
+        for (const c of (live.length ? live : hits.slice(0, 1))) { const k = String(c.text).replace(/<[^>]*>/g, '').trim(); if (seen.has(k)) continue; seen.add(k); out.push(c.text); }
+        return out.join(sep);
     },
     
     // ★ (2026-10-29 09:10, 20차) 자막 한 줄을 화면용 HTML 로 — 전부 escape 한 뒤 속성 없는 <i> <b> <u> 만 되살림.
@@ -37209,6 +39996,7 @@ const App = {
         // 시계 스타일 초기화
         const clockStyle = localStorage.getItem('clock_style') || '0';
         $('.clock-style-item').removeClass('active');
+        if (!document.querySelector('.clock-style-item[data-clock="' + CSS.escape(clockStyle) + '"]')) return;   // ★ (2026-11-12 19:50, 103차 개선 X3) 이 브라우저에 남은 모르는 값(종전 판이 넣은 'x"]' 등)이면 표시만 건너뜀 — 종전엔 선택자 오류로 앱 시작(init)이 멈췄음(재현)
         $(`.clock-style-item[data-clock="${clockStyle}"]`).addClass('active');
     },
     
@@ -37254,7 +40042,7 @@ const App = {
         document: ['pdf', 'txt', 'md', 'html', 'htm'],
         code: ['php', 'js', 'css', 'json', 'xml', 'xsl', 'sql', 'py', 'java', 'c', 'cc', 'cpp', 'cxx', 'cs', 'h', 'hpp', 'ps1', 'bat', 'cmd', 'vbs', 'sh', 'bash', 'yml', 'yaml', 'ini', 'conf', 'log', 'csv', 'tsv', 'reg', 'inf', 'cfg', 'env', 'properties', 'toml', 'ts', 'tsx', 'jsx', 'vue', 'rb', 'go', 'rs', 'swift', 'kt', 'lua', 'pas', 'asm', 'gradle', 'makefile', 'dockerfile', 'srt', 'vtt', 'ass', 'ssa', 'smi', 'sub', 'nfo', 'cue', 'm3u8', 'lst', 'rpt', '1st', 'text', 'key', 'less', 'scss', 'gitignore', 'htaccess'],
         hwp: ['hwp', 'hwpx'],
-        office: ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'],
+        office: ['doc', 'docx', 'xls', 'xlsx', 'ods', 'ppt', 'pptx'],   // ★ (2026-10-30 11:30) ods 추가 — 오피스 뷰어(SheetJS)가 엶
         archive: ['zip', 'rar', '7z', 'tar', 'gz', 'tgz', 'bz2', 'tbz2', 'xz', 'iso', 'cab', 'wim', 'arj', 'lzh', 'rpm', 'deb', 'dmg', 'msi', 'nsis', '001']
     },
     
@@ -37331,6 +40119,7 @@ const App = {
             
             const isChunked = vaultItem?._chunked || item._chunked;
             const totalChunks = vaultItem?._totalChunks || item._totalChunks || 1;
+            if (vaultItem?._chunkMismatch || item._chunkMismatch) throw new Error(t('vault_err_incomplete_file', '파일 조각 일부가 없습니다(업로드가 중간에 끊긴 파일). 이 파일은 온전히 풀 수 없습니다.'));   // ★ (2026-11-01 09:40, 38차 점검) 조각이 모자란 압축을 잘린 채 임시 업로드하던 것 — 먼저 막음
             
             let decrypted;
             
@@ -37392,12 +40181,12 @@ const App = {
                 if (!upJson.success) throw new Error(upJson.error || 'Upload failed');
                 
                 if (list && totalUpChunks > 1 && _zt === this._zipLoadSeq) {
-                    list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #999);">📦 ${t('uploading', '업로드 중...')} (${Math.round((i+1)/totalUpChunks*100)}%)</div>`;
+                    list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #999);">📦 ${t('nt_uploading', '업로드 중...')} (${Math.round((i+1)/totalUpChunks*100)}%)</div>`;   // ★ (2026-11-02 10:32, 42차 점검) uploading 값에 📤 가 붙어 '📦 📤 업로드 중...'·en 'Uploading'(점 없음) → 이미 있는 nt_uploading
                 }
             }
             
             // 4. archive_list API 호출 (vault_temp_id 포함)
-            const res = await this.api('archive_list', { 
+            let res = await this.api('archive_list', { 
                 storage_id: storageId, 
                 path: item.name,
                 vault_temp_id: tempId
@@ -37406,18 +40195,47 @@ const App = {
                 this.api('vault_preview_cleanup', { storage_id: storageId, path: vaultPath, temp_id: tempId }).catch(() => {});
                 return;
             }
+            // ★ (2026-11-01 07:26, 37차 기능 점검) 헤더 암호화 압축(파일 이름까지 암호화한 7z 등)은 success:true + need_password 로 오는데 보관함 경로는 그걸 보지 않아
+            //   암호 창 없이 '0개 항목' 빈 목록이었다 → 일반 경로(_loadZipList)처럼 암호 창 → 같은 임시 파일(vault_temp_id)로 다시 목록
+            let _vaPw = '';
+            while (res && res.success && res.need_password) {
+                const pwd = await this.showZipPasswordModal({
+                    title: t('archive_preview_password_title', '🔐 압축 파일 암호'),
+                    message: res.wrong_password
+                        ? t('zip_wrong_password', '암호가 틀립니다. 다시 입력하세요.')
+                        : t('archive_password_required', '암호가 걸린 압축 파일입니다. 암호를 입력하세요.')
+                });
+                if (pwd === null || pwd === '' || _zt !== this._zipLoadSeq) {
+                    this.api('vault_preview_cleanup', { storage_id: storageId, path: vaultPath, temp_id: tempId }).catch(() => {});
+                    if (list && _zt === this._zipLoadSeq) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-text-3, #888);">🔒 ${t('archive_password_cancelled', '암호 입력이 취소되었습니다.')}</div>`;
+                    return;
+                }
+                _vaPw = pwd;
+                res = await this.api('archive_list', { storage_id: storageId, path: item.name, vault_temp_id: tempId, password: pwd }, 'GET');
+                if (_zt !== this._zipLoadSeq) {
+                    this.api('vault_preview_cleanup', { storage_id: storageId, path: vaultPath, temp_id: tempId }).catch(() => {});
+                    return;
+                }
+            }
             
             if (!res.success) {
-                if (list && _zt === this._zipLoadSeq) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-fg-err, #d32f2f);">❌ ${this.escapeHtml(res.error || 'Error')}</div>`;
+                if (list && _zt === this._zipLoadSeq) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-fg-err, #d32f2f);">❌ ${this.escapeHtml(res.error || t('unknown_error', '알 수 없는 오류'))}</div>`;   // ★ (2026-11-02 10:32, 42차 점검) 대체 문구 'Error' 고정 → unknown_error
+                // ★ (2026-11-01 11:49, 39차 점검) 목록 단계가 실패하면(손상 압축·7z 없음 등) 방금 올린 복호화 임시 파일을 지우지 않았음(다른 실패 경로는 모두 정리) → 정리
+                this.api('vault_preview_cleanup', { storage_id: storageId, path: vaultPath, temp_id: tempId }).catch(() => {});
                 return;
             }
             this._zipItems = res.items || [];
             this._zipCurrentPath = '';
             // ★ (2026-10-29 18:52, 22차 점검) 다른 압축을 열었으면 이전 압축 암호를 비움(_loadZipList 20차와 같음) — 종전엔 남은 암호로 이 압축 항목을 열어 '암호 틀림'이 났음
             if (this._zipArchivePath !== item.name || this._zipStorageId !== storageId || !this._isVaultArchive) this._zipArchivePassword = '';
+            if (_vaPw) this._zipArchivePassword = _vaPw;   // ★ (2026-11-01 07:26, 37차 기능 점검) 방금 맞춘 암호를 미리보기·풀기에 재사용(_loadZipList 와 같게)
             this._zipStorageId = storageId;
             this._zipArchivePath = item.name;
             this._isVaultArchive = true;
+            // ★ (2026-11-01 11:49, 39차 점검) 앞 보관함 압축의 임시 id 를 정리 없이 덮어썼음 → 다르면 앞 것을 정리한 뒤 교체
+            if (this._vaultArchiveTempId && this._vaultArchiveTempId !== tempId) {
+                this.api('vault_preview_cleanup', { storage_id: this._vaultArchiveStorageId, path: this._vaultArchiveVaultPath, temp_id: this._vaultArchiveTempId }).catch(() => {});
+            }
             this._vaultArchiveTempId = tempId;
             this._vaultArchiveStorageId = storageId;
             this._vaultArchiveVaultPath = vaultPath;
@@ -37441,7 +40259,7 @@ const App = {
             if (tempId) {
                 this.api('vault_preview_cleanup', { storage_id: storageId, path: vaultPath, temp_id: tempId }).catch(() => {});
             }
-            if (list && _zt === this._zipLoadSeq) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-fg-err, #d32f2f);">❌ ${this.escapeHtml(e.message || 'Error')}</div>`;
+            if (list && _zt === this._zipLoadSeq) list.innerHTML = `<div style="text-align:center;padding:40px;color:var(--fs-fg-err, #d32f2f);">❌ ${this.escapeHtml(e.message || t('unknown_error', '알 수 없는 오류'))}</div>`;   // ★ (2026-11-02 10:32, 42차 점검) 대체 문구 'Error' 고정 → unknown_error
         }
     },
     
@@ -37480,9 +40298,10 @@ const App = {
             if (!res.success) {
                 const errList = document.getElementById('archive-list');
                 if (errList) {
+                    // ★ (2026-11-02 10:32, 42차 점검) 대체 문구 'Error' 고정 → unknown_error
                     errList.innerHTML = `<div style="text-align:center;padding:40px;">
-                        <div style="color:var(--fs-fg-err, #d32f2f);margin-bottom:10px;">❌ ${this.escapeHtml(res.error || 'Error')}</div>
-                        <button onclick="App._loadZipList(${storageId},${this._jsArg(path)})" style="padding:6px 16px;border:1px solid var(--fs-border-2, #ccc);border-radius:4px;background:var(--fs-surface-2, #f5f5f5);cursor:pointer;">🔄 ${t('retry', '다시 시도')}</button>
+                        <div style="color:var(--fs-fg-err, #d32f2f);margin-bottom:10px;">❌ ${this.escapeHtml(res.error || t('unknown_error', '알 수 없는 오류'))}</div>
+                        ${res.code === 'remote_unsupported' ? '' : `<button onclick="App._loadZipList(${storageId},${this._jsArg(path)})" style="padding:6px 16px;border:1px solid var(--fs-border-2, #ccc);border-radius:4px;background:var(--fs-surface-2, #f5f5f5);cursor:pointer;">🔄 ${t('retry', '다시 시도')}</button>`}<!-- ★ (2026-11-15 01:58, 155차) 원격 스토리지 미지원 안내에는 '다시 시도'를 빼 둠(눌러도 같은 안내) -->
                     </div>`;
                 }
                 return;
@@ -37725,10 +40544,16 @@ const App = {
             if (f.isDir || f.is_dir) return false;
             const ext = (f.extension || f.name.split('.').pop() || '').toLowerCase();
             return archiveExts.includes(ext);
-        }).map(f => ({ name: f.name, path: f.path, storageId: f.storageId || this.currentStorage, _vault: f._vault, _uuid: f._uuid, _chunked: f._chunked, _totalChunks: f._totalChunks }));
+        }).map(f => ({ name: f.name, path: f.path, storageId: f.storageId || this.currentStorage, _vault: f._vault, _uuid: f._uuid, _chunked: f._chunked, _totalChunks: f._totalChunks, _chunkMismatch: f._chunkMismatch }));   // ★ (2026-11-01 09:40, 38차 점검) 끊긴 조각 표시도 넘김([ ] 이동 때 검사)
         this._currentArchiveIdx = this._folderArchiveFiles.findIndex(f => f.name === archivePath || f.path === archivePath || f.name === archivePath.split('/').pop());
         
         this.showPreview(fakeItem);
+        // ★ (2026-11-11 23:28, 88차 개선 G3-1) 암호 항목 그림을 못 불러오면(틀린 암호 → 서버 404) 저장해 둔 암호를 버려 다음 누름에서 다시 묻게 — 종전엔 틀린 암호 '12' 가 남아 같은 압축을 다시 열어도 묻지 않고 계속 404(재현)
+        if (targetItem && targetItem.encrypted && this._zipArchivePassword) {
+            const _g31Pw = this._zipArchivePassword, _g31Img = document.querySelector('#preview-content img.preview-image');
+            const _g31Err = () => { if (this._zipArchivePassword === _g31Pw && this._zipArchivePath === archivePath && this._zipStorageId === storageId) this._zipArchivePassword = ''; };
+            if (_g31Img) { _g31Img.addEventListener('error', _g31Err, { once: true }); _g31Img.addEventListener('load', () => _g31Img.removeEventListener('error', _g31Err), { once: true }); }   // 잘 불러온 뒤(창 닫을 때 src 비우기의 error)는 보지 않음
+        }
     },
     
     // [ ] 키로 다른 압축파일의 이미지로 이동
@@ -37745,22 +40570,22 @@ const App = {
         if (!target) return;
         
         this._switchingArchive = true;
+        const _seq = this._zipLoadSeq;   // ★ (2026-11-01 01:07, 35차 전체 점검) 넘기는 도중 창을 닫거나 다른 압축을 열면(_zipLoadSeq 증가) 늦은 결과로 상태·임시 파일을 새로 세우지 않게
         
+        // ★ (2026-10-31 13:41, 34차 후속 개선) 새 압축을 확인하기 전에 앞 압축의 보관함 임시 파일을 지우고 _isVaultArchive 를 꺼서, 새 압축에 이미지가 없거나
+        //   실패하면 그대로 보이는 앞 갤러리가 깨졌고(임시 파일 삭제됨), _currentArchiveIdx 도 그대로라 이미지 없는 압축 너머로 넘어갈 수 없었음 —
+        //   앞 임시 파일 정리·상태 교체는 새 압축 확인이 성공한 뒤로 옮기고, 실패·이미지 없음이면 새로 만든 임시 파일만 지움.
+        //   이미지가 없으면 _currentArchiveIdx 는 그 압축으로 옮겨 다음 [ ] 가 그 너머로 가게 함
+        let _newTempId = null, _newTempStorageId = null, _newTempVaultPath = null;
+        const _cleanupNewTemp = () => {
+            if (!_newTempId) return;
+            this.api('vault_preview_cleanup', { storage_id: _newTempStorageId, path: _newTempVaultPath, temp_id: _newTempId }).catch(() => {});
+            _newTempId = null;
+        };
         try {
-            // 이전 vault 임시파일 정리
-            if (this._vaultArchiveTempId) {
-                this.api('vault_preview_cleanup', { 
-                    storage_id: this._vaultArchiveStorageId, 
-                    path: this._vaultArchiveVaultPath, 
-                    temp_id: this._vaultArchiveTempId 
-                }).catch(() => {});
-                this._vaultArchiveTempId = null;
-            }
-            
             const storageId = target.storageId;
             let archivePath = target.path || target.name;
             let vaultParam = '';
-            this._isVaultArchive = false; // 기본값 초기화
             
             // Vault 파일이면 복호화 → 임시업로드
             if (target._vault && target._uuid) {
@@ -37770,6 +40595,7 @@ const App = {
                 
                 const isChunked = target._chunked;
                 const totalChunks = target._totalChunks || 1;
+                if (target._chunkMismatch) throw new Error(t('vault_err_incomplete_file', '파일 조각 일부가 없습니다(업로드가 중간에 끊긴 파일). 이 파일은 온전히 풀 수 없습니다.'));   // ★ (2026-11-01 09:40, 38차 점검) 조각이 모자란 압축을 잘린 채 올리던 것
                 let decrypted;
                 
                 if (isChunked && totalChunks > 1) {
@@ -37792,7 +40618,12 @@ const App = {
                     decrypted = await E2ECrypto.decrypt(key, await response.arrayBuffer());
                 }
                 
+                if (_seq !== this._zipLoadSeq) { this._switchingArchive = false; return; }   // ★ (2026-11-01 01:07, 35차 전체 점검) 복호화 중 창을 닫음 — 올리지 않고 끝
                 const tempId = E2ECrypto.generateUUID();
+                // ★ (2026-11-01 01:07, 35차 전체 점검) 임시 id 를 첫 조각을 올리기 전에 넣음 — 종전엔 다 올린 뒤에만 넣어 중간 조각 실패 때 _cleanupNewTemp 가 부분 임시 파일을 지우지 못했음
+                _newTempId = tempId;
+                _newTempStorageId = storageId;
+                _newTempVaultPath = vaultPath;
                 const decArr = new Uint8Array(decrypted);
                 const CHUNK_SIZE = 4 * 1024 * 1024;
                 const totalUpChunks = Math.ceil(decArr.byteLength / CHUNK_SIZE);
@@ -37812,32 +40643,62 @@ const App = {
                     if (!upJson.success) throw new Error(upJson.error || 'Upload failed');
                 }
                 
-                this._vaultArchiveTempId = tempId;
-                this._vaultArchiveStorageId = storageId;
-                this._vaultArchiveVaultPath = vaultPath;
-                this._isVaultArchive = true;
                 vaultParam = `&vault_temp_id=${tempId}`;
                 archivePath = target.name;
             }
             
             // 아카이브 목록 조회
             const params = { storage_id: storageId, path: archivePath };
-            if (this._vaultArchiveTempId) params.vault_temp_id = this._vaultArchiveTempId;
+            if (_newTempId) params.vault_temp_id = _newTempId;
             const res = await this.api('archive_list', params, 'GET');
+            if (_seq !== this._zipLoadSeq) { _cleanupNewTemp(); this._switchingArchive = false; return; }   // ★ (2026-11-01 01:07, 35차 전체 점검) 그사이 창을 닫음 — 새 임시 파일만 지우고 끝
             if (!res.success || !res.items) throw new Error(res.error || 'Failed');
             
             // 이미지 파일 찾기
             const imageExts2 = ['jpg','jpeg','png','gif','webp','bmp','svg'];
-            const images = res.items.filter(item => {
+            let images = res.items.filter(item => {
                 if (item.is_dir || item.encrypted) return false;
                 const ext = item.name.split('.').pop().toLowerCase();
                 return imageExts2.includes(ext);
             });
+            // ★ (2026-11-04 01:24, 54차 점검) 그림이 모두 암호 항목이면 암호를 물어 보여 줌(목록에서 직접 열 때와 같음) — 종전엔 '이미지 없음'으로 건너뛰었음(재현). 취소하면 종전처럼 건너뜀
+            let _swPw = '', _swCancelled = false;
+            if (images.length === 0) {
+                const _encImgs = res.items.filter(item => !item.is_dir && item.encrypted && imageExts2.includes(item.name.split('.').pop().toLowerCase()));
+                if (_encImgs.length > 0) {
+                    const pwd = await this.showZipPasswordModal({
+                        title: t('archive_preview_password_title', '🔐 압축 파일 암호'),
+                        message: t('archive_password_required', '암호가 걸린 압축 파일입니다. 암호를 입력하세요.')
+                    });
+                    if (_seq !== this._zipLoadSeq) { _cleanupNewTemp(); this._switchingArchive = false; return; }
+                    if (pwd) { _swPw = pwd; images = _encImgs; } else { _swCancelled = true; }
+                }
+            }
             
             if (images.length === 0) {
-                this.toast(`📦 ${target.name}: ` + t('no_images', '이미지 없음'), 'info');
+                _cleanupNewTemp();
+                this._currentArchiveIdx = newIdx;
+                if (!_swCancelled) this.toast(`📦 ${target.name}: ` + t('no_images', '이미지 없음'), 'info');   // ★ 54차 재검토 — 암호 창을 취소했을 땐 '이미지 없음' 알림 없이 건너뜀
                 this._switchingArchive = false;
                 return;
+            }
+            
+            // 앞 압축의 보관함 임시 파일 정리 후 새 압축 상태로 교체(새 압축 확인이 끝난 뒤)
+            if (this._vaultArchiveTempId) {
+                this.api('vault_preview_cleanup', { 
+                    storage_id: this._vaultArchiveStorageId, 
+                    path: this._vaultArchiveVaultPath, 
+                    temp_id: this._vaultArchiveTempId 
+                }).catch(() => {});
+                this._vaultArchiveTempId = null;
+            }
+            this._isVaultArchive = false;
+            if (_newTempId) {
+                this._vaultArchiveTempId = _newTempId;
+                this._vaultArchiveStorageId = _newTempStorageId;
+                this._vaultArchiveVaultPath = _newTempVaultPath;
+                this._isVaultArchive = true;
+                _newTempId = null;   // 이제 this 쪽이 소유(창 닫을 때·다음 전환 때 정리)
             }
             
             // 상태 업데이트
@@ -37846,7 +40707,9 @@ const App = {
             if (this._zipArchivePath !== archivePath || this._zipStorageId !== storageId) this._zipArchivePassword = '';   // ★ (2026-10-29 21:36, 24차 점검) 다른 압축으로 넘기면 앞 압축 암호를 비움(20·22차와 같게, 누락) — 종전엔 앞 암호가 새 압축 미리보기 주소에 붙었음
             this._zipStorageId = storageId;
             this._zipArchivePath = archivePath;
+            if (_swPw) this._zipArchivePassword = _swPw;   // ★ 54차 — 위에서 받은 암호
             this._currentArchiveIdx = newIdx;
+            this._previewArchiveEntry = true;   // ★ (2026-11-01 07:18, 37차 기능 점검) 다른 압축 그림으로 넘겨도 압축 안 항목 — ⓘ·다운로드 막음
             
             // 첫 번째(]) 또는 마지막([) 이미지
             const imgIdx = 0; // 항상 첫 번째 이미지부터
@@ -37877,6 +40740,10 @@ const App = {
             this.updateGalleryCounter();
             
         } catch (e) {
+            _cleanupNewTemp();
+            // ★ (2026-11-01 01:55, 36차 전체 점검) 목록을 못 읽는 압축(손상 등)에서 인덱스를 그대로 둬 [ ] 로 그 너머에 갈 수 없었다
+            //   → '이미지 없음'처럼 실패해도 그 압축으로 인덱스를 옮김(창을 닫았거나 다른 압축을 연 경우 — _seq 다름 — 는 제외)
+            if (_seq === this._zipLoadSeq) this._currentArchiveIdx = newIdx;
             this.toast(e && e.message ? tf('nt_error_with', {msg: e.message}, `오류: ${e.message}`) : t('nt_error_generic', '오류가 발생했습니다.'), 'error');
         }
         this._switchingArchive = false;
@@ -37934,7 +40801,7 @@ const App = {
                 html += `<td style="padding:8px;"><code>${this.escapeHtml(ap.prefix)}</code></td>`;
                 html += `<td style="padding:8px;">${created}</td>`;
                 html += `<td style="padding:8px;">${lastUsed}</td>`;
-                html += `<td style="padding:8px;text-align:center;"><button class="btn btn-sm btn-danger" onclick="App.deleteAppPassword('${ap.id}')">🗑️</button></td>`;
+                html += `<td style="padding:8px;text-align:center;"><button class="btn btn-sm btn-danger" onclick="App.deleteAppPassword('${ap.id}')" aria-label="${t('delete','삭제')}">🗑️</button></td>`;   // ★ (2026-11-13 01:08, 108차 ARIA-4) 그림만 있는 삭제 단추에 이름 — 종전엔 이름이 비었음(재현)
                 html += `</tr>`;
             }
             html += '</tbody></table>';
@@ -37945,14 +40812,25 @@ const App = {
     // 앱 비밀번호 생성
     async createAppPassword() {
         const label = ($('#app-password-label').val() || '').trim() || 'WebDAV';
+        // ★ (2026-11-04) 55차 A2 — 현재 비밀번호 확인(2FA 켜기와 같은 기준: 빈 칸은 SSO 연결 계정만 '' 로 보내고 판정은 서버에 맡김)
+        const _apPwEl = document.getElementById('app-password-current');
+        const password = _apPwEl ? _apPwEl.value : '';
+        if (_apPwEl && !password && !this.user?.sso_provider) { this.toast(t('password_required', '비밀번호를 입력하세요.'), 'warning'); _apPwEl.focus(); return; }
+        // ★ (2026-11-02 11:53, 43차 점검) 응답 전 다시 누르면 앱 비밀번호가 둘 생기고 화면엔 마지막 것만 보였음 → 요청 동안 만들기 단추를 잠금
+        if (this._appPwCreating) return;
+        this._appPwCreating = true;
+        const _apBtn = document.getElementById('btn-create-app-password');
+        if (_apBtn) _apBtn.disabled = true;
         try {
-            const res = await this.api('app_password_create', { label });
+            const res = await this.api('app_password_create', { label, password });
+            if (!res) return;
             if (res.success) {
                 this._appPwCopied = false;
                 $('#app-password-value').text(res.password);
                 $('#btn-copy-app-password').html('📋 ' + t('copy', '복사')).css('background', '');
                 $('#app-password-created').show();
                 $('#app-password-label').val('');
+                if (_apPwEl) _apPwEl.value = '';
                 this.loadAppPasswords();
                 // 스크롤하여 생성된 비밀번호가 보이게
                 document.getElementById('app-password-created')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -37961,6 +40839,9 @@ const App = {
             }
         } catch (e) {
             this.toast(t('nt_error_generic', '오류가 발생했습니다.'), 'error');
+        } finally {
+            this._appPwCreating = false;   // ★ (2026-11-02 11:53, 43차 점검) 위 잠금 풂
+            if (_apBtn) _apBtn.disabled = false;
         }
     },
     
@@ -37981,9 +40862,12 @@ const App = {
         if (!confirmed) return;
         try {
             const res = await this.api('app_password_delete', { id });
-            if (res.success) {
+            if (res && res.success) {
                 this.toast(t('deleted', '삭제되었습니다.'), 'success');
                 this.loadAppPasswords();
+            } else if (res) {
+                this.toast(res.error || t('delete_failed', '삭제 실패'), 'error');   // ★ (2026-11-02 11:53, 43차 점검) 실패해도 아무 알림이 없었음
+                this.loadAppPasswords();   // ★ (2026-11-15 01:31, 153차) 이미 지워진 항목이면 목록을 새로 그림(서버가 없는 id 를 실패로 알리게 바뀜)
             }
         } catch (e) {}
     },
@@ -38137,6 +41021,9 @@ const App = {
     },
 
     _showPreviewImpl(item) {
+        // ★ (2026-11-01 01:56, 36차 전체 점검) 셔플 '재생 중 재생성이면 순서 유지'는 플레이어가 살아 있었는지로 판단하는데, 아래 정리에서 먼저 destroy 해 늘 false 였다
+        //   → 정리 전에 담아 두고 오디오 플레이어를 만들 때 넘김
+        const _audioWasOpen = !!this._fsAudioPlayer;
         // ★ (2026-09-30) 크기 보충 — 두 번 탭·더블클릭·Enter 로 열 때 항목을 { path, name, isDir } 로 새로 만들어 size 가 빠졌다
         //   (펜닐 로그 preview_defer itemSize: undefined). 현재 목록(this.files — 서버가 size 를 정수 바이트로 줌)에서 같은 경로를 찾아 복사본에
         //   채운다(넘겨받은 객체는 안 바꿈, 크기가 이미 있는 항목은 그대로). 휴대폰 500MB 판단(원본 미루기·파일 정보 실패 시 대비 경로)이 크기를 쓴다.
@@ -38244,6 +41131,7 @@ const App = {
                         v._pipeSid = null;
                     }
                     if (v._subTimer) { try { clearInterval(v._subTimer); } catch(e) {} }
+                    if (v._subFsHandler) { document.removeEventListener('fullscreenchange', v._subFsHandler); document.removeEventListener('webkitfullscreenchange', v._subFsHandler); v._subFsHandler = null; }   // ★ (2026-11-11 23:44, 88차 PLY-1) 자막 전체화면 처리기도 뗌 — 떼는 코드가 위에서 멈춘 자막 타이머 안에만 있어, 자막 있는 영상을 열고 닫거나 넘길 때마다 document 에 2개씩 쌓이고 닫힌 영상·자막이 메모리에 남았음(재현)
                     v._switchingToTranscode = true; // 에러 핸들러 방지
                     
                     // 이제 src 제거 (다운로드 중단)
@@ -38344,6 +41232,8 @@ const App = {
         
         this.currentPreviewPath = item.path;
         this.currentPreviewStorageId = storageId; // 미리보기 스토리지 ID 저장
+        // ★ (2026-11-01 07:18, 37차 기능 점검) 압축 안 항목은 path 가 '압축 안 경로'라 ⓘ(EXIF)·개인정보 삭제·다운로드가 스토리지의 같은 경로 진짜 파일을 대상으로 했다 → 표시해 두고 그 버튼들을 막음
+        this._previewArchiveEntry = String(item._vaultBlobUrl || '').indexOf('action=archive_preview') !== -1;
         const url = item._vaultBlobUrl || `api.php?action=download&storage_id=${storageId}&path=${encodeURIComponent(item.path)}&inline=1`;
         
         // 이미지인 경우 갤러리 모드 설정
@@ -38354,8 +41244,10 @@ const App = {
                 this._setupArchiveImageGallery();
             } else if (item._vaultBlobUrl) {
                 // vault 이미지: vault 전용 갤러리
+                this._folderArchiveFiles = null; this._currentArchiveIdx = null;   // ★ (2026-11-01 01:07, 35차 전체 점검) 압축 갤러리가 아니면 [ ] 압축 이동 목록을 비움(예전 압축으로 넘어가던 것)
                 this._setupVaultImageGallery(item, storageId);
             } else {
+                this._folderArchiveFiles = null; this._currentArchiveIdx = null;   // ★ (2026-11-01 01:07, 35차 전체 점검) 위와 같음
                 this.setupImageGallery(item, storageId);
             }
         } else {
@@ -38376,6 +41268,7 @@ const App = {
         if (window._startTranscodeTimer) { clearTimeout(window._startTranscodeTimer); window._startTranscodeTimer = null; }
         if (window._transcodeAbort) { window._transcodeAbort.abort(); window._transcodeAbort = null; }
         if (this._mediaInfoAbort) { this._mediaInfoAbort.abort(); this._mediaInfoAbort = null; }
+        try { if (this._pdfFetchAbort) { this._pdfFetchAbort.abort(); this._pdfFetchAbort = null; } } catch (e) {}   // ★ (2026-11-12 11:15, 97차 개선 A3) 받는 중인 PDF 받기 끊기 — 종전엔 PDF 받는 중 그림 등 다른 파일로 넘기면 끝까지 받았음(재현: 2MB/s, 30MB PDF 2초에 그림으로). PDF 끼리는 _renderPdfJs 가 끊음(94차 DOC-3)
         const _prevContent = document.getElementById('preview-content');
         if (_prevContent) {
             _prevContent.querySelectorAll('video').forEach(v => {
@@ -38385,6 +41278,8 @@ const App = {
                 if (v._mmsAbort) v._mmsAbort.abort();
                 if (v._pipeSid) { const _ku='api.php?action=transcode&pipe_kill='+v._pipeSid; try { if(navigator.sendBeacon) navigator.sendBeacon(_ku); else fetch(_ku,{keepalive:true}).catch(()=>{}); } catch(e){ try{ fetch(_ku,{keepalive:true}).catch(()=>{}); }catch(_){} } v._pipeSid = null; }
                 if (v._subTimer) clearInterval(v._subTimer);
+                if (v._subFsHandler) { document.removeEventListener('fullscreenchange', v._subFsHandler); document.removeEventListener('webkitfullscreenchange', v._subFsHandler); v._subFsHandler = null; }   // ★ (2026-11-11 23:44, 88차 PLY-1) 자막 전체화면 처리기도 뗌 — 떼는 코드가 위에서 멈춘 자막 타이머 안에만 있어, 자막 있는 영상을 열고 닫거나 넘길 때마다 document 에 2개씩 쌓이고 닫힌 영상·자막이 메모리에 남았음(재현)
+                if (v._hlsDebugTimer) { clearInterval(v._hlsDebugTimer); v._hlsDebugTimer = null; }   // ★ (2026-11-01 01:57, 36차 전체 점검) HLS 상태 점검 5초 타이머가 창을 닫거나 다른 파일로 가도 남아 쌓였다(떼어진 video·hls 붙잡음) → 함께 정리
                 v._switchingToTranscode = true; // 에러 핸들러 방지
                 v.pause();
                 v.removeAttribute('src');
@@ -38443,7 +41338,7 @@ const App = {
                         if (newImg.naturalWidth && newImg.naturalHeight) {
                             App._initViewer();
                         } else {
-                            newImg.addEventListener('load', () => App._initViewer(), { once: true });
+                            newImg.addEventListener('load', () => { if (newImg.isConnected) App._initViewer(); }, { once: true });   // ★ (2026-11-11 23:36, 88차 IMV-1) 넘긴 뒤 늦게 다 읽힌 앞 그림이 지금 그림의 뷰어 준비를 걸지 않게
                         }
                     }
                 });
@@ -38452,7 +41347,8 @@ const App = {
                 document.getElementById('preview-image-zoom-bar').style.display = 'none';
                 // 자막 파일 검색 (같은 폴더에서 동일/유사 파일명의 srt/smi/vtt/ass)
                 const videoBaseName = item.name.substring(0, item.name.lastIndexOf('.'));
-                const videoBaseNameLower = videoBaseName.toLowerCase();
+                // ★ (2026-11-02 14:34, 44차 점검) 비교용으로 NFC — 맥 NFD 자막 이름과 NFC 영상 이름이 바이트가 달라 짝을 못 찾았음(share.php 41차와 같게). 파일 이름 자체는 그대로
+                const videoBaseNameLower = videoBaseName.toLowerCase().normalize('NFC');
                 const subtitleExts = ['srt', 'smi', 'sami', 'vtt', 'ass', 'ssa'];
                 const subtitleTracks = [];
                 
@@ -38463,12 +41359,16 @@ const App = {
                     if (!f.name || f.is_dir) return;
                     const fext = f.name.split('.').pop().toLowerCase();
                     const fbase = f.name.substring(0, f.name.lastIndexOf('.'));
-                    const fbaseLower = fbase.toLowerCase();
-                    
-                    if (subtitleExts.includes(fext) && (
+                    const fbaseLower = fbase.toLowerCase().normalize('NFC');   // ★ (2026-11-02 14:34, 44차 점검) 비교용 NFC(위와 같음)
+                    // ★ (2026-11-02 14:34, 44차 점검) 구분자 검사가 없어 'Episode 1.mp4' 에 'Episode 10.srt' 가 붙어 다른 회차 자막이 떴음(아래 순위는 정렬만 함) →
+                    //   share.php 38차와 같은 규칙(같은 이름 / 앞부분이 같고 바로 뒤가 구분자 . - _ 공백 [ ( )만, 빈 이름 제외
+                    const _sepM = (c) => c === '.' || c === '-' || c === '_' || c === ' ' || c === '[' || c === '(';
+                    // ★ (2026-11-02 16:39, 45차 재확인) 44차에 구분자 없는 앞부분 일치(예: sub3.webm ↔ sub.srt)를 목록에서 뺐는데, 그건 10-08 펜닐 승인 '찾는 규칙·찾은 목록은 그대로, 순서만'(README 2593) 과 어긋났음 → 승인된 규칙으로 되돌리고, 실제 버그(경계가 숫자 중간을 자름 — Episode 1 ↔ Episode 10)만 뺌
+                    const _numCut = (longS, shortS) => /\d/.test(shortS.slice(-1)) && /\d/.test(longS.charAt(shortS.length));
+                    if (subtitleExts.includes(fext) && fbaseLower !== '' && videoBaseNameLower !== '' && (
                         fbaseLower === videoBaseNameLower ||
-                        fbaseLower.startsWith(videoBaseNameLower) ||
-                        videoBaseNameLower.startsWith(fbaseLower)
+                        (fbaseLower.startsWith(videoBaseNameLower) && (_sepM(fbaseLower.charAt(videoBaseNameLower.length)) || !_numCut(fbaseLower, videoBaseNameLower))) ||
+                        (videoBaseNameLower.startsWith(fbaseLower) && (_sepM(videoBaseNameLower.charAt(fbaseLower.length)) || !_numCut(videoBaseNameLower, fbaseLower)))
                     )) {
                         subtitleTracks.push({ name: f.name, path: f.path, ext: fext });
                     }
@@ -38480,7 +41380,7 @@ const App = {
                 {
                     const _sep = (c) => c === '.' || c === '-' || c === '_' || c === ' ' || c === '[' || c === '(';
                     const _rank = (t) => {
-                        const b = t.name.substring(0, t.name.lastIndexOf('.')).toLowerCase();
+                        const b = t.name.substring(0, t.name.lastIndexOf('.')).toLowerCase().normalize('NFC');   // ★ (2026-11-02 14:34, 44차 점검) 비교용 NFC(위 찾기와 같게)
                         if (b === videoBaseNameLower) return 0;
                         if (b.startsWith(videoBaseNameLower) && _sep(b.charAt(videoBaseNameLower.length))) return 1;
                         if (videoBaseNameLower.startsWith(b) && _sep(videoBaseNameLower.charAt(b.length))) return 2;
@@ -38802,6 +41702,9 @@ const App = {
                 const audioExtsForPlaylist = ['mp3','m4a','m4b','aac','ogg','oga','opus','flac','wav','weba'];   // ★ (2026-10-08) 음악은 웹 플레이어(브라우저가 직접 재생)라 브라우저가 여는 형식만(펜닐 결정) — wma 등은 미리보기·재생 대상에서 뺌(목록·아이콘엔 그대로)
                 const audioFiles = this._previewSiblingFiles(item).filter(f => {   // ★ (2026-10-30 02:05, 26차 점검) (폴더는 is_dir 도 — 'Album.flac' 같은 이름의 폴더가 곡으로 들어갔음)
                     if (f.isDir || f.is_dir) return false;
+                    // ★ (2026-11-01 01:56, 36차 전체 점검) 보관함 음악을 열면 목록의 보관함 곡(복호화 Blob 없음)이 암호문 주소(download)로 재생돼 소리가 안 났다
+                    //   → 동영상 목록처럼 _vault 항목은 빼서, 보관함이면 지금 곡 하나(복호화 blob url)만 재생
+                    if (f._vault) return false;
                     const fExt = f.name.split('.').pop().toLowerCase();
                     return audioExtsForPlaylist.includes(fExt);
                 });
@@ -38823,7 +41726,9 @@ const App = {
                     const isMp3 = fExt === 'mp3';
                     // ★ IDB 캐시 키 무효화용 mtime (파일 변경 시 새 URL → IDB miss → 새 fetch)
                     //   서버 캐시 키도 mtime 포함이므로 클라/서버 일관성 유지
-                    const _fMtime = f.modified ? Math.floor(new Date(f.modified).getTime() / 1000) : 0;
+                    const _fMtime = f.modified ? Math.floor(new Date(String(f.modified).replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2')).getTime() / 1000) : 0;   // ★ (2026-11-10 07:24, 61차 E) 서버 값 'YYYY-MM-DD HH:MM:SS'(공백)는 표준 형식이 아니라 Safari 15.3 이하가 못 읽어 NaN 이었음 → 'T'(오프셋 없음 = 현지 시각, 크로미움 결과 같음). 아래 두 곳도 같음
+                    // ★ (2026-11-02 10:33, 42차 점검) 커버 주소 v 는 mtime 만이라 39차 서버 키(mtime+크기)와 어긋나 시각을 유지한 표지 교체가 30일 immutable 캐시에 막혔음 → 'mtime-크기'(_fsMediaVer, 공유 화면과 같은 형식)
+                    const _fCoverV = this._fsMediaVer(f) || String(_fMtime);
                     
                     return {
                         name: f.name.replace(/\.[^.]+$/, ''),
@@ -38835,7 +41740,7 @@ const App = {
                         // Vault는 복호화된 blob만 접근 가능하므로 ID3 추출 불가
                         // ★ &v=mtime: 파일 변경 시 URL 달라져 IDB 캐시 자동 무효화 (서버는 v 파라미터 무시)
                         coverApiUrl: (isMp3 && _isLocalStorage && !f._vaultBlobUrl)
-                            ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(f.path)}&enc=b64&v=${_fMtime}&sz=512`
+                            ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(f.path)}&enc=b64&v=${_fCoverV}&sz=512`
                             : null,
                         // 가사 URL (오디오 + 로컬 스토리지만, LRC > USLT > TXT 우선순위)
                         // Vault는 같은 폴더 LRC/TXT 접근 가능하지만 USLT는 불가 (복호화된 blob에서 추출 불가)
@@ -38851,6 +41756,7 @@ const App = {
                 const imgExts = ['jpg','jpeg','png','webp','gif','bmp'];
                 const folderImages = this._previewSiblingFiles(item).filter(f => {   // ★ (2026-10-30 02:05, 26차 점검)
                     if (f.isDir || f.is_dir) return false;
+                    if (f._vault) return false;   // ★ (2026-11-01 01:56, 36차 전체 점검) 보관함 그림은 암호문이라 커버로 못 씀 — 제외
                     const ext = f.name.split('.').pop().toLowerCase();
                     return imgExts.includes(ext);
                 });
@@ -38869,7 +41775,8 @@ const App = {
                     const _singleExt = (item.name.split('.').pop() || '').toLowerCase();
                     const _singleIsMp3 = _singleExt === 'mp3';
                     // ★ IDB 캐시 키 무효화용 mtime (첫 번째 위치와 동일 패턴)
-                    const _itemMtime = item.modified ? Math.floor(new Date(item.modified).getTime() / 1000) : 0;
+                    const _itemMtime = item.modified ? Math.floor(new Date(String(item.modified).replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2')).getTime() / 1000) : 0;   // ★ (2026-11-10 07:24, 61차 E) 위 _fMtime 과 같음
+                    const _itemCoverV = this._fsMediaVer(item) || String(_itemMtime);   // ★ (2026-11-02 10:33, 42차 점검) 위 _fCoverV 주석과 같음
                     fsAudioList.push({ 
                         name: item.name.replace(/\.[^.]+$/, ''),
                         fullName: item.name,
@@ -38879,7 +41786,7 @@ const App = {
                         // 싱글 트랙 fallback: mp3 + 로컬 스토리지일 때만 ID3 커버 URL 제공 (base64 인코딩)
                         // ★ &v=mtime: 파일 변경 시 URL 달라져 IDB 캐시 자동 무효화
                         coverApiUrl: (_singleIsMp3 && _isLocalStorage && !item._vaultBlobUrl)
-                            ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(item.path)}&enc=b64&v=${_itemMtime}&sz=512`
+                            ? `api.php?action=audio_cover&storage_id=${storageId}&path=${_encodePath(item.path)}&enc=b64&v=${_itemCoverV}&sz=512`
                             : null,
                         // 가사 URL (오디오 + 로컬 스토리지만)
                         lyricsApiUrl: (_isLocalStorage && !item._vaultBlobUrl && ['mp3','m4a','flac','ogg','wav','aac','opus','ape','alac','aiff'].includes(_singleExt))
@@ -38898,7 +41805,7 @@ const App = {
                 const _clientFiles = audioFiles.map(f => ({
                     name: f.name,
                     size: f.size || 0,
-                    mtime: f.modified ? Math.floor(new Date(f.modified).getTime() / 1000) : 0,
+                    mtime: f.modified ? Math.floor(new Date(String(f.modified).replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2')).getTime() / 1000) : 0,   // ★ (2026-11-10 07:24, 61차 E) 위 _fMtime 과 같음
                 }));
                 // 이전 audio_durations 요청이 있으면 취소 (여러 번 폴더 이동 시 요청 쌓이는 것 방지)
                 if (this._audioDurationsAbort) {
@@ -38920,7 +41827,7 @@ const App = {
                 setTimeout(() => {
                     try {
                         // ★ 셔플: 이전 인스턴스가 살아있으면 '재생 중 재생성'(순서 유지), null이면 '닫았다 열기'(새 순서)
-                        const _wasOpen = !!this._fsAudioPlayer;
+                        const _wasOpen = _audioWasOpen || !!this._fsAudioPlayer;   // ★ (2026-11-01 01:56, 36차 전체 점검) 정리 전에 담은 값
                         // 이전 인스턴스 정리
                         if (this._fsAudioPlayer) {
                             try { this._fsAudioPlayer.destroy(); } catch(e) {}
@@ -39227,7 +42134,7 @@ const App = {
                             <div style="padding:20px;color:#fff;">📄 PDF ${t('loading','로딩 중...')}</div>
                         </div>`;
                         $('#preview-content').html(content);
-                        setTimeout(() => this._renderPdfJs(pdfContainerId, pdfUrl), 50);
+                        setTimeout(() => this._renderPdfJs(pdfContainerId, pdfUrl, item.name), 50);
                         return;
                     } else {
                         // PC: 브라우저 내장 PDF 뷰어 (iframe)
@@ -39255,10 +42162,10 @@ const App = {
                     }
                 }
                 // 나머지 문서는 텍스트로
-                this.loadTextPreview(url, item.name);
+                this.loadTextPreview(url, item.name, { size: item.size });   // ★ (2026-11-04) 크기를 넘김(10MB 넘으면 앞부분만)
                 return;
             case 'code':
-                this.loadTextPreview(url, item.name);
+                this.loadTextPreview(url, item.name, { size: item.size });
                 return;
             case 'hwp':
                 // HWP/HWPX 뷰어로 열기 (hwp_viewer 우선, rhwp_viewer fallback)
@@ -39367,6 +42274,10 @@ const App = {
                 // loadeddata, canplay 이벤트에도 걸어서 확실히 처리
                 _v.addEventListener('loadeddata', _fitVideoToModal);
                 _v.addEventListener('resize', _fitVideoToModal);
+                // ★ (2026-11-12 23:42, 106차 펜닐 제보 VFIT) 트랜스코딩 전환으로 video 를 새로 갈아 끼우면 위 이벤트가 새 요소엔 없다 — wrap 에서 가로채(capture) 새 요소의 크기 정보도 받음.
+                //   종전엔 HLS 시작이 5초보다 늦으면 맞춤이 한 번도 안 돼 wrap 이 body 크기 그대로 남았음(재현: HEVC·시작 10초, 15초 뒤에도 wrap 1093x535·style 없음)
+                const _vw = _v.closest('.video-player-wrap');
+                if (_vw) { _vw.addEventListener('loadedmetadata', _fitVideoToModal, true); _vw.addEventListener('resize', _fitVideoToModal, true); }
                 // fallback: 2초/5초 후에도 실행 (HLS 트랜스코딩은 로드가 느릴 수 있음)
                 setTimeout(_fitVideoToModal, 500);
                 setTimeout(_fitVideoToModal, 2000);
@@ -39392,7 +42303,8 @@ const App = {
         if (this._checkMediaInfo) {
             this._checkMediaInfo = false;
             const _dbgBadge = document.querySelector('.video-stream-badge');
-            if (_dbgBadge) _dbgBadge.textContent = '⏳ 코덱 확인 중...';
+            // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+            if (_dbgBadge) _dbgBadge.textContent = '⏳ ' + t('vbadge_codec_checking', '코덱 확인 중...');
             
             // 이전 요청 취소
             if (this._mediaInfoAbort) this._mediaInfoAbort.abort();
@@ -39483,7 +42395,8 @@ const App = {
                             if (badgeParent) {
                                 badgeParent.className = 'video-stream-badge';
                                 const _sizeMB2 = Math.round(_itemSize2 / (1024 * 1024));
-                                badgeParent.innerHTML = `⚡ 대용량(${_sizeMB2}MB) → 스트리밍 재생`;
+                                // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                badgeParent.innerHTML = '⚡ ' + tf('vbadge_large_streaming', {mb: _sizeMB2}, `대용량(${_sizeMB2}MB) → 스트리밍 재생`);
                             }
                             // 트랜스코딩 시작 (정상 분기와 동일 패턴)
                             if (window._startTranscodeTimer) clearTimeout(window._startTranscodeTimer);
@@ -39494,7 +42407,8 @@ const App = {
                         } else {
                             // 그 외: native 재생 폴백
                             if (window._videoDebug) console.log('[VD INFO-FAIL] native fallback (PC or small file)');
-                            if (badgeParent) badgeParent.textContent = '▶ 일반 재생';
+                            // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                            if (badgeParent) badgeParent.textContent = '▶ ' + t('native_playback', '일반 재생');
                             const _nativeVid2 = document.querySelector('#preview-content .preview-video');
                             if (_nativeVid2) {
                                 _nativeVid2._isReady = true;
@@ -39568,7 +42482,8 @@ const App = {
                     if (badgeParent) {
                         badgeParent.className = 'video-stream-badge native';
                         const sizeStr = fileSize > 0 ? ' ' + this.formatSize(fileSize) : '';
-                        badgeParent.innerHTML = `▶ 일반 재생<span class="codec-info"> (${codecName}${info.resolution ? ' ' + info.resolution : ''}${sizeStr})</span>`;
+                        // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                        badgeParent.innerHTML = `▶ ${t('native_playback', '일반 재생')}<span class="codec-info"> (${codecName}${info.resolution ? ' ' + info.resolution : ''}${sizeStr})</span>`;
                     }
                     // ★ 네이티브 재생 가능 → 코덱 체크용 차단 해제 (재생 버튼 활성화)
                     const _nativeVid = document.querySelector('#preview-content .preview-video');
@@ -39597,7 +42512,7 @@ const App = {
                 }
                 
                 // 트랜스코딩 전환 사유 표시
-                const isKo3 = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+                const isKo3 = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
                 let transcodeReason = '';
                 if (needsTranscodeByCodec) {
                     transcodeReason = `${codecName} → ${isKo3 ? '실시간 변환 재생' : 'Transcoding'}`;
@@ -39752,7 +42667,8 @@ const App = {
                     if (_badgeFb) {
                         _badgeFb.className = 'video-stream-badge';
                         const _sizeMB = Math.round(_itemSize / (1024 * 1024));
-                        _badgeFb.innerHTML = `⚡ 대용량(${_sizeMB}MB) → 스트리밍 재생`;
+                        // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                        _badgeFb.innerHTML = '⚡ ' + tf('vbadge_large_streaming', {mb: _sizeMB}, `대용량(${_sizeMB}MB) → 스트리밍 재생`);
                     }
                     // 트랜스코딩 시작 (정상 분기와 동일 패턴)
                     if (window._startTranscodeTimer) clearTimeout(window._startTranscodeTimer);
@@ -39764,7 +42680,8 @@ const App = {
                     // 그 외: native 재생 폴백
                     if (window._videoDebug) console.log('[VD CATCH-FALLBACK] native fallback (PC or small file)');
                     const badgeParent = document.querySelector('.video-stream-badge');
-                    if (badgeParent) badgeParent.textContent = '▶ 일반 재생';
+                    // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                    if (badgeParent) badgeParent.textContent = '▶ ' + t('native_playback', '일반 재생');
                     const _nativeVid = document.querySelector('#preview-content .preview-video');
                     if (_nativeVid) {
                         _nativeVid._isReady = true;
@@ -39882,7 +42799,7 @@ const App = {
                     if (vid.videoWidth === 0 && vid.videoHeight === 0 && !vid.dataset.transcodeBase && !App._directActive) {
                         // 종전 전환 동작(내용 그대로) — 바로 또는 파일 정보를 기다린 뒤 부른다
                         const _codecFallback = () => {
-                            const isKo3 = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+                            const isKo3 = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
                             const badge = wrap.querySelector('.video-stream-badge');
                             if (badge) {
                                 badge.className = 'video-stream-badge';
@@ -39990,18 +42907,29 @@ const App = {
                 vid.addEventListener('pause', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); this._positionTranscodeDuration(wrap, vid); });
                 vid.addEventListener('ended', () => { wrap.classList.remove('playing'); wrap.classList.remove('show-controls'); });
                 
+                // ★ (2026-11-03 21:35, 52차 점검) 원본을 <source> 로 넣으면 못 열 때 오류가 <source> 에만 오고(거품 없음) vid.error 는 null 이라 아래 처리기가 불리지 않아
+                //   자동 트랜스코딩 전환·안내 없이 검은 화면에서 멈췄음(재현: 이 브라우저가 못 푸는 H.264). 마지막 <source> 가 실패하면 '형식 미지원(4)' 으로 아래와 같게 처리
+                vid.addEventListener('error', (ev) => {
+                    const t = ev && ev.target;
+                    if (!t || t.tagName !== 'SOURCE' || vid.error) return;
+                    const srcs = vid.querySelectorAll('source');
+                    if (!srcs.length || t !== srcs[srcs.length - 1]) return;
+                    vid._srcFailCode = 4;
+                    vid.dispatchEvent(new Event('error'));
+                }, true);
                 // ★ 네이티브 비디오 재생 에러 핸들러 (코덱 미지원 감지)
                 vid.addEventListener('error', () => {
                     // 트랜스코딩 전환 중 의도적 소스 제거면 무시
                     if (vid._switchingToTranscode) return;
-                    const e = vid.error;
+                    const e = vid.error || (vid._srcFailCode ? { code: vid._srcFailCode, message: 'source failed' } : null);   // ★ 52차 — 위 <source> 실패 신호
+                    vid._srcFailCode = 0;
                     if (!e) return;
                     const codes = {1:'ABORTED', 2:'NETWORK', 3:'DECODE', 4:'SRC_NOT_SUPPORTED'};
                     const errCode = codes[e.code] || 'ERR' + e.code;
                     if (window._videoDebug) console.warn('[VideoDebug] VIDEO ERROR:', errCode, 'code:', e.code, 'message:', e.message, 'src:', vid.src, 'sources:', vid.querySelectorAll('source').length);
                     const badge = wrap.querySelector('.video-stream-badge');
                     
-                    const isKo2 = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+                    const isKo2 = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
                     
                     // ★ DECODE/SRC_NOT_SUPPORTED 에러 → 자동 트랜스코딩 전환 (1회만)
                     if ((e.code === 3 || e.code === 4) && !vid.dataset.transcodeBase && !vid._autoTranscodeAttempted) {
@@ -40079,7 +43007,7 @@ const App = {
                         const _at = vid.currentTime || 0;
                         const badge = wrap.querySelector('.video-stream-badge');
                         if (badge) {
-                            const isKo4 = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+                            const isKo4 = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
                             badge.className = 'video-stream-badge';
                             badge.innerHTML = '⏳ ' + (isKo4 ? '음성 코덱 미지원(' + c.toUpperCase() + ') → 트랜스코딩 전환 중...' : 'Unsupported audio (' + c.toUpperCase() + ') → switching to transcode...');
                         }
@@ -40217,20 +43145,26 @@ const App = {
                 
                 // 모달 닫힐 때 정리
                 const previewModal = document.getElementById('modal-preview');
+                // ★ (2026-11-02 10:27, 42차 점검) 정리를 한 함수로 묶어 틀 단위로 등록(App._fsPosRegister 주석) — 이어 보기로 틀이 바뀌어도 정리됨
+                let _fsCleanup = null;
+                const _fsPosCleanup = () => {
+                    fsBtn.remove();
+                    window.removeEventListener('resize', _repositionFs);
+                    window.removeEventListener('orientationchange', _repositionFs);
+                    document.removeEventListener('fullscreenchange', _repositionFs);
+                    document.removeEventListener('webkitfullscreenchange', _repositionFs);
+                    _wrapClassObs.disconnect();
+                    if (_fsCleanup) _fsCleanup.disconnect();
+                };
                 if (previewModal) {
-                    const _fsCleanup = new MutationObserver(() => {
+                    _fsCleanup = new MutationObserver(() => {
                         if (previewModal.style.display === 'none' || !document.body.contains(wrap)) {
-                            fsBtn.remove();
-                            window.removeEventListener('resize', _repositionFs);
-                            window.removeEventListener('orientationchange', _repositionFs);
-                            document.removeEventListener('fullscreenchange', _repositionFs);
-                            document.removeEventListener('webkitfullscreenchange', _repositionFs);
-                            _wrapClassObs.disconnect();
-                            _fsCleanup.disconnect();
+                            _fsPosCleanup();
                         }
                     });
                     _fsCleanup.observe(previewModal, { attributes: true, attributeFilter: ['style', 'class'] });
                 }
+                App._fsPosRegister(wrap, _fsPosCleanup);
                 
                 fsBtn.addEventListener('click', (e) => {
                     e.stopPropagation();
@@ -40267,7 +43201,7 @@ const App = {
                                     let _t = _track;
                                     // 트랙 자체가 사라졌으면 새로 생성
                                     if (!_t || ![...vid.textTracks].includes(_t)) {
-                                        _t = vid.addTextTrack('subtitles', vid._subLabel || '자막', 'ko');
+                                        _t = vid.addTextTrack('subtitles', vid._subLabel || t('subtitle', '자막'), 'ko');   // ★ (2026-11-02 10:32, 42차 점검) 대체 라벨이 한국어 고정이라 영어 화면 브라우저 자막 메뉴에도 '자막' → 이미 있는 subtitle 키
                                         vid._subTextTrack = _t;
                                     }
                                     // cue가 비어있으면 재주입
@@ -40425,6 +43359,17 @@ const App = {
                                 if (e.key === 'ArrowUp' && _vv.muted) _vv.muted = false;
                                 try { if (window.FSVideoSkin && typeof window.FSVideoSkin.showVolume === 'function') window.FSVideoSkin.showVolume(_vv.closest('.fsvs-on')); } catch (x) {}
                             }
+                        }
+                        return;
+                    }
+                    // ★ (2026-10-31 11:02, 펜닐 요청) M 키: 동영상 음소거 켜기/끄기(유튜브처럼) — 한글 입력 상태 'ㅡ' 도(물리 키 KeyM). 스피커 단추와 같게 음량 표시('음소거'/지금 음량 %)·기억.
+                    //   조합키(Ctrl·Alt·Meta)는 브라우저 몫. 음악 미리보기의 M 키(위)와는 따로 — 동영상이 열려 있을 때만
+                    if (e.code === 'KeyM' && !e.ctrlKey && !e.altKey && !e.metaKey && !e.repeat) {
+                        const _mv = document.querySelector('#preview-content .preview-video');
+                        if (_mv) {
+                            e.preventDefault();
+                            _mv.muted = !_mv.muted;
+                            try { if (window.FSVideoSkin && typeof window.FSVideoSkin.showVolume === 'function') window.FSVideoSkin.showVolume(_mv.closest('.fsvs-on')); } catch (x) {}
                         }
                         return;
                     }
@@ -40597,6 +43542,7 @@ const App = {
             // ★ 새 재생 시 HW→SW fallback 플래그 초기화
             //   (이전 파일이 fallback 탔으면 플래그 남아있어서 이번 파일이 안 탐)
             window._hlsSwRetried = false;
+            window._iosSwRetried = false;   // ★ (2026-11-01 01:08, 35차 전체 점검) 한 번 true 가 되면 되돌리는 곳이 없어 그 뒤 여는 모든 영상이 DECODE 오류에도 SW 재시도를 안 했음 → _hlsSwRetried 와 같게 초기화(ios_sw=1 재호출은 주소 검사로 막힘)
             
             // ★ 멀티오디오 자동 SW 강제 플래그 (info API 응답에 따라 설정)
             //   PC/iOS 공통: 멀티오디오 영상은 처음부터 force_sw=1로 시작
@@ -40760,20 +43706,27 @@ const App = {
                             return el;
                         };
                         
-                        video.addEventListener('timeupdate', () => {
-                            const el = ensureEl();
-                            if (el) el.textContent = `${formatTime(video.currentTime)} / ${durationText}`;
-                        });
-                        video.addEventListener('loadedmetadata', () => {
-                            const el = ensureEl();
-                            if (el) el.textContent = `0:00 / ${durationText}`;
-                        });
-                        // 일시정지/재생/리사이즈 시에도 위치 재보정 (timeupdate가 멈춰도 위치 유지)
-                        //   video 자체 이벤트만 사용 → video 제거 시 자동 정리(누수 없음)
+                        // ★ (2026-11-01 11:48, 39차 점검) 화질·음성 변경은 같은 <video> 로 _startTranscode 를 다시 불러 이 리스너들이 부를 때마다 더 붙었고,
+                        //   표시가 video.currentTime 이라 &seek= 로 시작한 스트림(이어 보기·화질 변경)에서 상대 시간이 나왔음
+                        //   → 영상 요소마다 한 번만 붙이고, 시간은 _qualitySeekOffset 을 더하고 길이는 그때의 _knownDuration 에서 읽음(다른 표시와 같게)
+                        const _durText = () => formatTime(Number(video._knownDuration) || realDur);
                         const _repositionDur = () => App._positionTranscodeDuration(video.closest('.video-player-wrap') || video.parentElement, video);
-                        video.addEventListener('pause', _repositionDur);
-                        video.addEventListener('play', _repositionDur);
-                        video.addEventListener('resize', _repositionDur);
+                        if (!video._tdBound) {
+                            video._tdBound = true;
+                            video.addEventListener('timeupdate', () => {
+                                const el = ensureEl();
+                                if (el) el.textContent = `${formatTime((video.currentTime || 0) + (Number(video._qualitySeekOffset) || 0))} / ${_durText()}`;
+                            });
+                            video.addEventListener('loadedmetadata', () => {
+                                const el = ensureEl();
+                                if (el) el.textContent = `${formatTime(Number(video._qualitySeekOffset) || 0)} / ${_durText()}`;
+                            });
+                            // 일시정지/재생/리사이즈 시에도 위치 재보정 (timeupdate가 멈춰도 위치 유지)
+                            //   video 자체 이벤트만 사용 → video 제거 시 자동 정리(누수 없음)
+                            video.addEventListener('pause', _repositionDur);
+                            video.addEventListener('play', _repositionDur);
+                            video.addEventListener('resize', _repositionDur);
+                        }
                         // 재생 전 초기 상태에서도 보정 (HLS 레이아웃/메타데이터 지연 대응)
                         ensureEl();
                         setTimeout(_repositionDur, 300);
@@ -40844,8 +43797,13 @@ const App = {
                     
                     // ★ _hlsStarting 플래그는 어떤 경우든(성공/실패/abort) 반드시 해제되어야 함
                     let hlsResp;
+                    // ★ (2026-11-12 10:45, 97차 개선 A1) 시작 요청은 닫을 때 바로 끊지 않고 10초 뒤에도 안 끝났을 때만 끊음 — 종전엔 응답 전(0.1·0.3초)에 닫으면 세션 ID 를 몰라 stop 이 안 나가 ffmpeg·세션 폴더가 남았음(재현). 응답을 받으면 아래 aborted() 갈래가 정리
+                    const _hlsStartCtl = new AbortController();
+                    transcodeAbort.signal.addEventListener('abort', () => { setTimeout(() => { try { _hlsStartCtl.abort(); } catch (e) {} }, 10000); }, { once: true });
+                    // ★ (2026-11-12 10:45, 97차 개선 A1) 같은 파일을 다시 열어 둔 상태면 stop 을 보내지 않음 — 서버가 그 세션을 재사용하므로(95차 CNV-1 회귀: 늦은 stop 이 다시 연 화면의 세션을 지워 처음부터 다시 재생)
+                    const _hlsSameFileOpen = () => { try { const _it = App._currentPreviewItem; return !!(document.querySelector('#preview-content .preview-video') && _it && _it.path === path); } catch (e) { return true; } };
                     try {
-                        hlsResp = await fetch(hlsStartUrl, { signal: transcodeAbort.signal });
+                        hlsResp = await fetch(hlsStartUrl, { signal: _hlsStartCtl.signal });   // ★ (2026-11-12 10:45, 97차 개선 A1) 종전 signal: transcodeAbort.signal
                     } catch (e) {
                         window._hlsStarting = false; // 반드시 해제 - 다음 시도 가능하도록
                         throw e;
@@ -40860,7 +43818,7 @@ const App = {
                     if (aborted()) {
                         try {
                             const _abortHlsData = await hlsResp.json();
-                            if (_abortHlsData && _abortHlsData.session) {
+                            if (_abortHlsData && _abortHlsData.session && !_hlsSameFileOpen()) {   // ★ (2026-11-12 10:45, 97차 개선 A1) 같은 파일을 다시 열었으면 stop 안 함(위 설명)
                                 const _abortStopUrl = 'api.php?action=hls_stream&hls_action=stop&session=' + _abortHlsData.session
                                     + '&storage_id=' + storageId + '&path=' + encodeURIComponent(path);
                                 if (window._diagLog) {
@@ -40879,6 +43837,14 @@ const App = {
                         return;
                     }
                     const hlsData = await hlsResp.json();
+                    // ★ (2026-11-12 10:45, 97차 개선 A1) 머리줄은 받았지만 본문을 다 읽기 전에(서버가 JSON 뒤 0.5초+PID 찾기 동안 붙잡음) 닫혔으면 위와 같이 정리 — 시작 요청을 더는 닫을 때 끊지 않아, 이 갈래가 없으면 아래 hls 생성 전 aborted() 에서 stop 없이 끝나 잔재가 남음
+                    if (aborted()) {
+                        if (hlsData && hlsData.session && !_hlsSameFileOpen()) {
+                            const _abortStopUrl2 = 'api.php?action=hls_stream&hls_action=stop&session=' + hlsData.session + '&storage_id=' + storageId + '&path=' + encodeURIComponent(path);
+                            try { if (navigator.sendBeacon) navigator.sendBeacon(_abortStopUrl2); fetch(_abortStopUrl2, { keepalive: true, method: 'GET' }).catch(() => {}); } catch (e) {}
+                        }
+                        return;
+                    }
                     
                     if (hlsData.success && hlsData.playlist) {
                         const playlistUrl = hlsData.playlist;
@@ -41058,6 +44024,14 @@ const App = {
                             // 매 5초마다 상태 표시 + stall 자동 복구
                             let hlsStallCount = 0;
                             const hlsDebugTimer = setInterval(() => {
+                                // ★ (2026-11-01 11:49, 39차 점검) 첫 hls 가 치명 오류로 정리되고 SW·MMS 로 넘어가거나 '트랜스코딩 중단됨'으로 끝나도 이 타이머가 계속 돌아
+                                //   5초 안에 배지를 '⚡ HLS ERR…'·'⚡ HLS 스트리밍' 으로 덮고, 이미 정리된 hls 에 startLoad 를 불렀음
+                                //   → 영상의 hls 가 이 인스턴스가 아니거나 이 인스턴스가 영상에서 떨어졌으면(destroy) 스스로 멈춤
+                                if (video._hlsInstance !== hls || (('media' in hls) && !hls.media)) {
+                                    clearInterval(hlsDebugTimer);
+                                    if (video._hlsDebugTimer === hlsDebugTimer) video._hlsDebugTimer = null;
+                                    return;
+                                }
                                 try {
                                     const ct = video.currentTime.toFixed(1);
                                     const dur = video.duration ? video.duration.toFixed(1) : '?';
@@ -41271,7 +44245,8 @@ const App = {
                                     if (hlsFfmpegDead) {
                                         // console.error('[HLS] ffmpeg process terminated — stopping playback');
                                         hls.destroy();
-                                        if (badge) badge.textContent = '❌ 트랜스코딩 중단됨';
+                                        // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                        if (badge) badge.textContent = '❌ ' + t('vbadge_transcode_stopped', '트랜스코딩 중단됨');
                                         return;
                                     }
                                     
@@ -41287,11 +44262,14 @@ const App = {
                                     const isManifestErr = (data.details === 'manifestLoadError' || data.details === 'manifestLoadTimeOut' || data.details === 'manifestParsingError');
                                     const isBufferAppendErr = (data.details === 'bufferAppendError');
                                     const is404 = data.response && (data.response.code === 404 || data.response.code === 410);
-                                    if ((isManifestErr || isBufferAppendErr || is404) && !transcodeBaseUrl.includes('force_sw=1') && !window._hlsSwRetried) {
+                                    // ★ (2026-11-01 11:50, 39차 점검) 다국어 영상은 처음부터 hlsStartUrl 에 force_sw=1 이 붙는데 transcodeBaseUrl 만 봐서, SW 세션이 실패해도 같은 SW 변환을
+                                    //   한 번 더 띄운 뒤에야 MMS 로 갔음(서버 ffmpeg 1회 낭비) → 아이폰 분기처럼 hlsStartUrl 도 확인
+                                    if ((isManifestErr || isBufferAppendErr || is404) && !transcodeBaseUrl.includes('force_sw=1') && !hlsStartUrl.includes('force_sw=1') && !window._hlsSwRetried) {
                                         window._hlsSwRetried = true;
                                         hls.destroy();
                                         if (video._hlsInstance === hls) video._hlsInstance = null;
-                                        if (badge) badge.textContent = '⚡ HW 실패 — SW 재시도 중...';
+                                        // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                        if (badge) badge.textContent = '⚡ ' + t('vbadge_hw_fail_sw_retry', 'HW 실패 — SW 재시도 중...');
                                         // 기존 HW 세션 stop
                                         try { if (video._hlsStopSession) video._hlsStopSession(); } catch(e) {}
                                         // SW 재시작 (비동기)
@@ -41320,7 +44298,8 @@ const App = {
                                                 if (aborted()) return;
                                                 const swData = await swResp.json();
                                                 if (!swData.success || !swData.playlist) {
-                                                    if (badge) badge.textContent = '❌ SW 재시작 실패';
+                                                    // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                                    if (badge) badge.textContent = '❌ ' + t('vbadge_sw_restart_failed', 'SW 재시작 실패');
                                                     return;
                                                 }
                                                 const swPlaylistUrl = swData.playlist;
@@ -41352,10 +44331,14 @@ const App = {
                                                         if (d.fatal) {
                                                             try { swHls.destroy(); } catch(e){}
                                                             if (video._hlsInstance === swHls) video._hlsInstance = null;
+                                                            // ★ (2026-10-31 13:41, 34차 후속 개선) 미리보기를 닫은 뒤면 MMS 로 넘어가지 않음(22·24차 aborted 확인의 대칭 누락 — 닫힌 미리보기를 위해 서버 변환을 새로 시작했음)
+                                                            if (aborted()) return;
                                                             // ★ SW HLS도 fatal → MMS/MediaSource fallback (공유 페이지와 일관성)
-                                                            if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                                            // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                                            if (badge) badge.textContent = '⚡ ' + t('vbadge_sw_fail_mms', 'SW 실패 — MMS 시도 중...');
                                                             try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(err) {
-                                                                if (badge) badge.textContent = '❌ 재생 실패';
+                                                                // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                                                if (badge) badge.textContent = '❌ ' + t('vbadge_play_failed', '재생 실패');
                                                             }
                                                         }
                                                     });
@@ -41369,10 +44352,14 @@ const App = {
                                                     App._markNativeHlsReady(video);   // ★ (2026-09-23) 아이폰 자체 HLS 는 준비 완료로 표시(가운데 재생 버튼이 막히던 문제)
                                                 }
                                             } catch(swErr) {
-                                                if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                                // ★ (2026-10-31 13:41, 34차 후속 개선) SW 시작 요청 중 미리보기를 닫으면(AbortError) 여기로 와서 닫힌 영상에 MMS·서버 변환을 새로 시작했음 — 닫혔으면 끝냄
+                                                if (aborted()) return;
+                                                // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                                if (badge) badge.textContent = '⚡ ' + t('vbadge_sw_fail_mms', 'SW 실패 — MMS 시도 중...');
                                                 // ★ SW도 실패 → MMS/MediaSource fallback (공유 페이지와 일관성)
                                                 try { this._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(e) {
-                                                    if (badge) badge.textContent = '❌ 재생 실패';
+                                                    // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                                    if (badge) badge.textContent = '❌ ' + t('vbadge_play_failed', '재생 실패');
                                                 }
                                             }
                                         })();
@@ -41387,7 +44374,8 @@ const App = {
                                         } else {
                                             // console.error('[HLS] max fatal retries reached, stopping');
                                             hls.destroy();
-                                            if (badge) badge.textContent = '❌ HLS 네트워크 오류 (재시도 초과)';
+                                            // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                            if (badge) badge.textContent = '❌ ' + t('vbadge_hls_net_retry_exceeded', 'HLS 네트워크 오류 (재시도 초과)');
                                         }
                                     } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
                                         hls.recoverMediaError();
@@ -41457,17 +44445,21 @@ const App = {
                                 // 이미 SW 재시도했거나 force_sw 상태면 종료
                                 //   - transcodeBaseUrl 또는 hlsStartUrl에 force_sw=1 있음
                                 //   - _multiAudioSwForced: 멀티오디오 자동 SW 시작 케이스
+                                if (aborted()) return;   // ★ (2026-11-01 01:08, 35차 전체 점검) 화질·음성 변경 뒤 남은 지난 세션의 처리기가 옛 주소로 MMS 대체를 시작하던 것(34차 후속 aborted 보강의 남은 곳)
                                 if (transcodeBaseUrl.includes('force_sw=1') || hlsStartUrl.includes('force_sw=1') || _multiAudioSwForced || window._hlsSwRetried) {
-                                    if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                    // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                    if (badge) badge.textContent = '⚡ ' + t('vbadge_sw_fail_mms', 'SW 실패 — MMS 시도 중...');
                                     try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(err) {
-                                        if (badge) badge.textContent = '❌ 재생 실패';
+                                        // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                        if (badge) badge.textContent = '❌ ' + t('vbadge_play_failed', '재생 실패');
                                     }
                                     return;
                                 }
                                 if (aborted()) return;
                                 
                                 window._hlsSwRetried = true;
-                                if (badge) badge.textContent = '⚡ HW 실패 — SW 재시도 중...';
+                                // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                if (badge) badge.textContent = '⚡ ' + t('vbadge_hw_fail_sw_retry', 'HW 실패 — SW 재시도 중...');
                                 
                                 // 기존 native HLS 정리 (hls.js 인스턴스 없음 — src 제거만)
                                 try { video.pause(); } catch(e) {}
@@ -41500,7 +44492,8 @@ const App = {
                                     if (aborted()) return;
                                     const swData = await swResp.json();
                                     if (!swData.success || !swData.playlist) {
-                                        if (badge) badge.textContent = '❌ SW 재시작 실패';
+                                        // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                        if (badge) badge.textContent = '❌ ' + t('vbadge_sw_restart_failed', 'SW 재시작 실패');
                                         return;
                                     }
                                     const swPlaylistUrl = swData.playlist;
@@ -41520,9 +44513,12 @@ const App = {
                                     // ★ SW도 실패 시 MMS fallback (PC와 일관성)
                                     video.addEventListener('error', function _iosSwErrorHandler() {
                                         video.removeEventListener('error', _iosSwErrorHandler);
-                                        if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                        if (aborted()) return;   // ★ (2026-11-01 01:08, 35차 전체 점검) 지난 세션의 처리기면 MMS 대체를 시작하지 않음
+                                        // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                        if (badge) badge.textContent = '⚡ ' + t('vbadge_sw_fail_mms', 'SW 실패 — MMS 시도 중...');
                                         try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(err) {
-                                            if (badge) badge.textContent = '❌ 재생 실패';
+                                            // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                            if (badge) badge.textContent = '❌ ' + t('vbadge_play_failed', '재생 실패');
                                         }
                                     }, { once: true });
                                     
@@ -41530,9 +44526,13 @@ const App = {
                                         try { video.pause(); video.removeAttribute('src'); video.load(); } catch(e) {}
                                     });
                                 } catch(swErr) {
-                                    if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
+                                    // ★ (2026-10-31 13:41, 34차 후속 개선) iOS 자체 HLS 의 SW 재시작도 같음 — 닫혀서 중단된 경우 MMS 로 넘어가지 않음
+                                    if (aborted()) return;
+                                    // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                    if (badge) badge.textContent = '⚡ ' + t('vbadge_sw_fail_mms', 'SW 실패 — MMS 시도 중...');
                                     try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch(e) {
-                                        if (badge) badge.textContent = '❌ 재생 실패';
+                                        // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                        if (badge) badge.textContent = '❌ ' + t('vbadge_play_failed', '재생 실패');
                                     }
                                 }
                             }, { once: false });
@@ -41545,7 +44545,7 @@ const App = {
                     //   닫힌 미리보기를 위해 서버 변환(ffmpeg)을 새로 시작했음(재현)
                     if (aborted()) return;
                     // HLS 실패 — force_sw로 1회 재시도 (HW 인코더 문제 대응)
-                    if (hlsStartUrl && !transcodeBaseUrl.includes('force_sw=1') && !window._hlsSwRetried) {
+                    if (hlsStartUrl && !transcodeBaseUrl.includes('force_sw=1') && !hlsStartUrl.includes('force_sw=1') && !window._hlsSwRetried) {   // ★ (2026-11-01 11:50, 39차 점검) 위 SW 재시도 조건과 같음
                         window._hlsSwRetried = true;
                         try {
                             const swHlsUrl = hlsStartUrl + '&force_sw=1';
@@ -41586,8 +44586,10 @@ const App = {
                                             try { hls.destroy(); } catch (e) {}
                                             if (video._hlsInstance === hls) video._hlsInstance = null;
                                             if (aborted()) return;
-                                            if (badge) badge.textContent = '⚡ SW 실패 — MMS 시도 중...';
-                                            try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch (err) { if (badge) badge.textContent = '❌ 재생 실패'; }
+                                            // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                            if (badge) badge.textContent = '⚡ ' + t('vbadge_sw_fail_mms', 'SW 실패 — MMS 시도 중...');
+                                            // ★ (2026-10-31 13:42, 34차 후속 개선) 동영상 배지 문구가 영어 화면에도 한국어로 나오던 것 — t()/tf() 로
+                                            try { App._fallbackToMMSMain(transcodeBaseUrl, video, badge); } catch (err) { if (badge) badge.textContent = '❌ ' + t('vbadge_play_failed', '재생 실패'); }
                                         }
                                     });
                                     video._hlsInstance = hls;
@@ -41656,6 +44658,9 @@ const App = {
                     
                     let sourceOpened = false;
                     video.addEventListener('error', () => {
+                        // ★ (2026-11-01 01:29, 35차 전체 점검) 지난 재생(취소된 _startTranscode)이 같은 video 에 붙여 둔 처리기는 무시 — 위 _iosSwRetried 초기화 뒤 옛 처리기가
+                        //   옛 주소로 SW 재시도를 걸어 고른 화질·음성이 되돌아가거나 재시작이 반복될 수 있었음(독립 검토 지적)
+                        if (aborted() || mmsAbortController.signal.aborted) return;
                         const e = video.error;
                         const badge = document.querySelector('.video-stream-badge');
                         if (e) {
@@ -41673,6 +44678,7 @@ const App = {
                                 video.removeAttribute('src');
                                 video.load();
                                 setTimeout(() => {
+                                    if (aborted()) return;   // ★ (2026-11-01 01:57, 36차 전체 점검) 0.5초 안에 다른 영상·화질로 넘어가면 옛 주소로 다시 시작해 새 재생을 취소했다 → 취소됐으면 안 함
                                     this._startTranscode(swUrl, storageId, path);
                                 }, 500);
                             }
@@ -41693,9 +44699,8 @@ const App = {
                             const sourceBuffer = mediaSource.addSourceBuffer(mimeType);
                             sourceBuffer.addEventListener('error', (e) => {
                                 // HW 인코더 출력이 iOS에서 파싱 불가 → SW fallback
-                                if (!transcodeBaseUrl.includes('ios_sw=1') && !window._iosSwRetried) {
-                                    window._iosSwRetried = true;
-                                }
+                                // ★ (2026-11-01 01:57, 36차 전체 점검) 여기서 _iosSwRetried 만 세우고 아무것도 안 해, 뒤따르는 video 'error'(DECODE)가 플래그를 보고
+                                //   SW 재시도를 건너뛰었다(append 파싱 실패 경우가 늘 막힘) → 플래그를 세우지 않고 video 'error' 처리기(ios_sw=1 재시작)에 맡김
                             });
                             let chunkCount = 0, totalBytes = 0;
                             
@@ -41975,16 +44980,11 @@ const App = {
                         if (e.message && e.message.includes('Empty src')) return;
                         
                         const codes = {1:'ABORTED', 2:'NETWORK', 3:'DECODE', 4:'SRC_NOT_SUPPORTED'};
-                        // ffmpeg stderr 로그 확인
-                        try {
-                            const logResp = await fetch('api.php?action=transcode_log');
-                            if (logResp.ok) {
-                                const logText = await logResp.text();
-                                if (logText) {
-                                    const lines = logText.split('\n').filter(l => l.trim());
-                                }
-                            }
-                        } catch(le) {}
+                        // ★ (2026-11-01 11:50, 39차 점검) 관리자 전용 ffmpeg 로그(transcode_log, 일반 사용자는 403)를 받아 버리기만 하고, 사용자에겐 배지 변화가 없어
+                        //   '실시간 변환 중...'에 멈춘 채 남았음 → 로그 요청을 빼고 배지에 오류 표시(아이폰 MMS 분기와 같게)
+                        if (!String(video.currentSrc || video.src || '').includes(pcSid)) return;   // 그사이 다른 재생 방식으로 바뀐 영상이면 건드리지 않음
+                        const badge = document.querySelector('.video-stream-badge');
+                        if (badge) badge.textContent = '❌ ' + t('vbadge_play_failed', '재생 실패') + (codes[e.code] ? ' (' + codes[e.code] + ')' : '');
                     }
                 }, { once: true });
                 
@@ -42061,6 +45061,7 @@ const App = {
             const audioIdx = e.target.value;
             const video = document.querySelector('#preview-content .preview-video');
             if (!video) return;
+            const _acWasPlaying = !video.paused;   // ★ (2026-11-14 01:58, 124차) 아래 HLS 정리(destroy)가 영상을 먼저 멈추므로 맨 앞에서 재생 중이었는지 잡아 둠(화질 바꾸기의 wasPaused 와 같음)
             
             // 현재 실제 재생 중인 baseUrl에서 audio 파라미터 확인 (클로저 baseUrl 대신 live 값 사용)
             const liveBaseUrl = video.getAttribute('data-transcode-base') || baseUrl;
@@ -42163,6 +45164,7 @@ const App = {
                 const _isMultiAudio = !!document.getElementById('audio-track-picker');
                 if (_isMultiAudio) {
                     // iOS와 동일 정리 단계
+                    video._pendingResumeAfterQuality = _acWasPlaying;   // ★ (2026-11-14 01:58, 124차) 재생 중이었으면 새 음성으로 이어 재생 — 화질 바꾸기·⚙ 음성(45727행대)과 같은 표시. 종전엔 이 갈래(여러 음성 #audio-track-picker — 새 플레이어 ⚙ 오디오도 이 상자)만 빠져, 보던 중 음성을 바꾸면 멈춘 채 남았음(재현)
                     if (video._mmsCleanup) video._mmsCleanup();
                     video.pause();
                     video.removeAttribute('src');
@@ -42218,6 +45220,7 @@ const App = {
             }
             
             // iOS: _startTranscode 재호출
+            video._pendingResumeAfterQuality = _acWasPlaying;   // ★ (2026-11-14 01:58, 124차) 위 PC 갈래와 같음(iOS 화질 바꾸기의 이어 재생 처리 — canplay 뒤 play, 막히면 조용히 넘어감)
             if (video._mmsCleanup) video._mmsCleanup();
             // 비디오 정지 및 src 초기화 (이전 재생 상태 완전 정리)
             video.pause();
@@ -42318,7 +45321,7 @@ const App = {
     _startDirectStream(storageId, path, info, badgeParent, fileSize, opt) {
         const video = document.querySelector('#preview-content .preview-video');
         if (!video) return;
-        const isKo = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+        const isKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
         // ★ (2026-09-30) opt: { audio: 음성 번호(0부터), start: 시작 위치(초), play: 이어서 재생 } — 음성 전환(_directSwitchAudio)이 다시 부를 때
         const _vpFirst = !opt || (opt.start == null && opt.audio == null);   // ★ (2026-10-04) 이어 보기 — 처음 시작일 때만(음성 변경 등은 제외)
         opt = opt || {};
@@ -42383,8 +45386,13 @@ const App = {
         // ★ (2026-09-30) 영상을 풀지 못하는 경우(아이폰이 지원하지 않는 H.264 10비트 등 — 소리만 나오고 화면 폭·높이 0) 트랜스코딩으로.
         //   loadedmetadata 가 아니라 첫 화면 준비(loadeddata) 1.5초 뒤에 본다 — 아이폰은 loadedmetadata 때 폭·높이가 아직 0(펜닐 로그 17:36).
         //   전환 방식은 기존 '코덱 미지원 감지'와 같다(트랜스코딩 표시 → _startTranscode — 원본 스트리밍 hls 정리·_directActive 해제는 거기서).
+        // ★ (2026-10-31 13:45, 34차 후속 개선) 음성 전환으로 이 함수를 다시 부르면 앞 호출의 1.5초 검사가 취소되지 않아, 새 hls 가 다시 붙는 동안(폭 0)
+        //   트랜스코딩으로 잘못 넘어갈 수 있었음 — 호출마다 표식을 영상에 두고 검사 때 같은 호출인지 확인
+        const _dsDimsToken = {};
+        video._dsDimsToken = _dsDimsToken;
         const checkVideoDims = () => {
             setTimeout(() => {
+                if (video._dsDimsToken !== _dsDimsToken) return;
                 if (fellBack || !video.isConnected || !this._directActive) return;
                 if (video.videoWidth > 0 || video.videoHeight > 0) return;
                 fellBack = true;
@@ -42431,6 +45439,9 @@ const App = {
             //   그 상태로 받아 둔 범위 밖으로 옮기면 startstreaming 이 오지 않아 조각을 하나도 요청하지 않고 멈췄다(펜닐 로그 11:33 — 버퍼 34.6초 뒤
             //   1006.9초로 이동, 요청 0건. 버퍼가 거의 빌 때 옮긴 영상은 정상). 받아 둔 범위 밖으로 옮기거나 버퍼가 바닥나 멈추면 지금 위치부터 다시 받게 한다
             //   (resumeBuffering = startLoad(-1)). 차면 브라우저가 다시 멈춤 신호를 보내 종전 흐름으로. PC 는 이 신호가 없어 영향 없음.
+            // ★ (2026-10-30 11:30) hls.js 1.7.4 로 올림 — 1.7 은 pauseBuffering 이 멈춤(STOPPED) 대신 '받기 일시 중지' 표시만 하고, 이동(seeking) 때 스스로 다시 받으며
+            //   이동 중의 endstreaming 은 무시함(WebKit 버그 321919 대응이 hls.js 안에 들어감). 그래서 아래 'STOPPED 일 때 resumeBuffering' 은 1.7 에선 거의 안 타고,
+            //   뒤로 이동 때 받던 조각 취소(FRAG_LOADING·fragCurrent·abortRequests·resetLoadingState — 1.7.4 에도 같은 이름 확인)는 그대로 동작. 아이폰 실기기 미확인
             const resumeIfNeeded = (why) => {
                 if (video._hlsInstance !== hls || fellBack || !started) return;
                 const t = video.currentTime || 0, b = video.buffered;
@@ -42518,7 +45529,7 @@ const App = {
                 existing.value = (App._directActive || nativeMode) ? 'native' : 'transcode';   // ★ (2026-09-30) 일반재생 빠른 시작 중도 '일반재생'
                 return;
             }
-            const _isKoQ = document.documentElement.lang === 'ko' || navigator.language.startsWith('ko');
+            const _isKoQ = (document.documentElement.lang || navigator.language || '').startsWith('ko');   // ★ (2026-11-10 19:35, 67차 점검) 화면 언어 우선 — 종전엔 영어 화면이어도 브라우저가 한국어면 한국어로 나왔음
             const _sel = document.createElement('select');
             _sel.className = 'playback-mode-select';
             _sel.title = _isKoQ ? '재생 방식 (일반재생: 원본 그대로 / 트랜스코딩: 변환 스트리밍)' : 'Playback mode';
@@ -42689,6 +45700,10 @@ const App = {
                 if (absoluteTime > 0) {
                     newBaseUrl += '&seek=' + absoluteTime.toFixed(2);
                 }
+                // ★ (2026-11-09 20:02, 60차 Z05) 빠른 시작에서 고른 음성(_dsAudio — 서버 음성 목록 순서)을 그 음성의 스트림 번호로 붙임 — 종전엔 audio 없이 시작해 첫 음성으로 돌아갔음(재현). 다국어 영상이면 음성 상자 틀도 만들어 _startTranscode 가 상자를 만들게(⚙ 오디오가 화질·위치를 지키는 기존 음성 변경 경로를 탐 — _fsvsNativeAudioToStream 과 같은 틀)
+                const _z5Ai = Array.isArray(video._fsvsAudioInfo) ? video._fsvsAudioInfo : null;
+                if (App._directActive && _z5Ai && video._dsAudio > 0 && _z5Ai[video._dsAudio] && isFinite(parseInt(_z5Ai[video._dsAudio].index, 10))) newBaseUrl += '&audio=' + parseInt(_z5Ai[video._dsAudio].index, 10);
+                if (_z5Ai && _z5Ai.length >= 2 && !wrap.querySelector('#video-audio-select')) { const _z5Ad = document.createElement('div'); _z5Ad.className = 'video-audio-select'; _z5Ad.id = 'video-audio-select'; wrap.insertBefore(_z5Ad, video.parentNode === wrap ? video : wrap.firstChild); }
                 video.setAttribute('data-transcode-base', newBaseUrl);
                 
                 // ★ 절대 원본 시점 저장 — 다음 변경 시 누적 보정용
@@ -42875,6 +45890,22 @@ const App = {
         });
     },
     
+    // ★ (2026-11-02 10:27, 42차 점검) 전체화면 버튼 위치 처리기(window resize·orientationchange, document fullscreenchange 2종, 틀 class 관찰자)의
+    //   정리가 '미리보기 모달의 style/class 변화'에만 걸려 있어, 재생목록으로 이어 볼 때(hideModal keepOpen + showPreview — 모달 속성 그대로)
+    //   편마다 처리기 4개 × 2~3벌이 옛 틀·영상을 붙잡은 채 쌓였음(20편 +241). → 틀 단위 정리 함수를 등록해 두고, 새로 묶을 때
+    //   같은 틀(트랜스코딩으로 두세 번 묶임)이거나 문서에서 빠진 옛 틀의 것을 먼저 정리한다. 모달 닫힘 정리는 그대로 둠.
+    _fsPosRegister(wrap, cleanup) {
+        const list = App._fsPosCleanups || (App._fsPosCleanups = []);
+        for (let i = list.length - 1; i >= 0; i--) {
+            const it = list[i];
+            if (it.wrap === wrap || !it.wrap.isConnected) {
+                list.splice(i, 1);
+                try { it.cleanup(); } catch (e) {}
+            }
+        }
+        list.push({ wrap, cleanup });
+    },
+
     // 비디오 플레이어 이벤트 바인딩 (트랜스코딩 전환 후 새 비디오 요소에 재바인딩)
     // 전체화면 버튼을 동영상 표시 영역(object-fit:contain 여백 제외) 우하단 안쪽에 배치.
     //   기기 세로 길이가 달라도 항상 영상 영역 기준으로 일정하게 위치.
@@ -42991,19 +46022,25 @@ const App = {
         setTimeout(_repositionFs2, 1000);
         // 모달 닫힐 때 window 리스너 정리
         const _previewModal2 = document.getElementById('modal-preview');
+        // ★ (2026-11-02 10:27, 42차 점검) 정리를 한 함수로 묶어 틀 단위로 등록(App._fsPosRegister 주석) — 같은 틀에 다시 묶거나 이어 보기로 틀이 바뀌면 앞 것 정리
+        let _fsCleanup2 = null;
+        const _fsPosCleanup2 = () => {
+            window.removeEventListener('resize', _repositionFs2);
+            window.removeEventListener('orientationchange', _repositionFs2);
+            document.removeEventListener('fullscreenchange', _repositionFs2);
+            document.removeEventListener('webkitfullscreenchange', _repositionFs2);
+            _wrapClassObs2.disconnect();
+            if (_fsCleanup2) _fsCleanup2.disconnect();
+        };
         if (_previewModal2) {
-            const _fsCleanup2 = new MutationObserver(() => {
+            _fsCleanup2 = new MutationObserver(() => {
                 if (_previewModal2.style.display === 'none' || !document.body.contains(wrap)) {
-                    window.removeEventListener('resize', _repositionFs2);
-                    window.removeEventListener('orientationchange', _repositionFs2);
-                    document.removeEventListener('fullscreenchange', _repositionFs2);
-                    document.removeEventListener('webkitfullscreenchange', _repositionFs2);
-                    _wrapClassObs2.disconnect();
-                    _fsCleanup2.disconnect();
+                    _fsPosCleanup2();
                 }
             });
             _fsCleanup2.observe(_previewModal2, { attributes: true, attributeFilter: ['style', 'class'] });
         }
+        App._fsPosRegister(wrap, _fsPosCleanup2);
         
         fsBtn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -43249,7 +46286,14 @@ const App = {
         App._fsVpPendingAutoPlay = false;  // 무조건 1회용 소비
         if (!video) return;
         const wrapper = video.closest('.video-player-wrap');
+        // ★ (2026-11-09 12:03, 57차 Z05-1) 코덱 확인 뒤 트랜스코딩으로 바뀌면 영상 요소가 새로 만들어지므로(같은 틀 안) 잡아 둔 video 대신 그때그때 다시 읽음 — 종전엔 떨어져 나간 옛 영상만 보아 다음 영상 자동 재생이 안 됐음(재현). 다른 틀(다른 미리보기)의 영상은 보지 않음
+        const _curVideo = () => {
+            const _v = document.querySelector('#preview-content .preview-video');
+            return (_v && (!wrapper || wrapper.contains(_v))) ? _v : null;
+        };
         const _playNow = () => {
+            const video = _curVideo();
+            if (!video) return;
             const _p = video.play();
             if (_p && typeof _p.catch === 'function') {
                 _p.catch(() => { /* 자동 재생 거부 — 사용자 수동 ▶로 폴백, 무시 */ });
@@ -43262,6 +46306,8 @@ const App = {
         //      ★ readyState >= 2 요구 시 preload="metadata" 영상은 안 도달할 수 있어 완화 (펜닐 v5.8.1e)
         const _isFullyReady = () => {
             if (wrapper && wrapper.classList.contains('video-not-ready')) return false;
+            const video = _curVideo();
+            if (!video) return false;
             if (video._isReady === false) return false;
             return video.readyState >= 1;
         };
@@ -43400,8 +46446,9 @@ const App = {
                 videos = all.filter(f => this._vpIsRelated(curFile.name, f.name));
                 if (videos.length === 0) videos = [curFile]; // 안전장치: 최소 자기 자신
                 // 연관 모드는 파일명 자연정렬 (E2가 E10보다 앞에). filter 결과는 새 배열이라 전체 목록엔 영향 없음
+                const _vpColl = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });   // ★ (2026-11-02 14:56, 44차 점검) 비교마다 localeCompare(옵션) 가 Collator 를 새로 만들어 느렸음(1만 개 1.25초, G3#13) → 같은 옵션의 Intl.Collator 하나로(명세상 같은 비교라 순서 같음)
                 videos = videos.slice().sort((a, b) =>
-                    (a.name || '').localeCompare((b.name || ''), undefined, { numeric: true, sensitivity: 'base' })
+                    _vpColl.compare((a.name || ''), (b.name || ''))
                 );
             }
         }
@@ -43770,19 +46817,50 @@ const App = {
     _fallbackToMMSMain(transcodeUrl, video, badge) {
         if (!video) video = document.querySelector('#preview-content .preview-video');
         if (!video) return;
+        // ★ (2026-11-10 16:51, 66차 점검) HLS 실패로 MMS 로 넘어와도 서버 HLS 세션을 끄지 않아 MMS 로 보는 내내 변환이 함께 돌았음(닫을 때야 stop) → 넘어오는 순간 stop(share.php 65차와 같은 패턴)
+        if (video._hlsStopSession) { try { video._hlsStopSession(); } catch (e) {} video._hlsStopSession = null; }
         if (!badge) badge = document.querySelector('.video-stream-badge');
         
         const MSApi = window.ManagedMediaSource || window.MediaSource;
         const mimeType = 'video/mp4; codecs="avc1.640029,mp4a.40.2"';
+        // ★ (2026-11-10 17:18, 66차 점검) 첫 HLS 가 준비(1초 받기) 전에 실패해 여기로 오면 준비 표시가 안 풀려, 재생 가드(_playGuard)가 재생을 바로 멈춰
+        //   'MMS 스트리밍' 인데 0초에 멈춘 채였음(24차 SW 재시작 경로와 같은 누락) → MMS 는 1초 이상 받았을 때, Pipe 는 주소를 넣은 직후 준비 완료로 표시. 이미 준비됐으면 그대로
+        // ★ (2026-11-10 23:50, 69차 재검토) 준비 표시를 풀어도 저절로 재생하지 않음('모든 영상 수동 재생')
+        //   (2026-11-11 00:08 재확인 반영) 넘어오기 전에 이미 준비(재생 가능)였을 때만 MMS·Pipe 가 이어서 재생 — 준비 전이었으면 사용자가 눌러야 재생
+        //   (MMS 가 준비를 먼저 풀고 끊겨 Pipe 로 가거나, 첫 updateend 에 1초 넘게 받혀 같은 처리기 안에서 풀린 경우도 저절로 재생됐음)
+        const _fbWasReady = video._isReady !== false;
+        // ★ (2026-11-11 01:12, 70차) 넘어오기 전에 사용자가 일시정지해 둔 영상이면 MMS·Pipe 가 다시 재생하지 않음 — 종전엔 MMS 의 userPaused 가 늘 false 로 시작해 저절로 다시 재생됐음(69차 R2 지적 2, 원본부터)
+        const _fbUserPaused = !!video._userPaused;
+        const _fbMarkReady = () => {
+            if (video._isReady === false) {
+                App._markNativeHlsReady(video);
+                if (video._hadControls) { try { video.setAttribute('controls', ''); } catch (e) {} }
+                return true;
+            }
+            return false;
+        };
         
         if (MSApi && typeof MSApi.isTypeSupported === 'function' && MSApi.isTypeSupported(mimeType)) {
             try {
                 const mediaSource = new MSApi();
+                // ★ (2026-10-31 13:45, 34차 후속 개선) 본 MMS 경로(_startTranscode)와 달리 _mmsCleanup 을 등록하지 않아, 화질 변경·닫기 정리(_mmsCleanup 이 있을 때만 부름)에서
+                //   MediaSource·blob URL·pause/play 처리기가 정리되지 않고 남았음 — 같은 모양의 정리 함수를 등록
+                let _fbObjUrl = null, _fbAbort = null, _fbOnPause = null, _fbOnPlay = null;
+                video._mmsCleanup = () => {
+                    if (_fbAbort) { try { _fbAbort.abort(); } catch (_) {} }
+                    try { if (mediaSource.readyState === 'open') mediaSource.endOfStream(); } catch (_) {}
+                    if (_fbObjUrl) { try { URL.revokeObjectURL(_fbObjUrl); } catch (_) {} _fbObjUrl = null; }
+                    if (_fbOnPause) video.removeEventListener('pause', _fbOnPause);
+                    if (_fbOnPlay) video.removeEventListener('play', _fbOnPlay);
+                    // ★ (2026-11-01 01:08, 35차 전체 점검) ManagedMediaSource(아이폰·맥 사파리)는 srcObject 로 붙는데 정리에서 떼지 않아, 화질 변경·'원본' 복귀 때 새 src/<source> 대신 끝난 MediaSource 를 계속 잡았음 → srcObject 도 비움
+                    try { if (video.srcObject === mediaSource) video.srcObject = null; } catch (_) {}
+                };
                 if (window.ManagedMediaSource) {
                     video.disableRemotePlayback = true;
                     video.srcObject = mediaSource;
                 } else {
-                    video.src = URL.createObjectURL(mediaSource);
+                    _fbObjUrl = URL.createObjectURL(mediaSource);
+                    video.src = _fbObjUrl;
                 }
                 
                 mediaSource.addEventListener('sourceopen', async () => {
@@ -43791,9 +46869,11 @@ const App = {
                     video._streamMethod = 'MMS';
                     const queue = [];
                     let appending = false;
-                    let userPaused = false;
-                    video.addEventListener('pause', () => { userPaused = true; });
-                    video.addEventListener('play', () => { userPaused = false; });
+                    let userPaused = _fbUserPaused;
+                    _fbOnPause = () => { userPaused = true; };
+                    _fbOnPlay = () => { userPaused = false; };
+                    video.addEventListener('pause', _fbOnPause);
+                    video.addEventListener('play', _fbOnPlay);
                     
                     function appendNext() {
                         if (appending || queue.length === 0 || sourceBuffer.updating) return;
@@ -43803,7 +46883,8 @@ const App = {
                     sourceBuffer.addEventListener('updateend', () => {
                         appending = false;
                         appendNext();
-                        if (!userPaused && video.paused && sourceBuffer.buffered.length > 0) {
+                        if (video._isReady === false && video.buffered.length > 0 && video.buffered.end(0) >= 1.0) _fbMarkReady();
+                        if (_fbWasReady && !userPaused && video.paused && sourceBuffer.buffered.length > 0) {
                             video.play().catch(() => {});
                         }
                     });
@@ -43812,6 +46893,7 @@ const App = {
                     //   브라우저가 끝까지 읽고 서버 ffmpeg 도 영상 끝까지 돌았음. 닫기 정리(_activeAbort·pipe_kill)가 닿도록 연결·세션 번호 저장
                     if (video._mmsAbort) { try { video._mmsAbort.abort(); } catch (_) {} }
                     const mmsMainAbort = new AbortController();
+                    _fbAbort = mmsMainAbort;
                     video._mmsAbort = mmsMainAbort;
                     window._activeAbort = mmsMainAbort;
                     try {
@@ -43834,10 +46916,12 @@ const App = {
                     } catch(e) {
                         if (mmsMainAbort.signal.aborted || !video.isConnected) return;   // ★ (2026-10-29 21:25, 24차 점검) 일부러 멈춘 것이면 Pipe 로 다시 시작하지 않음
                         // MediaSource 도중 실패 → Pipe 스트리밍 (직접 src)
+                        const _fbWasPlaying = !video.paused;   // ★ (2026-11-11 00:38, 69차 재확인 반영) MMS 에서 사용자가 눌러 보던 중이면 Pipe 에서도 이어서 재생(위 _fbWasReady 만 보면 t=0 에 멈췄음)
                         video.srcObject = null;
                         video.src = transcodeUrl;
                         video.load();
-                        video.play().catch(() => {});
+                        _fbMarkReady();
+                        if ((_fbWasReady && !userPaused) || _fbWasPlaying) video.play().catch(() => {});
                         if (badge) badge.innerHTML = '⚡ Pipe ' + t('streaming', '스트리밍');
                         video._streamMethod = 'Pipe';
                     }
@@ -43846,7 +46930,8 @@ const App = {
                 // MediaSource 자체 생성 실패 → Pipe 스트리밍
                 video.src = transcodeUrl;
                 video.load();
-                video.play().catch(() => {});
+                _fbMarkReady();
+                if (_fbWasReady && !_fbUserPaused) video.play().catch(() => {});
                 if (badge) badge.innerHTML = '⚡ Pipe ' + t('streaming', '스트리밍');
                 video._streamMethod = 'Pipe';
             }
@@ -43854,7 +46939,8 @@ const App = {
             // MediaSource API 미지원 → Pipe 스트리밍
             video.src = transcodeUrl;
             video.load();
-            video.play().catch(() => {});
+            _fbMarkReady();
+            if (_fbWasReady && !_fbUserPaused) video.play().catch(() => {});
             if (badge) badge.innerHTML = '⚡ Pipe ' + t('streaming', '스트리밍');
             video._streamMethod = 'Pipe';
         }
@@ -44584,7 +47670,8 @@ const App = {
             frameUrl: (sec) => {
                 const it = App._currentPreviewItem;
                 if (!it || it._vaultBlobUrl || !App._mediaInfoPath || it.path !== App._mediaInfoPath || App._mediaInfoStorageId == null) return null;
-                return `api.php?action=video_frame&storage_id=${App._mediaInfoStorageId}&path=${encodeURIComponent(App._mediaInfoPath)}&t=${Math.max(0, Math.floor(sec || 0))}`;
+                const _fv = App._fsMediaVer(it);   // ★ (2026-11-02 10:33, 42차 점검) 재생바 장면 주소에도 버전 값(_fsMediaVer 주석)
+                return `api.php?action=video_frame&storage_id=${App._mediaInfoStorageId}&path=${encodeURIComponent(App._mediaInfoPath)}&t=${Math.max(0, Math.floor(sec || 0))}` + (_fv ? '&v=' + _fv : '');
             },
             // ★ (2026-10-02) 재생바 미리보기 장면 묶음 주소(스킨 묶음 미리 받기 — 서버가 ffmpeg 1번으로 최대 20장을 캐시에). 조건은 frameUrl 과 같다.
             framesUrl: (secs) => {
@@ -44813,6 +47900,12 @@ const App = {
         if (!video) {
             return;
         }
+        // ★ (2026-11-01 11:38, 39차 점검) 트랜스코딩 전환 때 다시 부르는데(_startTranscode 는 영상 요소를 바꾸지 않고 src 만 바꿈) 같은 요소에 두 번 돌아
+        //   addTextTrack 트랙·자막 타이머·전체화면 처리기가 둘씩 생겼음(아이폰 전체화면 자막 이중 표시 가능) → 같은 영상 요소·같은 자막 목록이면
+        //   이미 붙였거나 붙이는 중이므로 건너뜀. 영상 요소가 실제로 바뀌었으면 새 요소엔 표시가 없어 그대로 다시 붙임. 하나도 못 붙였으면 아래 끝에서 표시를 지움.
+        if (video._subLoadFor === subtitleTracks) return;
+        video._subLoadFor = subtitleTracks;
+        let _subAttached = false;
         
         // ★ video 엘리먼트가 여전히 DOM에 연결되어 있고 모달 내부인지 확인
         // 자막 fetch 중 모달이 닫히면 cleanup이 video를 detach했을 수 있음
@@ -45133,6 +48226,13 @@ const App = {
                             overlay._fsHidden = false;
                         }
                     };
+                    // ★ (2026-10-31 13:44, 34차 후속 개선) 자막을 불러올 때마다 document 에 전체화면 처리기를 붙이고 떼지 않아, 닫힌 영상 요소를 붙잡은 채 쌓였음 —
+                    //   영상에 보관해 다시 부를 때 앞 것을 떼고, 영상이 문서에서 빠지면(아래 subTimer) 뗌
+                    if (video._subFsHandler) {
+                        document.removeEventListener('fullscreenchange', video._subFsHandler);
+                        document.removeEventListener('webkitfullscreenchange', video._subFsHandler);
+                    }
+                    video._subFsHandler = onFullscreenChange;
                     document.addEventListener('fullscreenchange', onFullscreenChange);
                     document.addEventListener('webkitfullscreenchange', onFullscreenChange);
                     
@@ -45149,7 +48249,7 @@ const App = {
                             if (_cues && _cues.length > 0) {
                                 let _t = video._subTextTrack;
                                 if (!_t || ![...video.textTracks].includes(_t)) {
-                                    _t = video.addTextTrack('subtitles', video._subLabel || '자막', 'ko');
+                                    _t = video.addTextTrack('subtitles', video._subLabel || t('subtitle', '자막'), 'ko');   // ★ (2026-11-02 10:32, 42차 점검) 위와 같음(대체 라벨 번역)
                                     video._subTextTrack = _t;
                                 }
                                 if ((!_t.cues || _t.cues.length === 0 || (typeof video._subExpectedOff === 'function' && _t._fsInjOff !== video._subExpectedOff())) && video._subInjectCues) {   // ★ (2026-10-08) 보정값이 바뀌었어도
@@ -45182,7 +48282,14 @@ const App = {
                     // 커스텀 오버레이 타이머
                     const subTimer = setInterval(() => {
                         try {
-                            if (!document.contains(video)) { clearInterval(subTimer); return; }
+                            if (!document.contains(video)) {
+                                clearInterval(subTimer);
+                                // ★ (2026-10-31 13:44, 34차 후속 개선) 영상이 빠지면 전체화면 처리기도 뗌(누수)
+                                document.removeEventListener('fullscreenchange', onFullscreenChange);
+                                document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+                                if (video._subFsHandler === onFullscreenChange) video._subFsHandler = null;
+                                return;
+                            }
                             if (overlay._fsHidden) return; // 전체화면 중이면 스킵
                             // ★ (2026-09-10) 자막 OFF 면 그리지 않는다(1단계 — 일반 재생 경로).
                             if (video._subEnabled === false) {
@@ -45198,13 +48305,14 @@ const App = {
                                 return;
                             }
                             const ct = App._subMediaTime(video) + (video._subSyncOffset || 0);   // ★ (2026-10-07) 스트리밍 보정값 포함
-                            let found = '';
+                            const _hits = [];
                             for (const cue of (video._subCues || cues)) {   // ★ (2026-10-08) ⚙ 에서 자막 파일을 바꾸면 video._subCues 가 바뀜
                                 if (ct >= cue.startTime && ct <= cue.endTime) {
-                                    found = cue.text;
-                                    break;
+                                    // ★ (2026-11-02 14:34, 44차 점검) 겹친 cue(두 사람 대사·ASS 표지판)는 먼저 것만 보이고 뒤 것이 가려졌음(break) → 맞는 cue 를 모두 줄바꿈으로 이어 표시
+                                    _hits.push(cue);
                                 }
                             }
+                            const found = App._subJoinCues(_hits, ct, 'startTime', 'endTime', '\n');   // ★ (2026-11-02 15:17, 44차 재검토) 이어 표시는 지금 진행 중인 cue 만(여럿 맞으면 바로 지금 끝나는 것은 뺌 — SMI·연속 SRT 는 끝=다음 시작이라 경계에서 두 줄이 겹쳐 보였음) + 같은 글자 줄은 한 번만(ASS 레이어 0·1 에 같은 문장을 두는 팬자막이 두 번 보였음)
                             if (found) {
                                 // VTT 허용 태그(i,b,u)만 — ★ (2026-10-29 09:10, 20차) 속성 없는 태그만 되살리는 _subtitleHtml 로(XSS)
                                 overlay.innerHTML = App._subtitleHtml(found);
@@ -45227,12 +48335,14 @@ const App = {
                     } catch (eSo) {}
                     // ★ (2026-10-08) '자막 있음' 알림 — 재생이 시작될 때 한 번(펜닐 요청). 자막 글자가 하나 이상일 때만.
                     if (cues.length > 0) { try { this._armSubNotice(video, sub.name, storageId); } catch (x) {} }
+                    _subAttached = true;
                     break;   // ★ (2026-10-08) 하나만 쓴다 — 나머지는 받지 않음
                 }
             } catch (e) {
                 if (_shownTried) break;
             }
         }
+        if (!_subAttached && !_shownTried && video._subLoadFor === subtitleTracks) video._subLoadFor = null;   // ★ (2026-11-01 11:38, 39차 점검) 위 표시 — 하나도 못 읽었으면 다음 호출이 다시 시도하게
     },
 
     // ★ (2026-10-08) 자막 이름의 언어(ko·en·ja·zh 등) — 영상 이름 뒤에 붙은 부분(영화.ko.srt 의 'ko')에서 찾는다. 모르면 ''.
@@ -45290,7 +48400,7 @@ const App = {
 
     // ★ (2026-10-08) 자막 파일 내용(받은 바이트) → cue 배열 — _loadSubtitles 안에 있던 코드를 그대로 옮김(⚙ '자막 파일' 바꾸기도 같이 쓰려고).
     //   인코딩 자동 감지(UTF-16 LE/BE·UTF-8·EUC-KR) → 형식별 VTT 변환(vtt·srt·smi/sami·ass/ssa) → cue({startTime,endTime,text}) 목록.
-    //   읽을 수 없는 형식·빈 내용이면 null(종전의 continue 와 같음). cue 가 0개여도 빈 배열을 돌려준다(종전과 같음).
+    //   읽을 수 없는 형식·빈 내용이면 null(종전의 continue 와 같음). cue 가 0개여도 null(★ 2026-11-02 14:34, 44차 점검 — 종전엔 빈 배열).
     _subtitleCuesFromBuffer(buffer, ext) {
         // 인코딩 처리: UTF-16 LE/BE, UTF-8, EUC-KR 자동 감지
         let text = '';
@@ -45344,10 +48454,11 @@ const App = {
         const vttLines = vttContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
         let ci = 0;
         while (ci < vttLines.length) {
-            const match = vttLines[ci].match(/(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/);
+            const match = vttLines[ci].match(/((?:\d{1,2}:)?\d{2}:\d{2}\.\d{3})\s*-->\s*((?:\d{1,2}:)?\d{2}:\d{2}\.\d{3})/);   // ★ (2026-11-01 09:45, 38차 점검) WebVTT 는 시를 생략할 수 있는데(00:01.000) h:mm:ss 만 받아 cue 가 0개였음 — 시를 선택으로
             if (match) {
                 const parseTime = (s) => {
                     const p = s.split(':');
+                    if (p.length === 2) p.unshift('0');   // ★ (2026-11-01 09:45, 38차 점검) 시 생략 꼴
                     return parseInt(p[0])*3600 + parseInt(p[1])*60 + parseFloat(p[2]);
                 };
                 const startTime = parseTime(match[1]);
@@ -45363,8 +48474,10 @@ const App = {
             }
             ci++;
         }
-        
-        return cues;
+
+        // ★ (2026-11-02 14:34, 44차 점검) cue 가 0개면 null — 종전엔 [] 를 돌려줘 호출부의 if (!cues) 를 통과해 빈 자막을 '성공'으로 보고
+        //   다음 후보 자막을 시도하지 않았고 ⚙ 자막 바꾸기도 실패 안내가 안 떴음(두 호출부 모두 null 을 실패로 다룸)
+        return cues.length ? cues : null;
     },
 
     // ★ (2026-10-08) '자막 있음' 알림(펜닐 요청 — 팟플레이어의 시작 정보·mpv 시작 메시지처럼) — 스킨의 음량 표시 자리에 'CC 자막: 파일 이름' 1.5초.
@@ -45442,7 +48555,8 @@ const App = {
         smi = smi.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         
         // <SYNC Start=밀리초> 태그 파싱
-        const syncRegex = /<SYNC\s+Start\s*=\s*(\d+)\s*>/gi;
+        // ★ (2026-11-02 14:34, 44차 점검) 'Start="1000"'·'Start=1000 End=…' 를 못 읽어 cue 0개였음 → share.php parseSmi(38차)와 같은 식(따옴표·다른 속성 허용)
+        const syncRegex = /<sync\b[^>]*?\bstart\s*=\s*["']?(\d+)["']?[^>]*>/gi;
         const syncs = [];
         let match;
         
@@ -45475,6 +48589,14 @@ const App = {
         
         // 시간순 정렬 후 VTT 큐 생성
         syncs.sort((a, b) => a.ms - b.ms);
+        // ★ (2026-11-02 14:34, 44차 점검) 같은 시각 블록 합치기 — 언어별로 SYNC 를 따로 둔 두 언어 자막(같은 Start 의 KRCC·ENCC)은 앞 블록의 끝이
+        //   같은 시각의 다음 블록이 되어 길이 0 으로 사라졌음 → 같은 ms 는 글자를 줄바꿈으로 이어 한 블록으로(빈 블록은 글자 없음으로 그대로)
+        for (let i = syncs.length - 1; i > 0; i--) {
+            if (syncs[i].ms === syncs[i - 1].ms) {
+                syncs[i - 1].text = [syncs[i - 1].text, syncs[i].text].filter(Boolean).join('\n');
+                syncs.splice(i, 1);
+            }
+        }
         for (let i = 0; i < syncs.length; i++) {
             // 빈 자막은 cue로 만들지 않음 (다음 자막의 endTime 역할만 함)
             if (!syncs[i].text) continue;
@@ -45621,10 +48743,13 @@ const App = {
             // 전체화면 진입/종료 시 버튼 숨기기/보이기
             vid.addEventListener('webkitbeginfullscreen', () => fsBtn.classList.add('hidden'));
             vid.addEventListener('webkitendfullscreen', () => fsBtn.classList.remove('hidden'));
-            document.addEventListener('fullscreenchange', () => {
+            // ★ (2026-10-31 13:44, 34차 후속 개선) 영상마다 document 에 붙이고 떼지 않아 화면에서 사라진 영상을 붙잡은 채 쌓였음 — 영상이 문서에서 빠졌으면 스스로 뗌
+            const _onBoardFs = () => {
+                if (!document.contains(vid)) { document.removeEventListener('fullscreenchange', _onBoardFs); return; }
                 if (document.fullscreenElement) fsBtn.classList.add('hidden');
                 else fsBtn.classList.remove('hidden');
-            });
+            };
+            document.addEventListener('fullscreenchange', _onBoardFs);
         });
     },
     
@@ -45662,7 +48787,7 @@ const App = {
             // 첨부파일명으로 매칭 시도
             for (const va of videoAttachments) {
                 if (src.includes(encodeURIComponent(va.file)) || src.includes(va.file)) {
-                    videoBaseName = va.name.substring(0, va.name.lastIndexOf('.')).toLowerCase();
+                    videoBaseName = va.name.substring(0, va.name.lastIndexOf('.')).toLowerCase().normalize('NFC');   // ★ (2026-11-02 14:34, 44차 점검) 비교용 NFC
                     break;
                 }
             }
@@ -45671,8 +48796,12 @@ const App = {
             
             // 매칭되는 자막 찾기
             const matchedSubs = subAttachments.filter(sa => {
-                const subBase = sa.name.substring(0, sa.name.lastIndexOf('.')).toLowerCase();
-                return subBase === videoBaseName || subBase.startsWith(videoBaseName) || videoBaseName.startsWith(subBase);
+                // ★ (2026-11-02 14:34, 44차 점검) 탐색기 미리보기와 같은 문제·같은 규칙 — 구분자 검사 없이 앞부분만 보아 '1.mp4' 에 '10.srt' 가 붙었고 NFD/NFC 이름은 짝을 못 찾았음
+                const subBase = sa.name.substring(0, sa.name.lastIndexOf('.')).toLowerCase().normalize('NFC');
+                const _sepB = (c) => c === '.' || c === '-' || c === '_' || c === ' ' || c === '[' || c === '(';
+                // ★ (2026-11-02 16:39, 45차 재확인) 44차에 구분자 없는 앞부분 일치(예: sub3.webm ↔ sub.srt)를 목록에서 뺐는데, 그건 10-08 펜닐 승인 '찾는 규칙·찾은 목록은 그대로, 순서만'(README 2593) 과 어긋났음 → 승인된 규칙으로 되돌리고, 실제 버그(경계가 숫자 중간을 자름 — Episode 1 ↔ Episode 10)만 뺌
+                const _numCutB = (longS, shortS) => /\d/.test(shortS.slice(-1)) && /\d/.test(longS.charAt(shortS.length));
+                return subBase !== '' && (subBase === videoBaseName || (subBase.startsWith(videoBaseName) && (_sepB(subBase.charAt(videoBaseName.length)) || !_numCutB(subBase, videoBaseName))) || (videoBaseName.startsWith(subBase) && (_sepB(videoBaseName.charAt(subBase.length)) || !_numCutB(videoBaseName, subBase))));
             });
             
             if (!matchedSubs.length) return;
@@ -45714,9 +48843,9 @@ const App = {
                         const vttLines = vttContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
                         let ci = 0;
                         while (ci < vttLines.length) {
-                            const match = vttLines[ci].match(/(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})/);
+                            const match = vttLines[ci].match(/((?:\d{1,2}:)?\d{2}:\d{2}\.\d{3})\s*-->\s*((?:\d{1,2}:)?\d{2}:\d{2}\.\d{3})/);   // ★ (2026-11-01 09:45, 38차 점검) 시 생략 VTT(00:01.000)도 읽게(위 _subtitleCuesFromBuffer 와 같음)
                             if (match) {
-                                const parseTime = (s) => { const p = s.split(':'); return parseInt(p[0])*3600 + parseInt(p[1])*60 + parseFloat(p[2]); };
+                                const parseTime = (s) => { const p = s.split(':'); if (p.length === 2) p.unshift('0'); return parseInt(p[0])*3600 + parseInt(p[1])*60 + parseFloat(p[2]); };
                                 const startTime = parseTime(match[1]);
                                 const endTime = parseTime(match[2]);
                                 let txt = '';
@@ -45799,11 +48928,13 @@ const App = {
                         // 타이머로 자막 갱신
                         const subTimer = setInterval(() => {
                             try {
-                                if (!document.contains(video)) { clearInterval(subTimer); return; }
+                                // ★ (2026-10-31 13:44, 34차 후속 개선) 영상이 빠지면 전체화면 처리기(onFS)도 뗌 — 종전엔 영상마다 쌓여 닫힌 영상을 붙잡았음
+                                if (!document.contains(video)) { clearInterval(subTimer); document.removeEventListener('fullscreenchange', onFS); document.removeEventListener('webkitfullscreenchange', onFS); return; }
                                 if (overlay._fsHidden) return;
                                 const ct = video.currentTime + (video._subSyncOffset || 0);
-                                let found = '';
-                                for (const cue of cues) { if (ct >= cue.startTime && ct <= cue.endTime) { found = cue.text; break; } }
+                                const _hits = [];
+                                for (const cue of cues) { if (ct >= cue.startTime && ct <= cue.endTime) _hits.push(cue); }   // ★ (2026-11-02 14:34, 44차 점검) 겹친 cue 모두 줄바꿈으로 이어 표시(종전 break 로 먼저 것만)
+                                const found = App._subJoinCues(_hits, ct, 'startTime', 'endTime', '\n');   // ★ (2026-11-02 15:17, 44차 재검토) 이어 표시는 지금 진행 중인 cue 만(여럿 맞으면 바로 지금 끝나는 것은 뺌 — SMI·연속 SRT 는 끝=다음 시작이라 경계에서 두 줄이 겹쳐 보였음) + 같은 글자 줄은 한 번만(ASS 레이어 0·1 에 같은 문장을 두는 팬자막이 두 번 보였음)
                                 if (found) { overlay.innerHTML = App._subtitleHtml(found); overlay.style.display = 'block'; }   // ★ (2026-10-29 09:10, 20차) XSS — _subtitleHtml
                                 else { overlay.style.display = 'none'; }
                             } catch(e) {}
@@ -45834,6 +48965,7 @@ const App = {
                     _chunked: f._chunked,
                     _totalChunks: f._totalChunks,
                     _chunkSize: f._chunkSize,
+                    _chunkMismatch: f._chunkMismatch,   // ★ (2026-11-01 08:02, 37차 기능 점검 재검토)
                     _tempUrl: currentItem._vaultBlobUrl && f._uuid === (this.files.find(x => x.path === currentItem.path)?._uuid) ? currentItem._vaultBlobUrl : null
                 });
             }
@@ -45864,16 +48996,22 @@ const App = {
         }
         
         // 로딩 표시
-        $('#preview-title').text('🔐 ' + img.name).attr('title', img.name);
+        $('#preview-title').html((window.fsIcoFrom ? window.fsIcoFrom('🔐') : '🔐') + ' ' + App.escapeHtml(img.name)).attr('title', img.name);   // ★ (2026-11-15 21:50, 215차) 제목 칸은 이름 속 이모지를 그대로 두게 됨(fs-icons.js '#preview-title') — 앞 🔐 만 종전처럼 선 그림으로
         $('#preview-content').html('<div style="display:flex;align-items:center;justify-content:center;height:100%;"><div style="text-align:center;"><div style="font-size:1.2em;">🔐</div><div style="margin-top:8px;color:var(--text-secondary,var(--fs-text-2, #666));">' + t('vault_decrypting', '암호화 해제 중...') + '</div></div></div>');
         
+        // ★ (2026-10-31 13:43, 34차 후속 개선) 빠르게 넘기면 늦게 끝난 앞 사진이 지금 사진 위에 그려졌고, 닫은 뒤 끝나면 닫힌 창에 그려졌음 —
+        //   await 뒤 지금 보는 사진이 아니거나 창이 닫혔으면 그리지 않음(복호화 결과 _tempUrl 캐시는 남김)
+        const _isClosed = () => { const _pm = document.getElementById('modal-preview'); return !_pm || _pm.style.display === 'none'; };
+        const _isStale = () => this.galleryImages[this.galleryIndex] !== img || _isClosed();
         try {
             const storageId = img.storageId;
             const path = this.vault.currentVaultPath;
             const key = this.getVaultKey(storageId, path);
             if (!key) throw new Error('Vault key not found');
             
-            const tempId = this._vaultPreviewTemp?.temp_id || E2ECrypto.generateUUID();
+            // ★ (2026-11-01 08:02, 37차 기능 점검 재검토) 사진마다 따로 임시 id — 종전엔 미리보기·앞 사진의 id 를 다시 써서 서버가 같은 임시 파일을 덮어써,
+            //   앞 사진으로 돌아가면 캐시한 주소(_tempUrl)가 마지막 사진 내용을 보여 줬음(37차에 큰 사진 미리보기도 id 를 등록하면서 첫 사진까지 그렇게 됨)
+            const tempId = img._galTempId || (img._galTempId = E2ECrypto.generateUUID());
             
             // ★ (2026-10-29 23:35, 24차 점검) 받기·복호화는 공통 함수로(조각 저장 파일도) — 종전엔 늘 통짜(uuid.enc)만 받아 5MB 넘는 사진은 넘길 때마다 '불러올 수 없습니다'였음(4회차 재검토)
             const decrypted = await this._vaultDecryptFileToArrayBuffer(storageId, path, img._uuid, img.name, key, null, img);
@@ -45894,14 +49032,26 @@ const App = {
             // 임시 URL 캐시
             const tempUrl = `api.php?action=vault_preview_serve&storage_id=${storageId}&path=${encodeURIComponent(path)}&temp_id=${tempId}&name=${encodeURIComponent(img.name)}`;
             img._tempUrl = tempUrl;
+            if (_isClosed()) {   // 닫힌 뒤면 정리 정보도 다시 만들지 않음
+                // ★ (2026-11-01 09:41, 38차 점검) 사진별 임시 id 는 닫을 때 정리 목록에 없어 방금 올린 평문 임시 파일이 서버 자동 정리에만 맡겨졌음 —
+                //   보는 사람이 없으니 바로 정리하고 캐시 주소도 지움
+                img._tempUrl = null; img._galTempId = null;
+                this.api('vault_preview_cleanup', { temp_id: tempId, storage_id: storageId, path: path }).catch(() => {});
+                return;
+            }
             
             // _vaultPreviewTemp 업데이트 (cleanup 시 사용)
             if (!this._vaultPreviewTemp) {
                 this._vaultPreviewTemp = { temp_id: tempId, storage_id: storageId, path: path };
+            } else if (this._vaultPreviewTemp.temp_id !== tempId) {
+                // ★ (2026-11-01 08:02, 37차 기능 점검 재검토) 사진마다 id 가 달라져 나머지는 따로 모아 닫을 때 함께 정리
+                (this._vaultGalleryTemps = this._vaultGalleryTemps || []).push({ temp_id: tempId, storage_id: storageId, path: path });
             }
             
+            if (_isStale()) return;
             this._renderGalleryImg(tempUrl, img.name);
         } catch (e) {
+            if (_isStale()) return;
             $('#preview-content').html('<div class="preview-error">' + t('il_cannot_load_image', '이미지를 불러올 수 없습니다') + '</div>');
         }
         
@@ -45929,13 +49079,14 @@ const App = {
             </div>`);
         document.getElementById('preview-image-zoom-bar').style.display = 'flex';
         const zoomEl = document.getElementById('img-zoom-level');
-        if (zoomEl) zoomEl.textContent = '맞춤';
+        // ★ (2026-10-31 13:36, 34차 후속 개선) 배율 표시 '맞춤' 이 영어 화면에도 한국어로 나오던 것 — t() 로
+        if (zoomEl) zoomEl.textContent = t('zoom_fit_label', '맞춤');
         const newImg = document.querySelector('.preview-image');
         if (newImg) {
             if (newImg.naturalWidth && newImg.naturalHeight) {
                 App._initViewer();
             } else {
-                newImg.addEventListener('load', () => App._initViewer(), { once: true });
+                newImg.addEventListener('load', () => { if (newImg.isConnected) App._initViewer(); }, { once: true });   // ★ (2026-11-11 23:36, 88차 IMV-1) 넘긴 뒤 늦게 다 읽힌 앞 그림이 지금 그림의 뷰어 준비를 걸지 않게
             }
         }
         
@@ -45962,7 +49113,7 @@ const App = {
                     this.galleryImages.push({
                         name: name,
                         path: path,
-                        storageId: storageId
+                        storageId: parseInt(el.getAttribute('data-storage-id'), 10) || storageId   // ★ (2026-11-04 01:39, 54차 점검) 검색 결과 항목은 제 스토리지(data-storage-id)로 — 종전엔 모두 지금 연 그림의 스토리지를 넣어 다른 스토리지 그림이 404·엉뚱한 그림으로 열렸음(재현). 속성 없는 일반 목록은 종전과 같음
                     });
                 }
             }
@@ -46062,6 +49213,7 @@ const App = {
         
         // vault 이미지면 복호화 경로
         if (img._vault) {
+            this.currentPreviewPath = img.path;   // ★ (2026-11-04 01:39, 54차 점검) 보관함 그림 넘기기도 지금 보이는 파일 경로로(다운로드 단추가 처음 연 파일을 받던 것) — 종전엔 안 바꿨음
             this._showVaultGalleryImage(img);
             return;
         }
@@ -46073,6 +49225,7 @@ const App = {
         
         this.currentPreviewPath = img.path;
         this.currentPreviewStorageId = img.storageId;
+        this._previewArchiveEntry = !!img._archiveUrl;   // ★ (2026-11-01 07:18, 37차 기능 점검) 압축 안 그림이면 ⓘ·다운로드 막음(showPreview 설명)
         
         // 기존 Viewer.js 인스턴스를 DOM 교체 전에 먼저 파괴
         if (this._viewerInstance) {
@@ -46097,14 +49250,15 @@ const App = {
         document.getElementById('preview-image-zoom-bar').style.display = 'flex';
         // 줌 레벨 초기화
         const zoomEl = document.getElementById('img-zoom-level');
-        if (zoomEl) zoomEl.textContent = '맞춤';
+        // ★ (2026-10-31 13:36, 34차 후속 개선) 배율 표시 '맞춤' 이 영어 화면에도 한국어로 나오던 것 — t() 로
+        if (zoomEl) zoomEl.textContent = t('zoom_fit_label', '맞춤');
         // 이미지 로드 완료 후 Viewer 초기화
         const newImg = document.querySelector('.preview-image');
         if (newImg) {
             if (newImg.naturalWidth && newImg.naturalHeight) {
                 App._initViewer();
             } else {
-                newImg.addEventListener('load', () => App._initViewer(), { once: true });
+                newImg.addEventListener('load', () => { if (newImg.isConnected) App._initViewer(); }, { once: true });   // ★ (2026-11-11 23:36, 88차 IMV-1) 넘긴 뒤 늦게 다 읽힌 앞 그림이 지금 그림의 뷰어 준비를 걸지 않게
             }
         }
         
@@ -46112,16 +49266,38 @@ const App = {
         this.updateGalleryCounter();
     },
     
-    async loadTextPreview(url, filename) {
+    async loadTextPreview(url, filename, opts) {
+        // ★ (2026-11-04) 10MB 넘는 파일은 앞 1MB 만 Range 로 받아 표시(전체를 받아 탭이 멈추고 죽던 것) — '전체 불러오기'로 종전처럼 전체.
+        //   크기를 모르거나 10MB 이하·서버가 Range 를 안 주면(200) 종전과 똑같이 전체를 받음. 잘린 상태에선 편집 단추를 숨김(잘린 내용 저장 방지)
+        const _TP_LIMIT = 10 * 1024 * 1024, _TP_HEAD = 1024 * 1024;
+        const _tpSize = (opts && !opts.full && Number(opts.size) > _TP_LIMIT) ? Number(opts.size) : 0;
+        let _tpTruncated = false;
         // 에디터 상태 리셋
         this._textEditorMode = false;
         this._editorDirty = false;
         const _eb = document.getElementById('btn-preview-edit');
         if (_eb) { _eb.style.display = 'none'; _eb.textContent = '✏️ ' + t('edit_file', '편집'); }
         
+        // ★ (2026-10-31 12:03, 34차 전체 점검) 요청 순번·시작 때 경로 — 늦게 온 앞 파일 응답이 지금 파일의 화면·편집 정보를 덮어써,
+        //   저장하면 지금 파일 경로에 앞 파일 내용이 써질 수 있었음. 오류 응답(403·404 본문)을 파일 내용처럼 보이던 것도 막음
+        const _tpSeq = this._textPreviewSeq = (this._textPreviewSeq || 0) + 1;
+        const _tpPath = this.currentPreviewPath || '';
         try {
-            const res = await fetch(url);
-            const buffer = await res.arrayBuffer();
+            const res = _tpSize ? await fetch(url, { headers: { Range: 'bytes=0-' + (_TP_HEAD - 1) } }) : await fetch(url);
+            if (_tpSeq !== this._textPreviewSeq || (this.currentPreviewPath || '') !== _tpPath) return;   // 다른 파일(그림·PDF 포함)로 넘어감
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            if (_tpSize && res.status === 206) _tpTruncated = true;
+            let buffer = await res.arrayBuffer();
+            const _tpCrc = _tpTruncated ? '' : this._crc32Hex(buffer);   // ★ (2026-11-14 00:10, 120차) 편집기를 연 때의 지문(읽은 바이트 그대로) — 저장 때 base_crc 로 보내 그사이 다른 곳에서 바뀌었는지 서버가 봄(saveTextEditor)
+            if (_tpSeq !== this._textPreviewSeq || (this.currentPreviewPath || '') !== _tpPath) return;   // 다른 파일(그림·PDF 포함)로 넘어감
+            if (_tpTruncated) {
+                // 잘린 끝의 덜 끝난 글자 때문에 UTF-8 판정이 EUC-KR 로 틀리지 않게 끝을 글자 경계로 맞춤(UTF-16 은 짝수 바이트)
+                const _b = new Uint8Array(buffer);
+                let _cut = _b.length;
+                if ((_b[0] === 0xFF && _b[1] === 0xFE) || (_b[0] === 0xFE && _b[1] === 0xFF)) _cut -= (_cut % 2);
+                else { let _i = _cut - 1, _k = 0; while (_i >= 0 && _k < 3 && (_b[_i] & 0xC0) === 0x80) { _i--; _k++; } if (_i >= 0 && _b[_i] >= 0xC0) { const _need = _b[_i] >= 0xF0 ? 3 : (_b[_i] >= 0xE0 ? 2 : 1); if (_k < _need) _cut = _i; } }
+                if (_cut < _b.length) buffer = buffer.slice(0, _cut);
+            }
             const bytes = new Uint8Array(buffer);
             
             // 인코딩 감지
@@ -46153,12 +49329,22 @@ const App = {
             const ext = filename.split('.').pop().toLowerCase();
             const isCode = this.previewExtensions.code.includes(ext);
             
-            const content = isCode 
-                ? `<pre class="preview-code"><code>${text}</code></pre>`
-                : `<pre class="preview-text">${text}</pre>`;
-            
+            // ★ (2026-11-04) 잘렸으면 맨 위에 안내 + '전체 불러오기'(pre 안에 넣어 배치는 종전 그대로)
+            const _tpNote = _tpTruncated
+                ? `<div class="preview-truncated-note" style="white-space:normal;font-family:inherit;margin:0 0 10px;padding:6px 10px;border-radius:6px;background:rgba(255,193,7,0.15);border:1px solid rgba(255,193,7,0.5);color:inherit;display:flex;flex-wrap:wrap;align-items:center;gap:8px;">`
+                  + `<span>${this.escapeHtml(tf('text_preview_truncated', { shown: this.formatSize(buffer.byteLength), total: this.formatSize(_tpSize) }, '파일이 커서 앞부분 {shown}만 표시합니다(전체 {total}).'))}</span>`
+                  + `<button type="button" class="btn btn-sm" id="btn-text-load-full">${this.escapeHtml(t('text_preview_load_full', '전체 불러오기'))}</button></div>`
+                : '';
+            const content = isCode
+                ? `<pre class="preview-code">${_tpNote}<code>${text}</code></pre>`
+                : `<pre class="preview-text">${_tpNote}${text}</pre>`;
+
             $('#preview-title').text(filename).attr('title', filename);
             $('#preview-content').html(content);
+            if (_tpTruncated) {
+                const _lf = document.getElementById('btn-text-load-full');
+                if (_lf) _lf.addEventListener('click', () => { _lf.disabled = true; this.loadTextPreview(url, filename, { full: true }); });
+            }
             // 텍스트 미리보기: 상단 정렬 (이미지용 중앙정렬 해제)
             $('#preview-content').css({ 'align-items': 'flex-start', 'justify-content': 'flex-start' });
             
@@ -46173,7 +49359,10 @@ const App = {
             
             // 편집 버튼 표시 (쓰기 권한 + 원격 스토리지 아닌 경우 또는 원격이어도 write 가능)
             const editBtn = document.getElementById('btn-preview-edit');
-            if (editBtn && this.currentPermissions.can_write && !this.vault?.isVaultView) {
+            if (editBtn && _tpTruncated) {
+                editBtn.style.display = 'none';   // ★ (2026-11-04) 잘린 내용은 편집·저장 못 하게
+                editBtn._editInfo = null;
+            } else if (editBtn && this.currentPermissions.can_write && !this.vault?.isVaultView) {
                 const _editExts = ['txt','md','json','xml','xsl','yaml','yml','ini','conf','cfg',
                     'sh','bash','bat','ps1','cmd','vbs','py','js','ts','tsx','jsx','vue',
                     'css','scss','less','html','htm','php','rb','go','rs','swift','lua','pas','asm',
@@ -46189,11 +49378,12 @@ const App = {
                     try { const _u = new URL(url, location.href); const _q = parseInt(_u.searchParams.get('storage_id')); if (_q) _edSid = _q; } catch (e) {}
                     editBtn._editInfo = {
                         storageId: _edSid,
-                        path: this.currentPreviewPath || '',
+                        path: _tpPath,
                         filename: filename,
                         encoding: detectedEncoding,
                         // ★ (2026-10-29 23:35, 24차 점검) escape 를 되푸는 대신 원문 그대로 — &amp; 를 먼저 풀어 파일 속 글자 '&lt;' '&gt;' 가 '<' '>' 로 바뀌었고 저장하면 그대로 써졌음(4회차 재검토)
-                        rawText: _rawOrigText
+                        rawText: _rawOrigText,
+                        baseCrc: _tpCrc   // ★ (2026-11-14 00:10, 120차) 위 _tpCrc
                     };
                 } else {
                     editBtn.style.display = 'none';
@@ -46201,7 +49391,9 @@ const App = {
                 }
             }
         } catch (e) {
+            if (_tpSeq !== this._textPreviewSeq || (this.currentPreviewPath || '') !== _tpPath) return;   // 다른 파일(그림·PDF 포함)로 넘어감
             this.toast(t('cannot_load_file', '파일을 불러올 수 없습니다.'), 'error');
+            $('#preview-content').html('<div class="preview-error">' + this.escapeHtml(t('cannot_load_file', '파일을 불러올 수 없습니다.')) + '</div>');   // ★ (2026-11-03 23:38, 53차 점검) 창에도 실패 표시(그림 미리보기 실패와 같음) — 종전엔 알림이 사라진 뒤 '로딩 중...' 이 그대로 남았음(재현: 다른 탭에서 지운 파일 열기)
         }
     },
     
@@ -46226,10 +49418,12 @@ const App = {
         this._textEditorMode = true;
         this._editorDirty = false;
         editBtn.textContent = t('cancel_edit', '편집 취소');
+        { const _imm = pc.closest('.modal-preview'); if (_imm && _imm.classList.contains('preview-immersive')) _imm.querySelectorAll('.modal-header, .preview-footer, #preview-image-zoom-bar').forEach(el => el.classList.remove('show-bar')); }   // ★ (2026-11-11 16:25, 76차 MOB-1) 가로(몰입)에서 편집을 시작하면 머리줄·아래 줄을 숨김(위 _setupPreviewImmersive 와 같은 이유)
         
         const ext = info.filename.split('.').pop().toLowerCase();
         
         // 에디터 UI 구성 — 메모장 스타일
+        // ★ (2026-11-13 01:08, 108차 ARIA-4) 찾기 줄 닫기 단추(✕ 그림만)에 이름 — 종전엔 이름이 비었음
         pc.innerHTML = `<div id="np-editor-root" style="display:flex;flex-direction:column;width:100%;height:100%;background:var(--theme-bg,var(--fs-surface, #fff));font-family:'Consolas','Courier New','맑은 고딕',monospace;">
             <div id="np-toolbar" style="display:flex;justify-content:space-between;align-items:center;padding:3px 8px;background:var(--theme-hover,var(--fs-surface-2, #f0f0f0));border-bottom:1px solid var(--theme-border,var(--fs-border-2, #ddd));flex-shrink:0;gap:4px;min-height:30px;">
                 <div style="display:flex;align-items:center;gap:4px;overflow:hidden;min-width:0;flex:1;">
@@ -46257,7 +49451,7 @@ const App = {
                     <button id="np-find-next" class="btn btn-sm" style="padding:2px 8px;font-size:11px;" title="${t('find_next', '다음 찾기')} (Enter)">▼</button>
                     <label style="font-size:11px;display:flex;align-items:center;gap:2px;color:var(--theme-text-secondary,var(--fs-text-2, #666));white-space:nowrap;"><input id="np-find-case" type="checkbox" style="margin:0;"> ${t('match_case', '대/소문자')}</label>
                     <span id="np-find-count" style="font-size:11px;color:var(--theme-text-secondary,var(--fs-text-3, #888));min-width:50px;"></span>
-                    <button id="np-find-close" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--theme-text-secondary,var(--fs-text-3, #888));padding:0 4px;line-height:1;">✕</button>
+                    <button id="np-find-close" aria-label="${t('close','닫기')}" style="background:none;border:none;cursor:pointer;font-size:14px;color:var(--theme-text-secondary,var(--fs-text-3, #888));padding:0 4px;line-height:1;">✕</button>
                 </div>
                 <div style="display:none;align-items:center;gap:4px;margin-top:4px;" id="np-replace-row">
                     <span style="font-size:11px;color:var(--theme-text-secondary,var(--fs-text-2, #666));width:40px;flex-shrink:0;">${t('replace_label', '바꾸기')}</span>
@@ -46289,6 +49483,8 @@ const App = {
         const textarea = document.getElementById('text-editor-area');
         if (!textarea) return;
         
+        // ★ (2026-11-11 02:29, 71차 점검) 원문이 CRLF 로만 되어 있으면 기억 — textarea 가 줄 끝을 LF 로 바꿔, 저장하면 .bat 등 Windows 파일의 CRLF 가 모두 LF 로 바뀌었음(아래 saveTextEditor 에서 되돌림)
+        if (typeof info.rawText === 'string' && info._crlfOnly === undefined) info._crlfOnly = /\r\n/.test(info.rawText) && !/(^|[^\r])\n/.test(info.rawText);
         textarea.value = info.rawText;
         // 초기 줄 수 표시
         const initLines = (textarea.value.match(/\n/g) || []).length + 1;
@@ -46358,6 +49554,9 @@ const App = {
         
         // 초기 + 리사이즈 시 gutter 그리기
         _drawGutter();
+        // ★ (2026-11-01 11:52, 39차 점검) 해제는 _exitTextEditor(취소·Esc)에서만 해, ✕·다른 파일로 닫으면 관찰자가 떼어진 textarea 를 붙든 채 편집할 때마다 하나씩 남았음
+        //   → 새로 만들기 전에 앞 관찰자를 끊음
+        if (this._editorResizeObs) { try { this._editorResizeObs.disconnect(); } catch (e) {} this._editorResizeObs = null; }
         this._editorResizeObs = new ResizeObserver(() => _drawGutter());
         this._editorResizeObs.observe(textarea);
         
@@ -46393,10 +49592,15 @@ const App = {
             // Tab → 4칸
             if (e.key === 'Tab') {
                 e.preventDefault();
+                // ★ (2026-11-14 21:18, 133차) 브라우저 입력으로 넣어 Ctrl+Z 기록을 남김 — 종전엔 value 를 통째로 바꿔 그 전 실행 취소 기록이 모두 사라졌음(재현). 안 되는 브라우저는 종전 방식
+                let _tabOk = false;
+                try { _tabOk = document.activeElement === textarea && document.execCommand('insertText', false, '    '); } catch (_) { _tabOk = false; }
+                if (!_tabOk) {
                 const s = textarea.selectionStart, en = textarea.selectionEnd;
                 textarea.value = textarea.value.substring(0, s) + '    ' + textarea.value.substring(en);
                 textarea.selectionStart = textarea.selectionEnd = s + 4;
                 textarea.dispatchEvent(new Event('input'));
+                }
             }
             // Ctrl+S 저장
             if ((e.ctrlKey || e.metaKey) && e.key === 's') {
@@ -46433,6 +49637,7 @@ const App = {
             setTimeout(() => _drawGutter(), 50);
         });
         // 초기 줄바꿈 on 상태
+        this._editorWordWrap = true;   // ★ (2026-11-04 01:39, 54차 점검) 글 칸·단추를 늘 '켜짐'으로 그리므로 기억 값도 맞춤 — 종전엔 앞 편집에서 끈 값(false)이 남아 첫 누름이 아무 변화 없었음(재현)
         const wrapBtn = document.getElementById('np-btn-wrap');
         if (wrapBtn) wrapBtn.style.fontWeight = 'bold';
         
@@ -46574,10 +49779,23 @@ const App = {
             const selected = textarea.value.substring(s, e);
             const match = caseCheck?.checked ? selected === q : selected.toLowerCase() === q.toLowerCase();
             if (match) {
+                // ★ (2026-11-14 21:18, 133차) 바꾸기 1개도 Tab 과 같게 브라우저 입력으로(Ctrl+Z 기록 유지). 바꿀 글이 빈 값이거나 안 되는 브라우저는 종전 방식
+                let _rpOk = false;
+                if (r !== '') {
+                    try {
+                        const _rpFocus = document.activeElement;
+                        textarea.focus(); textarea.setSelectionRange(s, e);
+                        _rpOk = document.execCommand('insertText', false, r);   // 들어갔으면 아래 종전 방식으로 다시 바꾸지 않음(두 번 바뀜 방지)
+                        if (_rpOk && textarea.value.substring(s, s + r.length) === r) { textarea.selectionStart = s; textarea.selectionEnd = s + r.length; }
+                        if (_rpFocus && _rpFocus !== textarea && typeof _rpFocus.focus === 'function') _rpFocus.focus();
+                    } catch (_) { _rpOk = false; }
+                }
+                if (!_rpOk) {
                 textarea.value = textarea.value.substring(0, s) + r + textarea.value.substring(e);
                 textarea.selectionStart = s;
                 textarea.selectionEnd = s + r.length;
                 textarea.dispatchEvent(new Event('input'));
+                }
             }
             findNext(false);
         };
@@ -46603,10 +49821,10 @@ const App = {
         
         // Enter → 다음 찾기
         findInput?.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); findNext(e.shiftKey); }
+            if (e.key === 'Enter') { e.preventDefault(); findNext(e.shiftKey); findInput.focus(); }   // ★ (2026-11-12 19:14, 102차 KBD-2) Enter 뒤 포커스를 찾기 칸에 둠(메모장식) — findNext 가 본문으로 포커스를 옮겨 Enter 를 한 번 더 누르면 찾은 글이 줄바꿈으로 바뀌었음(재현). 단추 클릭은 그대로
         });
         replaceInput?.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') { e.preventDefault(); replaceOne(); }
+            if (e.key === 'Enter') { e.preventDefault(); replaceOne(); replaceInput.focus(); }   // ★ (2026-11-12 19:14, 102차 KBD-2) 위와 같은 이유로 바꾸기 칸에 포커스 유지
         });
     },
     
@@ -46686,6 +49904,17 @@ const App = {
         bd.scrollLeft = textarea.scrollLeft;
     },
     
+    // ★ (2026-11-14 00:10, 120차) CRC32(16진 8자리, PHP hash('crc32b') 와 같은 값) — 텍스트 편집기 '연 뒤 바뀜' 확인용 지문(saveTextEditor)
+    _crc32Hex(buf) {
+        try {
+            let tb = App._crc32Tbl;
+            if (!tb) { tb = App._crc32Tbl = new Uint32Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); tb[n] = c >>> 0; } }
+            const b = new Uint8Array(buf); let c = 0xFFFFFFFF;
+            for (let i = 0; i < b.length; i++) c = tb[(c ^ b[i]) & 255] ^ (c >>> 8);
+            return ((c ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
+        } catch (e) { return ''; }
+    },
+
     async saveTextEditor() {
         const editBtn = document.getElementById('btn-preview-edit');
         const textarea = document.getElementById('text-editor-area');
@@ -46693,25 +49922,45 @@ const App = {
         
         const info = editBtn._editInfo;
         const saveBtn = document.getElementById('btn-text-save');
+        if (saveBtn && saveBtn.disabled) return;   // ★ (2026-11-12 17:35, 101차 EDT-2) 이미 저장 중이면 그만(저장 단추를 막는 그 표시) — 종전엔 저장 중 Ctrl+S 가 두 번째 요청을 보내, 뒤 요청이 먼저 끝나면 디스크엔 앞 내용이 남는데 '저장됨'·● 없음(재현). 고친 표시는 위 71차 비교로 남아 다시 저장할 수 있음
         const encSelect = document.getElementById('text-editor-encoding');
         const saveEncoding = encSelect ? encSelect.value : info.encoding;
         if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = t('saving', '저장 중...'); }
         
+        // ★ (2026-11-11 02:29, 71차 점검) 보낸 내용을 기억 — 저장 응답을 기다리는 동안 친 글자나 다른 파일로 바꿔 고친 것까지 '저장됨'으로 표시해, 닫을 때 확인 없이 사라졌음
+        const _sentText = textarea.value;
         try {
-            const res = await this.api('file_text_save', {
+            const _tsReq = (force) => this.api('file_text_save', {   // ★ (2026-11-14 00:10, 120차) 아래 '연 뒤 바뀜' 확인 뒤 같은 요청을 force 로 한 번 더 보내려고 함수로 감쌈(보내는 값은 종전과 같고 base_crc·force 만 더함)
                 storage_id: info.storageId,
                 path: info.path,
-                content: textarea.value,
-                encoding: saveEncoding
-            });
+                base_crc: info.baseCrc || undefined,   // ★ (2026-11-14 00:10, 120차) 연 때(또는 마지막 저장) 지문 — 서버가 지금 파일과 다르면 저장하지 않고 code 'changed_since_open'
+                force: force ? 1 : undefined,
+                content: info._crlfOnly ? _sentText.replace(/\r?\n/g, '\r\n') : _sentText,   // ★ (2026-11-11 02:29, 71차 점검) 원문이 CRLF 면 CRLF 로 저장(위 _crlfOnly)
+                encoding: saveEncoding,
+                orig_encoding: info.encoding   // ★ (2026-11-11 23:44, 88차 개선 G3-3) 거부 문구에 실제 원래 인코딩을 쓰도록 함께 보냄(서버 판정에는 쓰지 않음)
+            }, 'POST', null, 0, 120000 + Math.ceil(_sentText.length / 50000) * 1000);   // ★ (2026-11-12 19:50, 103차 개선 Y2) 이 저장에만 시간 제한(기본 120초 = 서버 api.php 실행 한도, 글자 5만 자마다 1초 더 — 느린 망의 큰 파일 보내기 몫) — 종전엔 응답이 끝내 오지 않으면 단추가 '저장 중...' 으로 막힌 채 다시 저장할 수 없었음(101차 EDT-2 뒤, 재현). 넘기면 기존 실패 안내와 같은 길로 단추가 풀리고 ● 는 남음
+            let res = await _tsReq(false);   // ★ (2026-11-14 00:10, 120차) 위 _tsReq
+            if (res && !res.success && res.code === 'changed_since_open') {   // ★ (2026-11-14 00:10, 120차) 연 뒤 다른 곳에서 바뀜 — 알리고 [덮어쓰기]면 종전처럼 저장, [취소]면 저장하지 않고 고친 내용·표시는 그대로(다시 저장 가능)
+                if (await this.confirmDanger(t('text_changed_overwrite_confirm', '편집기를 연 뒤 다른 곳(다른 창·기기·사용자)에서 이 파일이 바뀌었습니다. 지금 편집기 내용으로 덮어쓰면 그 변경은 사라집니다(버전 관리가 켜져 있으면 이전 버전에 남음). 덮어쓸까요?'), t('warning', '경고'), t('overwrite', '덮어쓰기'))) {
+                    res = await _tsReq(true);
+                } else {
+                    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = t('save', '저장'); }
+                    return;
+                }
+            }
             
             if (res.success) {
                 this.toast(t('file_saved', '파일이 저장되었습니다.'), 'success');
-                info.rawText = textarea.value;
+                info.rawText = _sentText;
+                if (res.crc) info.baseCrc = res.crc;   // ★ (2026-11-14 00:10, 120차) 디스크가 이제 이 내용 — 다음 저장의 기준 지문
+                // ★ (2026-11-11 02:29, 71차 점검) 같은 편집기·같은 파일이고 그 사이 바뀐 게 없을 때만 '고친 표시'를 지움
+                const _sameEditor = (document.getElementById('text-editor-area') === textarea) && (editBtn._editInfo === info) && (textarea.value === _sentText);
+                if (_sameEditor) {
                 this._editorDirty = false;
                 // dirty 표시 리셋
                 const dot = document.getElementById('np-dirty');
                 if (dot) dot.style.display = 'none';
+                }
                 if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = t('save', '저장'); }
                 return;
             } else {
@@ -47031,9 +50280,16 @@ const App = {
     async _restoreVaultKeysFromSession() {
         try {
             const stored = JSON.parse(sessionStorage.getItem('vault_keys') || '{}');
+            // ★ (2026-10-31 12:03, 34차 전체 점검) 같은 키(하위 보관함이 물려받은 키)는 객체 하나를 함께 씀 — 종전엔 항목마다 따로 import 해 객체가 달라져,
+            //   새로고침 뒤 하위 보관함에서 '잠금' 하면 같은 키를 쓰는 상위·형제 보관함이 잠기지 않았음(vaultLock 은 객체가 같은지로 판단)
+            const _byB64 = new Map();
             for (const [cacheKey, b64] of Object.entries(stored)) {
-                const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-                const key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+                let key = _byB64.get(b64);
+                if (!key) {
+                    const raw = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+                    key = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, true, ['encrypt', 'decrypt']);
+                    _byB64.set(b64, key);
+                }
                 this.vault.keys.set(cacheKey, key);
             }
         } catch (e) { /* 복원 실패 무시 */ }
@@ -47045,6 +50301,23 @@ const App = {
             const cacheKey = this._vaultCacheKey(storageId, path);
             const stored = JSON.parse(sessionStorage.getItem('vault_keys') || '{}');
             delete stored[cacheKey];
+            sessionStorage.setItem('vault_keys', JSON.stringify(stored));
+        } catch (e) {}
+    },
+    
+    // ★ (2026-11-01 01:58, 36차 전체 점검) 보관함 해제 뒤 그 경로·하위 경로 키가 메모리·sessionStorage 에 남아, 새로고침 뒤 옛 키로 비밀번호 없이 열렸다
+    //   (같은 폴더를 다른 비밀번호로 다시 암호화하면 옛 키로 올린 파일을 못 풂) → vaultLock 처럼 path 와 path/ 아래 키를 모두 지움
+    _forgetVaultKeysUnder(storageId, path) {
+        const pre = String(storageId) + ':';
+        const match = (ck) => {
+            if (!ck.startsWith(pre)) return false;
+            const p = ck.slice(pre.length);
+            return path === '' || p === path || p.startsWith(path + '/');
+        };
+        for (const ck of Array.from(this.vault.keys.keys())) if (match(ck)) this.vault.keys.delete(ck);
+        try {
+            const stored = JSON.parse(sessionStorage.getItem('vault_keys') || '{}');
+            for (const ck of Object.keys(stored)) if (match(ck)) delete stored[ck];
             sessionStorage.setItem('vault_keys', JSON.stringify(stored));
         } catch (e) {}
     },
@@ -47065,6 +50338,25 @@ const App = {
         return this.vault.keys.get(this._vaultCacheKey(storageId, path));
     },
     
+    // ★ (2026-11-01 07:25, 37차 기능 점검) 키 캐시는 '스토리지:경로' 기준이라, 보관함 이름 바꾸기·옮기기 뒤 같은 경로의 다른 보관함을 옛 키로 열거나
+    //   하위 보관함에 부모 키를 그냥 물려줘, 그 폴더 비밀번호로는 영영 못 푸는 파일이 생겼다 → 쓰기 전에 그 폴더 validator 로 한 번 확인.
+    //   맞으면 true, 틀리면 그 경로 캐시를 지우고 false. 정보를 못 읽거나 validator 가 없으면 true(종전대로 — 막지 않음)
+    async _vaultKeyMatches(storageId, path, key, evict = true) {   // ★ (2026-11-01 12:30, 39차 점검 재검토) evict=false: 부모 키로 하위 보관함을 '확인만' 할 때 — 틀려도 그 폴더에 캐시된 맞는 키를 지우지 않음
+        if (!key) return false;
+        let info;
+        try { info = await this.api('vault_info', { storage_id: storageId, path: path }, 'GET'); } catch (e) { return true; }
+        if (!info || !info.success || !info.is_vault) return true;
+        const validator = info.passwordValidator || info.password_validator;
+        if (!validator) return true;
+        let ok = true;
+        try { ok = await E2ECrypto.verifyPassword(key, validator); } catch (e) { ok = true; }
+        if (!ok && evict) {
+            this.vault.keys.delete(this._vaultCacheKey(storageId, path));
+            this._removeVaultKeyFromSession(storageId, path);
+        }
+        return ok;
+    },
+    
     /** 암호화 폴더 생성 */
     async vaultCreate() {
         
@@ -47074,6 +50366,9 @@ const App = {
             this.toast(t('vault_home_only', '암호화 폴더는 개인 폴더에서만 생성할 수 있습니다.'), 'error');
             return;
         }
+        // ★ (2026-11-01 17:22, 40차 점검) 위 '개인 폴더' 검사는 지금 위치로 하고, 만들기는 PBKDF2(createVault)를 기다린 '뒤'의 위치로 보내, 그사이 위치가 바뀌면
+        //   다른 폴더(개인 폴더 아닌 스토리지 포함)에 보관함이 생기고 키도 그 위치로 저장됐음 → 검사한 위치를 잡아 만들기·키 저장에 씀
+        const _vcSid = this.currentStorage, _vcPath = this.currentPath;
         
         // 기존 폴더 변환 모드인 경우 _vaultConvertExecute로 분기
         if (this._pendingConvertPath) {
@@ -47090,7 +50385,7 @@ const App = {
             return;
         }
         if (pw1.length < 1) {
-            this.toast(t('vault_password_too_short', '비밀번호를 입력하세요.'), 'error');
+            this.toast(t('vault_password_required', '비밀번호를 입력하세요.'), 'error');   // ★ (2026-11-02 10:32, 42차 점검) 검사는 '비었는지'뿐인데 vault_password_too_short 값이 '4자 이상이어야 합니다'라 사실과 달랐음 → 새 키
             return;
         }
         if (pw1 !== pw2) {
@@ -47193,11 +50488,12 @@ const App = {
                 }
                 
                 this._hideConvertProgress();
-                
+
+                const _dotNote = (initRes.skipped_dot > 0) ? ' ' + tf('vault_convert_dot_skipped', {n: initRes.skipped_dot}, '(점으로 시작하는 파일 {n}개는 건너뜀)') : '';   // ★ (2026-11-04) 56차 서버가 건너뛴 점(.) 파일 수(암호화 대상은 그대로)
                 if (errors.length > 0) {
-                    this.toast(`${converted}/${files.length}${t('vault_convert_partial', '개 변환 완료')} (${errors.length}${t('vault_convert_errors', '개 실패')})`, 'warning');
+                    this.toast(`${converted}/${files.length}${t('vault_convert_partial', '개 변환 완료')} (${errors.length}${t('vault_convert_errors', '개 실패')})${_dotNote}`, 'warning');
                 } else {
-                    this.toast(`${converted}${t('vault_convert_complete', '개 파일 암호화 변환 완료')}`, 'success');
+                    this.toast(`${converted}${t('vault_convert_complete', '개 파일 암호화 변환 완료')}${_dotNote}`, 'success');
                 }
                 if (_vaultKept.length > 0) this.toast(tf('vault_orig_kept', {n: _vaultKept.length}, '암호화 사본은 만들었지만 원본 {n}개는 지우지 못했습니다(삭제 권한 없음). 원본이 그대로 남아 있습니다.'), 'warning', 8000);
                 
@@ -47207,21 +50503,21 @@ const App = {
             
             // 신규 암호화 폴더 생성 모드
             const res = await this.api('vault_create', {
-                storage_id: this.currentStorage,
-                path: this.currentPath,
+                storage_id: _vcSid,   // ★ (2026-11-01 17:22, 40차 점검) 위 _vcSid 주석
+                path: _vcPath,
                 folder_name: name,
                 salt: vaultData.salt,
                 password_validator: vaultData.passwordValidator
             });
             
             if (res.success) {
-                const vaultPath = this.currentPath ? this.currentPath + '/' + name : name;
-                this.vault.keys.set(this._vaultCacheKey(this.currentStorage, vaultPath), vaultData.key);
+                const vaultPath = _vcPath ? _vcPath + '/' + name : name;   // ★ (2026-11-01 17:22, 40차 점검) 위 _vcSid 주석
+                this.vault.keys.set(this._vaultCacheKey(_vcSid, vaultPath), vaultData.key);
                 
                 this.toast(t('vault_created', '암호화 폴더가 생성되었습니다.'), 'success');
                 closeModal();
                 $('#vault-create-name').val('');
-                this._saveVaultKeyToSession(this.currentStorage, vaultPath, vaultData.key);
+                this._saveVaultKeyToSession(_vcSid, vaultPath, vaultData.key);
                 $('#vault-create-password').val('');
                 $('#vault-create-password2').val('');
                 this.loadFiles();
@@ -47243,9 +50539,17 @@ const App = {
         
         // 이전 경로 저장 (취소 시 복귀용)
         this._prevPath = this.currentPath || '';
+        const _reqPath = this.currentPath;   // ★ (2026-11-01 09:41, 38차 점검) 키 확인을 기다리는 사이 다른 곳으로 가면 늦게 끝난 쪽이 경로를 덮었음 — await 뒤 위치가 바뀌었으면 그만둠
+        const _isMoved = () => this.currentStorage !== storageId || this.currentPath !== _reqPath;
         
         // 이미 잠금 해제된 vault면 바로 진입
-        if (this.isVaultUnlocked(storageId, path)) {
+        // ★ (2026-11-01 07:25, 37차 기능 점검) 캐시 키가 이 폴더 비밀번호와 맞는지 확인(틀리면 캐시를 지우고 아래 비밀번호 창으로)
+        const _vkOk = this.isVaultUnlocked(storageId, path) && await this._vaultKeyMatches(storageId, path, this.getVaultKey(storageId, path));
+        if (_isMoved()) return;
+        if (_vkOk) {
+            // ★ (2026-11-13 08:10, 109차 NAV2-2) 보관함에 처음 들어갈 때만(보관함 밖에서, 지금 기록이 이 보관함이 아닐 때) 기록을 하나 쌓음 — 종전엔 쌓지 않고 vaultLoadFiles 의 replaceState 가
+            //   바로 앞(부모 폴더) 기록을 보관함 주소로 덮어써 '뒤로'가 부모를 건너뜀(재현, README '원인 미확인' 항목의 원인). 보관함 안 이동·새로 고침은 종전 그대로(replaceState)
+            try { const _hs = history.state; if (!(this.vault && this.vault.isVaultView) && !(_hs && !_hs.board && String(_hs.storageId) === String(storageId) && (_hs.path || '') === path)) history.pushState({ storageId: storageId, path: path, vaultFrom: (_hs && !_hs.board && String(_hs.storageId) === String(storageId)) ? (_hs.path || '') : null }, '', `#storage=${storageId}&path=${encodeURIComponent(path)}`); } catch (e) {}   // ★ (2026-11-13 09:56, 110차 RGR26-4) vaultFrom = 들어오기 직전 기록의 경로(같은 스토리지일 때) — 잠금 때 그 기록으로 '뒤로' 물러날 수 있는지 보려고
             this.currentPath = path;
             this.vault.currentVaultPath = path;
             this.vault.isVaultView = true;
@@ -47257,7 +50561,10 @@ const App = {
         if (this.vault && this.vault.isVaultView) {
             const parentPath = this.vault.currentVaultPath;
             const parentKey = this.getVaultKey(storageId, parentPath);
-            if (parentKey) {
+            // ★ (2026-11-01 07:25, 37차 기능 점검) 하위 보관함 비밀번호가 다르면(다른 보관함을 옮겨 넣은 경우 등) 물려주지 않고 비밀번호 창으로
+            const _pkOk = parentKey && await this._vaultKeyMatches(storageId, path, parentKey);
+            if (_isMoved()) return;   // ★ (2026-11-01 09:41, 38차 점검) 위와 같은 이유
+            if (_pkOk) {
                 // 하위 vault에 같은 키 캐시 → 비밀번호 재입력 불필요
                 this.vault.keys.set(this._vaultCacheKey(storageId, path), parentKey);
                 this.currentPath = path;
@@ -47271,7 +50578,14 @@ const App = {
         
         // vault 정보 가져오기
         const info = await this.api('vault_info', { storage_id: storageId, path: path }, 'GET');
-        if (!info.success || !info.is_vault) {
+        if (_isMoved()) return;   // ★ (2026-11-01 10:14, 38차 점검) vault_info 를 기다리는 사이 다른 곳으로 갔으면 손대지 않음(위 키 확인 분기와 같음)
+        // ★ (2026-11-12 04:39, 92차 VLT-1) 보관함 정보를 못 읽으면(.vault.json 잘림·손상) '보관함 아님'으로 보지 않고 오류만 알림 — 종전엔 그 폴더로 다시 가 목록 자동 감지가 또 여기로 와 10초에 1,688번 요청하며 모래시계로 멈췄음(재현, 원본부터). 이미 그 폴더 안이면 상위 폴더로
+        if (!info.success) {
+            this.toast(info.error || t('nt_error_generic', '오류가 발생했습니다.'), 'error');
+            if (String(this.currentStorage) === String(storageId) && this.currentPath === path) this.navigate(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+            return;
+        }
+        if (!info.is_vault) {
             // vault가 아니면 일반 navigate
             this.navigate(path);
             return;
@@ -47336,6 +50650,7 @@ const App = {
             this.toast(t('vault_unlocked', '암호화 폴더가 잠금 해제되었습니다.'), 'success');
             
             // vault 뷰로 진입
+            try { const _hs = history.state; if (!(this.vault && this.vault.isVaultView) && !(_hs && !_hs.board && String(_hs.storageId) === String(pv.storageId) && (_hs.path || '') === pv.path)) history.pushState({ storageId: pv.storageId, path: pv.path, vaultFrom: (_hs && !_hs.board && String(_hs.storageId) === String(pv.storageId)) ? (_hs.path || '') : null }, '', `#storage=${pv.storageId}&path=${encodeURIComponent(pv.path)}`); } catch (e) {}   // ★ (2026-11-13 08:10, 109차 NAV2-2) 비밀번호로 들어갈 때도 같음(vaultOpenFolder 주석)  ★ (2026-11-13 09:56, 110차 RGR26-4) vaultFrom = 들어오기 직전 기록의 경로(같은 스토리지일 때) — 잠금 때 그 기록으로 '뒤로' 물러날 수 있는지 보려고
             this.currentPath = pv.path;
             this.vault.currentVaultPath = pv.path;
             this.vault.isVaultView = true;
@@ -47362,14 +50677,21 @@ const App = {
             return;
         }
         
+        // ★ (2026-11-01 11:37, 39차 점검) 긴 작업(업로드·해제 등) 끝에 부르는 새로고침이 이미 보관함을 나간 화면에 오면 주소·목록을 보관함으로 덮었음 → 그만둠
+        if (!this.vault.isVaultView) return;
         // URL hash 업데이트 (새로고침 시 경로 유지)
         const hashUrl = `#storage=${storageId}&path=${encodeURIComponent(path)}`;
         if (window.location.hash !== hashUrl) {
             history.replaceState({ storageId: storageId, path: path }, '', hashUrl);
         }
         this.currentPath = path;
+        // ★ (2026-11-01 11:37, 39차 점검) vault_list·메타 복호화를 기다리는 사이 다른 폴더·스토리지·다른 보관함으로 옮기면 늦게 끝난 쪽이
+        //   주소줄·보관함 막대·목록(this.files)을 덮어썼음 → 요청 시점 위치·회차를 잡아 두고 await 뒤 바뀌었으면 그리지 않음(vaultOpenFolder 와 같은 방식)
+        const _vlSeq = this._vaultLoadSeq = (this._vaultLoadSeq || 0) + 1;
+        const _isMoved = () => _vlSeq !== this._vaultLoadSeq || this.currentStorage !== storageId || !this.vault.isVaultView || this.vault.currentVaultPath !== path;
         
         const res = await this.api('vault_list', { storage_id: storageId, path: path }, 'GET');
+        if (_isMoved()) return;
         if (!res.success) {
             this.toast(res.error, 'error');
             return;
@@ -47382,19 +50704,22 @@ const App = {
         const items = [];
         for (const f of (res.files || [])) {
             let meta = { name: f.uuid + '.enc', size: f.enc_size, type: 'application/octet-stream' };
+            let _metaOk = false;
             try {
                 if (f.enc_meta) {
                     meta = await E2ECrypto.decryptMeta(key, f.enc_meta);
+                    _metaOk = true;
                 }
             } catch (e) {
             }
+            if (_isMoved()) return;   // ★ (2026-11-01 11:37, 39차 점검) 위 _isMoved 참고 — 복호화 중 옮겼으면 그만둠
             
             const ext = (meta.name || '').split('.').pop().toLowerCase();
             items.push({
                 name: meta.name,
                 path: path + '/' + f.uuid,
                 is_dir: false,
-                size: meta.size || f.enc_size,
+                size: meta.size ?? f.enc_size,   // ★ (2026-11-11 17:01, 76차 VLT-2) 0바이트 파일이 암호문 크기(28 B)로 보이고 이름 바꾸기 때 그 값이 메타에 저장되던 것 — 메타 크기가 없을 때만 암호문 크기
                 modified: f.modified,
                 extension: ext,
                 type: this.getFileType(ext, false),
@@ -47407,7 +50732,9 @@ const App = {
                 // 서버 파일시스템 기준만 사용 (.chunks/ 폴더 존재 여부)
                 _chunked: f.chunked === true,
                 _totalChunks: f.chunk_count || 0,
-                _chunkSize: meta.chunkSize || E2ECrypto.CHUNK_SIZE
+                _chunkSize: meta.chunkSize || E2ECrypto.CHUNK_SIZE,
+                _chunkMismatch: this._vaultChunkMismatch(meta, f),   // ★ (2026-11-01 07:24, 37차 기능 점검) 메타 totalChunks ≠ 실제 조각 수(끊긴 업로드)면 복호화 때 오류로
+                _meta: _metaOk ? meta : null   // ★ (2026-11-01 11:43, 39차 점검) 이름 바꾸기가 메타를 {name,size,type} 만으로 다시 만들어 chunked·totalChunks·chunkSize·lastModified 가 사라졌음 → 원래 메타를 들고 다님
             });
         }
         
@@ -47441,16 +50768,18 @@ const App = {
         // 정렬 적용 (일반 파일 목록과 동일한 정렬 기준 사용)
         const sortBy = this.sortBy || 'name';
         const sortOrder = this.sortOrder || 'asc';
+        const _vlCollBase = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });   // ★ (2026-11-02 14:56, 44차 점검) 비교마다 localeCompare(옵션) 가 Collator 를 새로 만들어 느렸음(1만 개 1.25초, G3#13) → 같은 옵션의 Intl.Collator 하나로(명세상 같은 비교라 순서 같음)
+        const _vlCollNum = new Intl.Collator(undefined, { numeric: true });
         items.sort((a, b) => {
             // 폴더 먼저
             if (a.is_dir !== b.is_dir) return b.is_dir - a.is_dir;
             let cmp = 0;
             switch (sortBy) {
-                case 'name': cmp = (a.name || '').localeCompare(b.name || '', undefined, { numeric: true, sensitivity: 'base' }); break;
-                case 'date': cmp = new Date(a.modified || 0) - new Date(b.modified || 0); break;
+                case 'name': cmp = _vlCollBase.compare((a.name || ''), (b.name || '')); break;
+                case 'date': cmp = new Date((typeof a.modified === 'string' ? a.modified.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : a.modified) || 0) - new Date((typeof b.modified === 'string' ? b.modified.replace(/^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/, '$1T$2') : b.modified) || 0); break;   // ★ (2026-11-10 10:29, 62차 D9) 옛 Safari 에서 NaN → 보관함 날짜 정렬이 안 됐음
                 case 'size': cmp = (a.size || 0) - (b.size || 0); break;
                 case 'type': cmp = (a.extension || '').localeCompare(b.extension || ''); break;
-                default: cmp = (a.name || '').localeCompare(b.name || '', undefined, { numeric: true }); break;
+                default: cmp = _vlCollNum.compare((a.name || ''), (b.name || '')); break;
             }
             return sortOrder === 'desc' ? -cmp : cmp;
         });
@@ -47458,6 +50787,7 @@ const App = {
         // 파일 목록 렌더링
         this._renderVaultFiles(items);
         this.files = items;
+        try { this.updateSelectionUI(); } catch (e) {}   // ★ (2026-10-30 14:39, 재검토) 보관함 폴더를 열면 상태줄 항목 수·세부 정보 창을 그 폴더로(종전엔 앞 폴더 값이 남았음)
         
         // 선택 상태 초기화
         this.selectionAnchor = -1;
@@ -47483,8 +50813,9 @@ const App = {
         const toolbar = document.createElement('div');
         toolbar.id = 'vault-toolbar';
         toolbar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--bg-warning,var(--fs-tint-warn, #fff3cd));border-radius:8px;margin-bottom:8px;flex-wrap:wrap;';
+        // ★ (2026-11-15 11:11, 180차) 띄어쓰기 없는 긴 보관함 이름이 휴대폰에서 막대 밖으로 158px 잘렸음(재현: 제목 12~548px / 화면 390px) → 제목만 칸 안에서 줄 바꿈
         toolbar.innerHTML = `
-            <span style="font-weight:600;">🔐 ${this.escapeHtml(folderName)}</span>
+            <span style="font-weight:600;min-width:0;overflow-wrap:anywhere;">🔐 ${this.escapeHtml(folderName)}</span>
             <span style="font-size:0.85em;color:var(--text-secondary,var(--fs-text-2, #666));">${t('vault_unlocked_desc', 'E2E 암호화 폴더')}</span>
             <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;">
                 <button class="btn btn-sm" id="btn-vault-upload-file" style="font-size:0.85em;">📤 ${t('vault_btn_upload', '암호화 업로드')}</button>
@@ -47524,6 +50855,7 @@ const App = {
     /** vault 파일 목록 렌더링 */
     _renderVaultFiles(items) {
         const list = $('#file-list').empty();
+        { const _saWrap = document.querySelector('.select-all-wrap'); if (_saWrap) _saWrap.style.removeProperty('display'); }   // ★ (2026-11-02 17:55, 46차 재검토) 삭제 권한 없는 폴더에서 숨긴 '전체' 칸을 보관함에선 다시 보이게(보관함 체크박스는 늘 그려짐 — 전체 선택 → 내려받기)
         
         if (!items.length) {
             list.html(`<div class="empty-msg">🔐 ${t('vault_empty', '암호화 폴더가 비어있습니다.')}</div>`);
@@ -47548,6 +50880,11 @@ const App = {
             const plainClass = (isPlain ? ' vault-plain' : '') + (isSubVault ? ' is-vault' : '');
             const escapedPath = this.escapeHtml(item.path || '');
             const checkbox = `<input type="checkbox" class="file-checkbox" data-path="${escapedPath}" data-vault-idx="${idx}" onclick="event.stopPropagation();">`;
+            // ★ (2026-11-15 11:07, 180차) 목록 보기 줄을 일반 목록(renderFileItem)과 같은 칸 순서(날짜·유형·크기)로 — 종전엔 크기·날짜 두 칸뿐이라 머리줄(수정한 날짜·유형·크기)과
+            //   어긋나 '수정한 날짜' 아래 크기, '유형' 아래 날짜가 보였고 휴대폰에선 유형 칸이 비었음(재현). 폴더는 일반 목록처럼 크기 칸을 비움
+            const _vIsDir = !!(item.is_dir || item.isDir);
+            const _vExt = (_vIsDir || !(item.name || '').includes('.')) ? '' : (item.name || '').split('.').pop().toLowerCase();   // 181차 — 점 없는 이름은 '파일'(위 일반 목록과 같음)
+            const _vTypeLabel = _vIsDir ? t('type_folder','파일 폴더') : (_vExt ? _vExt.toUpperCase() + ' ' + t('type_file','파일') : t('type_file','파일'));
             
             const html = this.viewMode === 'grid'
                 ? `<div class="file-item vault-file${plainClass}" data-vault-idx="${idx}" data-uuid="${item._uuid || ''}" data-plain="${isPlain}" data-name="${escapedName}" data-path="${escapedPath}">
@@ -47560,8 +50897,9 @@ const App = {
                     <div class="file-check">${checkbox}</div>
                     <div class="file-icon">${icon}</div>
                     <div class="file-name-wrap"><span class="file-name" title="${escapedName}">${escapedName}</span>${badge}</div>
-                    <div class="file-size">${this.formatSize(item.size)}</div>
                     <div class="file-date">${item.modified}</div>
+                    <div class="file-type">${this.escapeHtml(_vTypeLabel)}</div>
+                    <div class="file-size">${_vIsDir ? '' : this.formatSize(item.size)}</div>
                    </div>`;
             htmlParts.push(html);
         });
@@ -47661,6 +50999,9 @@ const App = {
         }
         
         const totalCount = encItems.length + subVaultItems.length;
+        // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 스토리지·보관함 위치는 확인 창 '전'에 잡아 아래 해제에 넘김(선택 삭제 _delSid 와 같은 방식) — 종전엔 창이 뜬 채 '뒤로'로 보관함을 나가면
+        //   확인 뒤 지금 위치(보관함 아님)로 풀려다 '비밀번호가 틀렸습니다'로 실패했음(재현). 뒤로 가지 않으면 값이 같음
+        const _vdSid = this.currentStorage, _vdPath = this.vault.currentVaultPath;
         if (!await this.showConfirmModal({
             title: t('confirm', '확인'),
             content: `<div style="font-size:14px;">${totalCount}${t('vault_decrypt_all_confirm', '개 항목을 암호화 해제하시겠습니까?')}</div>`,
@@ -47679,7 +51020,7 @@ const App = {
             processed++;
             this.toastUpdate(`🔓 ${t('vault_decrypting', '암호화 해제 중...')} ${item.name} (${processed}/${totalAll})`, 'info', 30000);
             try {
-                if (await this.vaultDecryptFile(item) === false) fail++; else success++;
+                if (await this.vaultDecryptFile(item, _vdSid, _vdPath) === false) fail++; else success++;   // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 위 _vdSid 주석
             } catch (e) {
                 fail++;
             }
@@ -47690,7 +51031,7 @@ const App = {
             processed++;
             this.toastUpdate(`🔓 ${t('vault_decrypting', '암호화 해제 중...')} 📁${sv.name} (${processed}/${totalAll})`, 'info', 30000);
             try {
-                await this._decryptSubVaultFolder(sv.path);
+                await this._decryptSubVaultFolder(sv.path, _vdSid, _vdPath);   // ★ (2026-11-12 22:16, 105차 개선 CNF-3) 위 _vdSid 주석
                 success++;
             } catch (e) {
                 fail++;
@@ -47705,11 +51046,16 @@ const App = {
     },
     
     /** sub-vault 폴더의 전체 암호화 해제 (재귀) */
-    async _decryptSubVaultFolder(subPath) {
-        const storageId = this.currentStorage;
-        const parentPath = this.vault.currentVaultPath;
+    async _decryptSubVaultFolder(subPath, sid, vpath) {   // ★ (2026-11-12 22:16, 105차 개선 CNF-3) sid·vpath — 해제 확인 창 전에 잡은 위치(없으면 종전처럼 지금 위치)
+        const storageId = sid || this.currentStorage;
+        const parentPath = vpath || this.vault.currentVaultPath;
         const key = this.getVaultKey(storageId, parentPath);
         if (!key) throw new Error('No vault key');
+        // ★ (2026-11-01 11:51, 39차 점검) 37차에 vaultOpenFolder 는 하위 보관함 비밀번호가 다르면 부모 키를 물려주지 않게 했는데, 해제는 확인 없이 부모 키를
+        //   하위 보관함 키로 캐시해 모든 파일이 이유 없이 실패('N개 실패')하고 틀린 키가 세션에 남았음 → 같은 확인, 다르면 안내하고 그만둠
+        if (!(await this._vaultKeyMatches(storageId, subPath, key, false))) {
+            throw new Error(t('vault_subvault_pw_differs', '비밀번호가 다른 하위 보관함입니다. 그 폴더를 열어 해제하세요.'));
+        }
         
         // 해당 sub-vault 키 캐시 (같은 비밀번호)
         this.vault.keys.set(this._vaultCacheKey(storageId, subPath), key);
@@ -47745,6 +51091,7 @@ const App = {
             
             try {
                 const isChunked = f.chunked === true && (f.chunk_count || 0) > 0;
+                if (this._vaultChunkMismatch(meta, f)) throw new Error(t('vault_err_incomplete_file', '파일 조각 일부가 없습니다(업로드가 중간에 끊긴 파일). 이 파일은 온전히 풀 수 없습니다.'));   // ★ (2026-11-01 07:24, 37차 기능 점검) 조각이 모자란 파일을 잘린 채 저장하던 것
                 
                 if (isChunked) {
                     // 청크 모드: 청크별 다운로드 → 복호화 → 저장
@@ -47763,6 +51110,7 @@ const App = {
                         formData.append('uuid', f.uuid);
                         formData.append('original_name', meta.name);
                         formData.append('chunk_index', ci);
+                        formData.append('dec_job', App._vdJobTok(f.uuid, ci));   // ★ (2026-11-11 17:01, 76차 VLT-1) 해제 한 번의 임의 표식(서버 임시 파일 이름에 붙음)
                         formData.append('total_chunks', totalChunks);
                         formData.append('csrf_token', this.csrfToken);
                         
@@ -47806,6 +51154,7 @@ const App = {
                                 formData.append('uuid', f.uuid);
                                 formData.append('original_name', meta.name);
                                 formData.append('chunk_index', ci);
+                                formData.append('dec_job', App._vdJobTok(f.uuid, ci));   // ★ (2026-11-11 17:01, 76차 VLT-1) 해제 한 번의 임의 표식(서버 임시 파일 이름에 붙음)
                                 formData.append('total_chunks', totalUpChunks);
                                 formData.append('csrf_token', this.csrfToken);
                                 const saveRes = await fetch('api.php?action=vault_decrypt_save_chunk', { method: 'POST', body: formData });
@@ -47864,6 +51213,7 @@ const App = {
                         formData.append('uuid', f.uuid);
                         formData.append('original_name', meta.name);
                         formData.append('chunk_index', ci);
+                        formData.append('dec_job', App._vdJobTok(f.uuid, ci));   // ★ (2026-11-11 17:01, 76차 VLT-1) 해제 한 번의 임의 표식(서버 임시 파일 이름에 붙음)
                         formData.append('total_chunks', totalUpChunks);
                         formData.append('csrf_token', this.csrfToken);
                         
@@ -47884,6 +51234,7 @@ const App = {
         // .vault.json 재귀 삭제
         const rmRes = await this.api('vault_remove', { storage_id: storageId, path: subPath, recursive: true });
         if (!rmRes || !rmRes.success) throw new Error((rmRes && rmRes.error) || t('nt_convert_failed', '실패'));
+        this._forgetVaultKeysUnder(storageId, subPath);   // ★ (2026-11-01 01:58, 36차 전체 점검) 해제한 하위 폴더(와 그 아래) 키를 메모리·세션에서 지움(위에서 캐시해 둔 키 포함)
     },
     
     /** 선택된 vault 파일 일괄 삭제 */
@@ -47910,6 +51261,7 @@ const App = {
         const choice = await new Promise(resolve => {
             const close = (val) => { document.getElementById('download-choice-modal')?.remove(); document.removeEventListener('keydown', escH); resolve(val); };
             const escH = (e) => { if (e.key === 'Escape') close(null); };
+            // ★ (2026-11-02 10:32, 42차 점검) 받기 방식 설명이 일반 받기 창의 download_individual_desc·download_zip_desc 값(암호화 해제 설명 없음)으로 나왔음 → 보관함용 새 키 vault_download_*_desc
             const html = `
                 <div id="download-choice-modal" class="modal-overlay" style="display:flex;align-items:center;justify-content:center;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:10000;">
                     <div style="background:var(--fs-surface, white);border-radius:12px;min-width:340px;max-width:90%;box-shadow:0 10px 40px rgba(0,0,0,0.3);">
@@ -47920,11 +51272,11 @@ const App = {
                         <div style="padding:0 20px 20px;display:flex;flex-direction:column;gap:10px;">
                             <button id="dl-choice-individual" class="btn btn-primary" style="padding:12px;font-size:14px;">
                                 📄 ${t('download_individual','개별 다운로드')}
-                                <div style="font-size:11px;color:rgba(255,255,255,0.8);margin-top:3px;">${t('download_individual_desc','파일을 하나씩 암호화 해제 후 다운로드')}</div>
+                                <div style="font-size:11px;color:rgba(255,255,255,0.8);margin-top:3px;">${t('vault_download_individual_desc','파일을 하나씩 암호화 해제 후 다운로드')}</div>
                             </button>
                             <button id="dl-choice-zip" class="btn btn-secondary" style="padding:12px;font-size:14px;">
                                 🗜️ ${t('download_as_zip','ZIP 압축 다운로드')}
-                                <div style="font-size:11px;color:rgba(0,0,0,0.5);margin-top:3px;">${t('download_zip_desc','암호화 해제 후 하나의 ZIP 파일로 다운로드')}</div>
+                                <div style="font-size:11px;color:rgba(0,0,0,0.5);margin-top:3px;">${t('vault_download_zip_desc','암호화 해제 후 하나의 ZIP 파일로 다운로드')}</div>
                             </button>
                         </div>
                     </div>
@@ -47956,7 +51308,7 @@ const App = {
         try {
             // JSZip 동적 로드
             if (typeof JSZip === 'undefined') {
-                // ★ (2026-10-29 17:55, 22차 점검) 함께 들어 있는 같은 판(assets/vendor/jszip.min.js 3.10.1)을 먼저, 없으면 CDN — 종전엔 CDN 만 써서
+                // ★ (2026-10-29 17:55, 22차 점검) 함께 들어 있는 같은 판(assets/vendor/jszip.min.js 3.10.2 — 2026-10-30 올림)을 먼저, 없으면 CDN — 종전엔 CDN 만 써서
                 //   인터넷이 막힌 사내망에서는 보관함 여러 파일 ZIP 받기가 늘 실패했음(뷰어들은 이미 로컬 파일 사용)
                 const _loadJs = (src) => new Promise((resolve, reject) => {
                     const s = document.createElement('script');
@@ -47974,6 +51326,7 @@ const App = {
             const path = this.vault.currentVaultPath;
             const key = this.getVaultKey(storageId, path);
             const zipFailed = [];   // ★ (2026-10-29 21:32, 24차 점검) 빠진 파일 이름 — 종전엔 실패를 조용히 넘기고 'N개 완료'라고 알렸음
+            const zipNames = new Set();   // ★ (2026-11-01 01:09, 35차 전체 점검) 같은 이름이 둘이면 zip.file 이 앞 것을 덮어 하나가 조용히 빠졌음 → 겹치면 'a (1).txt' 처럼 번호를 붙임
             
             for (let i = 0; i < selectedItems.length; i++) {
                 const item = selectedItems[i];
@@ -47989,7 +51342,17 @@ const App = {
                         if (!resp.ok) throw new Error('Download failed');
                         data = await resp.arrayBuffer();
                     }
-                    if (data) zip.file(item.name, data); else zipFailed.push(item.name);
+                    if (data) {
+                        // ★ (2026-11-01 11:44, 39차 점검) 예전에 들어간 '../x' 같은 보관함 이름이 ZIP 항목 경로가 되지 않게 / \ 를 _ 로(위 renameFile 검사와 한 겹 더)
+                        let zName = String(item.name || '').replace(/[\\/]/g, '_');
+                        if (zipNames.has(zName)) {
+                            const zi = this._splitFileName(item.name);
+                            let zn = 1;
+                            do { zName = `${zi.base} (${zn++})${zi.ext}`; } while (zipNames.has(zName));
+                        }
+                        zipNames.add(zName);
+                        zip.file(zName, data);
+                    } else zipFailed.push(item.name);
                 } catch (e) {
                     zipFailed.push(item.name);
                 }
@@ -48034,7 +51397,7 @@ const App = {
             const res = await fetch('api.php?action=vault_upload', { method: 'POST', body: fd, signal: _signal });
             const json = await res.json();
             if (!json.success) throw new Error(json.error);
-            return;
+            return uuid;   // ★ (2026-11-01 11:52, 39차 점검) 새 파일 uuid 를 돌려줌(덮어쓰기에서 씀 — 다른 호출부는 값을 쓰지 않음)
         }
         
         // 청크 모드
@@ -48047,6 +51410,8 @@ const App = {
         };
         const encMeta = await E2ECrypto.encryptMeta(key, meta);
         
+        // ★ (2026-11-01 07:23, 37차 기능 점검) 조각 업로드가 중간에 실패·취소되면 meta(원래 크기)와 앞 조각만 남아 '잘린 파일'이 정상 파일처럼 보였다 → 그 uuid 를 vault_delete 로 정리하고 오류는 그대로 던짐
+        try {
         for (let i = 0; i < totalChunks; i++) {
             if (_signal?.aborted) throw new DOMException('Aborted', 'AbortError');
             const start = i * E2ECrypto.CHUNK_SIZE;
@@ -48073,11 +51438,28 @@ const App = {
                 this.toastUpdate(`🔐 ${file.name} (${i + 1}/${totalChunks})`, 'info');
             }
         }
+        } catch (e) {
+            await this._vaultCleanupPartialUpload(storageId, path, uuid);
+            throw e;
+        }
+        return uuid;   // ★ (2026-11-01 11:52, 39차 점검) 위 단일 파일 경로와 같음
+    },
+    
+    // ★ (2026-11-01 07:23, 37차 기능 점검) 조각 업로드가 실패·취소됐을 때 그 uuid 의 meta·조각을 지움(실패해도 무시 — 원래 오류를 알리는 게 우선)
+    async _vaultCleanupPartialUpload(storageId, path, uuid) {
+        try { await this.api('vault_delete', { storage_id: storageId, path: path, uuid: uuid }); } catch (e) {}
+        // ★ (2026-11-01 09:42, 38차 점검) 취소는 브라우저 쪽 fetch 만 끊어, 본문이 이미 다 간 조각 요청(첫 조각이면 meta 포함)이 위 삭제보다 늦게 서버에서 저장돼
+        //   반쪽 파일이 다시 남을 수 있었음 — 15초 뒤 같은 uuid 를 한 번 더 지움(uuid 는 업로드마다 새로 만들고 vault_delete 는 없어도 성공이라 부작용 없음)
+        setTimeout(() => { this.api('vault_delete', { storage_id: storageId, path: path, uuid: uuid }).catch(() => {}); }, 15000);
     },
     
     /** vault에서 선택된 파일 일괄 삭제 */
     async _vaultDeleteSelected() {
         const selectedItems = this.getSelectedOrCheckedItems();
+        // ★ (2026-11-01 17:19, 40차 점검) 항목마다 await 하며 지우는데 스토리지·보관함 경로를 반복마다 다시 읽어, 도중(또는 확인 창 + 뒤로 가기)에 다른 스토리지로 가면
+        //   남은 항목을 그 스토리지의 같은 경로에서 휴지통 없이 영구 삭제했음 → 시작할 때 잡은 값만 씀(24차 H264 변환 _convSid 와 같은 방식)
+        const _vdSid = this.currentStorage;
+        const _vdPath = this.vault.currentVaultPath;
         
         if (!selectedItems.length) {
             this.toast(t('prompt_select_items', '항목을 선택하세요.'), 'warning');
@@ -48097,35 +51479,42 @@ const App = {
         
         let success = 0;
         const totalItems = encItems.length + plainItems.length + subVaultItems.length;
+        // ★ (2026-11-02 11:54, 43차 점검) 항목 실패 알림이 바로 뒤 '삭제 중…'·끝 '삭제됨' 알림에 덮여(알림 칸 하나, 다음 프레임에 그림) 한 번도 안 보였음
+        //   → 실패는 모아 두었다가 끝 알림 하나에 'N개 실패: 이름…' 로 합치고, 실패가 있으면 경고(전부 실패면 오류) 색
+        const _vdFails = [];
         
         // 암호화 파일 삭제
         for (let i = 0; i < encItems.length; i++) {
             const item = encItems[i];
             this.toastUpdate(`🗑️ ${t('deleting', '삭제 중...')} ${item.name} (${i + 1}/${totalItems})`, 'info');
             const res = await this.api('vault_delete', {
-                storage_id: this.currentStorage,
-                path: this.vault.currentVaultPath,
+                storage_id: _vdSid,   // ★ (2026-11-01 17:19, 40차 점검) 위 _vdSid 주석
+                path: _vdPath,
                 uuid: item._uuid
             });
-            if (res.success) success++;
-            else this.toast(`${item.name}: ${res.error || t('nt_error_generic', '오류가 발생했습니다.')}`, 'error');
+            if (res && res.success) success++;
+            else _vdFails.push(`${item.name}: ${(res && res.error) || t('nt_error_generic', '오류가 발생했습니다.')}`);   // ★ (2026-11-02 11:54, 43차 점검) 위 _vdFails 주석
         }
         
         // sub-vault 폴더 삭제 (영구 삭제 — 휴지통 안 감)
         for (const sv of subVaultItems) {
-            const res = await this.api('delete', { storage_id: this.currentStorage, path: sv.path, permanent: true });
-            if (res.success) success++;
-            else this.toast(`${sv.name}: ${res.error || t('nt_error_generic', '오류가 발생했습니다.')}`, 'error');
+            const res = await this.api('delete', { storage_id: _vdSid, path: sv.path, permanent: true });   // ★ (2026-11-01 17:19, 40차 점검) 위 _vdSid 주석
+            if (res && res.success) success++;
+            else _vdFails.push(`${sv.name}: ${(res && res.error) || t('nt_error_generic', '오류가 발생했습니다.')}`);   // ★ (2026-11-02 11:54, 43차 점검) 위 _vdFails 주석
         }
         
         // 일반(plain) 파일/폴더 삭제 (영구 삭제)
         for (const pl of plainItems) {
-            const res = await this.api('delete', { storage_id: this.currentStorage, path: pl.path, permanent: true });
-            if (res.success) success++;
-            else this.toast(`${pl.name}: ${res.error || t('nt_error_generic', '오류가 발생했습니다.')}`, 'error');
+            const res = await this.api('delete', { storage_id: _vdSid, path: pl.path, permanent: true });   // ★ (2026-11-01 17:19, 40차 점검) 위 _vdSid 주석
+            if (res && res.success) success++;
+            else _vdFails.push(`${pl.name}: ${(res && res.error) || t('nt_error_generic', '오류가 발생했습니다.')}`);   // ★ (2026-11-02 11:54, 43차 점검) 위 _vdFails 주석
         }
         
-        if (success > 0) {
+        if (_vdFails.length) {
+            // ★ (2026-11-02 11:54, 43차 점검) 성공·실패 요약 하나로(위 _vdFails 주석)
+            this.toast(`${success}${t('items_deleted', '개 항목 삭제됨')} (${_vdFails.length}${t('count_failed', '개 실패')}: ${_vdFails.slice(0, 3).join(' / ')}${_vdFails.length > 3 ? ' …' : ''})`, success > 0 ? 'warning' : 'error', 10000);
+            if (success > 0) this.vaultLoadFiles();
+        } else if (success > 0) {
             this.toast(`${success}${t('items_deleted', '개 항목 삭제됨')}`, 'success');
             this.vaultLoadFiles();
         }
@@ -48152,6 +51541,7 @@ const App = {
                 _plain: f._plain,
                 _subVault: f._subVault || false,
                 _chunked: f._chunked, _totalChunks: f._totalChunks, _chunkSize: f._chunkSize,   // ★ (2026-10-29 17:53, 22차 점검) 조각 저장 정보(붙여넣기 때 복호화에 필요)
+                _chunkMismatch: f._chunkMismatch,   // ★ (2026-11-01 09:40, 38차 점검) 끊긴 조각 표시도 클립보드에 — 빠져서 보관함 붙여넣기가 잘린 파일을 그대로 만들던 것
                 _vaultPath: this.vault.currentVaultPath,
                 _vaultStorageId: this.currentStorage
             })),
@@ -48164,8 +51554,9 @@ const App = {
         const _n = selectedItems.length;
         if (mode === 'cut') this.toastResponsive(tf('nt_clip_cut_pc', {n: _n}, `${_n}개 항목을 잘라냈습니다.`), tf('nt_clip_cut_m', {n: _n}, `${_n}개 잘라냄`), 'info');
         else this.toastResponsive(tf('nt_clip_copy_pc', {n: _n}, `${_n}개 항목을 복사했습니다.`), tf('nt_clip_copy_m', {n: _n}, `${_n}개 복사됨`), 'info');
+        this.updatePasteButton();   // ★ (2026-11-04 01:39, 54차 점검) 일반 복사·잘라내기처럼 붙여넣기 단추 갱신 — 종전엔 안 불러 PC 하단 단추가 안 뜨거나 옛 개수·모드가 남았음(재현)
     },
-    
+
     /** vault 출처 파일/폴더를 일반 폴더에 붙여넣기 (복호화→일반 업로드) */
     async _vaultPasteToNormal() {
         const _cbAtStart = this.clipboard;   // ★ (2026-10-30 00:56, 25차 — 24차 남은 낮은 것) 끝난 뒤 잘라내기 클립보드를 비울지 판단용(작업 중 새로 복사한 것은 남김 — 일반 붙여넣기와 같음)
@@ -48189,6 +51580,16 @@ const App = {
         
         // 청크 업로드 헬퍼 (413 방지)
         const chunkSize = this.serverConfig?.maxChunkSize || (2 * 1024 * 1024);
+        // ★ (2026-11-12 04:46, 92차 개선 RL429-3) 업로드 요청 제한(IP당 분당 1000건, 서버 한도는 그대로)에 걸리면 잠시 기다렸다 같은 요청을 다시 보냄(90차 RGR9-N2 탐색기 업로드와 같은 5·10·15·20·20·20초) — 종전엔 바로 실패로 쳐, 같은 분에 다른 업로드 990건이 있으면 31개 중 22개가 '요청이 너무 많습니다'로 실패했음(재현). 취소·로그아웃·다른 계정이면 멈춤
+        const _rlUser = this.user && this.user.username;
+        const _rlFetch = async (url, fd, signal) => {
+            for (let rl429 = 0; ; rl429++) {
+                const r = await fetch(url, { method: 'POST', body: fd, signal });
+                if (r.status !== 429 || rl429 >= 6 || !this.user || this.user.username !== _rlUser) return r;
+                await new Promise(res => setTimeout(res, Math.min(5000 * (rl429 + 1), 20000)));
+                if (!this.user || this.user.username !== _rlUser) return r;   // 기다리는 사이 취소(signal)됐으면 위 fetch 가 AbortError 로 끝남(종전 취소 처리 그대로)
+            }
+        };
         const _chunkedUpload = async (fileData, fileName, targetStorageId, targetPath, signal, onProgress) => {
             const blob = new Blob([fileData]);
             const totalChunks = Math.max(1, Math.ceil(blob.size / chunkSize));
@@ -48201,7 +51602,7 @@ const App = {
                 fd.append('path', targetPath);
                 fd.append('csrf_token', this.csrfToken);
                 if (onProgress) onProgress(50);
-                const res = await fetch('api.php?action=upload', { method: 'POST', body: fd, signal });
+                const res = await _rlFetch('api.php?action=upload', fd, signal);   // ★ (2026-11-12 04:46, 92차 개선 RL429-3)
                 if (res.status === 413) {
                     // 서버 제한 초과 → 청크 업로드로 폴백 (아래 로직 실행)
                 } else {
@@ -48239,13 +51640,14 @@ const App = {
                 fd.append('duplicateAction', 'rename');
                 fd.append('csrf_token', this.csrfToken);
                 
-                const res = await fetch('api.php?action=upload_chunk', { method: 'POST', body: fd, signal });
+                const res = await _rlFetch('api.php?action=upload_chunk', fd, signal);   // ★ (2026-11-12 04:46, 92차 개선 RL429-3)
                 let json;
                 try { json = await res.json(); } catch(e) {
                     throw new Error(`Chunk ${ci + 1}/${actualTotalChunks} HTTP ${res.status}`);
                 }
                 if (json.csrf_error) {
                     await this.refreshCsrfToken();
+                    if (await this._acctSwitchGuard()) throw new Error(t('account_switched_reload', '다른 탭에서 다른 계정으로 로그인되었습니다. 이 화면은 이전 계정으로 열려 있어 새로 고칩니다.'));   // ★ (2026-11-11 22:04, 85차 RGR4-1)
                     fd.set('csrf_token', this.csrfToken);
                     const retry = await fetch('api.php?action=upload_chunk', { method: 'POST', body: fd, signal });
                     json = await retry.json();
@@ -48365,7 +51767,8 @@ const App = {
                     if (totalFiles === 0 && !pasteAbort.signal.aborted) {
                         // 빈 폴더도 성공으로 카운트
                         // ★ (2026-10-29 23:35, 24차 점검) 단, 목록을 못 읽어 0개면 경고(마지막 알림에 합침, 잘라내기면 클립보드 유지 — 4회차 재검토)
-                        if (scanFailed) _pasteWarns.push(`📁${folderName}: ${t('vault_cut_scan_fail', '일부 폴더를 읽지 못해 원본 폴더를 유지합니다.')}`);
+                        // ★ (2026-11-01 01:58, 36차 전체 점검) 복사인데 잘라내기용 키(vault_cut_scan_fail — ko/en 이 '원본 폴더를 유지합니다')를 써 맞지 않는 문구가 나왔다 → 복사용 새 키(빈 폴더 경로도 복사일 때)
+                        if (scanFailed) _pasteWarns.push(`📁${folderName}: ${mode === 'cut' ? t('vault_cut_scan_fail', '일부 폴더를 읽지 못해 원본 폴더를 유지합니다.') : t('vault_copy_scan_fail', '일부 폴더를 읽지 못했습니다.')}`);
                         success++;
                         continue;
                     }
@@ -48380,12 +51783,13 @@ const App = {
                         this.toastUpdate(`🔓 ${_fileLabel} ${t('vault_decrypting', '암호화 해제 중...')}`, 'info', 60000);
                         
                         try {
-                            if (!af.key) throw new Error('Vault key not found');
+                            if (!af.key) throw new Error(t('vault_paste_locked', '보관함이 잠겨 있습니다. 보관함을 연 뒤 다시 시도하세요.'));   // ★ (2026-11-11 23:40, 88차 개선 G3-2 — 00:07 문구를 붙여넣기 전용 키로) 잠근 보관함 항목 붙여넣기 실패 문구를 번역 키(vault_paste_locked)로 — 종전엔 한국어 화면에 영어 'Vault key not found'(재현). 실패 판정은 그대로
                             
                             const tempItem = {
                                 _uuid: af.file.uuid,
                                 _chunked: af.file.chunked === true,
                                 _totalChunks: af.file.chunk_count || 0,
+                                _chunkMismatch: this._vaultChunkMismatch(af.meta, af.file),   // ★ (2026-11-01 07:24, 37차 기능 점검) 조각이 모자란 파일은 복호화 때 오류
                                 _chunkSize: af.meta.chunkSize || E2ECrypto.CHUNK_SIZE,
                                 _mimeType: af.meta.type,
                                 name: af.meta.name
@@ -48443,15 +51847,18 @@ const App = {
                     if (mode === 'cut' && scanFailed) {
                         _pasteWarns.push(`📁${folderName}: ${t('vault_cut_scan_fail', '일부 폴더를 읽지 못해 원본 폴더를 유지합니다.')}`);
                     } else if (mode === 'cut' && !pasteAbort.signal.aborted && folderProcessed === totalFiles) {
-                        await this.api('delete', {
+                        const _dr = await this.api('delete', {
                             storage_id: srcVaultStorageId,
                             path: it.path
                         });
+                        // ★ (2026-11-01 11:51, 39차 점검) 원본 삭제 결과를 보지 않고 '완료'·클립보드 비움 → 실패면(삭제 권한 없음·잠김) 경고에 넣어 클립보드를 남김
+                        if (!_dr || !_dr.success) _pasteWarns.push(`📁${folderName}: ${t('vault_cut_orig_kept', '원본을 지우지 못해 그대로 남아 있습니다.')}`);
                     } else if (mode === 'cut' && folderProcessed < totalFiles) {   // ★ (2026-10-29 23:35, 24차 점검) 하나도 못 옮긴 경우(0개)도 경고
                         _pasteWarns.push(`📁${folderName}: ${totalFiles - folderProcessed}${t('count_files_failed', '개 파일 실패')} — ${t('vault_cut_partial_fail', '원본 폴더가 유지됩니다.')}`);
                     } else if (mode !== 'cut' && (scanFailed || folderProcessed < totalFiles)) {
                         // ★ (2026-10-29 23:35, 24차 점검) 복사도 빠진 파일이 있으면 경고(종전엔 마지막 '완료' 알림에 덮여 몰랐음)
-                        _pasteWarns.push(`📁${folderName}: ${scanFailed ? t('vault_cut_scan_fail', '일부 폴더를 읽지 못했습니다.') : (totalFiles - folderProcessed) + t('count_files_failed', '개 파일 실패')}`);
+                        // ★ (2026-11-01 01:58, 36차 전체 점검) 복사인데 잘라내기용 키(vault_cut_scan_fail — ko/en 이 '원본 폴더를 유지합니다')를 써 맞지 않는 문구가 나왔다 → 복사용 새 키
+                        _pasteWarns.push(`📁${folderName}: ${scanFailed ? t('vault_copy_scan_fail', '일부 폴더를 읽지 못했습니다.') : (totalFiles - folderProcessed) + t('count_files_failed', '개 파일 실패')}`);
                     }
                     
                     success++;
@@ -48465,7 +51872,7 @@ const App = {
                         const vaultStorageId = it._vaultStorageId || _cbAtStart.storageId;
                         const vaultPath = it._vaultPath;
                         const key = this.getVaultKey(vaultStorageId, vaultPath);
-                        if (!key) throw new Error('Vault key not found');
+                        if (!key) throw new Error(t('vault_paste_locked', '보관함이 잠겨 있습니다. 보관함을 연 뒤 다시 시도하세요.'));   // ★ (2026-11-11 23:40, 88차 개선 G3-2 — 00:07 문구를 붙여넣기 전용 키로) 잠근 보관함 항목 붙여넣기 실패 문구를 번역 키(vault_paste_locked)로 — 종전엔 한국어 화면에 영어 'Vault key not found'(재현). 실패 판정은 그대로
                         
                         // 복호화 진행률 콜백
                         this._vaultDecryptProgress = (phase, pct) => {
@@ -48491,18 +51898,20 @@ const App = {
                     });
                     
                     if (mode === 'cut') {
+                        let _dr = { success: true };
                         if (it._vault && it._uuid) {
-                            await this.api('vault_delete', {
+                            _dr = await this.api('vault_delete', {
                                 storage_id: it._vaultStorageId || _cbAtStart.storageId,
                                 path: it._vaultPath,
                                 uuid: it._uuid
                             });
                         } else if (it._plain && it.path) {
-                            await this.api('delete', {
+                            _dr = await this.api('delete', {
                                 storage_id: it._vaultStorageId || _cbAtStart.storageId,
                                 path: it.path
                             });
                         }
+                        if (!_dr || !_dr.success) _pasteWarns.push(`${it.name}: ${t('vault_cut_orig_kept', '원본을 지우지 못해 그대로 남아 있습니다.')}`);   // ★ (2026-11-01 11:51, 39차 점검) 위 폴더 삭제와 같음
                     }
                     
                     success++;
@@ -48525,7 +51934,7 @@ const App = {
                 this.toast(`${success}${t('count_items', '개 항목')} ${t('paste_complete', '붙여넣기 완료')} · ⚠️ ${_pasteWarns.join(' / ')}`, 'warning', 10000);
             } else {
                 this.toast(`${success}${t('count_items', '개 항목')} ${t('paste_complete', '붙여넣기 완료')}`, 'success');
-                if (mode === 'cut' && this.clipboard === _cbAtStart) this.clipboard = { items: [], mode: 'copy', storageId: null };
+                if (mode === 'cut' && this.clipboard === _cbAtStart) { this.clipboard = { items: [], mode: 'copy', storageId: null }; this.updatePasteButton(); }   // ★ (2026-11-04 01:39, 54차 점검) 비운 뒤 붙여넣기 단추 갱신 — 종전엔 단추가 남아 누르면 '클립보드가 비어있습니다'
             }
             this.loadFiles();
         } else if (_pasteWarns.length > 0) {
@@ -48553,6 +51962,11 @@ const App = {
         }
         
         let success = 0;
+        const _vpDelFails = []; let _vpItemFails = 0;   // ★ (2026-11-01 11:51, 39차 점검) 원본 삭제 실패 이름·실패 항목 수(끝 처리)
+        const _vpFailMsgs = [];   // ★ (2026-11-02 11:54, 43차 점검) 실패 항목 '이름: 이유'(끝 요약 알림용)
+        // ★ (2026-11-01 01:09, 35차 전체 점검) 같은 폴더 복사(복호화→재암호화)가 원래 이름 그대로 올라가 같은 이름이 둘 생겼음(서버는 uuid 로 저장해 막지 않음) →
+        //   지금 보관함 목록의 이름과 겹치면 'a (1).txt' 처럼 바꿔 올림(일반 폴더 복사와 같게). 서버 직접 복사(같은 키·다른 폴더)는 메타를 그대로 옮겨 해당 없음
+        const _pasteNames = new Set((this.files || []).map(f => f && f.name).filter(Boolean));
         const pasteAbort = new AbortController();
         this._vaultPasteAbort = pasteAbort;
         // _vaultUploadOneFile에서 사용할 abort
@@ -48602,7 +52016,7 @@ const App = {
                     const vaultSid = it._vaultStorageId || sourceStorageId;
                     const vaultPath = it._vaultPath || path;
                     const srcKey = this.getVaultKey(vaultSid, vaultPath);
-                    if (!srcKey) throw new Error('Vault key not found');
+                    if (!srcKey) throw new Error(t('vault_paste_locked', '보관함이 잠겨 있습니다. 보관함을 연 뒤 다시 시도하세요.'));   // ★ (2026-11-11 23:40, 88차 개선 G3-2 — 00:07 문구를 붙여넣기 전용 키로) 잠근 보관함 항목 붙여넣기 실패 문구를 번역 키(vault_paste_locked)로 — 종전엔 한국어 화면에 영어 'Vault key not found'(재현). 실패 판정은 그대로
                     
                     // 같은 스토리지 + 같은 키 → 서버에서 직접 처리
                     let sameKey = false;
@@ -48646,34 +52060,54 @@ const App = {
                     fileData = await response.arrayBuffer();
                 }
                 
-                const file = new File([fileData], it.name, { lastModified: Date.now() });
+                let _pName = it.name;
+                if (_pasteNames.has(_pName)) {
+                    const _pi = this._splitFileName(it.name);
+                    let _pn = 1;
+                    do { _pName = `${_pi.base} (${_pn++})${_pi.ext}`; } while (_pasteNames.has(_pName));
+                }
+                const file = new File([fileData], _pName, { lastModified: Date.now() });
                 
                 // 암호화 + vault 업로드
                 await this._vaultUploadOneFile(storageId, path, key, file);
+                _pasteNames.add(_pName);
                 
                 // 잘라내기(cut)면 원본 삭제
                 if (mode === 'cut') {
+                    let _dr;
                     if (it._vault && it._uuid) {
-                        await this.api('vault_delete', { storage_id: it._vaultStorageId || sourceStorageId, path: it._vaultPath || path, uuid: it._uuid });
+                        _dr = await this.api('vault_delete', { storage_id: it._vaultStorageId || sourceStorageId, path: it._vaultPath || path, uuid: it._uuid });
                     } else {
-                        await this.api('delete', { storage_id: sourceStorageId, path: it.path });
+                        _dr = await this.api('delete', { storage_id: sourceStorageId, path: it.path });
                     }
+                    if (!_dr || !_dr.success) _vpDelFails.push(it.name);   // ★ (2026-11-01 11:51, 39차 점검) 원본 삭제 결과를 보지 않았음(아래 끝 처리)
                 }
                 
                 success++;
             } catch (e) {
+                if (e.name !== 'AbortError') _vpItemFails++;   // ★ (2026-11-01 11:51, 39차 점검) 실패한 항목이 있으면 잘라내기 클립보드를 남김(아래)
                 if (e.name === 'AbortError') {
+                    pasteSession.status = 'cancelled';   // ★ (2026-11-01 01:09, 35차 전체 점검) 취소해도 패널 항목이 '완료'(초록)로 바뀌던 것 → '취소됨'
                     this.toast(t('paste_cancelled', '붙여넣기가 취소되었습니다.'), 'warning');
                     break;
                 }
-                this.toast(`${it.name}: ${e.message}`, 'error');
+                _vpFailMsgs.push(`${it.name}: ${e.message}`);   // ★ (2026-11-02 11:54, 43차 점검) 끝 알림에 덮여 안 보였음 → 모아서 끝 요약에(아래)
             }
         }
         this._vaultPasteAbort = null;
         this._vaultUploadAbort = null;
         
+        // ★ (2026-11-01 01:09, 35차 전체 점검) 취소면 '취소됨'으로 표시(vaultUploadFiles 와 같게)
+        if (pasteSession.status === 'cancelled' || pasteAbort.signal.aborted) {
+            pasteSession.status = 'cancelled';
+            const cancelItem = document.getElementById(`upload-session-${sessionId}`);
+            if (cancelItem) {
+                const pct = cancelItem.querySelector('.upload-session-percent');
+                if (pct) { pct.textContent = t('cancelled', '취소됨'); pct.style.color = '#e67e22'; }
+            }
+        }
         // 전송 패널 세션 완료 처리
-        if (pasteSession) {
+        else if (pasteSession) {
             pasteSession.status = 'done';
             pasteSession.percent = 100;
             const uploadItem = document.getElementById(`upload-session-${sessionId}`);
@@ -48681,7 +52115,10 @@ const App = {
                 const fill = uploadItem.querySelector('.upload-session-fill');
                 const pct = uploadItem.querySelector('.upload-session-percent');
                 if (fill) fill.style.width = '100%';
-                if (pct) { pct.textContent = t('completed', '완료'); pct.style.color = '#4CAF50'; }
+                if (pct) {
+                    if (_vpFailMsgs.length) { pct.textContent = `${t('completed', '완료')} (${_vpFailMsgs.length}${t('count_failed', '개 실패')})`; pct.style.color = '#e67e22'; }   // ★ (2026-11-02 11:54, 43차 점검) 실패가 있어도 초록 '완료'였음
+                    else { pct.textContent = t('completed', '완료'); pct.style.color = '#4CAF50'; }
+                }
             }
         }
         
@@ -48697,19 +52134,28 @@ const App = {
             }
         }, 2000);
         
+        // ★ (2026-11-02 11:54, 43차 점검) 항목 실패·원본 삭제 실패를 끝 알림 하나로 합침 — 종전엔 항목 실패가 끝 '완료'(성공) 알림에 덮여 안 보였음. 실패가 있으면 경고(전부 실패면 오류)
+        if (success > 0 || _vpFailMsgs.length) {
+            let _vpMsg = `${success}${t('count_files_vault_paste_complete', '개 파일 암호화 붙여넣기 완료')}`;
+            if (_vpFailMsgs.length) _vpMsg += ` (${_vpFailMsgs.length}${t('count_failed', '개 실패')}: ${_vpFailMsgs.slice(0, 3).join(' / ')}${_vpFailMsgs.length > 3 ? ' …' : ''})`;
+            if (success > 0 && _vpDelFails.length > 0) _vpMsg += ` · ⚠️ ${_vpDelFails.join(', ')}: ${t('vault_cut_orig_kept', '원본을 지우지 못해 그대로 남아 있습니다.')}`;
+            const _vpWarn = _vpFailMsgs.length > 0 || (success > 0 && _vpDelFails.length > 0);
+            this.toast(_vpMsg, !_vpWarn ? 'success' : (success > 0 ? 'warning' : 'error'), _vpWarn ? 10000 : 3000);
+        }
         if (success > 0) {
-            this.toast(`${success}${t('count_files_vault_paste_complete', '개 파일 암호화 붙여넣기 완료')}`, 'success');
-            if (mode === 'cut' && this.clipboard === _cbAtStart) this.clipboard = { items: [], mode: 'copy', storageId: null };
+            // ★ (2026-11-01 11:51, 39차 점검) 원본 삭제 실패·일부 항목 실패가 있어도 잘라내기 클립보드를 비웠음 → 둘 다 없을 때만 비우고, 삭제 실패는 알림
+            if (mode === 'cut' && this.clipboard === _cbAtStart && _vpDelFails.length === 0 && _vpItemFails === 0) { this.clipboard = { items: [], mode: 'copy', storageId: null }; this.updatePasteButton(); }   // ★ (2026-11-04 01:39, 54차 점검) 비운 뒤 붙여넣기 단추 갱신(_vaultPasteToNormal 과 같음)
             this.vaultLoadFiles();
         }
     },
     
     /** vault에 폴더 구조 유지하며 암호화 업로드 */
-    async _vaultUploadWithStructure(files) {
+    async _vaultUploadWithStructure(files, target) {
         // files: [{ file: File, relativePath: 'folder/sub/file.txt' }, ...]
         // 또는 collectFilesFromEntry 결과: [{ file: File, path: 'folder/sub/file.txt' }, ...]
-        const storageId = this.currentStorage;
-        const basePath = this.vault.currentVaultPath;
+        // ★ (2026-11-01 17:17, 40차 점검) target(끌어놓기가 파일 수집 전에 잡은 보관함 위치)이 오면 그 위치·그 키로 — 수집 중 다른 보관함으로 가면 그쪽에 올라갔음
+        const storageId = target ? target.storageId : this.currentStorage;
+        const basePath = target ? target.vaultPath : this.vault.currentVaultPath;
         const key = this.getVaultKey(storageId, basePath);
         if (!key) { this.toast(t('vault_password_wrong'), 'error'); return; }
         
@@ -48731,8 +52177,14 @@ const App = {
         
         // 1) 하위 vault 폴더 생성
         const parentInfo = await this.api('vault_info', { storage_id: storageId, path: basePath }, 'GET');
+        // ★ (2026-11-01 11:39, 39차 점검) 같은 이름의 하위 보관함이 이미 있으면 서버 vault_init 은 'Already a vault' 로 끝나는데(validator 그대로), 결과를 안 보고
+        //   부모 키를 그 폴더 키로 캐시·암호화해, 비밀번호가 다른 하위 보관함이면 그 폴더 비밀번호로 못 푸는 파일이 생겼음
+        //   → vault_init 뒤 _vaultKeyMatches(37차 진입·붙여넣기와 같은 확인)로 보고, 다르면 그 폴더(와 그 아래)는 만들지도 올리지도 않고 건너뜀.
+        const _badDirs = [];
+        const _underBad = (rel) => _badDirs.some(b => rel === b || rel.startsWith(b + '/'));
         
         for (const dir of sortedDirs) {
+            if (_underBad(dir)) continue;
             const fullPath = basePath ? basePath + '/' + dir : dir;
             this.toastUpdate(`📁 ${dir} ${t('vault_creating_folder', '폴더 생성 중...')}`, 'info');
             
@@ -48751,6 +52203,7 @@ const App = {
                     salt: parentInfo.salt,
                     passwordValidator: parentInfo.passwordValidator
                 }).catch(() => {});
+                if (!(await this._vaultKeyMatches(storageId, fullPath, key, false))) { _badDirs.push(dir); continue; }   // ★ (2026-11-01 11:39, 39차 점검) 위 _badDirs 참고
                 // 키 캐시
                 this.vault.keys.set(this._vaultCacheKey(storageId, fullPath), key);
                 this._saveVaultKeyToSession(storageId, fullPath, key);
@@ -48759,6 +52212,7 @@ const App = {
         
         // 2) 파일 암호화 업로드
         let success = 0;
+        let _skippedBad = 0;   // ★ (2026-11-01 11:39, 39차 점검) 비밀번호가 다른 하위 보관함에 들어갈 파일 수(위 _badDirs)
         
         // 전송 패널에 세션 등록 (진행률 바 표시)
         const sessionId = this.multiUpload?.nextSessionId ? this.multiUpload.nextSessionId++ : Date.now();
@@ -48788,6 +52242,7 @@ const App = {
             const fileName = parts.pop();
             const fileDir = parts.length ? parts.join('/') : '';
             const targetPath = basePath + (fileDir ? '/' + fileDir : '');
+            if (fileDir && _underBad(fileDir)) { _skippedBad++; continue; }   // ★ (2026-11-01 11:39, 39차 점검) 위 _badDirs 참고
             
             // 진행률 업데이트
             structUploadSession.percent = Math.round(i / fileItems.length * 100);
@@ -48806,11 +52261,25 @@ const App = {
                 await this._vaultUploadOneFile(storageId, targetPath, key, file);
                 success++;
             } catch (e) {
+                // ★ (2026-11-01 01:09, 35차 전체 점검) 전송 패널 ✕ 로 취소하면 'xxx: Aborted' 오류와 '완료' 표시가 함께 떴음 → vaultUploadFiles 와 같게 '취소됨'으로 표시하고 멈춤
+                if (e.name === 'AbortError') {
+                    structUploadSession.status = 'cancelled';
+                    this.toast(t('upload_cancelled', '업로드가 취소되었습니다.'), 'warning');
+                    break;
+                }
                 this.toast(`${fileName}: ${e.message}`, 'error');
             }
         }
         
         // 완료 처리
+        if (structUploadSession.status === 'cancelled' || structUploadSession.abortController.signal.aborted) {
+            structUploadSession.status = 'cancelled';
+            const cancelItem = document.getElementById(`upload-session-${sessionId}`);
+            if (cancelItem) {
+                const pct = cancelItem.querySelector('.upload-session-percent');
+                if (pct) { pct.textContent = t('cancelled', '취소됨'); pct.style.color = '#e67e22'; }
+            }
+        } else {
         structUploadSession.status = 'completed';
         structUploadSession.percent = 100;
         const doneItem = document.getElementById(`upload-session-${sessionId}`);
@@ -48819,6 +52288,7 @@ const App = {
             const pct = doneItem.querySelector('.upload-session-percent');
             if (fill) fill.style.width = '100%';
             if (pct) { pct.textContent = t('completed', '완료'); pct.style.color = '#4CAF50'; }
+        }
         }
         
         // 세션 제거 (2초 후)
@@ -48838,6 +52308,7 @@ const App = {
             this.toast(`${success}${t('vault_upload_complete', '개 파일 암호화 업로드 완료')}`, 'success');
             this.vaultLoadFiles();
         }
+        if (_skippedBad > 0) this.toast(tf('vault_struct_skipped_subvault', '비밀번호가 다른 하위 보관함에 들어갈 {count}개 파일은 올리지 않았습니다. 그 폴더를 열어 올리세요.', { count: _skippedBad }), 'warning', 8000);   // ★ (2026-11-01 11:39, 39차 점검)
     },
     
     async vaultUploadFiles(files) {
@@ -48869,6 +52340,9 @@ const App = {
         
         // 기존 vault 파일명 목록 수집 (중복 체크용)
         let existingNames = new Set();
+        // ★ (2026-11-01 11:52, 39차 점검) 덮어쓸 기존 파일을 '지금 화면의' this.files 에서 이름으로 찾아, 올리는 동안 다른 폴더로 옮기면 못 찾거나 다른 폴더 항목을 골랐고,
+        //   같은 이름을 한 번에 둘 올려 둘 다 덮어쓰면 첫 사본이 남았음 → 시작 때 목록으로 이름→uuid 표를 만들고 올린 뒤 새 uuid 로 갱신, 삭제 실패는 알림
+        const _nameUuid = new Map();
         try {
             const listRes = await this.api('vault_list', { storage_id: storageId, path: path }, 'GET');
             if (listRes.success) {
@@ -48877,6 +52351,7 @@ const App = {
                         if (f.enc_meta) {
                             const meta = await E2ECrypto.decryptMeta(key, f.enc_meta);
                             if (meta.name) existingNames.add(meta.name);
+                            if (meta.name && f.uuid && !_nameUuid.has(meta.name)) _nameUuid.set(meta.name, f.uuid);
                         }
                     } catch (e) { /* 메타 복호화 실패 무시 */ }
                 }
@@ -48884,6 +52359,10 @@ const App = {
         } catch (e) { /* 목록 조회 실패 시 중복 체크 건너뛰기 */ }
         
         let successCount = 0;
+        // ★ (2026-11-02 11:54, 43차 점검) 파일별 실패 알림이 끝 'N개 암호화 업로드 완료'(성공)에 덮여 안 보였고 전송 패널도 초록 '완료'였음
+        //   → 실패(_vuFails)·덧붙일 경고(_vuNotes)를 모아 끝 알림 하나로, 실패가 있으면 경고/오류 색과 패널 '완료 (N개 실패)'
+        const _vuFails = [];
+        const _vuNotes = [];
         // vault 업로드 취소용 AbortController (세션의 것 사용)
         const vaultUploadAbort = vaultUploadSession.abortController;
         this._vaultUploadAbort = vaultUploadAbort;
@@ -48919,8 +52398,9 @@ const App = {
                         while (existingNames.has(newName)) { num++; newName = `${info.base} (${num})${info.ext}`; }
                         // File 객체 이름 변경 (새 File 생성)
                         const renamedFile = new File([file], newName, { type: file.type, lastModified: file.lastModified });
-                        await this._vaultUploadOneFile(storageId, path, key, renamedFile);
+                        const _newU = await this._vaultUploadOneFile(storageId, path, key, renamedFile);
                         existingNames.add(newName);
+                        if (_newU) _nameUuid.set(newName, _newU);
                         successCount++;
                         fileIdx++;
                         continue;
@@ -48928,19 +52408,22 @@ const App = {
                     // 'overwrite': 새 파일을 먼저 올리고 성공하면 기존 파일 삭제
                     // ★ (2026-10-29 10:32, 20차 점검) 순서 바꿈 — 종전엔 기존 파일을 먼저 영구 삭제해, 올리기가 실패·취소되면 둘 다 없어졌음.
                     //   보관함 파일은 uuid 로 따로 저장돼 같은 이름이 잠깐 둘이어도 됨
-                    const existingFile = this.files?.find(f => f.name === file.name && f._vault);
-                    await this._vaultUploadOneFile(storageId, path, key, file);
-                    if (existingFile && existingFile._uuid) {
-                        await this.api('vault_delete', { storage_id: storageId, path: path, uuid: existingFile._uuid });
+                    const _oldU = _nameUuid.get(file.name);   // ★ (2026-11-01 11:52, 39차 점검) 위 _nameUuid 참고
+                    const _newU = await this._vaultUploadOneFile(storageId, path, key, file);
+                    if (_oldU) {
+                        const _dr = await this.api('vault_delete', { storage_id: storageId, path: path, uuid: _oldU });
+                        if (!_dr || !_dr.success) _vuNotes.push(`${file.name}: ${(_dr && _dr.error) || t('delete_failed', '삭제 실패')}`);   // ★ (2026-11-02 11:54, 43차 점검) 위 _vuFails 주석
                     }
+                    if (_newU) _nameUuid.set(file.name, _newU);
                     existingNames.add(file.name);
                     successCount++;
                     fileIdx++;
                     continue;
                 }
                 
-                await this._vaultUploadOneFile(storageId, path, key, file);
+                const _newU = await this._vaultUploadOneFile(storageId, path, key, file);
                 existingNames.add(file.name);
+                if (_newU && !_nameUuid.has(file.name)) _nameUuid.set(file.name, _newU);
                 successCount++;
             } catch (e) {
                 if (e.name === 'AbortError') {
@@ -48954,7 +52437,7 @@ const App = {
                     this.toast(t('upload_cancelled', '업로드가 취소되었습니다.'), 'warning');
                     break;
                 }
-                this.toast(`${file.name}: ${e.message}`, 'error');
+                _vuFails.push(`${file.name}: ${e.message}`);   // ★ (2026-11-02 11:54, 43차 점검) 위 _vuFails 주석
             }
             fileIdx++;
         }
@@ -48967,10 +52450,21 @@ const App = {
                 const fill = doneItem.querySelector('.upload-session-fill');
                 const pct = doneItem.querySelector('.upload-session-percent');
                 if (fill) fill.style.width = '100%';
-                if (pct) { pct.textContent = t('completed', '완료'); pct.style.color = '#4CAF50'; }
+                if (pct) {
+                    if (_vuFails.length) { pct.textContent = `${t('completed', '완료')} (${_vuFails.length}${t('count_failed', '개 실패')})`; pct.style.color = '#e67e22'; }   // ★ (2026-11-02 11:54, 43차 점검) 위 _vuFails 주석
+                    else { pct.textContent = t('completed', '완료'); pct.style.color = '#4CAF50'; }
+                }
             }
         }
-        if (successCount > 0) {
+        if (_vuFails.length || _vuNotes.length) {
+            // ★ (2026-11-02 11:54, 43차 점검) 성공·실패 요약 하나로(위 _vuFails 주석)
+            const _vuDet = [..._vuFails, ..._vuNotes];
+            let _vuMsg = `${successCount}${t('vault_upload_success', '개 암호화 업로드 완료')}`;
+            if (_vuFails.length) _vuMsg += ` (${_vuFails.length}${t('count_failed', '개 실패')})`;
+            _vuMsg += `: ${_vuDet.slice(0, 3).join(' / ')}${_vuDet.length > 3 ? ' …' : ''}`;
+            this.toast(_vuMsg, (_vuFails.length && successCount === 0) ? 'error' : 'warning', 10000);
+            if (successCount > 0) this.vaultLoadFiles();
+        } else if (successCount > 0) {
             this.toast(`${successCount}${t('vault_upload_success', '개 암호화 업로드 완료')}`, 'success');
             this.vaultLoadFiles();
         }
@@ -49024,7 +52518,7 @@ const App = {
     /** vault 파일을 복호화하여 ArrayBuffer로 반환 (vault→vault 복사/붙여넣기용) */
     async _vaultDecryptFileToArrayBuffer(storageId, vaultPath, uuid, filename, key, signal, src) {
         // ★ (2026-10-29 17:53, 22차 점검) 조각으로 저장된 파일이면 조각 정보도(src) — 종전엔 늘 통짜(uuid.enc)를 받으려 해서 5MB 넘는 파일은 404 로 실패했음
-        const item = { _uuid: uuid, name: filename, _vault: true, _chunked: !!(src && src._chunked), _totalChunks: (src && src._totalChunks) || 0, _mimeType: src && src._mimeType };
+        const item = { _uuid: uuid, name: filename, _vault: true, _chunked: !!(src && src._chunked), _totalChunks: (src && src._totalChunks) || 0, _mimeType: src && src._mimeType, _chunkMismatch: !!(src && src._chunkMismatch) };   // ★ (2026-11-01 08:02, 37차 기능 점검 재검토) 조각 불일치 표시도 넘김(보관함 붙여넣기·갤러리가 잘린 파일을 그대로 쓰던 것)
         const oldSignal = this._vaultAbortSignal;
         this._vaultAbortSignal = signal || null;
         try {
@@ -49035,8 +52529,30 @@ const App = {
         }
     },
     
+    /** ★ (2026-11-11 17:01, 76차 VLT-1) 암호화 해제 저장(vault_decrypt_save_chunk) 한 번마다 쓰는 임의 표식 — 첫 조각(0)에서 새로 만들고 같은 파일의 뒤 조각은 같은 값.
+     *  서버가 임시 파일 이름에 붙여, 두 탭이 같은 파일을 동시에 풀어도 서로의 임시 파일을 자르거나 이어 붙이지 않음(종전엔 섞인 파일이 원래 이름으로 저장되고 원본 .enc 가 지워졌음 — 재현) */
+    _vdJobTok(uuid, ci) {
+        if (!this._vdJobToks) this._vdJobToks = {};
+        if (ci === 0 || !this._vdJobToks[uuid]) {
+            let tok = '';
+            try { const a = new Uint8Array(8); crypto.getRandomValues(a); tok = Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); } catch (e) { tok = (Date.now().toString(16) + Math.random().toString(16).slice(2)).replace(/[^0-9a-f]/g, '').slice(0, 16); }
+            this._vdJobToks[uuid] = tok;
+        }
+        return this._vdJobToks[uuid];
+    },
+    
+    // ★ (2026-11-01 07:24, 37차 기능 점검) 조각 저장 파일의 메타 totalChunks 와 서버의 실제 조각 수(chunk_count)가 다른지 — 종전엔 비교하지 않고 있는 조각만 풀어 붙여,
+    //   업로드가 중간에 끊긴 파일이 오류 없이 잘린 채 저장·미리보기됐음
+    _vaultChunkMismatch(meta, f) {
+        if (!meta || !f || f.chunked !== true) return false;
+        const want = Number(meta.totalChunks);
+        if (!meta.chunked || !Number.isInteger(want) || want <= 0) return false;
+        return (f.chunk_count || 0) !== want;
+    },
+    
     async _vaultDecryptToBlob(storageId, path, key, item) {
         const uuid = item._uuid;
+        if (item._chunkMismatch) throw new Error(t('vault_err_incomplete_file', '파일 조각 일부가 없습니다(업로드가 중간에 끊긴 파일). 이 파일은 온전히 풀 수 없습니다.'));   // ★ (2026-11-01 07:24, 37차 기능 점검) 끊긴 업로드로 조각이 모자란 파일
         const _progress = (phase, pct) => {
             if (this._vaultDecryptProgress) this._vaultDecryptProgress(phase, pct);
         };
@@ -49262,12 +52778,10 @@ const App = {
                 await new Promise(r => setTimeout(r, 300));
             }
             
-            // 60초 후 지연 cleanup
-            const cleanupData = { temp_id: tempId, storage_id: storageId, path: path };
+            // ★ (2026-11-01 01:59, 36차 전체 점검) 새 탭 뷰어(hwp_viewer/office_viewer)는 2분마다 vault_preview_touch 로 연장하고 떠날 때(pagehide) 스스로 정리하는데,
+            //   메인 창이 5분 뒤 무조건 vault_preview_cleanup 을 보내 그 뒤 📥·'rhwp로 보기'가 403/404 였다 → 5분 정리 타이머를 없앰
+            //   (hideModal 즉시 정리만 막음. 뷰어가 못 열린 경우 남은 파일은 서버의 수정 시각 5분 자동 정리가 지움)
             this._vaultPreviewTemp = null;
-            setTimeout(() => {
-                this.api('vault_preview_cleanup', cleanupData).catch(() => {});
-            }, 300000);
             
             // 모달 닫고 뷰어로 직접 열기 (showPreview 거치지 않음)
             this._restorePreviewModalSize();
@@ -49359,12 +52873,13 @@ const App = {
             preOpenTab = window.open('about:blank', '_blank');
             if (preOpenTab) {
                 preOpenTab.document.title = '🔐 ' + item.name + ' - Loading...';
-                preOpenTab.document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:var(--fs-text-2, #666);"><div style="text-align:center;"><div style="font-size:2em;margin-bottom:12px;">🔐</div><div>암호화 해제 중...</div></div></div>';
+                // ★ (2026-10-31 13:45, 34차 후속 개선) 미리 열어 둔 새 탭의 안내문이 영어 화면에도 한국어로 고정이던 것 — 기존 키 vault_decrypting 으로(escape)
+                preOpenTab.document.body.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;color:var(--fs-text-2, #666);"><div style="text-align:center;"><div style="font-size:2em;margin-bottom:12px;">🔐</div><div>' + this.escapeHtml(t('vault_decrypting', '암호화 해제 중...')) + '</div></div></div>';
             }
         }
         
         // 복호화 진행률 — 작은 모달로 표시
-        $('#preview-title').text('🔐 ' + item.name).attr('title', item.name);
+        $('#preview-title').html((window.fsIcoFrom ? window.fsIcoFrom('🔐') : '🔐') + ' ' + App.escapeHtml(item.name)).attr('title', item.name);   // ★ (2026-11-15 21:50, 215차) 위와 같음
         // ★ 탭 제목도 함께 (2026-08-15) — vault는 showPreview를 거치지 않고 여기서 직접 모달을 여는
         //   경로가 있어(복호화 진행 → 자체 렌더) _showPreviewImpl의 제목 설정이 걸리지 않는다.
         //   복호화 후 showPreview로 넘어가는 경로에서는 그쪽이 다시 덮어쓰므로 충돌 없음.
@@ -49409,6 +52924,7 @@ const App = {
             if (pctEl) pctEl.textContent = Math.round(pct) + '%';
         };
         
+        let _vpMyAbort = null;   // ★ (2026-11-01 11:53, 39차 점검) 아래 catch 에서 '새 미리보기가 이 작업을 끊었는지' 판단용
         try {
             // 이전 임시 파일 정리 + 이전 작업 중단
             if (this._vaultPreviewAbort) {
@@ -49416,15 +52932,21 @@ const App = {
             }
             const abortCtrl = new AbortController();
             this._vaultPreviewAbort = abortCtrl;
+            _vpMyAbort = abortCtrl;
             const tempId = E2ECrypto.generateUUID();
             // _vaultPreviewTemp는 설정하지 않음 — cleanup은 setTimeout으로만 처리
             // hideModal/모달닫기에서 즉시 삭제 방지
+            // ★ (2026-11-01 07:26, 37차 기능 점검) 위 주석의 setTimeout 정리는 실제로 없어, 큰(조각) 파일을 같은 창에서 보고 닫으면(또는 받는 도중 닫으면) data/vault_temp 의 평문이
+            //   서버 확률 정리에만 맡겨졌다 → 조각 모드는 정리 대상으로 등록(닫을 때 hideModal·closeModal 이 5분 뒤 vault_preview_cleanup).
+            //   HWP/Office 새 탭 경로는 아래에서 지금처럼 null 로 돌려 뷰어가 스스로 정리
+            if (item._chunked && item._totalChunks > 0) this._vaultPreviewTemp = { temp_id: tempId, storage_id: storageId, path: path };
             
             const uuid = item._uuid;
             const CHUNK_SIZE = item._chunkSize || E2ECrypto.CHUNK_SIZE;
             const ENC_CHUNK_SIZE = 12 + CHUNK_SIZE + 16;
             const isChunked = item._chunked && item._totalChunks > 0;
             
+            if (item._chunkMismatch) throw new Error(t('vault_err_incomplete_file', '파일 조각 일부가 없습니다(업로드가 중간에 끊긴 파일). 이 파일은 온전히 풀 수 없습니다.'));   // ★ (2026-11-01 07:24, 37차 기능 점검) 조각이 모자란 파일을 잘린 채 미리보기하던 것
             if (isChunked) {
                 // === 청크 모드: 파이프라인 — 다운로드+복호화와 업로드를 병렬 수행 ===
                 const totalChunks = item._totalChunks;
@@ -49553,12 +53075,10 @@ const App = {
                             await new Promise(r => setTimeout(r, 300));
                         }
                         
-                        // 60초 후 지연 cleanup
-                        const cleanupData2 = { temp_id: tempId, storage_id: storageId, path: path };
+                        // ★ (2026-11-01 01:59, 36차 전체 점검) 새 탭 뷰어(hwp_viewer/office_viewer)는 2분마다 vault_preview_touch 로 연장하고 떠날 때(pagehide) 스스로 정리하는데,
+                        //   메인 창이 5분 뒤 무조건 vault_preview_cleanup 을 보내 그 뒤 📥·'rhwp로 보기'가 403/404 였다 → 5분 정리 타이머를 없앰
+                        //   (hideModal 즉시 정리만 막음. 뷰어가 못 열린 경우 남은 파일은 서버의 수정 시각 5분 자동 정리가 지움)
                         this._vaultPreviewTemp = null;
-                        setTimeout(() => {
-                            this.api('vault_preview_cleanup', cleanupData2).catch(() => {});
-                        }, 300000);
                         
                         // 모달 닫고 뷰어로 직접 열기
                         this._restorePreviewModalSize();
@@ -49575,7 +53095,8 @@ const App = {
                         this._vaultPreviewBusy = false;
                         return;
                     } else {
-                        const mimeType = item._mimeType || E2ECrypto.guessMimeType?.(item.name) || 'application/octet-stream';
+                        // ★ (2026-11-04) 미리보기 blob 형식은 확장자로(메타 type 이 text/html 인 채 이름만 .pdf 면 PDF 폴백 iframe 에서 스크립트가 돌던 것)
+                        const mimeType = E2ECrypto.guessMimeType?.(item.name) || 'application/octet-stream';
                         const blob = new Blob([decrypted], { type: mimeType });
                         const blobUrl = URL.createObjectURL(blob);
                         this._lastVaultBlobUrl = blobUrl;
@@ -49666,7 +53187,7 @@ const App = {
                     }
                     
                     // Blob에서 미리보기 (HWP/Office는 서버 업로드)
-                    const mimeType = item._mimeType || E2ECrypto.guessMimeType?.(item.name) || 'application/octet-stream';
+                    const mimeType = E2ECrypto.guessMimeType?.(item.name) || 'application/octet-stream';   // ★ (2026-11-04) 확장자로(메타 type 안 씀)
                     const decBlob = new Blob(decChunks, { type: mimeType });
                     _updateProgress('upload', 95);
                     
@@ -49711,7 +53232,7 @@ const App = {
                     if (abortCtrl.signal.aborted) throw new DOMException('Aborted', 'AbortError');
                     
                     // Blob에서 미리보기 (HWP/Office는 서버 업로드)
-                    const mimeType = item._mimeType || E2ECrypto.guessMimeType?.(item.name) || 'application/octet-stream';
+                    const mimeType = E2ECrypto.guessMimeType?.(item.name) || 'application/octet-stream';   // ★ (2026-11-04) 확장자로(메타 type 안 씀)
                     const decBlob = new Blob([decrypted], { type: mimeType });
                     _updateProgress('upload', 95);
                     
@@ -49728,11 +53249,10 @@ const App = {
             
             // HWP/Office는 새 탭으로 열리므로 hideModal에서 즉시 cleanup 방지
             if (type === 'hwp' || type === 'office') {
-                const cleanupData3 = { temp_id: tempId, storage_id: storageId, path: path };
+                // ★ (2026-11-01 01:59, 36차 전체 점검) 새 탭 뷰어(hwp_viewer/office_viewer)는 2분마다 vault_preview_touch 로 연장하고 떠날 때(pagehide) 스스로 정리하는데,
+                //   메인 창이 5분 뒤 무조건 vault_preview_cleanup 을 보내 그 뒤 📥·'rhwp로 보기'가 403/404 였다 → 5분 정리 타이머를 없앰
+                //   (hideModal 즉시 정리만 막음. 뷰어가 못 열린 경우 남은 파일은 서버의 수정 시각 5분 자동 정리가 지움)
                 this._vaultPreviewTemp = null;
-                setTimeout(() => {
-                    this.api('vault_preview_cleanup', cleanupData3).catch(() => {});
-                }, 300000);
             }
             
             const previewItem = {
@@ -49749,6 +53269,12 @@ const App = {
             this.showPreview(previewItem);
             this._vaultPreviewBusy = false;
         } catch (e) {
+            // ★ (2026-11-01 11:53, 39차 점검) 30초 넘은 미리보기 중 다른 파일을 열면 새 호출이 이 작업을 끊는데, 여기서 busy·모달 크기를 되돌려 새 작업의 진행 창이 풀리고
+            //   중복 방지도 풀렸음 → 새 작업이 끊은 것이면 미리 연 탭만 닫고 끝냄
+            if (e.name === 'AbortError' && _vpMyAbort && this._vaultPreviewAbort && this._vaultPreviewAbort !== _vpMyAbort) {
+                if (preOpenTab && !preOpenTab.closed) { try { preOpenTab.close(); } catch(x) {} }
+                return;
+            }
             this._vaultPreviewBusy = false;
             // 모달 크기 복원
             this._restorePreviewModalSize();
@@ -49871,7 +53397,21 @@ const App = {
         if (!key) { this.toast(t('vault_password_wrong'), 'error'); return false; }
         
         this.toast(`🔐 ${t('vault_encrypting', '암호화 중...')} ${item.name} (${this.formatSize(item.size)})`, 'info');
-        
+
+        // ★ (2026-11-04) 같은 이름 암호화 파일이 이미 있으면 붙여넣기처럼 '이름 (n).확장자' 로(대소문자 무시) — 종전엔 같은 이름 암호화 파일이 둘 생겼음(49차 #2 와 같은 결과)
+        let encName = item.name;
+        {
+            const _encLow = new Set((this.files || []).filter(f => f && f !== item && !f._plain && f._uuid).map(f => String(f.name || '').toLowerCase()));
+            // ★ (2026-11-04) 55차 재검토 — 선택 일괄 암호화는 파일 사이에 목록을 다시 읽지 않아 앞 파일이 방금 정한 이름을 몰랐음 → 이번 묶음에서 정한 이름도 함께 봄
+            if (this._vaultEncTaken instanceof Set) this._vaultEncTaken.forEach(n => _encLow.add(n));
+            if (_encLow.has(String(encName).toLowerCase())) {
+                const _ei = this._splitFileName(item.name);
+                let _en = 1;
+                do { encName = `${_ei.base} (${_en++})${_ei.ext}`; } while (_encLow.has(encName.toLowerCase()));
+            }
+            if (this._vaultEncTaken instanceof Set) this._vaultEncTaken.add(String(encName).toLowerCase());
+        }
+
         try {
             // Range 요청으로 파일 크기 확인
             const fileSize = item.size || 0;
@@ -49884,8 +53424,8 @@ const App = {
                 const response = await fetch(dlBaseUrl);
                 if (!response.ok) throw new Error('Download failed');
                 const fileData = await response.arrayBuffer();
-                const file = new File([fileData], item.name, { lastModified: Date.now() });
-                
+                const file = new File([fileData], encName, { lastModified: Date.now() });
+
                 const result = await E2ECrypto.encryptFile(key, file);
                 const fd = new FormData();
                 fd.append('enc_file', new Blob([result.encData], { type: 'application/octet-stream' }), uuid + '.enc');
@@ -49901,13 +53441,15 @@ const App = {
                 // 청크 모드: Range 다운로드 → 청크별 암호화 → 업로드
                 const totalChunks = Math.ceil(fileSize / E2ECrypto.CHUNK_SIZE);
                 const meta = {
-                    name: item.name, size: fileSize,
+                    name: encName, size: fileSize,
                     type: item._mimeType || 'application/octet-stream',
                     lastModified: Date.now(),
                     chunked: true, totalChunks, chunkSize: E2ECrypto.CHUNK_SIZE
                 };
                 const encMeta = await E2ECrypto.encryptMeta(key, meta);
                 
+                // ★ (2026-11-01 07:23, 37차 기능 점검) 조각 실패 시 잘린 암호화 사본이 원본 옆에 남던 것 → 정리 후 오류 그대로
+                try {
                 for (let i = 0; i < totalChunks; i++) {
                     const start = i * E2ECrypto.CHUNK_SIZE;
                     const end = Math.min(start + E2ECrypto.CHUNK_SIZE, fileSize) - 1;
@@ -49932,6 +53474,10 @@ const App = {
                     if (!upJson.success) throw new Error(upJson.error);
                     
                     this.toastUpdate(`🔐 ${item.name} (${i + 1}/${totalChunks})`, 'info');
+                }
+                } catch (e) {
+                    await this._vaultCleanupPartialUpload(storageId, path, uuid);
+                    throw e;
                 }
             }
             
@@ -50037,6 +53583,8 @@ const App = {
         let processed = 0;
         
         // 일반 파일 암호화
+        this._vaultEncTaken = new Set();   // ★ (2026-11-04) 55차 재검토 — 이 묶음에서 정한 암호화 이름(같은 이름 둘 방지)
+        try {
         for (const item of fileItems) {
             processed++;
             this.toastUpdate(`🔐 ${t('vault_encrypting', '암호화 중...')} ${item.name} (${processed}/${totalAll})`, 'info', 30000);
@@ -50044,6 +53592,7 @@ const App = {
                 if (await this.vaultEncryptPlainFile(item, _keptAll) === true) success++; else failed++;
             } catch (e) { failed++; /* vaultEncryptPlainFile에서 이미 토스트 */ }
         }
+        } finally { this._vaultEncTaken = null; }
         
         // 일반 폴더 → sub-vault 변환 (하위 파일 포함)
         for (const folder of folderItems) {
@@ -50097,6 +53646,8 @@ const App = {
         // 서버에 .vault.json 생성 + 파일 목록 가져오기
         const vaultInfo = await this.api('vault_info', { storage_id: storageId, path: parentPath }, 'GET');
         if (!vaultInfo.success || !vaultInfo.salt) throw new Error('Cannot read vault info');
+        // ★ (2026-11-01 07:22, 37차 기능 점검) 안에 보관함·보관함 암호문이 있으면 시작 전에 막음(_vaultConvertPreScan 설명)
+        if (await this._vaultConvertPreScan(storageId, folderPath)) throw new Error(t('vault_err_nested_vault', '안에 이미 암호화 폴더가 있어 변환할 수 없습니다. 안쪽 암호화 폴더를 먼저 해제하거나 밖으로 옮겨 주세요.'));
         
         const initRes = await this.api('vault_convert_init', {
             storage_id: storageId,
@@ -50160,6 +53711,8 @@ const App = {
                     };
                     const encMeta = await E2ECrypto.encryptMeta(key, meta);
                     
+                    // ★ (2026-11-01 07:23, 37차 기능 점검) 조각 실패 시 잘린 암호화 사본이 남던 것 → 정리 후 오류 그대로(원본은 지우지 않음)
+                    try {
                     for (let ci = 0; ci < totalChunks; ci++) {
                         const start = ci * CHUNK_SIZE;
                         const end = Math.min(start + CHUNK_SIZE, fileData.byteLength);
@@ -50181,6 +53734,10 @@ const App = {
                         if (!upJson.success) throw new Error(upJson.error);
                         this.toastUpdate(`🔐 ${t('vault_encrypting', '암호화 중...')} 📁${folderPath.split('/').pop()} — ${fileInfo.name} (${i + 1}/${files.length}) ${Math.round((ci + 1) / totalChunks * 100)}%`, 'info', 30000);
                     }
+                    } catch (e) {
+                        await this._vaultCleanupPartialUpload(storageId, uploadPath, uuid);
+                        throw e;
+                    }
                 }
                 
                 // 4. 원본 삭제
@@ -50197,22 +53754,23 @@ const App = {
         }
         
         // ★ (2026-10-29 17:55, 22차 점검) 실패한 파일이 있으면 '완료' 대신 알림 — 종전엔 실패를 삼키고 늘 '폴더 암호화 완료' 라, 암호화 안 된 원본이 남은 줄 몰랐음
-        if (_encFailed > 0) this.toast(`📁 ${folderPath.split('/').pop()} — ${_encFailed}${t('count_failed', '개 실패')}`, 'error', 8000);
-        else this.toast(tf('vault_folder_encrypted_done', {name: folderPath.split('/').pop()}, '📁 {name} 폴더 암호화 완료'), 'success');
+        const _dotNote = (initRes.skipped_dot > 0) ? ' ' + tf('vault_convert_dot_skipped', {n: initRes.skipped_dot}, '(점으로 시작하는 파일 {n}개는 건너뜀)') : '';   // ★ (2026-11-04) 56차 서버가 건너뛴 점(.) 파일 수를 알림에(암호화 대상은 그대로)
+        if (_encFailed > 0) this.toast(`📁 ${folderPath.split('/').pop()} — ${_encFailed}${t('count_failed', '개 실패')}${_dotNote}`, 'error', 8000);
+        else this.toast(tf('vault_folder_encrypted_done', {name: folderPath.split('/').pop()}, '📁 {name} 폴더 암호화 완료') + _dotNote, 'success');
         if (_vaultKept.length > 0 && Array.isArray(keptList)) keptList.push(..._vaultKept);
         else if (_vaultKept.length > 0) this.toast(tf('vault_orig_kept', {n: _vaultKept.length}, '암호화 사본은 만들었지만 원본 {n}개는 지우지 못했습니다(삭제 권한 없음). 원본이 그대로 남아 있습니다.'), 'warning', 8000);   // ★ (2026-10-29 00:02, 12차)
         return _encFailed;   // ★ (2026-10-29 23:24, 24차 점검) 실패 파일 수를 돌려줌 — 부르는 쪽(선택 암호화) 마지막 알림에 반영(3회차 재검토)
     },
     
     /** 개별 파일 암호화 해제 (복호화 → 원본으로 저장 → .enc 삭제) */
-    async vaultDecryptFile(item) {
+    async vaultDecryptFile(item, sid, vpath) {   // ★ (2026-11-12 22:16, 105차 개선 CNF-3) sid·vpath — 해제 확인 창 전에 잡은 위치(없으면 종전처럼 지금 위치)
         if (!item._vault || !item._uuid) {
             this.toast(t('nt_not_encrypted', '암호화된 파일이 아닙니다.'), 'error');
             return false;
         }
         
-        const storageId = this.currentStorage;
-        const path = this.vault.currentVaultPath;
+        const storageId = sid || this.currentStorage;
+        const path = vpath || this.vault.currentVaultPath;
         const key = this.getVaultKey(storageId, path);
         if (!key) { this.toast(t('vault_password_wrong'), 'error'); return false; }
         
@@ -50262,6 +53820,7 @@ const App = {
                 formData.append('uuid', item._uuid);
                 formData.append('original_name', item.name);
                 formData.append('chunk_index', i);
+                formData.append('dec_job', App._vdJobTok(item._uuid, i));   // ★ (2026-11-11 17:01, 76차 VLT-1) 해제 한 번의 임의 표식(서버 임시 파일 이름에 붙음)
                 formData.append('total_chunks', totalChunks);
                 formData.append('csrf_token', this.csrfToken);
                 
@@ -50329,6 +53888,7 @@ const App = {
         // 재귀적으로 모든 vault 경로의 파일 수집
         const allFiles = []; // { vaultPath, file(uuid, enc_meta, ...) }
         const vaultPaths = [rootPath];
+        const _diffSubVaults = [];   // ★ (2026-11-01 11:53, 39차 점검) 비밀번호가 다른 하위 보관함(아래)
         
         while (vaultPaths.length > 0) {
             const vp = vaultPaths.shift();
@@ -50344,12 +53904,19 @@ const App = {
                 // sub-vault 폴더 탐색 큐에 추가
                 for (const p of (res.plain_files || [])) {
                     if (p.is_dir && p.is_vault) {
+                        // ★ (2026-11-01 11:53, 39차 점검) 하위 보관함을 모두 최상위 키 하나로 풀어, 비밀번호가 다른 하위 보관함이면 그 파일이 이유 없이 모두 실패했음
+                        //   → 큐에 넣기 전에 키를 확인하고, 다른 것이 있으면 아무것도 풀기 전에 안내하고 멈춤(일부만 풀고 vault_remove 로 그 폴더 표시까지 지우지 않게)
+                        if (!(await this._vaultKeyMatches(storageId, p.path, key, false))) { _diffSubVaults.push(p.name || p.path); continue; }
                         vaultPaths.push(p.path);
                     }
                 }
             } catch (e) {
                 console.error('[Vault DecryptAll] list error:', vp, e);
             }
+        }
+        if (_diffSubVaults.length > 0) {
+            this.toast(tf('vault_decrypt_all_subvault_differs', '비밀번호가 다른 하위 보관함이 있어 전체 해제를 멈췄습니다: {list}. 그 폴더를 먼저 열어 해제하세요.', { list: _diffSubVaults.join(', ') }), 'warning', 10000);
+            return;
         }
         
         if (allFiles.length === 0) {
@@ -50360,6 +53927,7 @@ const App = {
                 this.toast(t('vault_removed', '암호화가 해제되었습니다.'), 'success');
                 this.vault.keys.delete(this._vaultCacheKey(storageId, rootPath));
                 this._removeVaultKeyFromSession(storageId, rootPath);
+                this._forgetVaultKeysUnder(storageId, rootPath);   // ★ (2026-11-01 01:58, 36차 전체 점검) 하위 보관함 키도 지움
                 this.vault.currentVaultPath = null;
                 this.vault.isVaultView = false;
                 document.getElementById('vault-toolbar')?.remove();
@@ -50389,6 +53957,7 @@ const App = {
             
             try {
                 const isFileChunked = f.chunked === true && (f.chunk_count || 0) > 0;
+                if (this._vaultChunkMismatch(meta, f)) throw new Error(t('vault_err_incomplete_file', '파일 조각 일부가 없습니다(업로드가 중간에 끊긴 파일). 이 파일은 온전히 풀 수 없습니다.'));   // ★ (2026-11-01 07:24, 37차 기능 점검) 조각이 모자란 파일을 잘린 채 저장하던 것
                 let blob;
                 
                 if (isFileChunked) {
@@ -50429,7 +53998,8 @@ const App = {
                             throw new Error('File too small and no chunks found');
                         }
                     } else {
-                        const ENC_CHUNK_SIZE = 12 + (E2ECrypto.CHUNK_SIZE || 4194304) + 16;
+                        // ★ (2026-11-01 01:09, 35차 전체 점검) 옛 형식(concat) 분할 크기를 고정값으로 계산해 다른 조각 크기로 만든 파일은 '전체 해제'에서만 실패했음 → 메타의 chunkSize 를 먼저(하위 폴더 해제와 같게)
+                        const ENC_CHUNK_SIZE = 12 + (meta.chunkSize || E2ECrypto.CHUNK_SIZE || 4194304) + 16;
                         let decData;
                         if (encData.byteLength <= ENC_CHUNK_SIZE) {
                             decData = await E2ECrypto.decrypt(key, encData);
@@ -50473,6 +54043,7 @@ const App = {
                     formData.append('uuid', f.uuid);
                     formData.append('original_name', meta.name);
                     formData.append('chunk_index', ci);
+                    formData.append('dec_job', App._vdJobTok(f.uuid, ci));   // ★ (2026-11-11 17:01, 76차 VLT-1) 해제 한 번의 임의 표식(서버 임시 파일 이름에 붙음)
                     formData.append('total_chunks', totalChunks);
                     formData.append('csrf_token', this.csrfToken);
                     
@@ -50491,6 +54062,7 @@ const App = {
         
         if (errors.length > 0) {
             this.toast(`${decrypted}/${allFiles.length}${t('vault_decrypt_partial', '개 암호화 해제 완료')} (${errors.length}${t('vault_convert_errors', '개 실패')})`, 'warning');
+            if (decrypted > 0) this.vaultLoadFiles();   // ★ (2026-11-01 11:53, 39차 점검) 실패가 있으면 목록을 새로 읽지 않아 이미 풀린 파일이 암호 파일로 남아 보였음
             return;
         }
         
@@ -50501,6 +54073,7 @@ const App = {
             this.vault.keys.delete(this._vaultCacheKey(storageId, rootPath));
             this.vault.currentVaultPath = null;
             this._removeVaultKeyFromSession(storageId, rootPath);
+            this._forgetVaultKeysUnder(storageId, rootPath);   // ★ (2026-11-01 01:58, 36차 전체 점검) 하위 보관함 키도 지움
             this.vault.isVaultView = false;
             document.getElementById('vault-toolbar')?.remove();
             this.loadFiles();
@@ -50648,13 +54221,16 @@ const App = {
             if (this._renameBatchRunning) { this.toast(t('nt_rename_batch_busy', '이름을 바꾸는 중입니다. 끝난 뒤 다시 시도하세요.'), 'info'); return; }   // ★ (2026-10-27 15시) 위 showRenameModal 과 같음
             this._setRenameBatch(null);
             // vault 파일 정보로 renameOriginal 설정 후 모달 표시
-            const ext = (item.name.lastIndexOf('.') > 0) ? item.name.substring(item.name.lastIndexOf('.') + 1) : '';
+            // ★ (2026-11-04 01:39, 54차 점검) 폴더(일반 폴더·하위 보관함)는 확장자를 떼지 않음(showRenameModal 과 같게) — 종전엔 isDir:false 고정이라 폴더 'a.b' 를 'c' 로 바꾸면 'c.b' 가 됐음(재현). 파일은 종전과 같음
+            const _isDir = !!(item.isDir || item.is_dir);
+            const ext = (!_isDir && item.name.lastIndexOf('.') > 0) ? item.name.substring(item.name.lastIndexOf('.') + 1) : '';
             const baseName = ext ? item.name.substring(0, item.name.lastIndexOf('.')) : item.name;
             this.renameOriginal = {
                 path: item.path, name: item.name, baseName, ext,
-                isDir: false, storageId: this.currentStorage,
+                isDir: _isDir, storageId: this.currentStorage,
                 _vault: item._vault, _uuid: item._uuid,
-                _mimeType: item._mimeType, size: item.size
+                _mimeType: item._mimeType, size: item.size,
+                _meta: item._meta   // ★ (2026-11-01 11:43, 39차 점검) 원래 메타 필드 유지용(vaultLoadFiles 주석)
             };
             const extRow = document.getElementById('rename-ext-row');
             const showExtCb = document.getElementById('rename-show-ext');
@@ -50720,7 +54296,17 @@ const App = {
         const parts = (path || '').split('/');
         parts.pop();
         this.currentPath = parts.join('/');
-        this.loadFiles();
+        // ★ (2026-11-13 09:56, 110차 RGR26-4) 지금 기록이 부모에서 들어오며 쌓은 보관함 기록(vaultFrom = 부모)이면 '뒤로' 한 칸 물러나 그 부모 기록으로(목록은 popstate 가 그림),
+        //   아니면 지금 기록을 부모 주소로 바꿈 — 종전(109차)엔 보관함 기록이 남아 잠금 뒤 첫 '뒤로'가 부모→부모로 헛돌았음(재현). 주소가 보관함 경로에 남아 새로 고치면 비밀번호 창이 뜨던 것(원본부터)도 같이 풀림
+        //   (바꾸기만 하면 [부모, 부모] 가 되어 헛도는 건 그대로였음 — 재현)
+        let _lkBack = false;
+        try {
+            const _lkHs = history.state;
+            _lkBack = !!(path && _lkHs && !_lkHs.board && String(_lkHs.storageId) === String(storageId) && _lkHs.path === path && _lkHs.vaultFrom === this.currentPath);
+            if (_lkBack) history.back();
+            else if (path && this.currentStorage) history.replaceState({ storageId: this.currentStorage, path: this.currentPath }, '', `#storage=${this.currentStorage}&path=${encodeURIComponent(this.currentPath)}`);
+        } catch (e) { _lkBack = false; }
+        if (!_lkBack) this.loadFiles();
     },
     
     /** 기존 폴더를 암호화 폴더로 변환 */
@@ -50737,15 +54323,48 @@ const App = {
         }, 300);
     },
     
+    // ★ (2026-11-01 07:22, 37차 기능 점검) '이 폴더 암호화' 시작 전 확인 — 안에 이미 보관함(.vault.json)이나 보관함 암호문(uuid.enc·uuid.meta.enc·uuid.chunks)이 있으면
+    //   그 암호문까지 바깥 키로 다시 암호화하고 원본을 지워 안쪽 보관함을 풀 수 없게 됐다 → 처음 찾은 경로를 돌려줌(없으면 null).
+    //   폴더가 아주 많거나 목록을 못 읽으면 null(서버 vault_convert_init 이 다시 막음)
+    async _vaultConvertPreScan(storageId, folderPath) {
+        const UUID_RE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+        const encRe = new RegExp('^' + UUID_RE + '\\.(meta\\.)?enc$', 'i');
+        const chunksRe = new RegExp('^' + UUID_RE + '\\.chunks$', 'i');
+        const queue = [folderPath];
+        let scanned = 0;
+        while (queue.length) {
+            const p = queue.shift();
+            if (++scanned > 3000) return null;
+            let res;
+            try { res = await this.api('files', { storage_id: storageId, path: p, show_hidden: 1 }, 'GET'); } catch (e) { return null; }
+            if (!res || !res.success) return null;
+            if (p !== folderPath && res.is_vault_folder) return p;
+            for (const it of (res.items || [])) {
+                const nm = String(it.name || '');
+                const ip = it.path || (p ? p + '/' + nm : nm);
+                if (it.is_dir || it.isDir) {
+                    if (it.is_vault || chunksRe.test(nm)) return ip;
+                    queue.push(ip);
+                } else if (encRe.test(nm)) {
+                    return ip;
+                }
+            }
+        }
+        return null;
+    },
+    
     /** 폴더 변환 실행 */
     async _vaultConvertExecute() {
         const folderPath = this._pendingConvertPath;
+        // ★ (2026-11-01 17:22, 40차 점검) 사전 검사·PBKDF2·파일마다 받기/올리기를 기다리는 사이 그때의 currentStorage 를 다시 읽어, 도중에 다른 스토리지로 가면 변환 시작(vault_convert_init)부터
+        //   다른 스토리지의 같은 경로로 갈 수 있었음 → 시작할 때(개인 폴더 검사 직후) 스토리지를 잡아 함수 안 모든 요청·키 저장에 씀
+        const _cvSid = this.currentStorage;
         
         const pw1 = $('#vault-create-password').val();
         const pw2 = $('#vault-create-password2').val();
         
         if (pw1.length < 1) {
-            this.toast(t('vault_password_too_short', '비밀번호를 입력하세요.'), 'error');
+            this.toast(t('vault_password_required', '비밀번호를 입력하세요.'), 'error');   // ★ (2026-11-02 10:32, 42차 점검) 검사는 '비었는지'뿐인데 vault_password_too_short 값이 '4자 이상이어야 합니다'라 사실과 달랐음 → 새 키
             return;
         }
         if (pw1 !== pw2) {
@@ -50757,12 +54376,20 @@ const App = {
         btn.prop('disabled', true).text(t('creating', '생성 중...'));
         
         try {
+            // ★ (2026-11-01 07:22, 37차 기능 점검) 안에 보관함·보관함 암호문이 있으면 시작 전에 막고 안내(_vaultConvertPreScan 설명)
+            const _cvHit = await this._vaultConvertPreScan(_cvSid, folderPath);
+            if (_cvHit) {
+                this.alert(t('vault_err_nested_vault', '안에 이미 암호화 폴더가 있어 변환할 수 없습니다. 안쪽 암호화 폴더를 먼저 해제하거나 밖으로 옮겨 주세요.') + '\n\n' + this.escapeHtml(_cvHit), t('vault_convert_title', '폴더 암호화'));
+                btn.prop('disabled', false).text('🔒 ' + t('create', '생성'));
+                return;
+            }
+            
             // 키 파생
             const vaultData = await E2ECrypto.createVault(pw1);
             
             // 서버에 .vault.json 생성 + 파일 목록 가져오기
             const initRes = await this.api('vault_convert_init', {
-                storage_id: this.currentStorage,
+                storage_id: _cvSid,
                 path: folderPath,
                 salt: vaultData.salt,
                 password_validator: vaultData.passwordValidator
@@ -50775,7 +54402,8 @@ const App = {
             }
             
             // 키 캐시
-            this.vault.keys.set(this._vaultCacheKey(this.currentStorage, folderPath), vaultData.key);
+            this.vault.keys.set(this._vaultCacheKey(_cvSid, folderPath), vaultData.key);
+            this._saveVaultKeyToSession(_cvSid, folderPath, vaultData.key);   // ★ (2026-11-01 01:58, 36차 전체 점검) 메모리에만 넣어 세션의 옛 키가 남아 새로고침 뒤 옛 키로 열렸다 → 세션에도 저장(옛 값 덮어씀)
             
             closeModal();
             $('#vault-create-name').prop('disabled', false);
@@ -50812,7 +54440,7 @@ const App = {
                 
                 try {
                     // 1. 원본 파일 다운로드
-                    const dlUrl = `api.php?action=vault_convert_file&storage_id=${this.currentStorage}&path=${encodeURIComponent(fileInfo.path)}`;
+                    const dlUrl = `api.php?action=vault_convert_file&storage_id=${_cvSid}&path=${encodeURIComponent(fileInfo.path)}`;
                     const response = await this._vaultFetchRetry(dlUrl);
                     if (!response.ok) throw new Error(`Download failed: ${response.status}`);
                     
@@ -50832,7 +54460,7 @@ const App = {
                         
                         const formData = new FormData();
                         formData.append('enc_file', new Blob([encData], { type: 'application/octet-stream' }), uuid + '.enc');
-                        formData.append('storage_id', this.currentStorage);
+                        formData.append('storage_id', _cvSid);
                         formData.append('path', uploadPath);
                         formData.append('uuid', uuid);
                         formData.append('enc_meta', encMeta);
@@ -50853,6 +54481,8 @@ const App = {
                         };
                         const encMeta = await E2ECrypto.encryptMeta(vaultData.key, meta);
                         
+                        // ★ (2026-11-01 07:23, 37차 기능 점검) 조각 실패 시 잘린 암호화 사본이 남던 것 → 정리 후 오류 그대로(원본은 지우지 않음)
+                        try {
                         for (let ci = 0; ci < totalFileChunks; ci++) {
                             const start = ci * CHUNK_SIZE;
                             const end = Math.min(start + CHUNK_SIZE, fileData.byteLength);
@@ -50861,7 +54491,7 @@ const App = {
                             
                             const fd = new FormData();
                             fd.append('enc_file', new Blob([encChunk], { type: 'application/octet-stream' }), uuid + '.enc.' + ci);
-                            fd.append('storage_id', this.currentStorage);
+                            fd.append('storage_id', _cvSid);
                             fd.append('path', uploadPath);
                             fd.append('uuid', uuid);
                             fd.append('chunk_index', ci);
@@ -50875,12 +54505,16 @@ const App = {
                             
                             this._updateConvertProgress(i + 1, files.length, `${fileInfo.name} ${Math.round((ci + 1) / totalFileChunks * 100)}%`, convertedSize, totalSize);
                         }
+                        } catch (e) {
+                            await this._vaultCleanupPartialUpload(_cvSid, uploadPath, uuid);
+                            throw e;
+                        }
                     }
                     
                     // 원본 파일 삭제
                     // ★ (2026-10-29 00:02, 12차 점검) 원본 지우기 결과 확인 — 11차부터 삭제 권한이 없으면 서버가 거부하는데 결과를 안 봐서, 원본이 남았는데도 아무 안내 없이 '변환 완료'였음
                     const _vdel2 = await this.api('vault_convert_delete_original', {
-                        storage_id: this.currentStorage,
+                        storage_id: _cvSid,
                         path: fileInfo.path
                     });
                     if (!_vdel2 || !_vdel2.success) _vaultKept.push(fileInfo.name);
@@ -50896,12 +54530,13 @@ const App = {
             
             // 완료
             this._hideConvertProgress();
-            
+
+            const _dotNote = (initRes.skipped_dot > 0) ? ' ' + tf('vault_convert_dot_skipped', {n: initRes.skipped_dot}, '(점으로 시작하는 파일 {n}개는 건너뜀)') : '';   // ★ (2026-11-04) 56차 서버가 건너뛴 점(.) 파일 수(암호화 대상은 그대로)
             if (errors.length > 0) {
                 console.error('[Vault Convert] Errors:', errors);
-                this.toast(`${converted}/${files.length}${t('vault_convert_partial', '개 변환 완료')} (${errors.length}${t('vault_convert_errors', '개 실패')})`, 'warning');
+                this.toast(`${converted}/${files.length}${t('vault_convert_partial', '개 변환 완료')} (${errors.length}${t('vault_convert_errors', '개 실패')})${_dotNote}`, 'warning');
             } else {
-                this.toast(`${converted}${t('vault_convert_complete', '개 파일 암호화 변환 완료')}`, 'success');
+                this.toast(`${converted}${t('vault_convert_complete', '개 파일 암호화 변환 완료')}${_dotNote}`, 'success');
             }
             if (_vaultKept.length > 0) this.toast(tf('vault_orig_kept', {n: _vaultKept.length}, '암호화 사본은 만들었지만 원본 {n}개는 지우지 못했습니다(삭제 권한 없음). 원본이 그대로 남아 있습니다.'), 'warning', 8000);   // ★ (2026-10-29 00:02, 12차)
             
@@ -51191,6 +54826,12 @@ const App = {
     // ===== 즐겨찾기 =====
     favorites: [],
     
+    /** ★ (2026-11-17 15:44, 339차 재검토) 이름 바꾸기·이동 뒤 즐겨찾기 목록 다시 읽기 — 서버는 336차부터 경로를 따라 바꾸는데, 화면 목록은 로그인 때 읽은 그대로라
+     *  새로고침 전까지 옛 이름이 보이고 눌러도 안 열렸음(339차 확인). 짧은 시간에 여러 번 불려도 한 번만 읽음 */
+    _favRefreshSoon() {
+        try { clearTimeout(this._favRefreshT); this._favRefreshT = setTimeout(() => { try { this.loadFavorites(); } catch (e) {} }, 400); } catch (e) {}
+    },
+
     async loadFavorites() {
         try {
             const res = await this.api('favorites_get');
@@ -51285,12 +54926,13 @@ const App = {
         const visibleItems = this.favorites.slice(0, count);
         const hasMore = this.favorites.length > count;
         
+        // ★ (2026-11-15 15:01, 184차) 이름을 span.sidebar-item-name 으로 감쌈 — 링크가 flex 라 CSS 의 '…' 말줄임이 안 걸려 PC 에서 긴 이름이 글자 중간에서 잘렸음(재현, style.css 184차). 최근 파일도 같음
         list.innerHTML = visibleItems.map(fav => {
             const icon = fav.is_dir ? this.getFolderIcon() : this.getFileIcon(fav.name);
             const escapedPath = this.escapeHtml(fav.path);
             const escapedName = this.escapeHtml(fav.name);
             return `<li class="favorite-item" data-storage="${fav.storage_id}" data-path="${escapedPath}" data-is-dir="${fav.is_dir}">
-                <a href="#" title="${escapedPath}"><span class="sidebar-icon">${icon}</span> ${escapedName}</a>
+                <a href="#" title="${escapedPath}"><span class="sidebar-icon">${icon}</span> <span class="sidebar-item-name">${escapedName}</span></a>
                 <span class="favorite-remove" title="${t('remove','제거')}">×</span>
             </li>`;
         }).join('');
@@ -51356,6 +54998,9 @@ const App = {
                     if (list.querySelectorAll('.favorite-item').length === 0) {
                         list.innerHTML = `<li class="empty-message" style="color:var(--fs-text-3, #999);font-size:12px;padding:5px 10px;">${t('no_favorites','즐겨찾기가 없습니다')}</li>`;
                     }
+                } else {
+                    // ★ (2026-11-03 23:38, 53차 점검) 실패면(다른 탭·기기에서 이미 지운 항목 등) 서버 목록으로 다시 그림 — 종전엔 아무 반응 없이 항목이 계속 남았음(재현)
+                    this.loadFavorites();
                 }
             });
         });
@@ -51457,7 +55102,7 @@ const App = {
             const escapedPath = this.escapeHtml(file.path);
             const escapedName = this.escapeHtml(file.name);
             return `<li class="recent-file-item" data-storage="${file.storage_id}" data-path="${escapedPath}">
-                <a href="#" title="${escapedPath}"><span class="sidebar-icon">${icon}</span> ${escapedName}</a>
+                <a href="#" title="${escapedPath}"><span class="sidebar-icon">${icon}</span> <span class="sidebar-item-name">${escapedName}</span></a>
                 <span class="recent-remove" title="${t('il_remove', '삭제')}">×</span>
             </li>`;
         }).join('');
@@ -51581,7 +55226,13 @@ const App = {
         this.recentFilesTimer = null;
         
         try {
-            await this.api('recent_files_add_batch', { items });
+            const res = await this.api('recent_files_add_batch', { items });
+            // ★ (2026-11-01 07:18, 37차 기능 점검) 서버에 기록만 하고 사이드바 '최근 파일'은 새로고침해야 바뀌었다 → 기록 뒤 목록이 열려 있으면 다시 불러오고, 접혀 있으면 펼칠 때 불러오도록 표시
+            if (res && res.success) {
+                const recentList = document.getElementById('recent-files-list');
+                if (recentList && recentList.offsetParent !== null) this.loadRecentFiles();
+                else this._recentFilesStale = true;
+            }
         } catch (e) {
             // 429 에러 등 무시
         }
@@ -51668,6 +55319,10 @@ const App = {
                     
                     if ($list) $list.appendChild(tr);
                 });
+            } else if (!res || !res.success) {
+                // ★ (2026-11-02 11:55, 43차 점검) file_versions 실패도 '저장된 이전 버전이 없습니다'로 그렸음 → 표 자리에 실패 이유를 보여 줌
+                if ($table) $table.style.display = 'table';
+                if ($list) $list.innerHTML = `<tr><td colspan="99" style="text-align:center;padding:30px;color:var(--fs-fg-err, #e74c3c);">⚠️ ${this.escapeHtml(t('version_load_failed', '버전 목록 조회 실패') + ((res && res.error) ? ': ' + res.error : ''))}</td></tr>`;
             } else {
                 if ($empty) $empty.style.display = 'block';
             }
@@ -51727,7 +55382,8 @@ const App = {
     async loadLockedFiles() {
         try {
             const res = await this.api('locked_files_get', {
-                storage_id: this.currentStorage
+                storage_id: this.currentStorage,
+                show_hidden: this._isShowHidden() ? 1 : 0   // ★ (2026-11-02 09:48, 41차 재검토) 서버가 숨김 항목을 show_hidden 일 때만 남기게 바뀌어(41차), 보내지 않으면 '숨긴 항목 표시'를 켜도 숨김 항목의 🔒 표시가 사라졌음(검토 발견)
             });
             if (res.success) {
                 this.lockedPaths = res.locked_paths || [];
@@ -51809,9 +55465,10 @@ const App = {
     },
     
     // 공유 추가/제거 시 스크롤 유지하면서 DOM만 업데이트
-    _updateShareUI(path, shared, shareType) {
+    _updateShareUI(path, shared, shareType, onlyStorageId) {
         const fileItems = document.querySelectorAll(`.file-item[data-path="${CSS.escape(path)}"]`);
         fileItems.forEach(el => {
+            if (onlyStorageId != null && String(el.getAttribute('data-storage-id')) !== String(onlyStorageId)) return;   // ★ (2026-11-13 09:42, 110차 RGR26-2) 스토리지를 넘긴 때(검색 결과 공유)만 그 스토리지 행으로 — 넘기지 않는 종전 호출은 그대로
             el.dataset.shared = shared ? 'true' : 'false';
             if (shared) {
                 el.classList.add('is-shared');
@@ -52273,7 +55930,13 @@ function closeModal() {
         }
         return;
     }
-    
+
+    // ★ (2026-11-09 12:03, 57차 Z06-1) 텍스트 편집 중 고친 내용이 있으면 미리보기 X 로 닫을 때도 ESC 와 같은 확인 — 종전엔 확인 없이 사라졌음(재현). 취소면 창 유지, 그 밖엔 종전대로 바로 닫음
+    if (typeof App !== 'undefined' && App._textEditorMode && App._editorDirty) {
+        const _pvTop = Array.from(document.querySelectorAll('.modal')).find(m => window.getComputedStyle(m).display !== 'none');
+        if (_pvTop && _pvTop.id === 'modal-preview' && !confirm(t('unsaved_changes', '저장하지 않은 변경 사항이 있습니다. 정말 닫으시겠습니까?'))) return;
+    }
+
     // 미리보기 중복 호출 방지 캐시 리셋
     window._lastShowPreview = 0;
     window._lastShowPreviewKey = '';
@@ -52357,6 +56020,8 @@ function closeModal() {
             }
             // 자막 타이머 정리
             if (v._subTimer) clearInterval(v._subTimer);
+            if (v._subFsHandler) { document.removeEventListener('fullscreenchange', v._subFsHandler); document.removeEventListener('webkitfullscreenchange', v._subFsHandler); v._subFsHandler = null; }   // ★ (2026-11-11 23:44, 88차 PLY-1) 자막 전체화면 처리기도 뗌 — 떼는 코드가 위에서 멈춘 자막 타이머 안에만 있어, 자막 있는 영상을 열고 닫거나 넘길 때마다 document 에 2개씩 쌓이고 닫힌 영상·자막이 메모리에 남았음(재현)
+            if (v._hlsDebugTimer) { clearInterval(v._hlsDebugTimer); v._hlsDebugTimer = null; }   // ★ (2026-11-01 01:57, 36차 전체 점검) HLS 상태 점검 5초 타이머가 창을 닫거나 다른 파일로 가도 남아 쌓였다(떼어진 video·hls 붙잡음) → 함께 정리
             
             // ★ blob URL 명시적 revoke (MediaSource blob 해제)
             // removeAttribute('src')만으로는 blob URL이 해제되지 않음 → 재생 계속됨
@@ -52477,7 +56142,8 @@ function closeModal() {
                 App._pendingVault = null;
                 // _prevPath가 vault 경로와 같거나 없으면 → 상위 폴더로
                 const prevPath = App._prevPath || '';
-                if (!prevPath || prevPath === vaultPath || vaultPath.startsWith(prevPath + '/') === false && prevPath.startsWith(vaultPath)) {
+                // ★ (2026-11-01 11:42, 39차 점검) prevPath.startsWith(vaultPath) 에 '/' 가 없어 이전 경로 'Docs2'·보관함 'Docs' 면 Docs2 대신 보관함 상위로 갔음 → 하위 경로일 때만
+                if (!prevPath || prevPath === vaultPath || vaultPath.startsWith(prevPath + '/') === false && prevPath.startsWith(vaultPath + '/')) {
                     // 상위 폴더로 이동
                     const parentPath = vaultPath.includes('/') ? vaultPath.substring(0, vaultPath.lastIndexOf('/')) : '';
                     App.vault.isVaultView = false;
@@ -52494,6 +56160,7 @@ function closeModal() {
         
         // 미리보기 모달이면 vault 작업 중단 + 임시파일 정리
         if (currentModal.id === 'modal-preview' && typeof App !== 'undefined') {
+            try { App._pdfJsCleanup(); } catch (e) {}   // ★ (2026-11-01 11:41, 39차 점검) PDF.js 문서·워커·Observer 정리(hideModal 과 같게)
             if (App._vaultPreviewAbort) {
                 App._vaultPreviewAbort.abort();
                 App._vaultPreviewAbort = null;
@@ -52507,9 +56174,39 @@ function closeModal() {
                     App.api('vault_preview_cleanup', cleanupData).catch(() => {});
                 }, 300000); // 5분 후
             }
-            if (App.galleryImages) {
-                App.galleryImages.forEach(img => { if (img._tempUrl) img._tempUrl = null; });
+            // ★ (2026-11-01 08:02, 37차 기능 점검 재검토) 갤러리 사진별 임시 파일도 5분 뒤 정리(hideModal 과 같음)
+            if (App._vaultGalleryTemps && App._vaultGalleryTemps.length) {
+                const _gts = App._vaultGalleryTemps; App._vaultGalleryTemps = [];
+                setTimeout(() => { _gts.forEach(d => App.api('vault_preview_cleanup', d).catch(() => {})); }, 300000);
             }
+            if (App.galleryImages) {
+                App.galleryImages.forEach(img => { if (img._tempUrl) img._tempUrl = null; img._galTempId = null; });
+            }
+            // ★ (2026-11-01 01:07, 35차 전체 점검) X 단추(closeModal)로 닫으면 hideModal 과 달리 ① 보관함 압축 미리보기의 복호화 임시 파일을 지우지 않았고
+            //   ② 보관함 복호화 Blob URL 을 해제하지 않아 탭 메모리에 쌓였고 ③ [ ] 압축 이동 목록이 남았음 → hideModal 과 같게 정리
+            if (App._vaultArchiveTempId) {
+                App.api('vault_preview_cleanup', {
+                    storage_id: App._vaultArchiveStorageId,
+                    path: App._vaultArchiveVaultPath,
+                    temp_id: App._vaultArchiveTempId
+                }).catch(() => {});
+                App._vaultArchiveTempId = null;
+                App._vaultArchiveStorageId = null;
+                App._vaultArchiveVaultPath = null;
+            }
+            App._isVaultArchive = false;
+            if (App._lastVaultBlobUrl) {
+                try { URL.revokeObjectURL(App._lastVaultBlobUrl); } catch (e) {}
+                App._lastVaultBlobUrl = null;
+            }
+            App._lastVaultBlob = null;
+            App._folderArchiveFiles = null;
+            App._currentArchiveIdx = null;
+            // ★ (2026-11-09 19:59, 60차 Z06) 텍스트 편집 상태도 hideModal 과 같게 지움 — 남아 있으면 다음 보관함 미리보기 진행 창(showPreview 전)을 X·ESC 로 닫을 때 엉뚱한 '저장하지 않은 변경' 확인이 떴음(재현)
+            App._textEditorMode = false;
+            App._editorDirty = false;
+            const _editBtnC = document.getElementById('btn-preview-edit');
+            if (_editBtnC) { _editBtnC.style.display = 'none'; _editBtnC.textContent = '✏️ ' + t('edit_file', '편집'); _editBtnC._editInfo = null; }
         }
         
         // PDF 모드 클래스 제거
@@ -52522,6 +56219,7 @@ function closeModal() {
         currentModal.style.height = '';
         const mbody = currentModal.querySelector('.modal-body');
         if (mbody) mbody.style.height = '';
+        if (mbody) mbody.style.flex = '';   // ★ (2026-11-12 23:42, 106차 펜닐 제보 VFIT) X 로 닫을 때도 크기 조정의 flex:none 을 지움(hideModal 과 같게) — 종전엔 남아 다음 동영상이 모달보다 크게 열렸음(재현)
         currentModal.style.display = 'none';
         // ★ 탭 제목 복원 (2026-08-15 추가, 2026-08-17 범위 축소)
         //   closeModal()은 App.hideModal()을 거치지 않고 모달을 직접 숨기므로,
@@ -52852,6 +56550,7 @@ function initModalResize() {
 
 // 초기화
 document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.modal').forEach(m => App._ariaDialog(m));   // ★ (2026-11-13 01:06, 108차 ARIA-1) 화면에 미리 있는 창(index.php) 전부 — 띄우는 방식과 상관없이 표시
     // 이미지 뷰어 컨트롤바 이벤트 바인딩
     const zoomBar = document.getElementById('preview-image-zoom-bar');
     if (zoomBar) {
@@ -52924,9 +56623,22 @@ document.addEventListener('DOMContentLoaded', () => {
             loginBox.style.display = 'block';
             setTimeout(() => {
                 loginBox.classList.add('active');
+                // ★ (2026-11-12 19:20, 102차 KBD-5) 2FA 화면이 보이면 코드 칸(백업 칸이 보이면 그 칸)에 포커스 — 종전엔 2FA 중 Esc 로 닫았다 다시 열면
+                //   숨은 아이디 칸에 포커스를 주려다 포커스가 BODY 에 남았음(재현). 2FA 가 아니면 종전처럼 아이디 칸
+                const _tfForm = document.getElementById('twofa-form');
+                if (_tfForm && _tfForm.getClientRects().length) {
+                    const _bk = document.getElementById('twofa-backup-code');
+                    const _tc = (_bk && _bk.getClientRects().length) ? _bk : document.getElementById('twofa-code');
+                    if (_tc) { _tc.focus(); return; }
+                }
                 const usernameInput = document.getElementById('login-username');
                 if (usernameInput) usernameInput.focus();
             }, 50);
+        });
+        // ★ (2026-11-03 21:40, 52차 점검) Enter·Space 로도 열기(로그인 시작 칸 자신에 포커스가 있을 때만 — 안쪽 언어 선택칸의 키는 그대로)
+        loginStart.addEventListener('keydown', (e) => {
+            if (e.target !== loginStart) return;
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') { e.preventDefault(); loginStart.click(); }
         });
     }
     

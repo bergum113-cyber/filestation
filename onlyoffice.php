@@ -27,10 +27,12 @@ $auth = new Auth();
 $storage = new Storage();
 
 // 로그인 확인
-if (!$auth->isLoggedIn()) {
+// ★ (2026-11-07 11:20, 로그인 유지 풀림 재검토) 세션이 없으면 로그인 유지 토큰으로 복구 시도(index.php·api.php 와 같게) — 종전엔 이 화면이 첫 요청이면(iPhone 이 탭을 정리한 뒤 뷰어 탭을 다시 읽을 때 등) 로그인 유지를 켜도 로그인 화면/401 로 갔음(재현)
+if (!$auth->isLoggedIn() && !$auth->checkRememberToken()) {
     header('Location: index.php');
     exit;
 }
+$auth->isLoggedIn();   // ★ (2026-11-09 14:12, 58차) 로그인 유지 토큰으로 복구한 첫 요청도 세션 목록에 기록(index.php 와 같게 — 다른 뷰어는 뒤에서 확인을 다시 불러 원래 기록됨, 이 파일만 안 됐음(원본 대조로 확인). 결과는 쓰지 않음)
 
 // OnlyOffice 설정 로드 (settings.json에서)
 $settings = $db->load('settings');
@@ -67,7 +69,11 @@ if ($onlyofficeHost) {
 
 // 파라미터 가져오기
 $storageId = (int)($_GET['storage_id'] ?? 0);
+if (isset($_GET['path']) && !is_string($_GET['path'])) { http_response_code(400); exit('Invalid path'); }   // ★ (2026-11-11 13:21, 74차) path[]= 배열이면 dirname()/basename() TypeError 로 500 이었음(api.php 는 56차에 400 으로 정리, 이 진입점은 앞단을 안 거침) → 400. 문자열 경로는 그대로
 $filePath = $_GET['path'] ?? '';
+// ★ (2026-11-03 14:21, 51차 재검토) 로컬 스토리지도 원격처럼 '..'(또는 점·공백만 있는 '.. '·'...') 조각을 거부 — api.php 앞단 차단을 거치지 않는 진입점이라, 루트 위로 넘치는 '..'
+//   ('../<스토리지 폴더>/secret/a.docx')나 Linux 의 '.. '·'...' 폴더를 끼운 경로가 폴더 권한·잠금 비교만 비켜 가 읽기 금지 폴더 읽기·쓰기 금지/잠긴 한글 파일 덮어쓰기가 됐음(재현)
+if (preg_match('#(^|[\\\\/])[. ]*\.\.[. ]*($|[\\\\/])#', (string)$filePath)) { http_response_code(403); exit('Invalid path'); }
 $mode = $_GET['mode'] ?? 'edit'; // edit, view
 if (!in_array($mode, ['edit', 'view'])) $mode = 'edit';
 
@@ -83,16 +89,16 @@ if (!$storage->checkPermission($storageId, 'can_read')) {
 // 폴더별 권한 체크
 $ooFileDir = dirname($filePath);
 if ($ooFileDir === '.') $ooFileDir = '';
-if (!$storage->checkFolderPermission($storageId, $ooFileDir ?: $filePath)) {
+if (!$storage->checkFolderPermission($storageId, ($ooFileDir !== '' ? $ooFileDir : $filePath))) { // ★ (2026-11-01 17:17, 40차 점검) 부모 폴더가 '0' 이면 ?: 가 빈 값으로 봐 항목 자신 규칙으로 검사했음 → '' 일 때만 항목 자신
     die('<h2>' . __('oo_no_permission') . '</h2><p>' . __('oo_no_permission_desc') . '</p><a href="index.php">' . __('oo_go_back') . '</a>');
 }
 
 // 쓰기 모드일 때 쓰기 권한 확인
-if ($mode === 'edit' && (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, $ooFileDir ?: $filePath, 'can_write'))) {
+if ($mode === 'edit' && (!$storage->checkPermission($storageId, 'can_write') || !$storage->checkFolderPermission($storageId, ($ooFileDir !== '' ? $ooFileDir : $filePath), 'can_write'))) { // ★ (2026-11-01 17:17, 40차 점검) 부모 폴더가 '0' 이면 ?: 가 빈 값으로 봐 항목 자신 규칙으로 검사했음 → '' 일 때만 항목 자신
     $mode = 'view'; // 쓰기 권한 없으면 보기 모드로 전환
 }
 // ★ (2026-10-29 10:26, 20차 점검) 잠긴 파일은 보기 모드로 — 종전엔 편집으로 열려 저장(콜백)되면 잠긴 파일을 덮어썼음(재현). 텍스트·한글 편집기 저장과 같은 기준
-if ($mode === 'edit' && JsonDB::getInstance()->find('locked_files', ['storage_id' => (int)$storageId, 'path' => $filePath])) {
+if ($mode === 'edit' && (new FileManager())->isFileLockedPublic((int)$storageId, (string)$filePath)) {   // ★ (2026-10-31 12:03, 34차 전체 점검) 글자 그대로 비교라 'a//b'·'/a'·대소문자(윈도우) 표기로 잠금을 지났음 → 탐색기와 같은 정리 비교
     $mode = 'view';
 }
 
@@ -163,10 +169,35 @@ $documentKey = md5($storageId . ':' . $filePath . ':' . $fileModified . ':' . $f
 fsOoKeyRegister($documentKey, (int)$storageId, (string)$filePath, $mode);
 
 // 콜백 URL (OnlyOffice에서 저장 시 호출)
-$callbackBaseUrl = $ONLYOFFICE_CALLBACK_URL ?: (
-    ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http') .
-    '://' . $_SERVER['HTTP_HOST']
-);
+// ★ (2026-11-02 10:26, 42차 점검) 자동값이 scheme://HTTP_HOST 뿐이라 하위 폴더(/fs/) 설치면 OnlyOffice 가 /api.php 를 불러 404, HTTPS 를 끝내는
+//   프록시 뒤에선 http:// 가 나갔음(재현) → 공유 URL(ShareManager getShareUrl)처럼 dirname(SCRIPT_NAME) 을 붙이고, X-Forwarded-Proto/SSL 은
+//   신뢰 프록시(TRUSTED_PROXIES)에서 온 요청일 때만 믿음. 관리자가 넣은 콜백 URL 은 그대로 씀
+$ooFromTrustedProxy = (function () {
+    $ra = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+    $bin = @inet_pton($ra);
+    if ($bin === false) return false;
+    foreach ((defined('TRUSTED_PROXIES') ? (array)TRUSTED_PROXIES : []) as $p) {
+        $p = (string)$p;
+        if (strpos($p, '/') === false) { if ($ra === $p) return true; continue; }
+        [$net, $bits] = explode('/', $p, 2);
+        $nb = @inet_pton($net);
+        if ($nb === false || strlen($nb) !== strlen($bin) || !ctype_digit($bits)) continue;
+        $bits = (int)$bits; $bytes = intdiv($bits, 8); $rem = $bits % 8;
+        if ($bits > strlen($bin) * 8) continue;
+        if (substr($bin, 0, $bytes) !== substr($nb, 0, $bytes)) continue;
+        if ($rem === 0 || ((ord($bin[$bytes]) ^ ord($nb[$bytes])) & (0xFF << (8 - $rem)) & 0xFF) === 0) return true;
+    }
+    return false;
+})();
+$ooIsHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || (isset($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443)
+    || ($ooFromTrustedProxy && (
+        (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower(trim(explode(',', (string)$_SERVER['HTTP_X_FORWARDED_PROTO'])[0])) === 'https')
+        || (!empty($_SERVER['HTTP_X_FORWARDED_SSL']) && $_SERVER['HTTP_X_FORWARDED_SSL'] === 'on')));
+$ooDir = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '/')), '/');
+// 사용자 브라우저 기준 주소('돌아가기' 링크용) — 콜백 URL 설정(서버끼리 쓰는 내부 주소일 수 있음)과 상관없음
+$ooBrowserBaseUrl = ($ooIsHttps ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'localhost') . $ooDir;
+$callbackBaseUrl = $ONLYOFFICE_CALLBACK_URL ?: $ooBrowserBaseUrl;
 $callbackBaseUrl = rtrim($callbackBaseUrl, '/');
 $callbackUrl = $callbackBaseUrl . '/api.php?action=onlyoffice_callback';
 
@@ -197,7 +228,7 @@ $config = [
     'documentType' => $documentType,
     'editorConfig' => [
         'callbackUrl' => $callbackUrl . '&storage_id=' . $storageId . '&path=' . rawurlencode($filePath) . '&key=' . $documentKey,
-        'lang' => 'ko',
+        'lang' => (function_exists('getLang') && getLang() === 'en') ? 'en' : 'ko',   // ★ (2026-11-02 10:35, 42차 점검) 'ko' 고정이라 영어 사용자도 편집기 화면이 한국어였음(나머지 파일 담당 보고) — 앱 언어를 따름
         'mode' => $mode,
         'user' => [
             'id' => (string)$userId,
@@ -212,7 +243,7 @@ $config = [
             'feedback' => false,
             'forcesave' => true,
             'goback' => [
-                'url' => $callbackBaseUrl . '/index.php'
+                'url' => $ooBrowserBaseUrl . '/index.php'   // ★ (2026-11-02 10:26, 42차 점검) 종전엔 콜백 URL 설정값을 써서, 화면 안내대로 Docker 내부 주소(http://172.17.0.1)를 넣으면 '돌아가기'가 사용자를 그 주소로 보냈음
             ],
             'help' => false,
             'hideRightMenu' => false,

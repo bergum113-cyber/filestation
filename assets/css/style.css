@@ -79,6 +79,8 @@ body {
 .login-start.hidden {
     opacity: 0;
     pointer-events: none;
+    visibility: hidden;   /* ★ (2026-11-03 22:06, 52차 재검토) 숨긴 뒤 Tab·Shift+Tab 으로 보이지 않는 칸에 포커스가 가지 않게(tabindex=0 을 준 뒤 생긴 일, 검토 재현) */
+    transition: opacity 0.5s, visibility 0s linear 0.5s;   /* 사라지는 0.5초 동안은 보이고 끝난 뒤 숨김(다시 보일 땐 바로) */
 }
 
 .login-start-header {
@@ -133,19 +135,46 @@ body {
 }
 
 .login-start-title span {
-    color: var(--fs-fg-info, #3b82f6);
+    /* ★ (2026-11-01 01:05, 35차 전체 점검) 로그인 시작 화면은 테마와 상관없이 어두운 바탕인데, 밝은 바탕용 짙은 안내 글자색(--fs-fg-info)을 받아
+       11개 테마에서 'Station' 이 2.3~2.8:1 로 묻혔음 → 테마 기본색을 흰색과 섞은 밝은 색(모든 테마 4.9:1 이상), 못 쓰는 브라우저는 종전 파란색 */
+    color: #3b82f6;
+    color: color-mix(in srgb, var(--primary, #3b82f6) 70%, #ffffff);
 }
 
+/* ★ (2026-10-30 23:36, 펜닐 요청 — 참고: codepen typeforward 'breathe') '클릭하여 로그인' 숨쉬기를 글자 굵기로 — 가늘게(100) ↔ 굵게(900), 3초.
+   종전(14:07)은 반투명 어두운 띠 + 테두리 + 그림자에 밝기만 75~100% 로 오가서 숨쉬기가 약했음 → 띠·테두리 없앰.
+   굵기를 부드럽게 바꾸려면 가변 글꼴이 필요해 Pretendard Variable(SIL OFL 1.1)에서 이 문구 글자만 뽑아 넣음(assets/fonts/fs-hint-var.woff2, 4KB —
+   OFL 이 고친 글꼴엔 원래 이름을 못 쓰게 해서 이름을 'FS Hint Var' 로 바꿈, 라이선스 fs-hint-var-OFL.txt). 글꼴을 못 읽으면 기본 글꼴로 보이고 굵기만 안 변함.
+   밝은 배경 사진에서도 읽히게 퍼진 옅은 그늘만(테두리처럼 보이지 않게). 움직임 줄이기 설정이면 숨쉬기 끔(중간 굵기로 고정) */
+@font-face {
+    font-family: 'FS Hint Var';
+    src: url('../fonts/fs-hint-var.woff2') format('woff2');
+    font-weight: 45 930;
+    font-style: normal;
+    font-display: swap;
+}
 .login-start-hint {
-    color: rgba(255, 255, 255, 0.4);
-    font-size: 14px;
-    animation: hintPulse 2s ease-in-out infinite;
+    color: #fff;
+    font-family: 'FS Hint Var', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Malgun Gothic', sans-serif;
+    font-size: 18px;   /* ★ (2026-10-30 23:56, 펜닐 요청) 22px 가 커 보여 줄임 */
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    padding: 6px 0;
+    text-shadow: 0 0 16px rgba(0, 0, 0, 0.35);
+    animation: hintBreathe 3s ease-in-out infinite;
     pointer-events: none;
 }
 
-@keyframes hintPulse {
-    0%, 100% { opacity: 0.4; }
-    50% { opacity: 0.8; }
+/* 휴대폰 공통 규칙 '* { transition-duration: 0.1s !important }'(모바일 트랜지션 최소화) 때문에 안쪽 글자가 굵기 변화를 0.1초씩 늦게 쫓다
+   매 순간 다시 시작돼 가는 굵기에 멈춰 있었음(390px 시험에서 잡음) → 이 문구만 전환 끔 */
+.login-start-hint, .login-start-hint * { transition: none !important; }
+
+@keyframes hintBreathe {
+    0%, 100% { font-variation-settings: 'wght' 100; }
+    50% { font-variation-settings: 'wght' 700; }   /* ★ (2026-10-30 23:56, 펜닐 요청) 가장 굵을 때 900 → 700(살짝 얇게) */
+}
+@media (prefers-reduced-motion: reduce) {
+    .login-start-hint { animation: none; font-variation-settings: 'wght' 400; }
 }
 
 /* 로그인 박스 */
@@ -680,6 +709,28 @@ body {
     line-height: 1.4;
     color: var(--theme-text, var(--fs-text, #212529));
 }
+/* ★ (2026-11-15 18:23, 205차) 휴대폰 시스템 정보 '외부 도구' 표 — 휴대폰 창 표 공통 규칙(한 줄 고정·옆으로 밀기) 때문에 7-Zip 상태 안내 한 문장이 표 밖으로 이어져(표 523px / 칸 366px)
+   옆으로 밀어야 읽혔음(재현) → 이 안내 칸(colspan 칸)만 칸 안에서 줄 바꿈. 폴더 경로처럼 '…'로 줄이는 다른 칸은 그대로 */
+@media (max-width: 1024px) {
+    #modal-system-info .info-table td[colspan] {
+        white-space: normal;
+    }
+    /* '서비스 상태' WebDAV 주소(눌러 복사하는 code[data-cp])도 '…mydav.ph'에서 잘렸음(재현: 표 380/366) → 주소만 칸 안에서 줄 바꿈 */
+    #modal-system-info .info-table td code[data-cp] {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+/* ★ (2026-11-15 18:41, 206차) 휴대폰 스토리지 관리 표 — 다른 칸이 고정 너비라 '설명' 머리칸이 64px 만 남아 영어 화면에서 'Descri…'로 잘렸음(재현 88/64) → 휴대폰만 90px(옆으로 미는 표라 PC 배치는 그대로) */
+@media (max-width: 1024px) {
+    #storages-table th:nth-child(6) {
+        width: 90px;
+    }
+}
+/* ★ (2026-11-15 17:16, 194차) 띄어쓰기 없는 긴 제목(영문·숫자 붙여쓰기)이 줄을 안 바꿔 휴대폰에서 글 보기 화면 밖으로 잘렸음(재현: 제목 오른쪽 끝 803px / 화면 390px) → 넘칠 때만 칸 안에서 줄 바꿈 */
+.board-detail-header h2 {
+    overflow-wrap: anywhere;
+}
 
 .board-detail-meta {
     display: flex;
@@ -884,6 +935,8 @@ body {
     border-radius: 4px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.15);
 }
+/* ★ (2026-11-10 20:00, 67차 점검) 현재 쪽에 마우스를 올리면 위 .board-pg-num:hover 바탕이 덮어 흰 숫자가 거의 사라졌음(기본 테마 1.11:1) → 현재 쪽은 올려도 같은 바탕 */
+.board-pg-current:hover { background: var(--theme-primary, var(--primary, #4a90d9)); }
 
 /* 네비게이션 (처음/이전/다음/끝) */
 .board-pg-nav {
@@ -1482,6 +1535,8 @@ body {
 }
 
 .search-box input:focus { outline: none; }
+/* ★ (2026-11-12 19:22, 102차 KBD-6) Tab 으로 들어온 검색칸만 상자 둘레에 테마 색 얇은 테두리(app.js 가 kbd-focus 를 붙임) — 종전엔 키보드 포커스 표시가 없었음(재현). 마우스로 누를 때는 종전과 같음 */
+.search-box.kbd-focus { box-shadow: 0 0 0 2px var(--primary); }
 
 .search-box button {
     background: none;
@@ -2050,13 +2105,13 @@ img.fs-file-icon-img {
 .file-list.grid-view .file-thumbnail .thumb-img {
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: contain;   /* ★ (2026-11-12 21:13, 104차 펜닐 요청 썸네일 B안) 그림 전체가 칸 안에(서버 썸네일도 비율 유지) — 종전 cover 는 위아래·양옆이 잘렸음 */
     border-radius: 6px;
     transition: opacity 0.2s ease;
 }
 
 .file-list.grid-view .file-thumbnail.thumb-loaded {
-    background: transparent;
+    background: var(--fs-surface-2, #f5f5f5);   /* ★ (2026-11-12 21:13, 104차 펜닐 요청 썸네일 B안) 남는 곳은 옅은 회색 판(불러오기 전 칸과 같은 테마 변수) — 종전 transparent */
 }
 
 .file-list.grid-view .file-thumbnail.thumb-loaded .thumb-img {
@@ -2774,7 +2829,7 @@ body.modal-open.trash-modal-active .transfer-progress {
 .share-result { margin-top: 20px; }
 .share-existing-info { margin-top: 12px; padding: 16px; background: var(--bg-secondary, var(--fs-surface-2, #f8f9fa)); border-radius: 8px; border: 1px solid var(--border-color, var(--fs-border, #eee)); }
 .share-existing-info .detailed-info-table { font-size: 14px; width: 100%; }
-.share-existing-info .detailed-info-table th { width: 90px; padding: 8px 10px; }
+.share-existing-info .detailed-info-table th { width: 116px; padding: 8px 10px; }   /* ★ (2026-11-04 01:41, 54차 점검) 기본 규칙(52차 116px)과 같게 — 90px 이라 영어 'Share Expires' 가 칸을 넘쳐 값에 붙었음(재현) */
 .share-existing-info .detailed-info-table td { padding: 8px 10px; }
 .share-existing-info .btn { font-size: 13px !important; padding: 6px 14px !important; }
 
@@ -3133,7 +3188,7 @@ body.modal-open.trash-modal-active .transfer-progress {
 .notify-item-text strong { color: var(--fs-fg-info, #4a90e2); }
 
 .notify-item-action {
-    background: #4a90e2;
+    background: #3d78b4;   /* ★ (2026-11-01 01:55, 36차 전체 점검) #4a90e2 위 흰 11px 글자 3.3:1 → 쪽 번호(4060행)와 같은 색 */
     color: #fff;
     border: none;
     padding: 5px 12px;
@@ -3287,7 +3342,7 @@ body.board-mode #transfer-progress {
 }
 
 .detailed-info-table th {
-    width: 80px;
+    width: 116px;   /* ★ (2026-11-03 21:42, 52차 점검) 80 → 116 — 안쪽 56px 라 영어 Dimensions(89px)·Accessed·Extension·Attributes·Modified, 한국어 '크기(픽셀)' 가 값 칸과 겹쳤음 */
     font-weight: 500;
     color: var(--fs-text-2, #666);
     background: var(--fs-surface-2, #f9f9f9);
@@ -3355,6 +3410,14 @@ body.board-mode #transfer-progress {
     overscroll-behavior-x: contain;
 }
 .settings-tabs::-webkit-scrollbar { display: none; }
+/* ★ (2026-11-15 18:10, 203차) PC 설정 창은 탭 6개(713px)가 탭 줄(660px)보다 넓어 마지막 '로그인 기록'이 '로그인'까지만 보였고, 스크롤 막대를 숨겨 마우스로는 옆으로 밀 수 없었음(재현) →
+   PC(1025px 이상)만 탭 안쪽 좌우 여백 20 → 12px(휴대폰 탭과 같은 값) 로 한 줄에 다 들어가게 — 14px 은 영어 화면에서 6px 모자랐음(204차). 휴대폰(좌우 밀기)은 그대로 */
+@media (min-width: 1025px) {
+    .settings-tabs .tab-btn {
+        padding-left: 12px;
+        padding-right: 12px;
+    }
+}
 
 .tab-btn {
     padding: 10px 20px;
@@ -3525,7 +3588,7 @@ body.board-mode #transfer-progress {
 }
 
 .badge-danger {
-    background: #f44336;
+    background: #c62828;   /* ★ (2026-11-01 01:55, 36차 전체 점검) #f44336 위 흰 11px 글자 3.7:1 → 5.6:1(35차 .badge-warning 과 같은 칸에 번갈아 나옴) */
     color: white;
 }
 
@@ -3540,7 +3603,7 @@ body.board-mode #transfer-progress {
 }
 
 .badge-warning {
-    background: #ff9800;
+    background: #b45309;   /* ★ (2026-11-01 01:07, 35차 전체 점검) #ff9800 위 흰 글자 2.2:1 → 짙은 주황(5.0:1) */
     color: white;
 }
 
@@ -3641,6 +3704,7 @@ body.board-mode #transfer-progress {
     display: flex;
     flex-wrap: wrap;
     gap: 15px;
+    margin-top: 15px;   /* ★ (2026-11-04 07:21, 펜닐 제보) 위 네트워크 인터페이스 칩 바로 밑에 구분선이 붙던 것 — 다른 구역(.resource-extra·.realtime-controls)처럼 위 여백 */
     padding-top: 15px;
     border-top: 1px solid rgba(255, 255, 255, 0.2);
     font-size: 13px;
@@ -3725,8 +3789,9 @@ body.board-mode #transfer-progress {
 }
 
 .security-card.error {
-    background: linear-gradient(135deg, var(--fs-tint-err, #fee2e2) 0%, #fecaca 100%);
-    border-color: #f87171;
+    /* ★ (2026-10-31 12:03, 34차 전체 점검) 끝색이 고정(#fecaca)이라 어두운 테마에서 설명 글자가 연분홍 바탕에 묻혔음 → ok/warn 처럼 테마 변수로 */
+    background: linear-gradient(135deg, var(--fs-tint-err, #fee2e2) 0%, var(--fs-tint-err, #fecaca) 100%);
+    border-color: var(--fs-tint-err-border, #f87171);
 }
 
 .security-icon {
@@ -3806,8 +3871,10 @@ body.board-mode #transfer-progress {
 .rt-buttons {
     display: flex;
     gap: 8px;
-    align-items: center;
+    align-items: stretch;   /* ★ (2026-11-04 07:21, 펜닐 제보) 선택칸·버튼 높이를 같게 */
+    flex-shrink: 0;
 }
+#rt-time { min-width: 0; }   /* 좁은 화면에선 시각 글자가 먼저 줄어들게 */
 
 .rt-select {
     padding: 4px 8px;
@@ -3825,6 +3892,13 @@ body.board-mode #transfer-progress {
 }
 
 .rt-btn {
+    /* ★ (2026-11-04 07:21, 펜닐 제보) 휴대폰 세로에서 버튼이 좁아져 아이콘·'중'·'지'가 세 줄로 접혀 세로로 긴 버튼이 되던 것 → 한 줄 고정 */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
     padding: 6px 12px;
     border-radius: 6px;
     border: none;
@@ -4618,18 +4692,18 @@ body.board-mode #transfer-progress {
 }
 .vec-btn {
     background: transparent;
-    border: 1px solid #555;
+    border: 1px solid var(--fs-border, #bbb);
     border-radius: 4px;
     padding: 3px 8px;
     font-size: 12px;
     cursor: pointer;
-    color: var(--fs-text-3, #aaa);
+    color: var(--fs-text-2, #555);   /* ★ (2026-11-01 01:55, 36차 전체 점검) 아래 줄(.preview-footer) 바탕은 밝은 테마에서 밝은데 어두운 바탕용 색이라 2.1:1, 올리면 흰 글자가 흰 바탕(1.1:1) → 테마 변수로(휴대폰 몰입 모드는 아래 미디어 쿼리에서 흰 글자) */
     transition: all 0.15s;
 }
 .vec-btn:hover {
-    background: rgba(255,255,255,0.1);
-    color: #fff;
-    border-color: #888;
+    background: var(--fs-surface-3, #e5e7eb);
+    color: var(--fs-text, #1a1a1a);
+    border-color: var(--fs-text-3, #888);
 }
 .vec-btn.vec-active {
     background: rgba(102, 126, 234, 0.8);
@@ -4661,7 +4735,7 @@ body.board-mode #transfer-progress {
 .vec-ab-range {
     font-size: 11px;
     font-weight: 700;
-    color: #ffb300;
+    color: var(--fs-fg-warn, #b45309);   /* ★ (2026-11-01 01:55, 36차 전체 점검) 밝은 바탕에서 #ffb300 이 1.8:1 → 테마 경고 글자색(몰입 모드는 아래에서 종전 앰버) */
     font-family: monospace;
     white-space: nowrap;
     align-self: center;
@@ -5196,6 +5270,8 @@ video::cue {
     color: #fff;
     text-align: left;
 }
+/* ★ (2026-11-15 18:44, 206차) 긴 곡 이름이 '…' 없이 글자 중간에서 잘렸음(재현: 908px 이름을 258px 칸에) — 재생 목록·창 제목처럼 말줄임 */
+.fap-now-title { text-overflow: ellipsis; }
 .fap-now-meta {
     font-size: 11px;
     color: rgba(255, 255, 255, 0.55);
@@ -6602,6 +6678,7 @@ video::cue {
 .fap-skin-pixel .fap-pl-item { color: #0f380f !important; font-family: inherit; border-bottom: 2px solid rgba(15,56,15,0.2); }
 .fap-skin-pixel .fap-pl-item:hover { background: rgba(15,56,15,0.1) !important; }
 .fap-skin-pixel .fap-pl-item.playing { background: #0f380f !important; color: #9bbc0f !important; }
+.fap-skin-pixel .fap-pl-dur { color: inherit !important; }   /* ★ (2026-11-10 10:52, 62차) 재생시간이 기본 플레이어용 흰색 35%라 연두 바탕에서 1.33:1 — SoundCloud(6258)처럼 줄 글자색을 따름 */
 /* ★ 재생중 넘버링도 제목과 같은 색 (게임보이 연두) */
 /*    재생중(playing)일 때만 강조 — 멈춤(active만)일 땐 일반색 */
 .fap-skin-pixel .fap-pl-item.playing .fap-pl-num {
@@ -7574,6 +7651,9 @@ html.fs-label-off .archive-ext, html.fs-label-off .subtitle-ext, html.fs-label-o
     text-size-adjust: 100%;
 }
 .share-meta::-webkit-scrollbar { display: none; }
+/* ★ (2026-11-15 10:11, 174차, 166차 남은 것) 한 줄에 다 안 들어가면 다음 줄로 접음 — 종전엔 한 줄 + 옆으로 밀기(스크롤 막대 숨김)라 휴대폰(390px)에서
+   끝 '비밀번호: 없음'이 카드 끝에서 잘린 듯 보였음(재현). 한 줄에 들어가는 넓은 화면은 종전과 같음 */
+.share-meta { flex-wrap: wrap; }
 
 .share-meta span {
     display: flex;
@@ -7771,6 +7851,7 @@ html.fs-label-off .archive-ext, html.fs-label-off .subtitle-ext, html.fs-label-o
     color: var(--fs-fg-info, #0066cc);
     font-family: monospace;
     font-size: 12px;
+    overflow-wrap: anywhere;   /* ★ (2026-11-17 14:22, 328차) 긴 경로(띄어쓰기 없음)가 한 줄로 이어져 휴대폰(폭 320~430px)에서 시스템 설정 창 본문이 가로로 밀리던 것(재현: 본문 443px / 화면 375px) — 아무 곳에서나 줄바꿈 */
     background: var(--fs-tint-info, #f0f7ff);
     padding: 5px 10px;
     border-radius: 4px;
@@ -9064,6 +9145,75 @@ body.is-mobile #board-detail-search {
     z-index: 1;
 }
 
+/* ★ (2026-11-15 07:31, 162차) 휴대폰·태블릿(1024px 이하)에서 '모달 내 테이블 가로 스크롤'(.modal-body table → block)이 이 표에도 걸려
+   스크롤이 두 겹(바깥 틀 + 표 자체)이 됐음 — 바깥을 끝까지 밀어도 크기·IP 칸이 화면 밖이었고, 아래로 내리면 머리줄 고정(sticky)이 바깥 틀이 아닌 표 기준이 되어
+   머리줄이 같이 올라가 사라졌음(재현). 이 표는 바깥 틀(.activity-table-wrap)이 가로·세로를 맡게 설계돼 있으므로 표만 table 로(압축 미리보기 표와 같은 방식).
+   같은 이유로 두 겹이던 로그인 기록 표(바깥 틀 .login-logs-wrapper — 머리줄 고정도 깨짐)·스토리지 관리 표(바깥 틀 overflow-x:auto div — 끝 칸이 바깥만 밀어선 안 보임)도 함께(재현) */
+@media (max-width: 1024px) {
+    #activity-table,
+    #modal-all-logins .login-logs-table,
+    #login-logs-list .login-logs-table,   /* ★ (2026-11-15 08:23, 165차) 설정 > 로그인 기록 탭(내 기록)도 같은 표 — 휴대폰에서 표 자체가 8px 더 밀려 끝 칸 글자가 잘렸음(재현) */
+    #users-table,   /* ★ (2026-11-15 09:50, 173차) 사용자 관리 표 — 휴대폰에서 창 본문을 끝까지 밀어도 '관리'(편집·삭제) 칸이 79px 잘렸음(재현: 26줄 모두) */
+    #storages-table {
+        display: table;
+    }
+}
+
+/* ★ (2026-11-15 11:00, 179차) 설정 > 앱 비밀번호 목록 — 띄어쓰기 없는 긴 라벨(최대 50자)이 줄을 안 바꿔 PC 에선 표가 창 본문보다 9px 넓어 가로 스크롤이 생기고
+   '마지막 사용' 머리칸이 한 글자씩 세로로 쪼개졌음, 휴대폰에선 표 자체 가로 스크롤(.modal-body table → block) 안에서 삭제 단추가 화면 밖(오른쪽 끝 701px / 화면 390px)이었음(재현).
+   라벨은 칸 안에서 줄 바꿈, 비밀번호 앞부분·날짜·머리칸은 한 줄로(휴대폰에선 비밀번호 앞부분도 줄 바꿈), 휴대폰에선 표를 table 로 되돌려 다섯 칸이 화면 안에 들어오게 */
+#app-passwords-list td:nth-child(1) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+#app-passwords-list th,
+#app-passwords-list td:nth-child(n+2) {
+    white-space: nowrap;
+}
+@media (max-width: 1024px) {
+    #app-passwords-list table {
+        display: table;
+    }
+    #app-passwords-list th,
+    #app-passwords-list td {
+        padding: 8px 4px !important;
+    }
+    #app-passwords-list td:nth-child(2) {
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+}
+
+/* ★ (2026-11-15 14:49, 181차) 검색 결과 줄에 유형 칸을 더함(app.js 181차) — PC 목록 보기에서만 보이고, 바둑판·휴대폰 검색 카드에선 종전처럼 숨김(날짜·크기와 같음) */
+.file-list.grid-view .search-result-item > .file-type {
+    display: none;
+}
+@media (max-width: 1024px) {
+    .file-list.list-view .file-item.search-result-item > .file-type {
+        display: none !important;
+    }
+}
+
+/* ★ (2026-11-15 16:16, 189차) 휴대폰 '이전 버전' 창 — 모든 창 표에 걸리는 최소 너비 500px(.modal-body .data-table) 때문에 세 칸짜리 버전 표가 화면(390px)보다 넓어
+   창 본문이 가로로 밀리고 '복원'·내려받기 단추가 화면 밖이었음(재현: 표 500px·본문 512/390) → 이 표만 화면 폭에 맞추고 저장 시간은 칸 안에서 줄 바꿈 */
+@media (max-width: 1024px) {
+    .modal-body #version-list-table {
+        min-width: 0;
+    }
+    #version-list-table td:first-child {
+        white-space: normal;
+    }
+    /* 칸 폭이 고정(table-layout: fixed, 머리칸 50·25·25%)이라 '작업' 칸(92px)에 복원·내려받기 두 단추(약 114px)가 안 들어가 화면 끝에 걸렸음 → 45·22·33% */
+    #version-list-table th:nth-child(1) { width: 45% !important; }
+    #version-list-table th:nth-child(2) { width: 22% !important; }
+    #version-list-table th:nth-child(3) { width: 33% !important; }
+}
+/* ★ (2026-11-15 16:20, 189차) '작업' 칸 — 공통 표 칸 규칙(넘치면 '…')에 걸려 칸 폭이 조금 모자라면 내려받기(⬇) 단추 자체가 '…'로 바뀌어 PC·휴대폰 모두 안 보였음(재현: PC 칸 115px 안 단추 56+30px) → 이 칸만 자르지 않음 */
+#version-list-table td:last-child {
+    overflow: visible;
+    text-overflow: clip;
+}
+
 #activity-table .nowrap {
     white-space: nowrap;
 }
@@ -9947,10 +10097,14 @@ body.is-mobile #board-detail-search {
     }
     
     /* confirm 모달: 내용이 짧으니 높이 자동 */
+    /* ★ (2026-11-12 22:16, 105차 개선 CNF-2) 내용이 창 최대 높이(80vh)를 넘으면 본문만 줄어 스크롤되게 — 종전엔 0 0 auto·visible 이라 단추 줄이 창 밖으로 밀려
+       누를 수 없었음(재현: 390×664 파일 8개 삭제, 단추 줄 590~654 > 창 아래 598). 짧은 창은 높이·위치 그대로(PC 규칙은 안 건드림) */
     #modal-confirm .modal-body {
-        flex: 0 0 auto;
+        flex: 1 1 auto;
         height: auto;
-        overflow: visible;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
     }
     
     .modal-footer {
@@ -9969,6 +10123,7 @@ body.is-mobile #board-detail-search {
     .modal-footer .btn {
         flex: 1;
         min-width: 100px;
+        word-break: keep-all; /* ★ (2026-11-04) 좁은 화면에서 한글 단추 글자가 낱말 가운데서 접히지 않게 */
     }
     
     /* 컨텍스트 메뉴 */
@@ -10422,6 +10577,7 @@ body.is-mobile #board-detail-search {
         right: 10px;
         max-width: none;
         font-size: 13px;
+        pointer-events: none;  /* ★ (2026-11-12 01:52, 90차 MOB-1) 알림(글자만)이 창 아래 만들기·변경 단추를 3초 동안 덮어 누름이 먹지 않았음(재현) — 누름은 아래로 통과 */
         transform: translateY(100px);  /* 모바일에서는 X축 이동 제거 */
         text-align: center;
     }
@@ -10611,6 +10767,16 @@ body.is-mobile #board-detail-search {
         align-items: flex-start !important;
         padding: 12px !important;
     }
+    /* ★ (2026-11-02 17:38, 46차 점검) 목록 보기(list-view)에서는 위 '모바일 list-view 2줄 grid'(display:grid !important, 특이도 0,3,0)가 검색 결과 줄에도 걸려 이름이 체크박스 칸에 끼고
+       아이콘이 가운데 뜨고 날짜가 잘렸음(검색 줄의 .file-info 엔 grid-area 가 없음 — 휴대폰 화면 재현) → 검색 결과 줄만 원래 의도인 flex 세로 배치로 */
+    .file-list.list-view .file-item.search-result-item {
+        display: flex !important;
+    }
+    /*   같은 이유로 list-view 자식 규칙(아이콘 가운데 정렬·날짜 강제 표시)도 검색 줄에서는 아래 원래 검색 배치(아이콘 왼쪽 위·경로 왼쪽 정렬·크기/날짜 숨김)로 */
+    .file-list.list-view .file-item.search-result-item > .file-icon { align-self: flex-start; }
+    .file-list.list-view .file-item.search-result-item > .file-date,
+    .file-list.list-view .file-item.search-result-item > .file-size { display: none !important; }
+    .file-list.list-view .file-item.search-result-item .file-meta { align-items: flex-start !important; }
     
     .search-result-item .file-checkbox {
         position: absolute;
@@ -11622,6 +11788,7 @@ tr:hover,
         width: 100% !important;
         height: calc(100vh - 120px) !important;
     }
+    .preview-pdf-container { min-width: 0 !important; }   /* ★ (2026-11-01 01:55, 36차 전체 점검) 휴대폰이 실제로 쓰는 PDF.js 상자에도 최소 폭 400px 해제 — 좁은 폰에서 쪽·도구줄이 잘렸음 */
     
     /* 텍스트/코드 미리보기 */
     .preview-text,
@@ -11706,7 +11873,19 @@ tr:hover,
     .modal-preview.preview-immersive .preview-footer .btn:active {
         background: rgba(255, 255, 255, 0.25) !important;
     }
+    /* ★ (2026-11-01 01:55, 36차 전체 점검) 몰입 모드 아래 줄은 늘 어두운 바탕 — 배속·반복 버튼·구간 시간은 종전 밝은 색 그대로 */
+    .modal-preview.preview-immersive .preview-footer .vec-btn { color: #ddd; border-color: #777; }
+    .modal-preview.preview-immersive .preview-footer .vec-btn:hover { color: #fff; background: rgba(255,255,255,0.1); border-color: #888; }
+    .modal-preview.preview-immersive .preview-footer .vec-ab-range { color: #ffb300; }
     
+    /* ★ (2026-11-17 07:49, 296차 펜닐 "알아서" — 286차 기록) 텍스트·코드 미리보기만: 위·아래 줄이 보일 때 그 높이만큼 위아래 여백 — 종전엔 처음 연 상태에서
+       첫 2줄이 반투명 머리줄에, 끝까지 내려도 마지막 줄이 아래 단추줄에 가려 탭해야 보였음(재현). 줄을 숨기면(탭) 종전 여백 15px 그대로. 그림·영상·PDF 는 그대로 */
+    .modal-preview.preview-immersive .modal-header.show-bar ~ .modal-body .preview-text,
+    .modal-preview.preview-immersive .modal-header.show-bar ~ .modal-body .preview-code {
+        padding-top: 58px !important;
+        padding-bottom: 52px !important;
+    }
+
     /* 본문: 전체 영역 */
     .modal-preview.preview-immersive .modal-body {
         position: absolute;
@@ -12094,7 +12273,7 @@ tr:hover,
     .login-box {
         width: 90% !important;
         max-width: 320px !important;
-        margin: 0 auto !important;
+        margin: auto !important;  /* ★ (2026-11-12 07:48, 95차 LGN-2) 위아래도 auto — 휴대폰 가로에서 상자가 화면보다 길면 위쪽(×·로고·제목)이 화면 위로 잘려 스크롤해도 닿지 않았음(재현). 상자가 화면에 들어가면 종전과 같음 */
         padding: 25px 20px !important;
         border-radius: 12px !important;
         box-sizing: border-box !important;
@@ -12196,6 +12375,12 @@ tr:hover,
     .login-box .remember-me input[type="checkbox"] {
         width: 12px !important;
         height: 12px !important;
+    }
+
+    /* ★ (2026-11-12 11:07, 97차 개선 B1) 로그인·2FA 상자의 위아래 여백 20 → 37px — 상자가 화면에 꽉 차면(위 여백 20) × 가 오른쪽 위 고정 언어칸(20~56px) 밑에 깔려 탭하면 언어칸이 눌렸음(iPhone 13 세로 2FA·SSO, SE 크기 로그인·2FA 재현). 위아래 같게 늘려 가운데 놓이는 상자(위 37px 이상 — iPhone 13 세로 로그인 포함)는 종전 그대로, 꽉 차던 경우만 × 가 52px 로 내려와 가운데(68px)가 언어칸 아래라 눌림(× 위 4px 는 언어칸과 겹침 — iPhone 13 세로 로그인과 같은 모양). :has 를 모르는 브라우저는 종전 그대로 */
+    #login-screen.active:has(#login-box.active) {
+        padding-top: 37px !important;
+        padding-bottom: 37px !important;
     }
 }
 
@@ -12377,6 +12562,8 @@ body:has(#login-screen.active) .pending-notification {
 .toggle-switch input:checked + .toggle-slider {
     background-color: #4caf50;
 }
+/* ★ (2026-11-10 20:00, 67차 점검) 실제 체크박스가 크기 0 이라 Tab 으로 와도 화면 변화가 없었음 → 키보드 포커스일 때만 스위치에 테두리 그림자 */
+.toggle-switch input:focus-visible + .toggle-slider { box-shadow: 0 0 0 3px rgba(74,144,217,0.55); }
 
 .toggle-switch input:checked + .toggle-slider:before {
     transform: translateX(24px);
@@ -13064,6 +13251,15 @@ body:has(#login-screen.active) .pending-notification {
         display: none;
     }
 }
+/* ★ (2026-11-15 15:01, 184차) PC: 긴 이름이 '…' 없이 글자 중간에서 잘렸음(위 a 는 flex 라 text-overflow 가 글자에 안 걸림 — 재현) → 이름 span 에 말줄임. 휴대폰은 위 좌우 스크롤 그대로 */
+@media (min-width: 1025px) {
+    .favorite-item a > .sidebar-item-name, .recent-file-item a > .sidebar-item-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+}
 
 .favorite-item.active, .recent-file-item.active {
     background: rgba(0, 120, 215, 0.15);
@@ -13127,6 +13323,10 @@ body:has(#login-screen.active) .pending-notification {
 .favorite-item:hover .favorite-remove,
 .recent-file-item:hover .recent-remove {
     opacity: 1;
+}
+/* ★ (2026-11-01 01:55, 36차 전체 점검) 마우스 없는 기기는 '×'를 늘 보이게 — 안 보이는 채로 눌려 확인 없이 바로 지워졌음 */
+@media (hover: none) {
+    .favorite-remove, .recent-remove { opacity: 0.7; }
 }
 
 .favorite-remove:hover, .recent-remove:hover {
@@ -13463,7 +13663,7 @@ body:has(#login-screen.active) .pending-notification {
     cursor: pointer;
 }
 .sr-pop .sr-pop-opt:hover, .sr-pop .sr-pop-opt:focus-visible { background: var(--fs-surface-2, #f1f5f9); outline: none; }
-.sr-pop .sr-pop-opt.is-cur { font-weight: 600; color: var(--fs-accent, var(--fs-grad-b, #1e3a5f)); }
+.sr-pop .sr-pop-opt.is-cur { font-weight: 600; color: var(--fs-primary-text, var(--fs-accent, var(--fs-grad-b, #1e3a5f))); }   /* ★ (2026-10-31 12:03, 34차 전체 점검) 밝은 강조색 테마에서 글자가 흐렸음 → 글자용 색 먼저 */
 .sr-pop .sr-pop-check { display: inline-flex; width: 16px; flex-shrink: 0; }
 .sr-pop .sr-pop-check .fs-ico { width: 15px; height: 15px; }
 .sr-pop .sr-pop-form { display: flex; flex-direction: column; gap: 8px; padding: 6px 6px 4px; }
@@ -14534,6 +14734,7 @@ button .fs-ico-ok, button .fs-ico-err, button .fs-ico-warn,
 .top-banner .banner-close {
     background: none;
     border: none;
+    color: inherit;   /* ★ (2026-11-01 01:55, 36차 전체 점검) 버튼은 글자색을 물려받지 않아 배너 글자색 대신 브라우저 기본색(어두운 테마는 흰색)이 나와 연노랑 배너에서 안 보였음 */
     font-size: 14px;
     cursor: pointer;
     opacity: 0.7;
@@ -14911,6 +15112,21 @@ button .fs-ico-ok, button .fs-ico-err, button .fs-ico-warn,
 
 .hourly-table td {
     font-weight: 500;
+}
+
+/* ★ (2026-11-15 07:18, 161차) 휴대폰에서 12칸이 한 번에 보이게 — 칸마다 최소 45px(12칸 540px)라 390px 화면에서 0~7시·12~19시만 보이고
+   8~11시·20~23시는 표 안을 옆으로 밀어야 보였음(밀 수 있다는 표시도 없음, 재현). 12칸이 실제로 잘리는 폭(571px 이하 — 572px 까지는 종전에도 다 보였음, 2px 단위로 재 봄)에서만 최소 폭을 풀고 글자·여백을 줄임 — 그보다 넓은 화면은 종전 그대로 */
+@media (max-width: 571px) {
+    .hourly-table th,
+    .hourly-table td {
+        min-width: 0;
+        padding: 8px 1px;
+        font-size: 11px;
+    }
+    /* 아래 '모달 내 테이블 가로 스크롤'(.modal-body table → block)이면 칸이 화면 폭으로 안 늘어나 오른쪽이 비므로, 압축 미리보기 표처럼 이 표만 table 로 */
+    .modal-body .hourly-table {
+        display: table;
+    }
 }
 
 @media (max-width: 1024px) {
@@ -16128,6 +16344,11 @@ body.video-pseudo-fs {
     .resize-handle-s {
         height: 16px;
     }
+    /* ★ (2026-11-03 11:52, 50차 점검) 미리보기는 이 폭에서 화면 전체로 고정(위 .modal-preview !important)이라 크기 조절이 안 되는데, 투명한 아래 손잡이(16px)가
+       '편집'·'다운로드' 단추의 아래쪽을 덮어 눌러도 반응이 없었음(재현: 390 폭, 단추 가운데 터치 → 손잡이가 받음). 미리보기 창의 손잡이만 숨김 */
+    .modal-preview .resize-handle {
+        display: none;
+    }
 }
 
 
@@ -16255,6 +16476,11 @@ body.video-pseudo-fs {
 #modal-icon-add-ext {
     max-width: 400px !important;
     width: 90vw !important;
+}
+/* ★ (2026-10-31 12:03, 34차 전체 점검) 1024px 이하에선 공통 모달 규칙이 전체 화면(top/left 0, 100%)으로 바꾸는데 위 translate(-50%,-50%) 가 남아
+   769~1024px 에서 창이 왼쪽 위로 반쯤 밀려 나갔음 → 그 폭에선 이동을 끔(768px 이하 규칙과 같게) */
+@media (max-width: 1024px) {
+    #modal-fperm-browse, #modal-fperm-bulk-edit, #modal-fperm-add-user, #modal-icon-change, #modal-icon-add-ext { transform: none !important; }
 }
 #modal-fperm-browse {
     max-width: 600px !important;
@@ -16728,6 +16954,12 @@ body.video-pseudo-fs {
 @media (max-width: 1023px) {
     /* 모바일: row 1=커버(240px) / row 2=가사(0) / row 3=시킹바 / row 4=컨트롤 / row 5=볼륨 / row 6=플레이리스트(1fr) */
     /* ★ 모바일은 작업 전 구조 유지 — 비주얼라이저 행 없음(펜닐님 요청) */
+    /* ★ (2026-10-31 12:03, 34차 전체 점검) 모바일은 가사가 2행 — 뒤쪽 PC 규칙(grid-row:3)이 이겨 시킹바 칸에 겹쳤음.
+       비주얼라이저 OFF 도 PC 행(340px 0 …)이 남아 커버 아래가 비고 가사가 0 높이였음 → 모바일 기본 행으로 */
+    .fap-skin-ap-fixed .fap-lyrics-wrap { grid-row: 2; }
+    .fap.fap-skin-ap-fixed.fap-vis-off:not(.fap-ios):not(.fap-no-inline-lyrics) {
+        grid-template-rows: 240px auto auto auto auto 1fr !important;
+    }
     .fap.fap-skin-ap-fixed.fap-no-inline-lyrics {
         grid-template-rows: 240px 0 auto auto auto 1fr !important;
     }
@@ -16767,6 +16999,11 @@ body.video-pseudo-fs {
 }
 
 .fs-vp-panel {
+    /* ★ (2026-11-01 01:05, 35차 전체 점검) 패널 바탕이 늘 짙은 남색이라 안의 보조 글자 변수를 밝은 값으로 다시 정함 — 밝은 전체 테마가 :root 에서 짙게 정해 2.0~2.4:1 로 흐렸음 */
+    --fs-text-2: #c4c7d0;
+    --fs-text-3: #a3a7b3;
+    --fs-text-4: #ccc;   /* ★ (2026-11-01 01:55, 36차 전체 점검) 목록 줄 본문 색(.fs-vp-item)도 — 35차에 빠져 어두운·full 테마에서 3.8~4.1:1 */
+    --fs-fg-info: #7cb7ff;
     flex: 0 0 320px;
     width: 320px;
     background: #1e1e2e;
@@ -16910,7 +17147,7 @@ body.video-pseudo-fs {
     content: '자동';
     right: auto;
     left: 7px;
-    color: var(--fs-text, #1a1a1a);
+    color: #1a1a1a;   /* ★ (2026-11-01 01:05, 35차 전체 점검) 바탕이 늘 노랑이라 고정 짙은 색 — 어두운 테마에서 밝은 글자(--fs-text)가 노랑 위에 올라 안 보였음(공유 페이지와 같게) */
 }
 /* hover */
 .fs-vp-header .fs-vp-autonext:hover {
@@ -17647,3 +17884,197 @@ input[type="radio"] {
 /* ★ (2026-10-25) 사이드바 메뉴 개수 표시("내 공유 링크 (28)" 등) — 메뉴를 눌러 선택되면 바탕은 선택색인데 개수 글자는 자기 색(파랑·테마 진한 색) 그대로라
    로즈 2.3:1·기본 3.2:1 로 흐렸다 → 선택된 동안만 그 칸의 글자색을 따라감(선택 안 됐을 땐 종전과 같음) */
 .menu-list li.active > a .menu-badge { color: inherit; }
+
+
+/* =====================================================================
+   ★ (2026-10-30 14:10, 펜닐 요청 — UI 시안 확정분) 빈 폴더 안내 · 상태줄 · 세부 정보 창 · 주소창
+   ===================================================================== */
+/* 빈 폴더 안내 */
+.fs-empty-state {
+    grid-column: 1 / -1;   /* ★ (2026-10-30 14:39, 재검토) 바둑판 보기(display:grid)에서 한 칸에 끼던 것 — 종전 .empty-msg 와 같이 전체 폭 */
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 560px;
+    margin: 48px auto;
+    padding: 40px 28px;
+    border: 2px dashed var(--border, #d0d7e2);
+    border-radius: 16px;
+    text-align: center;
+    color: var(--text, var(--fs-text, #1f2937));
+    background: var(--fs-surface, #fff);
+}
+.fs-empty-icon { color: var(--fs-primary-text, var(--primary, #2563eb)); margin-bottom: 10px; }
+.fs-empty-icon .fs-ico { width: 44px; height: 44px; }
+.fs-empty-title { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+.fs-empty-desc { font-size: 14px; color: var(--text-secondary, var(--fs-text-2, #4b5563)); line-height: 1.6; }
+.fs-empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 16px; }
+.fs-empty-actions .btn { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; }
+.fs-empty-hint { margin-top: 12px; font-size: 12px; color: var(--text-secondary, var(--fs-text-2, #5f6368)); }
+/* ★ (2026-10-30 22:09, 펜닐 요청 — 모바일 세로·가로 정리) 종전 margin 24px 8px + width 100% 라 상자가 오른쪽으로 16px 넘쳐(왼쪽 20px·오른쪽 4px) 한쪽에 붙어 보였음 →
+   좌우 auto 로 가운데. 글자·단추·여백을 휴대폰 크기로 줄이고, 가로 화면(높이 500px 이하)은 더 낮게(종전엔 안내가 화면 아래로 잘렸음) */
+body.is-mobile .fs-empty-state { margin: 20px auto; padding: 24px 16px; border-radius: 14px; max-width: 520px; }
+body.is-mobile .fs-empty-icon { margin-bottom: 6px; }
+body.is-mobile .fs-empty-icon .fs-ico { width: 36px; height: 36px; }
+body.is-mobile .fs-empty-title { font-size: 16px; margin-bottom: 4px; }
+body.is-mobile .fs-empty-desc { font-size: 13px; line-height: 1.5; }
+body.is-mobile .fs-empty-actions { gap: 6px; margin-top: 14px; }
+body.is-mobile .fs-empty-actions .btn { min-height: 36px; font-size: 13px; padding: 6px 12px; }
+@media (max-height: 500px) and (min-width: 600px) {
+    body.is-mobile .fs-empty-state { margin: 10px auto; padding: 14px 16px; }
+    body.is-mobile .fs-empty-icon { display: none; }
+    body.is-mobile .fs-empty-title { font-size: 15px; }
+    body.is-mobile .fs-empty-desc { font-size: 12px; }
+    body.is-mobile .fs-empty-actions { margin-top: 10px; }
+    body.is-mobile .fs-empty-actions .btn { min-height: 34px; }
+}
+/* 모바일 주소창 — 기본 테마의 .breadcrumb 흰 바탕·밑줄이 회색 툴바 안에서 흰 띠로 떠 보였음 → 툴바 바탕을 그대로. 글자 11~12px → 13px(위치 확인·누르기 쉽게) */
+body.is-mobile .toolbar-left #breadcrumb { background: transparent !important; border-bottom: 0 !important; font-size: 13px !important; padding: 0 4px !important; line-height: 1.8 !important; }
+body.is-mobile .toolbar-left #breadcrumb .breadcrumb-item.current { padding: 2px 4px; }   /* 마지막 칸도 링크 칸과 같은 안쪽 여백 — '/' 양옆 간격이 달랐음 */
+/* 휴대폰 목록 — PC 의 날짜 칸 고정 너비(170px)가 남아 날짜 칸이 줄지 못해 360px 에서 오른쪽 '파일 폴더'·'JPG 파일' 글자가 잘렸음(29차 전부터) → 칸 너비를 따름 */
+@media (max-width: 1024px) {   /* ★ (2026-10-30 22:44, 재검토) 모바일 칸 배치(grid)가 이 폭 안에서만 쓰여서 — 밖(모바일 UA 태블릿 1280px 등)은 PC 목록·머리글이라 날짜 칸만 줄어 머리글과 어긋났음(재현) */
+    body.is-mobile .file-list.list-view .file-item > .file-date { width: auto !important; }
+}
+/* 가로 화면(높이 500px 이하) — 위아래가 좁아 ← → ↑ 줄 옆에 주소창을 붙여 한 줄 아낌(빈 폴더 안내·목록이 더 보이게), 빈 폴더 설명 글은 숨김 */
+/* ★ (2026-10-30 22:34, 재검토) min-width 600px 조건 추가 — 세로 휴대폰에서 키보드가 올라와 화면 높이가 줄면 '가로'로 잡혀 입력하는 동안 주소창이 위 줄로 튀어 181px 로 찌그러졌음(360×300 재현). 가로 휴대폰은 폭 640px 이상 */
+@media (max-height: 500px) and (orientation: landscape) and (min-width: 600px) {
+    body.is-mobile .file-area > .toolbar .toolbar-left { flex-wrap: nowrap !important; }
+    body.is-mobile .toolbar-left #breadcrumb { width: auto !important; flex: 1 1 0 !important; min-width: 0 !important; white-space: nowrap !important; overflow-x: auto !important; overflow-y: hidden !important; }
+}
+@media (max-height: 420px) and (min-width: 600px) {
+    body.is-mobile .fs-empty-desc { display: none; }
+}
+/* 360px 안팎 휴대폰 — 툴바 단추줄이 24px 넘쳐 '목록 보기' 단추가 화면 밖으로 나갔음(29차 전부터) → 380px 이하에서 간격·안쪽 여백만 조금 줄임 */
+@media (max-width: 380px) {
+    body.is-mobile .file-area > .toolbar { padding-left: 8px !important; padding-right: 8px !important; }
+    body.is-mobile .file-area > .toolbar .toolbar-right { gap: 4px !important; }
+    body.is-mobile .file-area > .toolbar .toolbar-right .btn { padding: 4px 4px !important; }
+    body.is-mobile .file-area > .toolbar .toolbar-right .btn-icon { padding: 3px !important; }
+}
+
+/* 상태줄 */
+.status-bar .sb-sep { display: inline-block; width: 1px; height: 12px; margin: 0 10px; vertical-align: -1px; background: var(--border, #d1d5db); }
+.status-bar .sb-sel { color: var(--fs-primary-text, var(--primary, #1e3a8a)); font-weight: 500; }
+#status-selection { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.status-bar .status-left { min-width: 0; flex: 0 1 auto; overflow: hidden; }   /* ★ (2026-10-30 14:39, 재검토) 긴 검색 위치가 상태줄 밖으로 넘치지 않고 '…' 로 */
+
+/* 세부 정보 창 */
+.file-area.fs-details-open { position: relative; }
+.file-area.fs-details-open #file-list,
+.file-area.fs-details-open #file-list-header,
+.file-area.fs-details-open #search-pagination { margin-right: 300px; }
+.fs-details-pane {
+    position: absolute; right: 0; bottom: 0; width: 300px; box-sizing: border-box;
+    overflow-y: auto; padding: 14px 16px; z-index: 5;
+    background: var(--fs-surface, #fff); border-left: 1px solid var(--border, #e5e7eb);
+    color: var(--text, var(--fs-text, #1f2937)); font-size: 13px;
+}
+.fs-details-pane .dp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.fs-details-pane .dp-title { font-weight: 700; font-size: 14px; }
+.fs-details-pane .dp-close { border: 0; background: transparent; color: inherit; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+.fs-details-pane .dp-close:hover { background: var(--fs-surface-2, rgba(0,0,0,0.06)); }   /* ★ (2026-10-31 12:03, 34차 전체 점검) 없는 --hover 대신(어두운 테마에서 표시 안 됐음) */
+.fs-details-pane .dp-preview { height: 170px; border-radius: 10px; background: var(--light, var(--fs-surface-2, #f3f4f6)); display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 10px; }
+.fs-details-pane .dp-thumb { max-width: 100%; max-height: 100%; object-fit: contain; }
+.fs-details-pane .dp-icon { color: var(--text-secondary, var(--fs-text-2, #6b7280)); }
+.fs-details-pane .dp-icon .fs-ico { width: 56px; height: 56px; }
+.fs-details-pane .dp-name { font-weight: 700; font-size: 14px; word-break: break-all; }
+.fs-details-pane .dp-sub { color: var(--text-secondary, var(--fs-text-2, #5f6368)); margin-top: 2px; }
+/* ★ (2026-10-30 22:08, 펜닐 요청) 세부 정보 창 다시 짬 — 열기·다운로드·공유 단추 대신 속성 목록(종류·크기·내용·사진 크기·날짜 등) */
+.fs-details-pane .dp-props { display: grid; grid-template-columns: 86px minmax(0, 1fr); gap: 7px 10px; margin: 14px 0 0; padding-top: 12px; border-top: 1px solid var(--fs-border, var(--border, #e5e7eb)); }
+.fs-details-pane .dp-link { border: 0; background: transparent; padding: 0; font: inherit; color: var(--fs-primary-text, var(--primary, #1e3a8a)); cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
+.fs-details-pane .dp-link:disabled { color: var(--text-secondary, var(--fs-text-2, #5f6368)); cursor: default; text-decoration: none; }
+.fs-details-pane .dp-loading { margin-top: 10px; font-size: 12px; color: var(--text-secondary, var(--fs-text-2, #5f6368)); }
+.fs-details-pane .dp-foot { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--fs-border, var(--border, #e5e7eb)); }
+.fs-details-pane .dp-props dt { color: var(--text-secondary, var(--fs-text-2, #5f6368)); }
+.fs-details-pane .dp-props dd { margin: 0; word-break: break-all; }
+.fs-details-pane .dp-hint { margin-top: 14px; color: var(--text-secondary, var(--fs-text-2, #5f6368)); font-size: 12px; }
+#btn-details-pane.active { background: var(--fs-primary-soft, rgba(37, 99, 235, 0.12)); color: var(--fs-primary-text, #276fba); }   /* ★ (2026-11-01 01:05, 35차 전체 점검) 기본 테마(--fs-primary-text 없음)에서 켠 아이콘이 2.8:1 로 흐렸음 → 짙은 파랑 */
+body.is-mobile #btn-details-pane { display: none !important; }
+@media (max-width: 1199px) { #btn-details-pane { display: none !important; } }   /* ★ (2026-10-30 15:32, 해상도별 점검) 1024 → 1199 — 좁은 PC 화면에서 툴바 줄이 늘고 목록이 끼던 것 */
+
+/* 주소창 */
+#breadcrumb .bc-sep-btn {
+    border: 0; background: transparent; color: var(--secondary, #6b7280); font: inherit; font-size: 1.05em; line-height: 1;   /* ★ (2026-10-30 15:32) 15px 고정 → 글자 크기 따라감(휴대폰 주소창이 2px 높아지던 것) */
+    padding: 1px 3px; margin: 0 1px; border-radius: 5px; cursor: pointer; vertical-align: baseline;
+}
+#breadcrumb .bc-sep-btn:hover, #breadcrumb .bc-sep-btn:focus-visible { background: var(--fs-surface-2, rgba(0,0,0,0.07)); color: var(--fs-primary-text, var(--primary, #1e3a8a)); }
+#breadcrumb { position: relative; }
+#breadcrumb .bc-tools { position: absolute; left: 100%; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 0; margin-left: 1px; white-space: nowrap; opacity: 0.7; z-index: 2; }
+#breadcrumb:hover .bc-tools, #breadcrumb .bc-tools:focus-within { opacity: 1; }
+#breadcrumb .bc-tools.bc-tools-hidden { visibility: hidden; }
+#breadcrumb .bc-tool { border: 0; background: transparent; color: inherit; width: 24px; height: 24px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+#breadcrumb .bc-tool:hover, #breadcrumb .bc-tool:focus-visible { background: var(--fs-surface-2, rgba(0,0,0,0.07)); }
+#breadcrumb .bc-tool .fs-ico { width: 14px; height: 14px; }
+#breadcrumb.bc-editing { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 260px; }
+#breadcrumb .bc-input {
+    flex: 1; min-width: 200px; height: 32px; padding: 0 10px; font: inherit; font-size: 14px;
+    border: 2px solid var(--primary, #2563eb); border-radius: 8px; background: var(--fs-surface, #fff); color: var(--fs-text, #111827);   /* ★ (2026-10-30 16:42, 재검토) --text 는 어디에도 없어 어두운 테마에서 검은 글자가 검은 바탕에 묻혔음 */
+}
+#breadcrumb .bc-input.bc-busy { cursor: progress; opacity: 0.75; }   /* ★ (2026-10-31 01:54) 경로를 찾는 동안(읽기 전용, Esc 로 취소) */
+#breadcrumb .bc-input-hint { font-size: 12px; color: var(--text-secondary, var(--fs-text-2, #5f6368)); white-space: nowrap; }
+body.is-mobile #breadcrumb .bc-tools { display: none; }
+.bc-menu {
+    position: fixed; z-index: 4000; min-width: 200px; max-width: 360px; max-height: 60vh; overflow-y: auto;
+    padding: 6px; border-radius: 10px; background: var(--fs-surface, #fff); color: var(--text, var(--fs-text, #1f2937));
+    border: 1px solid var(--border, #e5e7eb); box-shadow: 0 10px 24px rgba(15, 23, 42, 0.16); font-size: 13px;
+}
+.bc-menu .bc-menu-item {
+    display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; color: inherit; font: inherit;
+    text-align: left; padding: 7px 10px; border-radius: 6px; cursor: pointer; flex-wrap: wrap;
+}
+.bc-menu .bc-menu-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bc-menu .bc-menu-item small { flex-basis: 100%; padding-left: 24px; color: var(--text-secondary, var(--fs-text-2, #5f6368)); word-break: break-all; }
+.bc-menu .bc-menu-item:hover { background: var(--fs-surface-2, rgba(0,0,0,0.06)); }
+/* ★ (2026-10-30 16:42, 재검토) --hover 가 없어 어두운 테마에선 키보드로 고른 줄이 안 보였음 → 바탕 + 강조색 테두리 */
+.bc-menu .bc-menu-item:focus-visible { background: var(--fs-surface-2, rgba(0,0,0,0.06)); outline: 2px solid var(--fs-accent, var(--primary, #2563eb)); outline-offset: -2px; }
+.bc-menu .bc-menu-item.current { font-weight: 600; color: var(--fs-primary-text, var(--primary, #1e3a8a)); }
+.bc-menu .bc-menu-item .fs-ico { width: 15px; height: 15px; flex-shrink: 0; }
+.bc-menu .bc-menu-empty { padding: 8px 10px; color: var(--text-secondary, var(--fs-text-2, #5f6368)); }
+
+/* ★ (2026-11-12 11:21, 97차 개선 A5) 압축·풀기 진행 창 — 상자 min-width:400px(app.js 인라인)이 좁은 휴대폰에서 화면보다 넓어 양옆이 밖으로 나갔음(재현: iPhone 13 390 폭 -5..395, 320 폭 -40..360) → 화면 폭 90%를 넘지 않게. 화면이 445px 이상이면 종전 400px 그대로 */
+#zip-progress-modal > div { min-width: min(400px, 90vw) !important; }
+
+/* ★ (2026-11-15 22:20, 217차 펜닐 제보 — 휴대폰 가로 동영상 미리보기) 가로(몰입 모드 .preview-immersive)에서는 머리줄(제목·↓·✕)이 영상 위에 겹쳐 뜨는데,
+   플레이어 안 위쪽 표시와 아래 줄이 그 자리를 그대로 써서 겹쳤음(재현: 844x340 — 세로 화면은 머리줄·아래 줄이 영상 밖이라 문제없음).
+     · 목록 단추(2 / 3)가 머리줄 ↓·✕ 위(767~838, 6~34)에 덮여 ✕ 를 누르면 목록 단추가 눌림 — 목록이 있는 영상은 가로에서 닫을 수 없었음
+     · 스트리밍 표시(HLS 스트리밍·일반 재생)가 제목 글자 밑에 깔려 겹쳐 보임
+     · 아래 줄(↓ 다운로드, 높이 37)이 플레이어 조작 줄(높이 72) 뒤에 겹쳐 흐린 글자·테두리 상자가 보임 — 같은 ↓ 가 머리줄에 이미 있음
+     · 머리줄 아래 1px 밝은 선이 영상을 가로지름
+   → 새 껍데기 플레이어(.fsvs-on)가 있는 가로 미리보기에서만: 목록 단추·스트리밍 표시를 머리줄(49px) 아래로 내리고, 아래 줄은 숨기고(다운로드는 머리줄 ↓),
+     머리줄 아래 선을 없앰. 세로 화면·PC·사진/PDF 등 다른 미리보기·공유 페이지는 그대로 */
+@media (orientation: landscape) and (max-width: 1024px) {
+    .modal-preview.preview-immersive .video-player-wrap.fsvs-on .fs-vp-toggle,
+    .modal-preview.preview-immersive .video-player-wrap.fsvs-on .video-stream-badge {
+        top: 56px !important;
+    }
+    .modal-preview.preview-immersive:has(.video-player-wrap.fsvs-on) .modal-footer.preview-footer,
+    .modal-preview.preview-immersive:has(.video-player-wrap.fsvs-on) .modal-footer.preview-footer.show-bar,
+    .modal-preview.preview-immersive:has(.video-player-wrap.fsvs-on) .modal-footer.preview-footer:hover {
+        display: none !important;
+    }
+    .modal-preview.preview-immersive:has(.video-player-wrap.fsvs-on) .modal-header {
+        border-bottom: none !important;
+    }
+    /* 재생 목록을 열면(오른쪽 패널) 패널 맨 윗줄(제목·다음재생 자동·범위·패널 ✕)이 머리줄 ↓·✕ 밑에 깔려 ✕ 두 개가 겹쳐 보였음(재현: 패널 머리 0~69, 머리줄 0~48)
+       → 패널을 머리줄 높이(48px)만큼 아래에서 시작. 패널 폭 접기·펼치기 규칙(가로 재생 중)은 그대로 */
+    .modal-preview.preview-immersive #preview-content .fs-vp-panel.open {
+        margin-top: 48px !important;
+        max-height: calc(100% - 48px) !important;
+    }
+    /* ★ (2026-11-17 09:22, 306차 펜닐 제보 — 휴대폰 가로 동영상: 배지가 영상마다 내려가 보이고, 영상이 확대돼 위아래가 잘림. 세로는 정상)
+       가로(몰입 모드)는 세로의 'wrap 을 화면에 꽉 채움'(v5.8.1j, :not(.preview-immersive))에서 빠져 플레이어 틀(wrap)이 영상 크기로 줄었음
+         · 목록 없는 영상: 틀이 영상 비율로 줄어 가운데 → 배지·조작 줄이 영상마다 다른 높이(재현 750x342: 2.4:1 은 틀 위 15px → 배지 71px, 목록 있는 영상 56px. 16:9 는 틀 폭이 608 로 줄어 조작 줄도 608)
+         · 틀 높이가 정해지지 않아 아이폰(WebKit)은 영상의 height:100%·max-height:100% 를 무시하고 폭에 맞춰 키워 위아래가 잘렸음(사진: 16:9 가 폭을 꽉 채우고 위아래 잘림 — 같은 영상 세로는 전체 보임)
+       → 세로와 같게 틀을 본문 칸에 꽉 채움(목록 묶음 안 틀도 높이 100%). 영상은 틀 안에서 종전 object-fit:contain 으로 전체가 보이게 가운데. 세로·PC·공유 페이지·그림은 그대로 */
+    .modal-preview.preview-immersive #preview-content:has(.video-player-wrap) {
+        align-items: stretch !important;
+    }
+    .modal-preview.preview-immersive #preview-content > .video-player-wrap {
+        align-self: stretch !important;
+        width: 100% !important;
+        height: 100% !important;
+    }
+    .modal-preview.preview-immersive #preview-content > .fs-vp-flex > .video-player-wrap {
+        align-self: stretch !important;
+        height: 100% !important;
+    }
+}

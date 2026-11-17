@@ -95,8 +95,9 @@ if (!function_exists('fs_rar_native_list')) {
         $flagBits = 0; $flags = 0; $decPos = 0;
         $oemLen = strlen($oem); $cps = [];
         $guard = 0;
+        $decMax = max(2048, ($oemLen + $encLen) * 2);   // ★ (2026-10-31 12:03, 34차 전체 점검) 출력 길이 상한 — unrar 원본처럼 버퍼 크기에서 멈춤(조작한 이름 하나가 수 MB 로 부풀었음)
         while ($encPos < $encLen) {
-            if (++$guard > 100000) break;
+            if (++$guard > 100000 || $decPos > $decMax) break;
             if ($flagBits === 0) {
                 if ($encPos >= $encLen) break;
                 $flags = ord($enc[$encPos]); $encPos++; $flagBits = 8;
@@ -134,8 +135,18 @@ if (!function_exists('fs_rar_native_list')) {
             $flags = ($flags << 2) & 0xFF; $flagBits -= 2;
         }
         // UTF-16 코드포인트 → UTF-8
+        // ★ (2026-11-02 09:03, 41차 점검) 서로게이트 쌍(U+10000 이상: 이모지·확장 한자)을 합쳐 4바이트로 — 종전엔 두 단위를 3바이트씩 따로 써서 잘못된 UTF-8(CESU-8)이 돼
+        //   호출부가 CP949/SJIS 변환으로 넘겨 이름이 깨졌음(재현). 짝 없는 서로게이트는 U+FFFD 로
         $out = '';
-        foreach ($cps as $cp) {
+        $cps = array_values($cps); $cpN = count($cps);
+        for ($ci = 0; $ci < $cpN; $ci++) {
+            $cp = $cps[$ci];
+            if ($cp >= 0xD800 && $cp <= 0xDBFF && $ci + 1 < $cpN && $cps[$ci + 1] >= 0xDC00 && $cps[$ci + 1] <= 0xDFFF) {
+                $cp = 0x10000 + (($cp - 0xD800) << 10) + ($cps[$ci + 1] - 0xDC00); $ci++;
+                $out .= chr(0xF0|($cp>>18)).chr(0x80|(($cp>>12)&0x3F)).chr(0x80|(($cp>>6)&0x3F)).chr(0x80|($cp&0x3F));
+                continue;
+            }
+            if ($cp >= 0xD800 && $cp <= 0xDFFF) $cp = 0xFFFD;
             if ($cp < 0x80)       $out .= chr($cp);
             elseif ($cp < 0x800)  $out .= chr(0xC0|($cp>>6)).chr(0x80|($cp&0x3F));
             else                  $out .= chr(0xE0|($cp>>12)).chr(0x80|(($cp>>6)&0x3F)).chr(0x80|($cp&0x3F));
@@ -161,6 +172,8 @@ if (!function_exists('fs_rar_native_list')) {
             if ($head_type === 0x74) { // File header
                 if ($pos + 32 > $len) break;
                 $unp_size  = unpack('V', substr($data, $pos+11, 4))[1];
+                // ★ (2026-11-01 09:43, 38차 점검) LHD_LARGE(0x100)면 위쪽 32비트 크기(HIGH_UNP_SIZE, +36)를 더함 — 종전엔 4GB 넘는 항목이 2^32 로 나눈 나머지(5GB → 1GB)로 나왔음
+                if (($head_flags & 0x100) && $pos + 40 <= $len) $unp_size += unpack('V', substr($data, $pos+36, 4))[1] * 4294967296;
                 $name_size = unpack('v', substr($data, $pos+26, 2))[1];
                 // FTIME: DOS datetime (pos+20, 4바이트 LE)
                 $mtime = '';
@@ -281,16 +294,60 @@ if (!function_exists('fs_rar_native_list')) {
         $isR5 = (substr($head, 0, 8) === "Rar!\x1a\x07\x01\x00");
         $isR4 = (substr($head, 0, 7) === "Rar!\x1a\x07\x00");
         if (!$isR5 && !$isR4) { @fclose($fh); return null; }
-        // 헤더 파싱에는 전체 데이터가 필요(파일명이 본문 곳곳에 위치). 큰 파일도 헤더만 보지만
-        // 분산되어 있어 전체 로드가 가장 단순/안전. 단, 과도하게 큰 파일은 상한을 둔다.
+        // ★ (2026-11-01 09:43, 38차 점검) 파일 전체(최대 1GB)를 file_get_contents 로 메모리에 올리던 것을 블록 헤더만 읽고 데이터 영역은 fseek 으로 건너뛰게 바꿈.
+        //   종전엔 요청 하나가 RAR 크기만큼 RAM 을 썼고, memory_limit 이 걸린 환경에선 치명 오류(호출부 null 폴백도 못 탐)였음.
+        //   각 블록 헤더를 '시그니처 + 그 블록 헤더' 짧은 버퍼로 만들어 기존 파서(fs_parse_rar5/4)에 그대로 넘기므로 해석 규칙은 종전과 같음.
+        //   헤더를 읽다 끊기거나 값이 이상하면 거기까지 모은 항목을 돌려줌(종전 파서가 범위를 벗어나면 멈추던 것과 같음).
+        $items = [];
+        $pos = $isR5 ? 8 : 7;
+        $sig = $isR5 ? "Rar!\x1a\x07\x01\x00" : "Rar!\x1a\x07\x00";
+        $guard = 0;
+        while (true) {
+            if (++$guard > 200000) break;              // 무한루프 방지(종전 파서와 같은 상한)
+            if (@fseek($fh, $pos) !== 0) break;
+            if ($isR5) {
+                $pre = @fread($fh, 4 + 10);            // CRC32(4) + hsize vint(최대 10바이트)
+                if ($pre === false || strlen($pre) < 5) break;
+                $p = 4;
+                $hsize = fs_rar5_vint($pre, $p);
+                if ($hsize <= 0 || $hsize > 2097152 + 64) break;   // 규격상 헤더 최대 2MB
+                $total = $p + $hsize;                  // CRC + vint + 헤더 본문
+                if (@fseek($fh, $pos) !== 0) break;
+                $blk = @fread($fh, $total);
+                if ($blk === false || strlen($blk) < $total) break;
+                // 데이터 영역 크기(dsize) — 기존 파서와 같은 순서로 읽음
+                $q = $p;
+                fs_rar5_vint($blk, $q);                // type
+                $hflags = fs_rar5_vint($blk, $q);
+                if ($hflags & 0x01) fs_rar5_vint($blk, $q);
+                $dsize = ($hflags & 0x02) ? fs_rar5_vint($blk, $q) : 0;
+                foreach (fs_parse_rar5($sig . $blk) as $it) $items[] = $it;
+                $next = $pos + $total + $dsize;
+            } else {
+                $pre = @fread($fh, 11);
+                if ($pre === false || strlen($pre) < 7) break;
+                $head_flags = unpack('v', substr($pre, 3, 2))[1];
+                $head_size  = unpack('v', substr($pre, 5, 2))[1];
+                if ($head_size < 7) break;
+                $add_size = 0;
+                if ($head_flags & 0x8000) {
+                    if (strlen($pre) < 11) break;
+                    $add_size = unpack('V', substr($pre, 7, 4))[1];
+                }
+                if (@fseek($fh, $pos) !== 0) break;
+                $blk = @fread($fh, $head_size);
+                if ($blk === false || strlen($blk) < $head_size) break;
+                // 파일 헤더에 LHD_LARGE 면 묶음 크기 위쪽 32비트(HIGH_PACK_SIZE, +32)도 데이터 영역에 포함
+                if (ord($pre[2]) === 0x74 && ($head_flags & 0x100) && $head_size >= 36) {
+                    $add_size += unpack('V', substr($blk, 32, 4))[1] * 4294967296;
+                }
+                foreach (fs_parse_rar4($sig . $blk) as $it) $items[] = $it;
+                $next = $pos + $head_size + $add_size;
+            }
+            if (!is_int($next) || $next <= $pos) break;   // 진행 안 하거나 크기가 정수 범위를 넘으면(조작·손상) 중단
+            $pos = $next;
+        }
         @fclose($fh);
-        $size = @filesize($path);
-        if ($size === false) return null;
-        // 2GB 초과 등 비정상은 호출측 폴백에 맡김(메모리 보호)
-        if ($size > 1073741824) return null; // 1GB 초과면 네이티브 생략
-        $data = @file_get_contents($path);
-        if ($data === false) return null;
-        if ($isR5) return ['fmt' => 'RAR5', 'items' => fs_parse_rar5($data)];
-        return ['fmt' => 'RAR4', 'items' => fs_parse_rar4($data)];
+        return ['fmt' => $isR5 ? 'RAR5' : 'RAR4', 'items' => $items];
     }
 }

@@ -2302,7 +2302,14 @@
                 data.char = {char : "&#9728;", size : 'normal', code : charCode};
                 break;
               default:
-                data.char = this.textDecoder(bullet,'utf-16le');
+                // ★ (2026-11-14 00:53, 122차 FileStation 수정) 위 표에 없는 글머리표 글자는 문자열만 넣어, 그리는 곳(hwpTextCss 의 bullet.char.char)에서 'undefined' 가 찍혔음
+                //   (재현: number-bullet.hwp '의무화 장소·시설·대상 undefined 마스크 착용'). 다른 경우와 같은 {char, size, code} 모양으로 — 글자는 innerHTML 로 들어가므로 & < > 를 글자로 바꿔 넣음
+                // ★ (2026-11-14 08:16, 126차) 위 표에 없는 기호 글꼴(Wingdings, 0xF000+글자 번호) 글머리표 몇 개는 브라우저에 글꼴이 없어 네모로 보였음(재현: number-bullet.hwp U+F071) →
+                //   Alan Wood Wingdings 대응표로 확인한 것만 짝지음(⮚·🗶·🗷 는 윈도우 기본 글꼴에 없는 경우가 많아 같은 뜻의 ➢·✗·☒ — 위 표가 체크박스를 ☑ 로 넣는 것과 같은 방식). 그 밖의 글자는 종전과 같음
+                { const _wd = {61553: '\u2751', 61554: '\u2752', 61555: '\u2B27', 61556: '\u29EB', 61608: '\u25FB', 61656: '\u27A2', 61691: '\u2717', 61693: '\u2612'};
+                  if (_wd[charCode]) { data.char = {char : _wd[charCode], size : 'normal', code : charCode}; break; } }
+                { const _bc = String(this.textDecoder(bullet,'utf-16le') || '').replace(/\u0000/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                  data.char = {char : _bc, size : 'normal', code : charCode}; }
                 break;
             }
             switch (this.readBit(attribute, 0, 1)) {

@@ -18,6 +18,7 @@
 
 /* 프리셋 */
 .fseq .fseq-prow { display: flex; align-items: center; gap: 10px; padding: 4px 14px 8px; }
+.fseq .fseq-prow { color: inherit; }   /* ★ (2026-11-09 16:10, 59차 T2) 이 줄(label)이 미리보기 창 안이라 테마의 '.modal-body label {color}'(theme.css 316)가 직접 걸려 전체 5종에서 '프리셋'이 어두운 판 위 짙은 글자(1.2~1.3:1)였음 — 판 글자색을 그대로 따르게 */
 .fseq .fseq-pl { flex: 0 0 auto; opacity: 0.8; font-size: 12px; }
 .fseq .fseq-preset {
     flex: 1; min-width: 0; height: 30px; padding: 0 8px; border-radius: 6px; cursor: pointer;

@@ -69,7 +69,12 @@
         '.fap-now-title', '.fap-pl-name', '.fap-lyrics-content', '.fap-lyrics-scroll', '.fap-lyrics-modal-text', '.fap-lyrics-modal-track',
         // ★ (2026-10-29 21:57, 24차 점검) 동영상 스킨의 ⚙ 메뉴 항목 이름·값(자막·음성 트랙 이름)과 짧은 알림('자막: 파일 이름') — 이름 속 이모지가 선 그림으로 바뀌었음(20차 음악 플레이어와 같은 누락)
         //   22:39 — '.fsvs-ml'(항목 이름 칸) 통째 제외는 앱 기호('↺ 싱크 0초로')까지 글자로 남겨 빼고, 사용자 이름이 들어가는 선택지 줄에만 fs-noico(fs-video-skin.js optRow)
-        '.fsvs-mv', '.fsvs-volosd'
+        '.fsvs-mv', '.fsvs-volosd',
+        // ★ (2026-11-01 01:52, 36차 전체 점검) 화면 자막(탐색기·공유) — 자막 대사 속 이모지('🎵 노래 🎵')가 선 그림으로 바뀌었음(20차 가사·24차 트랙 이름과 같은 누락)
+        '.subtitle-overlay',
+        // ★ (2026-11-15 21:50, 215차) 미리보기 창 제목(파일 이름) — '🎵노래.txt' 의 🎵 가 선 그림으로 바뀌어 목록 이름과 다르게 보였고 전체화면 정보 줄(제목 글자를 읽음)에서는 빠졌음(재현).
+        //   금고 미리보기 제목 앞 🔐 는 app.js 에서 선 그림으로 직접 넣음
+        '#preview-title'
     ].join(',');
 
     function makeSvg(name, cls) {
@@ -127,7 +132,9 @@
             if (node.tagName === 'OPTION') { stripOption(node); return; }
             if (node.tagName === 'SELECT' || node.tagName === 'OPTGROUP') { var os = node.querySelectorAll('option'); for (var i = 0; i < os.length; i++) stripOption(os[i]); return; }
             if (node.closest(SKIP)) return;
-            if (node.querySelector) { var sel = node.querySelectorAll('select option'); for (var j = 0; j < sel.length; j++) stripOption(sel[j]); }
+            // ★ (2026-11-11 02:42, 71차 점검) querySelectorAll('select option') 이 새로 붙는 요소마다 문서 크기에 비례해 걸려 5만 개 목록·1만 건 휴지통 창이 수 초씩 멈췄음
+            //   → 같은 결과(이 노드 아래 option 중 select 안에 있는 것)를 getElementsByTagName + closest 로
+            if (node.getElementsByTagName) { var sel = node.getElementsByTagName('option'); for (var j = 0; j < sel.length; j++) { if (sel[j].closest('select')) stripOption(sel[j]); } }
         }
         var walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT, {
             acceptNode: function (n) { return RE_T.test(n.nodeValue) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT; }

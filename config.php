@@ -4,7 +4,7 @@
  * 시놀로지 파일스테이션 대체용 셀프호스팅 파일 관리 시스템
  *
  * @author   펜닐 (Pennil)
- * @version  5.8.12
+ * @version  5.9.0
  * @license  All rights reserved
  */
 
@@ -13,7 +13,7 @@
 // ini_set('error_log', __DIR__ . '/data/php_error.log');
 
 // 버전 (수정 시 상단 @version 주석도 함께 업데이트할 것!)
-define('APP_VERSION', '5.8.12');
+define('APP_VERSION', '5.9.0');
 
 // 압축 해제/목록 디버그 로그 스위치 (진단 시에만 true)
 // true로 바꾸면 <DATA_PATH>/extract_debug.log 에 압축 처리 과정이 기록됨.
@@ -22,11 +22,12 @@ if (!defined('EXTRACT_DEBUG')) define('EXTRACT_DEBUG', false);
 
 // 위험 확장자 목록 (전역 — 업로드/이름변경/게시판 공통)
 // 서버 실행 가능 확장자 (모든 환경에서 항상 차단 — 업로드 설정과 무관)
-define('SERVER_EXEC_EXTS', ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phar', 'phps',
+// ★ (2026-11-01 07:37, 37차 기능 점검) 'pht'·'php8' 추가 — 일부 Apache 기본 설정(데비안 계열 등)이 .pht 를 PHP 로 실행함. api.php·FileManager.php 의 같은 목록도 함께 맞춤.
+define('SERVER_EXEC_EXTS', ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phar', 'phps', 'pht', 'php8',
     'jsp', 'jspx', 'asp', 'aspx', 'cgi', 'htaccess', 'user.ini']);
 
 // 파일 탐색기 위험 확장자 (편집 제한 등에 사용)
-define('DANGEROUS_EXTS', ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phar', 'phps',
+define('DANGEROUS_EXTS', ['php', 'phtml', 'php3', 'php4', 'php5', 'php7', 'phar', 'phps', 'pht', 'php8',
     'jsp', 'jspx', 'asp', 'aspx', 'exe', 'cgi', 'pl', 'py', 'rb', 'sh', 'bat', 'cmd', 'com',
     'htaccess', 'user.ini']);
 
@@ -39,6 +40,10 @@ define('BOARD_DANGEROUS_EXTS', ['html', 'htm', 'shtml', 'xhtml', 'svg']);
  *   '그 파일에 대해 실제로 발급한 키인지' 확인(종전엔 형식만 맞으면 통과했고, 콜백은 서명만 보고 대상 파일과 묶지 않았음).
  *   저장은 edit 로 발급한 키만. 24시간 지나면 지움.
  */
+// ★ (2026-11-09 13:59, 58차 Z17-2) 편집기를 24시간 넘게 열어 두면 저장 콜백이 'key not issued' 로 거부돼 편집 내용이 안 들어갔음(재현) →
+//   '편집'으로 발급한 키는 저장 콜백(JWT 서명 확인 뒤에만 needEdit 로 부름)에 한해 만료 뒤 6일(연 뒤 7일)까지 인정. 로그인 없는 키 내려받기(hex 키 우회)·보기 키는 24시간 그대로,
+//   콜백의 내려받기 주소 SSRF 검사도 그대로라 README 'SSRF 방어' 결정을 약하게 하지 않음. 키 기한은 마지막으로 연(보기·편집) 때부터 다시 잡히므로, 같은 파일을 7일 동안 아무도 다시 열지 않으면 그 뒤 저장은 거부돼 다시 열어야 함(15:01 표현 바로잡음 — 재검토에서 확인)
+define('FS_OO_EDIT_CB_GRACE', 6 * 86400);
 function fsOoKeyFile(): string { return (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data')) . '/onlyoffice_keys.json'; }
 function fsOoKeyRegister(string $key, int $storageId, string $path, string $mode): void {
     $f = fsOoKeyFile();
@@ -48,7 +53,7 @@ function fsOoKeyRegister(string $key, int $storageId, string $path, string $mode
         $raw = stream_get_contents($fp);
         $all = json_decode($raw ?: '[]', true) ?: [];
         $now = time();
-        foreach ($all as $k => $v) { if (($v['exp'] ?? 0) < $now) unset($all[$k]); }
+        foreach ($all as $k => $v) { if (($v['exp'] ?? 0) + ((($v['mode'] ?? '') === 'edit') ? FS_OO_EDIT_CB_GRACE : 0) < $now) unset($all[$k]); }   // ★ (2026-11-09 13:59, 58차 Z17-2) 편집 키는 아래 저장 콜백 유예 기간까지 남김(보기 키는 종전대로 24시간)
         $prev = $all[$key] ?? null;
         // 같은 키를 보기·편집 둘 다로 열었으면 편집 권한 기록을 유지
         $all[$key] = ['storage_id' => $storageId, 'path' => $path,
@@ -69,10 +74,22 @@ function fsOoKeyCheck(string $key, int $storageId, string $path, bool $needEdit 
     if ($fp) { if (flock($fp, LOCK_SH)) { $raw = (string)stream_get_contents($fp); flock($fp, LOCK_UN); } fclose($fp); }
     $all = json_decode($raw ?: '[]', true) ?: [];
     $r = $all[$key] ?? null;
-    if (!$r || ($r['exp'] ?? 0) < time()) return false;
+    if (!$r || ($r['exp'] ?? 0) + ($needEdit ? FS_OO_EDIT_CB_GRACE : 0) < time()) return false;   // ★ (2026-11-09 13:59, 58차 Z17-2) 저장 콜백(needEdit — 서명 확인 뒤에만 부름)만 유예 기간 더 인정
     if ((int)($r['storage_id'] ?? 0) !== $storageId || (string)($r['path'] ?? '') !== $path) return false;
     if ($needEdit && ($r['mode'] ?? '') !== 'edit') return false;
     return true;
+}
+
+/**
+ * ★ (2026-11-17 07:56, 297차 — 296차 펜닐 결정 "이름의 방향 뒤집기 문자 빼기"를 다른 올리기 길에도)
+ *   글자 방향 조작 문자(LRM·RLM U+200E/F, LRE~RLO U+202A~E, LRI~PDI U+2066~9) — 'U+202E txt.exe' 가 'exe.txt' 처럼 보임.
+ *   fsStripBidi: 지운 이름(웹·공유 페이지 저장 이름), fsHasBidi: 들어 있는지(WebDAV 는 이름을 바꾸면 클라이언트가 모르므로 거부에 씀). UTF-8 이 아니면 그대로·false
+ */
+function fsStripBidi(string $s): string {
+    return preg_replace('/[\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u', '', $s) ?? $s;
+}
+function fsHasBidi(string $s): bool {
+    return (bool)@preg_match('/[\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u', $s);
 }
 
 /**
@@ -86,9 +103,9 @@ function fsOoKeyCheck(string $key, int $storageId, string $path, bool $needEdit 
  */
 function fsServerExecReason(string $name): ?string {
     $name = basename(str_replace('\\', '/', $name));
-    $variants = [preg_replace('/[<>:"\/\\|?*\x00-\x1f]/', '', $name)];                       // 위험 문자를 지운 이름(일반 업로드·이름 바꾸기에 저장되는 이름)
+    $variants = [preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', $name)];                       // 위험 문자를 지운 이름(일반 업로드·이름 바꾸기에 저장되는 이름)
     if (strpos($name, ':') !== false) {
-        $variants[] = preg_replace('/[<>"\/\\|?*\x00-\x1f]/', '', explode(':', $name, 2)[0]); // ':' 앞까지(NTFS 스트림 'x.php::$DATA' → x.php)
+        $variants[] = preg_replace('/[<>"\/\\\\|?*\x00-\x1f]/', '', explode(':', $name, 2)[0]); // ':' 앞까지(NTFS 스트림 'x.php::$DATA' → x.php)
     }
     $tr = function ($k, $d) { return function_exists('__') ? __($k, $d) : $d; };
     foreach ($variants as $v) {
@@ -99,6 +116,10 @@ function fsServerExecReason(string $name): ?string {
         }
         $n = trim($low, '. ');
         if ($n === '') continue;
+        // ★ (2026-11-01 01:04, 35차 전체 점검) 이름 전체가 '점 + 실행 확장자'(.php·.phtml·..php 등)면 앞 점을 지운 뒤 확장자가 없어 보여 통과했음
+        //   (윈도우 Apache 의 AddHandler·IIS 는 '.php' 라는 이름도 PHP 로 실행) → 앞 점을 지우기 전 이름의 마지막 점 뒤도 확인
+        $rawExt = ltrim(strrchr(rtrim(ltrim($low, ' '), '. '), '.') ?: '', '.');
+        if ($rawExt !== '' && in_array($rawExt, SERVER_EXEC_EXTS, true)) return $tr('api_err_dangerous_ext', '보안상 허용되지 않는 파일 형식입니다') . ": .$rawExt";
         $ext = pathinfo($n, PATHINFO_EXTENSION);
         if (in_array($ext, SERVER_EXEC_EXTS, true)) return $tr('api_err_dangerous_ext', '보안상 허용되지 않는 파일 형식입니다') . ": .$ext";
         $parts = explode('.', $n);
@@ -147,8 +168,26 @@ function kstDate(string $format = 'Y-m-d H:i:s', ?int $timestamp = null): string
     }
 }
 
+/**
+ * ★ (2026-11-02 11:50, 43차 점검) 지금 정지 기간 안인지(F5#3) — status 가 'suspended' 이고, 시작일(suspend_from)이 비었거나 그날 00:00 이 지났고,
+ *   종료일(suspend_until)이 비었거나 아직 안 지났을 때(종료일 당일까지 정지 — 종전 Auth::login 의 '종료일 < 오늘이면 해제' 그대로)만 참.
+ *   종전엔 판정 네 곳(웹 로그인·세션 유지·SSO·WebDAV)이 종료일만 봐서, 다음 주부터로 예약한 정지가 저장 즉시 걸렸음
+ */
+function fsUserSuspendedNow(array $user): bool {
+    if (($user['status'] ?? 'active') !== 'suspended') return false;
+    $from = $user['suspend_from'] ?? null;
+    if ($from && ($fromTs = strtotime((string)$from)) !== false && $fromTs > time()) return false;   // 시작 전(읽을 수 없는 값은 종전처럼 정지로 봄)
+    $until = $user['suspend_until'] ?? null;
+    if ($until && strtotime((string)$until) < strtotime('today')) return false;   // 종료일 지남(종전과 같은 식)
+    return true;
+}
+
 // UTF-8 로케일 설정 (시놀로지/Linux에서 한글·일본어 파일명 처리에 필요)
 setlocale(LC_ALL, 'en_US.UTF-8', 'C.UTF-8', 'UTF-8');
+
+// ★ (2026-11-14 21:07, 132차 — 131차 보안 점검) 응답 머리글의 PHP 버전 표시(X-Powered-By: PHP/8.x)를 뺌 — 종전엔 모든 응답에 버전이 나갔음(재현).
+//   php.ini expose_php=Off 와 같은 효과(그 설정을 못 바꾸는 환경용). 명령줄 실행·이미 머리글을 보낸 뒤에는 아무것도 안 함
+if (PHP_SAPI !== 'cli' && !headers_sent()) { @header_remove('X-Powered-By'); }
 
 // 세션 설정 (세션 시작 전에만 설정)
 if (session_status() === PHP_SESSION_NONE) {
@@ -238,9 +277,23 @@ define('DATA_PATH', BASE_PATH . '/data');
 //
 $_storageSettings = [];
 $_storageSettingsFile = __DIR__ . '/data/storage_paths.json';
+$_storagePathsBroken = false;
 if (file_exists($_storageSettingsFile)) {
-    $_storageSettings = json_decode(file_get_contents($_storageSettingsFile), true) ?: [];
+    // ★ (2026-11-11 12:24, 73차) 앞 BOM 을 떼고 해석(43차 다른 설정 파일과 같음), 파일이 있는데 해석할 수 없으면(손상·빈 파일) '경로 설정 깨짐' 표시 —
+    //   종전엔 메모장 'UTF-8(BOM)' 저장만으로도 기본 경로로 바뀌어 홈 스토리지 공유가 '파일 없음'으로 지워졌음(MIG_73 #2 재현). 경로 값·기본값 대체는 종전 그대로
+    $_spRaw = file_get_contents($_storageSettingsFile);
+    if (is_string($_spRaw) && strncmp($_spRaw, "\xEF\xBB\xBF", 3) === 0) $_spRaw = substr($_spRaw, 3);
+    $_spDec = is_string($_spRaw) ? json_decode($_spRaw, true) : null;
+    if (is_array($_spDec)) {
+        $_storageSettings = $_spDec;
+    } else {
+        $_storagePathsBroken = true;
+        error_log('[FileStation] data/storage_paths.json could not be parsed — default folders are used for this request; share cleanup on home/shared storages is paused');
+    }
+    unset($_spRaw, $_spDec);
 }
+define('FS_STORAGE_PATHS_BROKEN', $_storagePathsBroken);   // ★ (2026-11-11 12:24, 73차) ShareManager 가 봄(위 설명)
+unset($_storagePathsBroken);
 
 // 개인 폴더 루트 (기본값: ./users)
 $_userFilesRoot = $_storageSettings['user_files_root'] ?? '';
@@ -298,13 +351,39 @@ define('TOTP_ENABLED', true);  // 사용자별 2FA 활성화 허용
 // TOTP 설정을 JSON 파일에서 로드 (관리자 설정 페이지에서 변경 가능)
 $_totpSettingsFile = __DIR__ . '/data/totp_settings.json';
 $_totpSettings = [];
+// ★ (2026-11-01 01:54, 36차 전체 점검) 파일이 있는데 지금 못 읽었는지(저장 중이라 비었거나 윈도우 잠금으로 읽기 실패) 구분 — 종전엔 그때도 '키 없음'으로 보고 아래에서
+//   새 키로 덮어써, ENC: 로 저장된 원격 스토리지 접속 정보를 영영 풀 수 없게 될 수 있었음. 잠깐 기다려 몇 번 다시 읽음
+$_totpReadOk = true;
 if (file_exists($_totpSettingsFile)) {
-    $_totpSettings = json_decode(file_get_contents($_totpSettingsFile), true) ?: [];
+    $_totpReadOk = false;
+    for ($_ti = 0; $_ti < 4; $_ti++) {
+        $_totpRaw = @file_get_contents($_totpSettingsFile);
+        // ★ (2026-11-01 09:40, 38차 점검) 앞 BOM 을 떼고 디코드 — 메모장 'UTF-8(BOM)' 으로 손 편집한 파일은 json_decode 가 실패해 아래에서 손상으로 치워지고 키가 바뀌었음(재현)
+        if (is_string($_totpRaw) && strncmp($_totpRaw, "\xEF\xBB\xBF", 3) === 0) $_totpRaw = substr($_totpRaw, 3);
+        $_totpDec = is_string($_totpRaw) && trim($_totpRaw) !== '' ? json_decode($_totpRaw, true) : null;
+        if (is_array($_totpDec)) { $_totpSettings = $_totpDec; $_totpReadOk = true; break; }
+        usleep(50000);
+    }
+    // ★ (2026-11-01 02:14, 36차 전체 점검) 계속 비었거나 깨진 파일(마지막 수정이 30초 넘게 전 — 저장 중이 아님)은 손상으로 보고 원본을 '.corrupt-시각' 으로 남긴 뒤 새로 만들게 함
+    //   (독립 검토 지적 — 위 '못 읽으면 덮어쓰지 않음' 만으로는 빈 파일이 남으면 매 요청이 기다리고 일회용 키를 써서 스스로 복구되지 않았음)
+    if (!$_totpReadOk) {
+        clearstatcache(true, $_totpSettingsFile);
+        $_tMt = @filemtime($_totpSettingsFile);
+        $_tRaw2 = @file_get_contents($_totpSettingsFile);
+        // ★ (2026-11-01 09:40, 38차 점검) 손상으로 치우는 건 '비었거나 공백만(BOM 포함)'인 파일로 한정 — 종전엔 내용은 있는데 끝 쉼표 등으로 파싱만 안 되는 파일도 치우고
+        //   새 키(2FA 사용자 있으면 기본 키)를 써서 ENC: 접속 정보·2FA 비밀키를 못 풀었음(재현). 내용이 있으면 파일은 그대로 두고 이 요청만 임시 키(아래 !$_totpReadOk 경로)
+        if ($_tMt !== false && (time() - $_tMt) > 30 && $_tRaw2 !== false && trim(str_replace("\xEF\xBB\xBF", '', $_tRaw2)) === '') {
+            @rename($_totpSettingsFile, $_totpSettingsFile . '.corrupt-' . date('Ymd_His'));
+            $_totpReadOk = true;   // 아래에서 새 파일로 만듦(파일이 없어졌으므로 'x' 경로)
+        } elseif ($_tRaw2 !== false && trim(str_replace("\xEF\xBB\xBF", '', $_tRaw2)) !== '') {
+            error_log('[FileStation] data/totp_settings.json is not valid JSON (' . json_last_error_msg() . ') — file left untouched, please fix it');   // ★ (2026-11-01 09:40, 38차 점검) 깨진 파일은 고치라는 로그만
+        }
+    }
 }
 
 // TOTP_ISSUER: QR 코드에 표시될 발급자명
 $_totpIssuer = $_totpSettings['issuer'] ?? '';
-if (empty($_totpIssuer)) {
+if (!is_string($_totpIssuer) || $_totpIssuer === '') {   // ★ (2026-11-14 21:18, 133차) 발급자 '0' 도 그대로(종전 empty 는 'WebHard' 로 바꿨음)
     $_totpIssuer = 'WebHard';
 }
 define('TOTP_ISSUER', $_totpIssuer);
@@ -333,13 +412,55 @@ if (empty($_totpEncryptionKey)) {
     } else {
         // 2FA 사용자가 없으면 새 랜덤 키 생성 후 저장
         $_totpEncryptionKey = bin2hex(random_bytes(32));
-        $_totpSettings['encryption_key'] = $_totpEncryptionKey;
-        $_totpSettings['issuer'] = $_totpIssuer;
-        $_totpSettings['generated_at'] = date('Y-m-d H:i:s');
-        @file_put_contents($_totpSettingsFile, json_encode($_totpSettings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+        if (!$_totpReadOk) {
+            // ★ (2026-11-01 01:54, 36차 전체 점검) 파일을 지금 못 읽은 것 — 이 요청에서만 임시 키를 쓰고 파일은 덮어쓰지 않음(다음 요청이 원래 키를 읽음)
+            error_log('[FileStation] totp_settings.json unreadable right now — not regenerating the encryption key');
+        } else {
+            $_totpSettings['encryption_key'] = $_totpEncryptionKey;
+            $_totpSettings['issuer'] = $_totpIssuer;
+            $_totpSettings['generated_at'] = date('Y-m-d H:i:s');
+            $_totpJson = json_encode($_totpSettings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+            if (!file_exists($_totpSettingsFile)) {
+                // ★ (2026-11-01 01:54, 36차 전체 점검) 처음 만들 때는 '없을 때만 만들기'(x) — 동시에 두 요청이 서로 다른 키로 덮어쓰지 않게. 진 쪽은 이긴 쪽 키를 읽어 씀
+                $_tfh = @fopen($_totpSettingsFile, 'x');
+                if ($_tfh) {
+                    $_tw = @fwrite($_tfh, $_totpJson); @fclose($_tfh);
+                    if ($_tw !== strlen($_totpJson)) @unlink($_totpSettingsFile);   // ★ (2026-11-01 02:14, 36차 전체 점검) 덜 쓴 파일(빈 파일)을 남기지 않음 — 다음 요청이 다시 만듦
+                }
+                else {
+                    usleep(50000);
+                    $_totpDec = json_decode((string)@file_get_contents($_totpSettingsFile), true);
+                    if (is_array($_totpDec) && !empty($_totpDec['encryption_key'])) $_totpEncryptionKey = $_totpDec['encryption_key'];
+                }
+            } else {
+                // 파일은 제대로 읽혔는데 키만 없던 경우 — 임시 파일에 쓴 뒤 바꿔치기(쓰는 도중 다른 요청이 빈 파일을 읽지 않게)
+                $_ttmp = $_totpSettingsFile . '.tmp' . getmypid() . bin2hex(random_bytes(3));
+                if (@file_put_contents($_ttmp, $_totpJson) !== false) {
+                    $_trOk = false;
+                    for ($_tr = 0; $_tr < 5 && !($_trOk = @rename($_ttmp, $_totpSettingsFile)); $_tr++) usleep(40000);   // ★ (2026-11-01 02:14, 36차 전체 점검) 윈도우는 다른 요청이 읽는 중이면 바꿔치기가 잠깐 실패 — 몇 번 다시 시도
+                    if (!$_trOk) @unlink($_ttmp);
+                }
+            }
+        }
     }
 }
 define('TOTP_ENCRYPTION_KEY', $_totpEncryptionKey);
+// ★ (2026-11-02 09:03, 41차 점검) totp_settings.json 이 있는데 못 읽은(깨진) 상태 표시 — 이때 위 키는 이 요청만의 임시 키(2FA 사용자 없음)이거나 공개된 기본 키(2FA 사용자 있음)라,
+//   그 키로 암호화해 저장한 원격 스토리지 접속 정보·2FA 비밀키는 다음 요청·파일을 고친 뒤 풀 수 없었음(D3#6·D8#2, 재현). 풀기(읽기)는 종전대로 두고 암호화 저장만 막음(fsTotpKeyUnreliableError)
+define('FS_TOTP_KEY_UNRELIABLE', !$_totpReadOk);
+
+/** ★ (2026-11-02 09:03, 41차 점검) 암호화 키를 믿을 수 없는 상태면 사용자에게 보일 오류 문구, 아니면 null — 암호화해 저장하는 곳(스토리지 설정·2FA 켜기·키 재생성)이 먼저 부름 */
+function fsTotpKeyUnreliableError(): ?string {
+    // ★ (2026-11-02 10:28, 42차 점검) openssl 확장이 없으면 암호화 자체를 못 함 — 종전엔 openssl_encrypt 가 없는 함수라 Error 로 '서버 오류'만 떴음(원격 스토리지 저장·2FA 켜기, E5#10).
+    //   이 함수를 먼저 부르는 곳(스토리지 설정 저장·2FA 시작/켜기·키 재생성·encryptStorageConfig)이 모두 암호화해 저장하는 곳이라 여기서 원인 문구를 돌려줌
+    if (!function_exists('openssl_encrypt')) {
+        $omsg = 'PHP openssl 확장이 필요합니다. php.ini 에서 extension=openssl 을 켠 뒤 웹 서버를 다시 시작하세요.';
+        return function_exists('__') ? __('err_openssl_required', $omsg) : $omsg;
+    }
+    if (!defined('FS_TOTP_KEY_UNRELIABLE') || !FS_TOTP_KEY_UNRELIABLE) return null;
+    $msg = 'data/totp_settings.json 파일이 손상되어(JSON 형식 오류) 암호화 키를 읽지 못했습니다. 파일을 고친 뒤 다시 시도하세요.';
+    return function_exists('__') ? __('err_totp_key_unreliable', $msg) : $msg;
+}
 
 // ===== 이메일 설정 (비밀번호 찾기) =====
 // SMTP 서버 설정 (선택사항, 비어있으면 PHP mail() 사용)
@@ -353,6 +474,40 @@ define('TOTP_ENCRYPTION_KEY', $_totpEncryptionKey);
 // 사이트명 (이메일에 표시)
 define('SITE_NAME', 'WebHard');
 
+/**
+ * ★ (2026-11-02 11:51, 43차 점검) 메일 제목 등에 쓸 사이트 이름 — 관리자 화면의 '사이트 이름'(data/site_settings.json site_name)이 있으면 그 값, 없으면 종전 SITE_NAME.
+ *   종전엔 상수 고정이라 설정을 바꿔도 메일 제목이 늘 '[WebHard] …'였음(F2#7). 요청당 한 번만 읽음
+ */
+function fsSiteName(): string {
+    static $name = null;
+    if ($name !== null) return $name;
+    $name = SITE_NAME;
+    $raw = @file_get_contents((defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/data')) . '/site_settings.json');
+    if (is_string($raw)) {
+        if (strncmp($raw, "\xEF\xBB\xBF", 3) === 0) $raw = substr($raw, 3);
+        $ss = json_decode($raw, true);
+        $sn = is_array($ss) && is_scalar($ss['site_name'] ?? null) ? trim(str_replace(["\r", "\n"], ' ', (string)$ss['site_name'])) : '';
+        if ($sn !== '') $name = $sn;
+    }
+    return $name;
+}
+
+/**
+ * ★ (2026-11-11 12:24, 73차) 설정 파일을 덮어쓰기 전에, 지금 파일이 깨져 있으면(내용이 있는데 JSON 객체·배열이 아님, 공백·NUL 뿐 포함) 원문을 '파일.corrupt-수정시각' 으로 한 번 보관
+ *   (JsonDB 손상 보관과 같은 이름 방식). 정상·0바이트·없는 파일이면 아무것도 안 함. site_settings.json·user_icon_map.json 저장이 부름 — 종전엔 깨진 파일 위에
+ *   저장 한 번으로 화면에 없는 값(로고·배경·ffmpeg 경로·아이콘 매핑)이 백업 없이 사라졌음(MIG_73 #7 재현). 저장 동작 자체는 그대로
+ */
+function fsKeepCorruptCopy(string $path): void {
+    if (!is_file($path)) return;
+    $raw = @file_get_contents($path);
+    if (!is_string($raw)) return;
+    if (strncmp($raw, "\xEF\xBB\xBF", 3) === 0) $raw = substr($raw, 3);
+    if ($raw === '') return;
+    if (trim($raw) !== '' && is_array(json_decode($raw, true))) return;
+    $bak = $path . '.corrupt-' . date('Ymd-His', (int)@filemtime($path));
+    if (!file_exists($bak)) { @copy($path, $bak); error_log('[FileStation] corrupt settings file kept as: ' . $bak); }
+}
+
 // IP/국가 제한 (빈 배열 = 제한 없음)
 define('ALLOWED_IPS', []);  // 예: ['192.168.1.0/24', '10.0.0.1']
 define('BLOCKED_IPS', []);
@@ -363,6 +518,9 @@ define('BLOCKED_COUNTRIES', []);
 // Cloudflare, Nginx 리버스 프록시 등 사용 시 프록시 IP를 등록하세요.
 // 등록하지 않으면 X-Forwarded-For 등 헤더를 무시하여 IP 스푸핑을 방지합니다.
 // 예: ['127.0.0.1', '::1', '173.245.48.0/20', '103.21.244.0/22']
+// ★ (2026-11-01 09:47, 38차 점검) 앞단에 Cloudflare 가 있으면 Cloudflare IP 대역 전체(https://www.cloudflare.com/ips/ 의 IPv4·IPv6 목록)를 넣어야 CF-Connecting-IP 를 믿음 —
+//   CF-Connecting-IP 는 X-Forwarded-For 의 맨 오른쪽 값(바로 앞 프록시가 본 접속 주소)이 신뢰 프록시일 때만 사용(로컬 프록시에 직접 붙은 방문자가 넣은 CF 헤더는 무시).
+//   그 밖에는 X-Forwarded-For 를 오른쪽부터 보며 신뢰 프록시가 아닌 첫 주소를 씀. 이 줄은 안내만(설정값은 그대로)
 define('TRUSTED_PROXIES', []);
 
 // 썸네일 설정
@@ -499,7 +657,17 @@ define('API_RATE_WINDOW', 60);
 
 // 데이터 폴더 생성
 if (!is_dir(DATA_PATH)) {
-    mkdir(DATA_PATH, 0755, true);
+    // ★ (2026-11-02 10:28, 42차 점검) 만들기 실패를 기록 없이 넘겨 첫 화면이 '잠시 후 다시 시도'만 보였음(E5#8) → 서버 오류 로그에 원인을 남김(화면 안내는 php_version_check.php 몫)
+    if (!@mkdir(DATA_PATH, 0755, true) && !is_dir(DATA_PATH)) {
+        error_log('[FileStation] cannot create data folder: ' . DATA_PATH . ' — check write permission for the web server user');
+    }
+}
+
+// ★ (2026-11-02 10:28, 42차 점검) 설치 고유값 — 로그인할 때 세션에 $_SESSION['fs_instance'] 로 넣고 Auth::isLoggedIn 이 같은지 확인(E5#3).
+//   세션 쿠키(PHPSESSID, path=/)와 세션 저장소를 같은 호스트의 다른 FileStation·다른 PHP 앱과 함께 써서, 그쪽에서 user_id=1 을 넣은 세션이 여기서 1번 계정으로 통했음.
+//   data 폴더 실제 경로로만 만듦(암호화 키를 섞지 않음 — 키 파일이 깨지면 요청마다 임시 키라 모두 로그아웃되므로). 비밀일 필요 없음(다른 앱은 이 키를 쓰지 않음)
+if (!defined('FS_INSTANCE_ID')) {
+    define('FS_INSTANCE_ID', substr(hash('sha256', 'filestation|' . (realpath(DATA_PATH) ?: DATA_PATH)), 0, 16));
 }
 
 // ===== 보안: 스토리지 폴더 보호 =====
@@ -577,6 +745,9 @@ function isSubPath(string $child, string $parent): bool {
 
 // ===== 스토리지 config 암호화/복호화 =====
 function encryptStorageConfig(array $config): string {
+    // ★ (2026-11-02 09:03, 41차 점검) 깨진 totp_settings.json(임시/기본 키) 상태면 저장을 거부(예외 → 저장 안 됨, 화면엔 오류 문구) — 종전엔 그 키로 암호화해 저장해 파일을 고친 뒤 풀 수 없었음(D3#6·D8#2).
+    //   호출부(Storage 추가·수정·연결 시험)는 모두 저장 직전/시험용이라 여기서 막으면 접속 정보가 바뀌지 않음
+    if (($kErr = fsTotpKeyUnreliableError()) !== null) throw new RuntimeException($kErr);
     $json = json_encode($config);
     $key = defined('TOTP_ENCRYPTION_KEY') ? TOTP_ENCRYPTION_KEY : 'default-storage-key-change-me!!';
     $key = hash('sha256', $key, true);
@@ -589,7 +760,10 @@ function encryptStorageConfig(array $config): string {
     return 'ENC:' . base64_encode($iv . $tag . $encrypted);
 }
 
-function decryptStorageConfig(string $data): array {
+// ★ (2026-11-02 09:03, 41차 점검) 배열로 저장된 config 행(StorageAdapter 는 받아 줌)이면 그대로 돌려줌 — 종전엔 string 형 매개변수라 TypeError(500)였음(D1#6). null 등 문자열이 아니면 빈 설정
+function decryptStorageConfig($data): array {
+    if (is_array($data)) return $data;
+    if (!is_string($data)) return [];
     if (empty($data)) return [];
     // 암호화된 형식 (ENC: 접두사)
     if (strpos($data, 'ENC:') === 0) {
@@ -600,6 +774,8 @@ function decryptStorageConfig(string $data): array {
         $iv = substr($raw, 0, 12);
         $tag = substr($raw, 12, 16);
         $encrypted = substr($raw, 28);
+        // ★ (2026-11-02 10:28, 42차 점검) openssl 확장이 없으면 Error 로 스토리지 목록·연결 요청 전체가 '서버 오류'였음(E5#10) → 못 푼 것과 같게 빈 설정 + 로그
+        if (!function_exists('openssl_decrypt')) { error_log('[FileStation] openssl extension missing — cannot decrypt storage config'); return []; }
         $json = openssl_decrypt($encrypted, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
         if ($json === false) return [];
         return json_decode($json, true) ?: [];

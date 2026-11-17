@@ -252,6 +252,15 @@ textarea:focus {
     border-color: #4a90d9;
     outline: none;
 }
+/* ★ (2026-11-03 21:41, 52차 점검) 키보드로 옮겨 왔을 때만(:focus-visible) 포커스 표시 — 위 outline:none 때문에 기본 테마에서만 체크박스·검색칸의 포커스가 안 보였음.
+   마우스로 누를 땐 종전과 같음, 플레이어 안쪽(.fsvs-root·.fap)은 종전처럼 빼고(2026-10-24 결정) */
+/*   ★ (2026-11-03 22:06, 52차 재검토) 체크박스·라디오·선택칸만 — 글 입력칸은 마우스로 눌러도 브라우저가 :focus-visible 로 봐 둥근 검색 틀 안에 네모 그림자가 생겼음(검토 재현).
+     글 입력칸은 위 테두리 색으로 포커스가 보임 */
+input[type="checkbox"]:not(:where(.fsvs-root *, .fap *)):focus-visible,
+input[type="radio"]:not(:where(.fsvs-root *, .fap *)):focus-visible,
+select:not(:where(.fsvs-root *, .fap *)):focus-visible {
+    box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.35);
+}
 
 /* ========== 컨텍스트 메뉴 ========== */
 .context-menu {
@@ -547,7 +556,7 @@ textarea:focus {
 }
 
 .security-info-bar code {
-    background: var(--theme-primary);
+    background: #1976d2; /* ★ (2026-11-04) 흰 글자 대비 4.6:1 — style.css 공통 규칙과 같은 색 (종전 var(--theme-primary) 3.3:1) */
     color: var(--fs-on-primary, #ffffff);
 }
 

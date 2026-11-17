@@ -1295,18 +1295,25 @@ class FSAudioPlayer {
             // 플레이리스트에 다른 곡이 있으면 다음으로 (없으면 그냥 정지)
             // 에러로 인한 자동 스킵이므로 다음 곡은 자동 재생
             if (this.playlist.length > 1) {
+                const _errSeq = this._loadTrackSeq;   // ★ (2026-11-01 09:44, 38차 점검) 0.5초 안에 사용자가 다른 곡(또는 같은 곡)을 고르면 타이머가 그 곡을 건너뛰었음 —
+                //   오류 때의 곡 불러오기 순번을 잡아 두고, 그 사이 새로 불러왔으면 넘기지 않음
                 setTimeout(() => {
                     if (this._destroyed) return;
+                    if (this._loadTrackSeq !== _errSeq) return;
                     // next 내부는 audio.paused로 autoplay 판단하는데
                     // 에러 상태는 paused=true이므로 수동으로 재생 시도
+                    // ★ (2026-11-03 21:37, 52차 점검) ⏮ 로 온 곡이 재생 불가면 앞쪽으로 넘김 — 종전엔 늘 다음 곡이라 ⏮ 를 눌러도 그 곡을 지나 앞으로 못 갔음(03 → ⏮ → 02 오류 → 다시 03, 재현)
+                    const _dir = this._loadDir === -1 ? -1 : 1;
                     let idx;
                     if (this.shuffle) {
                         const pos = this._shuffleOrder.indexOf(this.currentIndex);
-                        idx = this._shuffleOrder[(pos + 1) % this._shuffleOrder.length];
+                        const _sl = this._shuffleOrder.length;
+                        idx = this._shuffleOrder[(pos + _dir + _sl) % _sl];
                     } else {
-                        idx = (this.currentIndex + 1) % this.playlist.length;
+                        idx = (this.currentIndex + _dir + this.playlist.length) % this.playlist.length;
                     }
                     // autoplay=true로 강제 재생 시도 (에러 시엔 항상 다음 곡 재생)
+                    this._skipDir = _dir;   // ★ 52차 — 연속으로 재생 못 하면 같은 방향 유지
                     this._loadTrack(idx, true);
                 }, 500);  // 짧은 지연 후 다음 곡 (UX 고려)
             }
@@ -1315,6 +1322,7 @@ class FSAudioPlayer {
         // 재생 성공적으로 시작되면 에러 카운터 리셋
         a.addEventListener('playing', () => {
             this._errorSkipCount = 0;
+            this._skipDir = 0;   // ★ 52차 — 재생이 시작되면 넘김 방향 초기화
         });
         
         // 비주얼라이저 클릭/탭 → 모드 순환
@@ -1340,17 +1348,23 @@ class FSAudioPlayer {
             //   앞의 하나가 예외를 던지면 seekto 까지 등록되지 않고 조용히 삼켜졌다.
             //   seekto 핸들러가 없으면 iOS 잠금화면 스크러버는 끌려도 적용되지 않는다.
             const _msHandlers = {
-                play: () => this.togglePlay(),
-                pause: () => this.togglePlay(),
+                play: () => { if (this.audio.paused) this.togglePlay(); }, // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-1) 잠금화면 '재생'·'일시정지'를 요청대로 — 종전엔 둘 다 togglePlay(뒤집기)라 이미 멈춘 상태에서 '일시정지'가 오면 다시 재생, 재생 중 '재생'이 오면 멈췄음(재현, 원본부터). 지금 맞게 되는 경우는 결과 같음
+                pause: () => { if (!this.audio.paused) this.togglePlay(); },
                 previoustrack: () => this.prev(),
                 nexttrack: () => this.next(),
                 seekbackward: (details) => {
+                    if (this._trkSwitching) return;   // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-2) 곡을 넘기는 중(새 곡 길이를 받기 전)에 늦게 온 잠금화면 탐색은 버림 — 앞 곡 위치가 새 곡에 적용돼 다음 곡이 30초쯤부터 '이어 듣기'처럼 시작했음(재현, 원본부터). 음악은 늘 처음부터
                     this.audio.currentTime = Math.max(0, this.audio.currentTime - ((details && details.seekOffset) || 10));
                 },
                 seekforward: (details) => {
-                    this.audio.currentTime = Math.min(this.audio.duration || 0, this.audio.currentTime + ((details && details.seekOffset) || 10));
+                    if (this._trkSwitching) return;   // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-2) 곡을 넘기는 중(새 곡 길이를 받기 전)에 늦게 온 잠금화면 탐색은 버림 — 앞 곡 위치가 새 곡에 적용돼 다음 곡이 30초쯤부터 '이어 듣기'처럼 시작했음(재현, 원본부터). 음악은 늘 처음부터
+                    // ★ (2026-11-01 01:05, 35차 전체 점검) 길이를 아직 모를 때(NaN) '|| 0' 이 상한 0 이 되어 처음으로 튀었다 — 메인(app.js 2026-10-12)과 같게 길이가 유한할 때만 상한
+                    const _adur = this.audio.duration;
+                    const _atgt = this.audio.currentTime + ((details && details.seekOffset) || 10);
+                    this.audio.currentTime = (isFinite(_adur) && _adur > 0) ? Math.min(_adur, _atgt) : _atgt;
                 },
                 seekto: (details) => {
+                    if (this._trkSwitching) return;   // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-2) 곡을 넘기는 중(새 곡 길이를 받기 전)에 늦게 온 잠금화면 탐색은 버림 — 앞 곡 위치가 새 곡에 적용돼 다음 곡이 30초쯤부터 '이어 듣기'처럼 시작했음(재현, 원본부터). 음악은 늘 처음부터
                     if (!details || details.seekTime == null) return;
                     // ★ (2026-09-23) 끝까지 끌면 '곡이 끝난 것'으로 처리한다 (탐색기 app.js 와 같은 이유).
                     //   iOS 가 곡 길이를 처음에 틀리게 계산하면 '끝'으로 보이는 곳이 실제 끝이 아니어서
@@ -1448,6 +1462,8 @@ class FSAudioPlayer {
             // 탭 전환/복귀 시 iOS가 MediaMetadata를 지우는 경우가 있어서 복귀할 때 재설정
             this._mediaSessionVisHandler = () => {
                 if (this._destroyed) return;
+                // ★ (2026-10-31 13:35, 34차 후속 개선) 탭 복귀 때 AudioContext 되살리기가 빠져 있었다(2026-10-08 이식 때 누락) → app.js 와 같게 복귀 시 _resumeAudioCtx 호출.
+                if (!document.hidden) this._resumeAudioCtx();
                 if (!document.hidden) {
                     // 복귀: 500ms 지연 후 재설정 (iOS Safari가 처리할 시간 확보)
                     setTimeout(() => {
@@ -1502,7 +1518,10 @@ class FSAudioPlayer {
 
     // ── Track loading ──
     _loadTrack(idx, autoplay) {
+        // ★ (2026-11-03 22:06, 52차 재검토) 넘김 방향을 이 곡의 값으로 옮기고 바로 비움 — 종전엔 재생이 시작돼야만 지워져, 멈춘 채 ⏮ 를 누른 뒤 목록에서 재생 못 하는 곡을 고르면 앞 곡으로 넘어갔음(검토 재현)
+        this._loadDir = this._skipDir === -1 ? -1 : 1; this._skipDir = 0;
         if (idx < 0 || idx >= this.playlist.length) return;
+        this._loadTrackSeq = (this._loadTrackSeq || 0) + 1;   // ★ (2026-11-01 09:44, 38차 점검) 곡 불러오기 순번(오류 뒤 자동 넘김이 사용자가 고른 곡을 건너뛰지 않게)
         this.currentIndex = idx;
         // ★ (2026-09-17) positionState 의 throttle·억제창을 곡 전환 시 초기화한다.
         //   스크러버를 끝까지 끌어 다음 곡으로 넘어갈 때, 탐색 억제창(1.5초)이 남아 있으면
@@ -1523,6 +1542,8 @@ class FSAudioPlayer {
                 playlistLength: this.playlist.length
             });
         }
+        this._trkSwitching = true;   // ★ (2026-11-12 09:49, 96차 펜닐 제보 MUS-2) 위 탐색 버림 표시 — 새 곡 길이를 받으면(또는 3초 뒤) 풂
+        { const _au = this.audio; const _clr = () => { this._trkSwitching = false; }; _au.addEventListener('loadedmetadata', _clr, { once: true }); clearTimeout(this._trkSwitchT); this._trkSwitchT = setTimeout(_clr, 3000); }
         this.audio.src = track.url;
         // 재생 중이면 마퀴, 아니면 일반 텍스트
         if (!this.audio.paused || autoplay) {
@@ -1862,6 +1883,9 @@ class FSAudioPlayer {
         const lines = text.split(/\r?\n/);
         const result = [];
         const timeTagRe = /\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]/g;
+        // ★ (2026-11-02 14:34, 44차 점검) LRC 표준 [offset:±ms] 를 메타 줄로 건너뛰어 그런 파일은 가사가 고정으로 어긋났음 → 읽어서 모든 시각에서 ms/1000 을 뺌(양수면 가사를 앞당김, 0 아래는 0)
+        const _offM = text.match(/^\s*\[offset:\s*([+-]?\d+)\s*\]/im);
+        const _off = _offM ? parseInt(_offM[1], 10) / 1000 : 0;
         
         for (const line of lines) {
             // 메타데이터 라인 (시간 태그 없는 [ti:], [ar:] 등) 건너뜀
@@ -1883,7 +1907,7 @@ class FSAudioPlayer {
                 const ms = m[3] ? parseInt(m[3].padEnd(3, '0').substring(0, 3), 10) : 0;
                 const time = min * 60 + sec + ms / 1000;
                 if (time >= 0 && time < 36000) {  // 10시간 미만
-                    result.push({ time, text: lyricText });
+                    result.push({ time: _off ? Math.max(0, time - _off) : time, text: lyricText });   // ★ (2026-11-02 14:34, 44차 점검) offset 반영
                 }
             }
         }
@@ -2118,12 +2142,44 @@ class FSAudioPlayer {
         return undefined;
     }
     
+    // ★ (2026-11-02 10:26, 42차 점검) 커버 메모리 캐시(_coverBlobCache)에 상한이 없어 곡·재생목록을 넘길수록 원본 크기 커버 Blob 이
+    //   플레이어를 닫을 때까지 쌓였음(곡 1000개 ≈ 300MB) → 최근 사용 순 200개 상한, 밀려나는 항목은 revokeObjectURL.
+    //   단 폴더 커버(this.cover)·지금 곡 커버(_activeCoverUrl)·화면(플레이어 틀 안 img·onerror 글자)에 쓰이는 주소는 남김.
+    _coverCacheTouch(originalUrl) {
+        const v = this._coverBlobCache.get(originalUrl);
+        if (v === undefined) return v;
+        this._coverBlobCache.delete(originalUrl);
+        this._coverBlobCache.set(originalUrl, v);
+        return v;
+    }
+
+    _coverCachePut(originalUrl, blobUrl) {
+        const cache = this._coverBlobCache;
+        const MAX = 200;
+        if (cache.has(originalUrl)) {
+            const old = cache.get(originalUrl);
+            cache.delete(originalUrl);
+            if (old && old !== blobUrl) { try { URL.revokeObjectURL(old); } catch (e) {} }
+        }
+        cache.set(originalUrl, blobUrl);
+        if (cache.size <= MAX) return;
+        let html = null;
+        try { html = this.container ? this.container.innerHTML : ''; } catch (e) { html = ''; }
+        for (const [k, v] of cache) {
+            if (cache.size <= MAX) break;
+            if (k === originalUrl || k === this.cover || v === this._activeCoverUrl) continue;
+            if (html && v && html.indexOf(v) !== -1) continue;
+            cache.delete(k);
+            try { URL.revokeObjectURL(v); } catch (e) {}
+        }
+    }
+
     async _getCachedCoverUrl(originalUrl) {
         if (!originalUrl) return null;
         if (this._destroyed) return originalUrl;
         // 1. 메모리 캐시 hit
         if (this._coverBlobCache.has(originalUrl)) {
-            return this._coverBlobCache.get(originalUrl);
+            return this._coverCacheTouch(originalUrl);   // ★ (2026-11-02 10:26, 42차 점검) 최근 사용 순 갱신 — _coverCachePut 주석
         }
         // 2. 진행 중인 fetch 있으면 그 결과 기다림
         if (this._coverBlobPending.has(originalUrl)) {
@@ -2141,18 +2197,20 @@ class FSAudioPlayer {
                 if (!blob) {
                     // 3-B. IDB miss → 서버에서 fetch (iOS는 큐 거침, PC는 즉시)
                     const res = await this._coverFetchQueued(originalUrl);
-                    if (!res.ok) {
+                    if (!res.ok || res.status === 204) {   // ★ (2026-11-01 09:44, 38차 점검) fetch 의 ok 는 204 도 참이라 '커버 없음·권한 실패(204)'를 빈 그림으로
+                        //   메모리·IndexedDB(30일)에 캐시해, 비밀번호를 다시 넣거나 커버가 생겨도 안 나왔음 — 204 는 캐시하지 않음
                         // 404/204 등 — 원본 URL 그대로 반환 (브라우저가 onerror 처리하도록)
                         return originalUrl;
                     }
                     blob = await res.blob();
+                    if (!blob || blob.size === 0) return originalUrl;   // ★ (2026-11-01 09:44, 38차 점검) 빈 응답도 캐시하지 않음
                     // IDB 저장 (비동기, 결과 안 기다림 — 응답 지연 방지)
                     try { FSCoverCacheDB.set(originalUrl, blob); } catch (e) {}
                 }
                 
                 if (this._destroyed) return originalUrl;
                 const blobUrl = URL.createObjectURL(blob);
-                this._coverBlobCache.set(originalUrl, blobUrl);
+                this._coverCachePut(originalUrl, blobUrl);   // ★ (2026-11-02 10:26, 42차 점검) 상한 있는 넣기 — _coverCachePut 주석
                 return blobUrl;
             } catch (e) {
                 // 네트워크 에러 등 - 원본 URL 그대로 반환 (fallback)
@@ -2303,10 +2361,12 @@ class FSAudioPlayer {
         } else {
             idx = (this.currentIndex - 1 + this.playlist.length) % this.playlist.length;
         }
+        this._skipDir = -1;   // ★ (2026-11-03 21:37, 52차 점검) 재생 못 하는 곡이면 같은 방향(앞)으로 넘김 — 아래 오류 처리 참고
         this._loadTrack(idx, !this.audio.paused);
     }
     next() {
         if (!this.playlist.length) return;
+        this._skipDir = 1;
         let idx;
         if (this.shuffle) {
             const pos = this._shuffleOrder.indexOf(this.currentIndex);
@@ -2337,10 +2397,18 @@ class FSAudioPlayer {
         } else {
             // 'none': play next unless last
             if (this.shuffle) {
+                // ★ (2026-11-01 11:34, 39차 점검) 셔플 순서에서의 위치(pos < 끝)로만 판단해, 순서 중간에서 시작하면
+                //   앞쪽 곡을 안 듣고 멈췄음(첫 곡이 순서 끝이면 1곡만). → '들은 곡' 기록으로 판단: 아직 안 들은 곡이
+                //   있으면 순서를 돌아가며 그 곡으로, 전부 들었으면 멈춤.
+                if (!this._shufflePlayed) this._shufflePlayed = new Set();
+                this._shufflePlayed.add(this.currentIndex);
+                const n = this._shuffleOrder.length;
                 const pos = this._shuffleOrder.indexOf(this.currentIndex);
-                if (pos < this._shuffleOrder.length - 1) {
-                    const nextIdx = this._shuffleOrder[pos + 1];
-                    this._loadTrack(nextIdx, true);
+                if (this._shufflePlayed.size < this.playlist.length) {
+                    for (let k = 1; k <= n; k++) {
+                        const cand = this._shuffleOrder[(pos + k + n) % n];
+                        if (!this._shufflePlayed.has(cand)) { this._loadTrack(cand, true); break; }
+                    }
                 }
             } else {
                 if (this.currentIndex < this.playlist.length - 1) {
@@ -2587,7 +2655,12 @@ class FSAudioPlayer {
         // _loadTrack에서 호출: 재생한 곡 기록 → 전곡 한 바퀴 소진 시 자동 재셔플.
         if (!this.shuffle) return;
         if (!this._shufflePlayed) this._shufflePlayed = new Set();
+        // ★ (2026-11-01 11:34, 39차 점검) 반복 끔이면 마지막 곡을 불러오는 순간 다시 섞여 곡 끝에서 멈추지 않고
+        //   계속 재생됐음 → 반복 끔에서는 이번 추가로 한 바퀴가 찬 경우 다시 섞지 않음(곡 끝 _onEnded 가 멈춤).
+        //   이미 다 찬 상태에서 새로 고른 곡이면 새 바퀴로 시작.
+        const _wasFull = this.playlist.length > 0 && this._shufflePlayed.size >= this.playlist.length;
         this._shufflePlayed.add(idx);
+        if (this.loop === 'none' && !_wasFull) { this._saveShuffleOrder(); return; }
         if (this.playlist.length > 0 && this._shufflePlayed.size >= this.playlist.length) {
             this._buildShuffleOrder();
             this._shufflePlayed = new Set([idx]);
@@ -3682,7 +3755,10 @@ class FSAudioPlayer {
     
     _showVisModeLabel() {
         if (!this.$ || !this.$.visualizer) return;
-        const labels = { bars: '막대', mirror: '미러', wave: '파형', ripple: '물결', peak: '피크', vu: 'VU', vuled: 'VU LED' };
+        // ★ (2026-10-31 12:03, 34차 전체 점검) 영어 화면에서도 한국어였음 → 페이지 언어로
+        const _visKo = (document.documentElement.lang || navigator.language || '').startsWith('ko');
+        const labels = _visKo ? { bars: '막대', mirror: '미러', wave: '파형', ripple: '물결', peak: '피크', vu: 'VU', vuled: 'VU LED' }
+                              : { bars: 'Bars', mirror: 'Mirror', wave: 'Wave', ripple: 'Ripple', peak: 'Peak', vu: 'VU', vuled: 'VU LED' };
         const mode = this._visModes[this._visModeIdx];
         const label = labels[mode] || mode;
         // 기존 라벨 제거
@@ -3736,19 +3812,21 @@ class FSAudioPlayer {
         if (!('wakeLock' in navigator)) return;  // 미지원 브라우저 (iOS 16 미만 등)
         try {
             if (this._wakeLock) return;  // 이미 획득됨
-            this._wakeLock = await navigator.wakeLock.request('screen');
-            // Wake Lock이 시스템에 의해 풀릴 수 있음 (탭 숨김, 최소화 등)
-            this._wakeLock.addEventListener('release', () => {
-                this._wakeLock = null;
-            });
             // 탭 복귀 시 재획득
-            if (!this._wakeLockVisHandler) {
+            // ★ (2026-11-01 01:05, 35차 전체 점검) 종전엔 요청이 성공한 뒤에만 등록돼, 화면이 꺼진(문서 숨김) 동안 곡이 넘어가면
+            //   'ended' 가 핸들러를 떼고 다음 곡 요청은 거절(NotAllowedError)돼 이후 화면을 켜도 잠금이 다시 잡히지 않았다.
+            //   요청 결과와 상관없이 첫 시도 때 등록한다(재생 중일 때만 동작 — 아래 조건).
+            if (!this._wakeLockVisHandler && !this._destroyed) {
                 this._wakeLockVisHandler = async () => {
                     if (document.visibilityState === 'visible' && 
                         !this.audio.paused && 
                         !this._wakeLock) {
                         try {
-                            this._wakeLock = await navigator.wakeLock.request('screen');
+                            // ★ (2026-11-01 01:05, 35차 전체 점검) 메인(app.js 34차 후속 14:09)과 같게 지역 변수로 받고, 그사이 정지·파기됐거나
+                            //   다른 요청이 이미 잡았으면 받은 잠금을 푼다 — 종전엔 바로 덮어써 겹친 요청의 앞 잠금이 참조를 잃고 남았다.
+                            const _wl2 = await navigator.wakeLock.request('screen');
+                            if (this._destroyed || this.audio.paused || this._wakeLock) { try { _wl2.release(); } catch(e) {} return; }
+                            this._wakeLock = _wl2;
                             this._wakeLock.addEventListener('release', () => {
                                 this._wakeLock = null;
                             });
@@ -3757,6 +3835,18 @@ class FSAudioPlayer {
                 };
                 document.addEventListener('visibilitychange', this._wakeLockVisHandler);
             }
+            // ★ (2026-11-01 01:05, 35차 전체 점검) 메인(app.js 34차 후속)과 같게 지역 변수로 받고 `|| this._wakeLock` 도 확인 —
+            //   종전엔 this._wakeLock 에 바로 덮어써 요청 두 개가 겹치면 앞 잠금이 고아로 남아 일시정지 뒤에도 화면이 안 꺼졌다.
+            const _wl = await navigator.wakeLock.request('screen');
+            if (this._destroyed || this.audio.paused || this._wakeLock) {
+                try { _wl.release(); } catch(e) {}
+                return;
+            }
+            this._wakeLock = _wl;
+            // Wake Lock이 시스템에 의해 풀릴 수 있음 (탭 숨김, 최소화 등)
+            this._wakeLock.addEventListener('release', () => {
+                this._wakeLock = null;
+            });
         } catch(e) {
             // Wake Lock 요청 실패 (배터리 세이버 모드, 권한 거부 등) - 조용히 무시
         }
@@ -4033,7 +4123,7 @@ class FSAudioPlayer {
     //   현재 곡 커버(플레이어·잠금화면)는 이 대기열을 거치지 않는다 — 종전 그대로 즉시.
     _plCoverLoad(imgEl, origUrl) {
         if (!imgEl || !origUrl) return;
-        if (this._coverBlobCache.has(origUrl)) { imgEl.src = this._coverBlobCache.get(origUrl); return; }
+        if (this._coverBlobCache.has(origUrl)) { imgEl.src = this._coverCacheTouch(origUrl); return; }   // ★ (2026-11-02 10:26, 42차 점검) 최근 사용 순 갱신
         if (!this._plCoverQ) {
             this._plCoverQ = [];
             this._plCoverActive = 0;
@@ -4141,6 +4231,8 @@ class FSAudioPlayer {
             const t = this.playlist[i];
             const li = document.createElement('li');
             li.className = 'fap-pl-item' + (i === this.currentIndex ? ' active' : '') + (i === this.currentIndex && !this.audio.paused ? ' playing' : '');
+            // ★ (2026-10-31 13:35, 34차 후속 개선) li 를 새로 만들 때 검색 강조를 다시 붙이지 않아 한 칸만 스크롤해도 강조가 사라졌다 → 현재 일치 곡이면 클래스를 붙인다.
+            if (this._plSearchMatches && this._plSearchPos >= 0 && i === this._plSearchMatches[this._plSearchPos]) li.classList.add('fap-pl-search-hit');
             li.dataset.index = i;
             li.style.position = 'absolute';
             li.style.top = (i * this._VS_ITEM_H) + 'px';
@@ -4224,10 +4316,15 @@ class FSAudioPlayer {
         if (!list) return;
         
         // 레이아웃이 아직 계산 안 됐으면 다음 프레임에 재시도 (초기 로드 대응)
+        // ★ (2026-11-04 01:42, 54차 점검) 대기 중 재시도는 하나만(가장 최근 idx) 두고, 플레이어가 파기됐거나 목록이 문서에서 빠졌으면 멈춤 — 종전엔 높이 0 인 동안
+        //   곡을 넘길 때마다 매 프레임 반복이 하나씩 늘었고(재현: 휴대폰 가로 공유 음악 60→120→…→300회/초), 닫힌 플레이어도 끝없이 붙잡았음. 높이가 생기면 바로 스크롤하는 동작은 그대로
         if (!list.clientHeight) {
-            requestAnimationFrame(() => this._vsScrollToIndex(idx));
+            if (this._destroyed || !list.isConnected) return;
+            this._vsScrollWant = idx;
+            if (!this._vsScrollRaf) this._vsScrollRaf = requestAnimationFrame(() => { this._vsScrollRaf = 0; this._vsScrollToIndex(this._vsScrollWant); });
             return;
         }
+        if (this._vsScrollRaf) { cancelAnimationFrame(this._vsScrollRaf); this._vsScrollRaf = 0; }   // ★ (2026-11-04 01:42, 54차 점검) 바로 스크롤했으면 남은 재시도(옛 idx)는 버림
         
         const itemTop = idx * this._VS_ITEM_H;
         const viewH = list.clientHeight;

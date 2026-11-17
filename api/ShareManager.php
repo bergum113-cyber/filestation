@@ -3,6 +3,9 @@
  * ShareManager - 공유 링크 관리 (JSON 기반)
  */
 class ShareManager {
+    // ★ (2026-11-12 16:10, 100차 CVR-1) 공유 표지 추출(extractID3v2Cover) 판 — '표지 없음' 표시(.nocover)에 ';cv:판' 을 적고 같은 판 표시만 믿음(옛 표시는 만나면 지우고 다시 추출).
+    //   share.php 표지 주소의 &cv= 에도 쓰여 브라우저의 옛 204 캐시를 피함. 추출 코드를 고치면 이 숫자만 올리면 됨(성공한 표지 캐시는 그대로 씀) — 종전엔 99차 AUD-1 뒤에도 옛 판 표시가 남아 204(재현)
+    public const COVER_VER = 2;
     private $db;
     private $auth;
     private $storage;
@@ -12,7 +15,38 @@ class ShareManager {
         $this->auth = new Auth();
         $this->storage = new Storage();
     }
-    
+
+    /**
+     * ★ (2026-11-11 12:24, 73차) 스토리지 표를 믿을 수 없는 상태인지 — 손상·읽기 실패·빈 표이거나, 손상 보관본(storages.json.corrupt-*)·없어짐 표시(storages.json.missing-*, JsonDB::init)가 있음.
+     *   이때 '스토리지 없음 → 공유 삭제'를 건너뜀(MIG_73 #1: 깨진 storages.json 을 빈 표로 읽어 모든 공유·내부 공유가 백업 없이 지워졌음, 비로그인 방문 한 번으로도).
+     *   손상된 표는 첫 쓰기 때 정상 표로 바뀌므로 보관본·표시 파일이 남아 있는 동안(관리자가 복구·정리할 때까지) 계속 건너뜀. 정상 설치(보관본 없음)는 종전 그대로
+     */
+    private ?bool $stTableUnreliable = null;
+    private function storagesTableUnreliable(): bool {
+        if ($this->stTableUnreliable !== null) return $this->stTableUnreliable;
+        $base = (defined('DATA_PATH') ? DATA_PATH : (__DIR__ . '/../data')) . '/storages.json';
+        $this->stTableUnreliable = $this->db->readFailed('storages') || $this->db->isCorrupt('storages') || empty($this->db->load('storages'))
+            || (bool)glob($base . '.corrupt-*') || (bool)glob($base . '.missing-*');
+        return $this->stTableUnreliable;
+    }
+
+    /**
+     * ★ (2026-11-11 12:24, 73차) 공유를 '스토리지/경로 없음'·'파일 없음'으로 지워도 되는지 — 지우면 안 되는 경우 false.
+     *   $kind: 'storage'(스토리지 행 없음) / 'path'(행은 있는데 기준 경로 null) / 'file'(기준 폴더는 열리는데 파일 없음)
+     *   ① 'storage': 스토리지 표를 믿을 수 없으면(위 함수) 지우지 않음. 표가 정상인데 그 스토리지만 없으면 종전처럼 지움
+     *   ② 'path': SMB 는 접속 정보를 못 풀면(totp_settings.json 손상·키 변경) 경로가 null 이라 지우지 않음(MIG_73 #3). 그 밖의 종류는 종전처럼 지움
+     *   ③ 'file': storage_paths.json 이 깨져 기본 폴더로 대체된 요청(config.php FS_STORAGE_PATHS_BROKEN)이면 그 경로를 쓰는 홈·공용 폴더 스토리지의 공유는 지우지 않음(MIG_73 #2)
+     */
+    // ★ (2026-11-11 13:14, 74차) private → public: api.php 'folder_permissions' 의 폴더 규칙 자동 정리도 같은 판정('file')을 씀. 판정 내용은 그대로
+    public function shareCleanupSafe(int $storageId, string $kind, ?array $stRow = null): bool {
+        if ($kind === 'storage') return !$this->storagesTableUnreliable();
+        if ($stRow === null) $stRow = $this->storage->getStorageById($storageId);
+        $type = (string)($stRow['storage_type'] ?? '');
+        if ($kind === 'path') return $type !== 'smb';
+        if ($kind === 'file') return !(defined('FS_STORAGE_PATHS_BROKEN') && FS_STORAGE_PATHS_BROKEN && ($type === 'home' || $type === 'shared'));
+        return true;
+    }
+
     // 파일에 대한 기존 공유 확인
     public function checkShare(int $storageId, string $filePath): array {
         $userId = $this->auth->getUserId();
@@ -75,12 +109,15 @@ class ShareManager {
         
         // 경로 정규화
         $filePath = str_replace(['\\', '\/'], '/', $filePath);
-        
+
         // 경로 탐색 공격 방지
         if (preg_match('#(^|[\\/])\\.\\.($|[\\/])#', $filePath)) {
             return ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
         }
-        
+        // ★ (2026-11-01 07:19, 37차 기능 점검) 저장 경로를 Storage::normFolderPath 처럼 '.'·빈 조각 제거('./a'·'/a'·'a//b'·끝 '/' → 'a/b') — 종전엔 그대로 저장해,
+        //   글자 그대로 비교하는 삭제·이름 바꾸기 뒤 공유 정리(cleanupSharesForPath)·목록 배지에서 빠져 옛 링크가 남았음(대소문자·끝 점은 실제 이름이라 그대로 둠)
+        $filePath = implode('/', array_filter(explode('/', $filePath), static fn($s) => $s !== '' && $s !== '.'));
+
         // 파일 존재 확인
         $basePath = $this->storage->getRealPath($storageId);
         if (!$basePath) {
@@ -100,17 +137,28 @@ class ShareManager {
         $token = $this->generateToken();
         
         $expireAt = null;
+        // ★ (2026-11-02 10:26, 42차 점검) 만든 시각을 만료 계산과 같은 time() 값으로 — 종전엔 password_hash(수십 ms) 뒤 date() 라 초가 바뀌면
+        //   1일 공유가 86399초가 돼 공유 관리 '1일' 필터에서 빠지고 '1시간 이하'로 분류됐음(비밀번호 공유의 약 6%)
+        $_createdTs = time();
         if (!empty($options['expire_days'])) {
-            $days = (float)$options['expire_days'];
+            $days = min(36500.0, (float)$options['expire_days']);   // ★ (2026-11-16 12:31, 233차) 위 한도 100년 — 아주 큰 값(예: 1e9일)은 만료일이 수백만 년 뒤가 되어 목록·정리(strtotime)가 못 읽고 만료로 봐 만들자마자 지워졌음(재현: '성공'인데 공유가 없음). 화면 선택지(30분~30일)는 그대로
             $seconds = max(60, (int)round($days * 86400)); // 최소 1분
-            $expireAt = date('Y-m-d H:i:s', time() + $seconds);
+            $expireAt = date('Y-m-d H:i:s', $_createdTs + $seconds);
         } elseif (!empty($options['expire_at'])) {
-            $expireAt = $options['expire_at'];
+            // ★ (2026-10-31 12:03, 34차 전체 점검) 문자열·날짜로 읽히는 값만 — 종전엔 배열 등을 그대로 저장해, 공유 목록·정리(strtotime)가 TypeError 로
+            //   모든 사용자에게 500 이 났음
+            $ts = is_string($options['expire_at']) ? strtotime($options['expire_at']) : false;
+            $expireAt = $ts ? date('Y-m-d H:i:s', $ts) : null;
         }
         
         $password = null;
-        if (!empty($options['password'])) {
-            $password = password_hash($options['password'], PASSWORD_DEFAULT);
+        // ★ (2026-11-01 17:16, 40차 점검) 비밀번호 '0' 이 empty('0') 로 '없음'이 돼 비밀번호 없는 공개 링크가 만들어졌음 → 빈 문자열일 때만 '없음'
+        if (isset($options['password']) && !is_scalar($options['password'])) {   // 배열 등은 비밀번호 없는 링크로 만들지 않고 거부(종전엔 password_hash TypeError 로 실패)
+            return ['success' => false, 'error' => __('api_err_invalid_request', '잘못된 요청입니다.')];
+        }
+        $_pwIn = is_scalar($options['password'] ?? null) ? (string)$options['password'] : '';
+        if ($_pwIn !== '') {
+            $password = password_hash($_pwIn, PASSWORD_DEFAULT);
         }
         
         $id = $this->db->insert('shares', [
@@ -120,14 +168,18 @@ class ShareManager {
             'created_by' => $this->auth->getUserId(),
             'password' => $password,
             'expire_at' => $expireAt,
-            'max_downloads' => $options['max_downloads'] ?? null,
+            'max_downloads' => (is_numeric($options['max_downloads'] ?? null) && (int)$options['max_downloads'] > 0) ? (int)$options['max_downloads'] : null,   // ★ (2026-10-31 12:03, 34차 전체 점검) 정수로
             'download_count' => 0,
             'share_type' => $options['share_type'] ?? 'download',
             'is_dir' => is_dir($fullPath) ? 1 : 0,
             'is_active' => 1,
-            'created_at' => date('Y-m-d H:i:s')
+            'created_at' => date('Y-m-d H:i:s', $_createdTs)   // ★ (2026-11-02 10:26, 42차 점검) 위 만료 계산과 같은 시각
         ]);
         
+        // ★ (2026-11-01 17:21, 40차 점검) 저장 실패(insert 0)를 안 보고 성공·토큰을 응답해 동작하지 않는 링크를 줬음 → 실패로 응답
+        if (!$id) {
+            return ['success' => false, 'error' => __('err_save_failed', '저장 실패')];
+        }
         // 디버깅: 저장 후 다시 로드해서 확인
         $savedShares = $this->db->load('shares');
         
@@ -155,6 +207,10 @@ class ShareManager {
         $users = $this->db->load('users');
         $storages = $this->db->load('storages');
         
+        // ★ (2026-11-02 17:37, 46차 점검) 공유마다 users·storages 를 처음부터 훑었음(공유 수 × 사용자 수, H1#2) → (int)id → 첫 행 표를 한 번 만들어 씀(종전 '첫 일치에서 break' 와 같은 행)
+        $uMap = []; foreach ($users as $user) { $k = (int)$user['id']; if (!array_key_exists($k, $uMap)) $uMap[$k] = $user; }
+        $sMap = []; foreach ($storages as $storage) { $k = (int)$storage['id']; if (!array_key_exists($k, $sMap)) $sMap[$k] = $storage; }
+        
         $result = [];
         foreach ($shares as $share) {
             if ((!$isAdmin || $mineOnly) && (int)$share['created_by'] !== (int)$userId) {
@@ -162,26 +218,22 @@ class ShareManager {
             }
             
             // 생성자 이름 추가
-            foreach ($users as $user) {
-                if ((int)$user['id'] === (int)$share['created_by']) {
-                    $share['creator_name'] = $user['username'];
-                    break;
-                }
+            if (array_key_exists((int)$share['created_by'], $uMap)) {   // ★ (2026-11-02 17:37, 46차 점검) 종전 foreach ($users …) 첫 일치
+                $user = $uMap[(int)$share['created_by']];
+                $share['creator_name'] = $user['username'];
             }
             
             // 스토리지 이름 추가
-            foreach ($storages as $storage) {
-                if ((int)$storage['id'] === (int)$share['storage_id']) {
-                    $share['storage_name'] = $storage['name'];
-                    // is_dir이 없는 기존 데이터 대응: 실제 경로로 확인
-                    if (!isset($share['is_dir'])) {
-                        $basePath = $this->storage->getRealPath((int)$share['storage_id']);
-                        if ($basePath) {
-                            $fp = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
-                            $share['is_dir'] = is_dir($fp) ? 1 : 0;
-                        }
+            if (array_key_exists((int)$share['storage_id'], $sMap)) {   // ★ (2026-11-02 17:37, 46차 점검) 종전 foreach ($storages …) 첫 일치
+                $storage = $sMap[(int)$share['storage_id']];
+                $share['storage_name'] = $storage['name'];
+                // is_dir이 없는 기존 데이터 대응: 실제 경로로 확인
+                if (!isset($share['is_dir'])) {
+                    $basePath = $this->storage->getRealPath((int)$share['storage_id']);
+                    if ($basePath) {
+                        $fp = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
+                        $share['is_dir'] = is_dir($fp) ? 1 : 0;
                     }
-                    break;
                 }
             }
             
@@ -193,9 +245,11 @@ class ShareManager {
         }
         
         // 최신순 정렬
-        usort($result, function($a, $b) {
-            return strtotime($b['created_at']) - strtotime($a['created_at']);
-        });
+        // ★ (2026-11-02 17:37, 46차 점검) 비교마다 strtotime 을 두 번 불렀음(H1#2) → 항목마다 한 번 계산해 번호 배열을 같은 비교식으로 정렬(안정 정렬이라 동률 순서도 같음)
+        $ts = array_map(fn($r) => strtotime($r['created_at']), $result);
+        $ix = array_keys($result);
+        usort($ix, function($a, $b) use ($ts) { return $ts[$b] - $ts[$a]; });
+        $result = array_map(fn($i) => $result[$i], $ix);
         
         return $result;
     }
@@ -292,9 +346,33 @@ class ShareManager {
         return implode(DIRECTORY_SEPARATOR, $resolved);
     }
     
+    // ★ (2026-11-02 17:37, 46차 점검) 여러 id 를 표 잠금·쓰기 한 번으로 지움 — delete($table, ['id' => $id]) 를 id 마다 차례로 부른 것과 같은 결과(같은 matchValue 비교, 남는 행 순서 유지).
+    //   api.php fsDbDeleteIds 와 같은 방식(share.php 등 api.php 없이도 불리므로 여기 따로 둠)
+    private function deleteIdsOnce(string $table, array $ids): void {
+        $ids = array_values($ids);
+        if (!$ids) return;
+        $db = $this->db;
+        $db->atomicUpdate($table, function ($data) use ($db, $ids) {
+            $intLike = function ($v) { return is_int($v) || (is_string($v) && preg_match('/^-?\d{1,18}\z/', $v)); };
+            $allInt = true; $intSet = [];
+            foreach ($ids as $id) { if ($intLike($id)) $intSet[(int)$id] = true; else { $allInt = false; break; } }
+            $keep = [];
+            foreach ((is_array($data) ? $data : []) as $row) {
+                $hit = false;
+                if (isset($row['id'])) {   // delete 도 id 없는 행은 남김
+                    if ($allInt && $intLike($row['id'])) $hit = isset($intSet[(int)$row['id']]);   // 둘 다 정수 모양이면 matchValue 도 (int) 비교
+                    else { foreach ($ids as $id) { if ($db->matchValue($row['id'], $id)) { $hit = true; break; } } }
+                }
+                if (!$hit) $keep[] = $row;
+            }
+            return $keep;
+        });
+    }
+    
     public function cleanupExpiredShares(): int {
         $shares = $this->db->load('shares');
         $deletedCount = 0;
+        $delIds = [];   // ★ (2026-11-02 17:37, 46차 점검) 아래 한 번에 지우기용
         $now = time();
         
         
@@ -324,23 +402,29 @@ class ShareManager {
                     
                     
                     // ★ (2026-10-29 18:42, 22차 점검) 스토리지 자체에 닿을 때만 '파일 없음'으로 지움 — 종전엔 SMB·외장 디스크가 잠깐 끊겨도 그 스토리지의 공유가 모두 영구 삭제됐음
-                    if (!file_exists($fullPath) && is_dir($basePath)) {
+                    if (!file_exists($fullPath) && is_dir($basePath) && $this->shareCleanupSafe((int)$share['storage_id'], 'file')) {   // ★ (2026-11-11 12:24, 73차) 경로 설정이 깨진 요청이면 홈·공용 폴더 공유는 남김(shareCleanupSafe)
                         $shouldDelete = true;
                         $deleteReason = 'file_not_exists';
                     }
                 } else {
                     // 스토리지가 삭제된 경우
-                    $shouldDelete = true;
-                    $deleteReason = 'storage_deleted';
+                    // ★ (2026-11-11 12:24, 73차) 스토리지 표를 믿을 수 없거나(손상·없어짐) SMB 접속 정보를 못 푼 경우는 지우지 않음(shareCleanupSafe) — 그 밖은 종전 그대로
+                    $stRowC = $this->storage->getStorageById((int)$share['storage_id']);
+                    if ($stRowC ? $this->shareCleanupSafe((int)$share['storage_id'], 'path', $stRowC) : $this->shareCleanupSafe((int)$share['storage_id'], 'storage')) {
+                        $shouldDelete = true;
+                        $deleteReason = 'storage_deleted';
+                    }
                 }
             }
             
             if ($shouldDelete) {
                 $this->_cleanShareCache($share);  // ★ 캐시 정리 (자동 정리 함수 — 일관성)
-                $this->db->delete('shares', ['id' => $share['id']]);
+                $delIds[] = $share['id'] ?? null;   // ★ (2026-11-02 17:37, 46차 점검) 종전 여기서 한 건씩 $this->db->delete('shares', …) — 아래에서 한 번에
                 $deletedCount++;
             }
         }
+        // ★ (2026-11-02 17:37, 46차 점검) 지울 공유마다 shares 표 전체를 다시 썼음(500건 만료 시 18초, H1#4) → 모아서 한 번에(종전 delete 를 차례로 부른 것과 남는 행·순서 같음)
+        $this->deleteIdsOnce('shares', $delIds);
         
         return $deletedCount;
     }
@@ -464,11 +548,13 @@ class ShareManager {
                     if (is_file($fullPath)) {
                         $mtime = @filemtime($fullPath);
                         if ($mtime !== false) {
-                            $key = md5($token . '/' . $share['file_path'] . '/' . $mtime);
+                            // ★ (2026-11-02 10:27, 42차 점검) getShareCover 의 새 키(시각-크기)와 예전 키(시각만) 둘 다 지움
+                            foreach ([md5($token . '/' . $share['file_path'] . '/' . $mtime . '-' . (int)@filesize($fullPath)), md5($token . '/' . $share['file_path'] . '/' . $mtime)] as $key) {
                             @unlink($shareAudioDir . '/' . $key . '.img');
                             @unlink($shareAudioDir . '/' . $key . '.meta');
                             @unlink($shareAudioDir . '/' . $key . '.nocover');
                             @unlink($shareAudioDir . '/' . $key . '.w512.jpg');   // ★ (2026-09-26) 줄인 커버(09-23 share.php 커버 512px) — 빠져 있어 공유를 지워도 남았다(재검토)
+                            }
                         }
                     }
                 }
@@ -489,7 +575,8 @@ class ShareManager {
         if (!is_dir($dir)) @mkdir($dir, 0755, true);
         // ★ (2026-10-28 19:55, 6차 점검) 종전엔 X-Forwarded-For 를 무조건 믿어 요청마다 값을 바꾸면 횟수가 매번 새로 시작됐음 →
         //   api.php getClientIP()(TRUSTED_PROXIES 에서 온 연결만 헤더 인정)와 같은 기준. 그 함수가 없는 진입점(share.php)은 REMOTE_ADDR
-        $ip = function_exists('getClientIP') ? (string)getClientIP() : (string)($_SERVER['REMOTE_ADDR'] ?? '0');
+        // ★ (2026-10-31 12:03, 34차 전체 점검) 전역 getClientIP 는 api.php 에만 있어 share.php 에서는 늘 REMOTE_ADDR(프록시 뒤면 모두 한 주소)였음 → Auth 와 같은 기준
+        $ip = $this->auth ? (string)$this->auth->getCurrentIP() : (function_exists('getClientIP') ? (string)getClientIP() : (string)($_SERVER['REMOTE_ADDR'] ?? '0'));
         return $dir . '/sharepw_' . md5($ip . '|' . $token) . '.json';
     }
     private function sharePwBlocked(string $token, int $max = 10, int $window = 600): bool {
@@ -511,7 +598,36 @@ class ShareManager {
         }
         fclose($fp);
     }
-    private function sharePwClear(string $token): void { @unlink($this->sharePwRlFile($token)); }
+    // ★ (2026-10-31 13:44, 34차 후속 개선) 확인과 기록을 한 잠금 안에서(Auth::twoFaAttemptReserve 와 같은 방식) — 종전엔 sharePwBlocked(잠금 없이 읽기)와 sharePwFail(실패 뒤 기록)이 따로라
+    //   틀린 비밀번호 요청을 동시에 많이 보내면 모두 password_verify 까지 진행해 10회를 넘게 시도할 수 있었음. 시도를 먼저 1회로 기록하고, 맞으면 sharePwClear 로 비움.
+    //   반환 false = 이미 한도(막음)
+    private function sharePwReserve(string $token, int $max = 10, int $window = 600): bool {
+        $fp = @fopen($this->sharePwRlFile($token), 'c+');
+        if (!$fp) return true;   // 기록 파일을 못 열면 막지 않음(sharePwFail 이 조용히 넘어가던 종전 동작과 같게)
+        $ok = true;
+        if (flock($fp, LOCK_EX)) {
+            $now = time();
+            $data = @json_decode((string)stream_get_contents($fp), true) ?: [];
+            $data = array_values(array_filter($data, fn($t) => ($now - (int)$t) < $window));
+            if (count($data) >= $max) {
+                $ok = false;
+            } else {
+                $data[] = $now;
+                ftruncate($fp, 0); rewind($fp); fwrite($fp, json_encode($data)); fflush($fp);
+            }
+            flock($fp, LOCK_UN);
+        }
+        fclose($fp);
+        return $ok;
+    }
+    // ★ (2026-10-31 13:44, 34차 후속 개선) 지우지 않고 잠금 안에서 비움(twoFaFailClear 와 같음) — 이제 맞은 시도도 먼저 기록되므로, Windows 에서 다른 요청이 연 파일 삭제가 조용히 실패하면 기록이 쌓일 수 있었음
+    private function sharePwClear(string $token): void {
+        $f = $this->sharePwRlFile($token);
+        if (!is_file($f)) return;
+        $fp = @fopen($f, 'c+'); if (!$fp) return;
+        if (flock($fp, LOCK_EX)) { ftruncate($fp, 0); fflush($fp); flock($fp, LOCK_UN); }
+        fclose($fp);
+    }
 
     /** ★ (2026-10-29 18:46, 22차 점검) 세션 인증 표시 값 — 공유 비밀번호(해시)가 바뀌면 달라짐 */
     public static function shareAuthMark(array $share): string {
@@ -522,7 +638,47 @@ class ShareManager {
         return is_string($v) && hash_equals(self::shareAuthMark($share), $v);
     }
     
-    public function accessShare(string $token, ?string $password = null): array {
+    // ★ (2026-11-01 01:52, 36차 전체 점검) $resumeRange — downloadShare 만 넘김: 이 세션에서 이미 받기 시작했고 Range 시작>0 인 이어받기(단일 파일)는 횟수 초과로 지우지 않음
+    /**
+     * ★ (2026-11-17 13:28, 322차 — 펜닐 결정 "둘 다 접근 때 다시 확인", README 결정 필요 2204·2398줄 정리) 공유를 연 지금도 만든 사람이 쓸 수 있는 계정이고
+     *   만들 때 요구한 권한을 아직 가졌는지 — 종전엔 만든 사람의 권한을 빼거나 계정을 정지해도 공개 공유·파일 받기·내부 공유가 계속 동작했음(재현).
+     *   기준은 만들 때와 같음(api.php share_create·internal_share_create): 공유 경로 읽기(부모 + 하위 폴더 규칙), 받기·스트리밍은 내려받기,
+     *   파일 받기는 쓰기(경로 규칙 포함), 내부 공유는 내려받기 + 요청한 작업이 쓰기면 쓰기·전체면 지우기까지(하위 규칙 포함). 권한을 돌려주면 다시 동작.
+     *   실제 관리자가 만든 공유와 만든 사람이 기록되지 않은 옛 공유는 종전 그대로
+     */
+    private function _creatorStillAllowed(array $share, bool $internal, string $need = 'read'): bool {
+        $uid = (int)($internal ? ($share['shared_by'] ?? 0) : ($share['created_by'] ?? 0));
+        if ($uid <= 0) return true;
+        $u = $this->db->find('users', ['id' => $uid]);
+        if (!$u) return false;
+        $status = $u['status'] ?? 'active';
+        if ($status === 'suspended') { if (function_exists('fsUserSuspendedNow') && fsUserSuspendedNow($u)) return false; }
+        elseif ($status !== 'active') return false;
+        if (!($u['is_active'] ?? 1)) return false;
+        if (($u['role'] ?? '') === 'admin') return true;
+        $sid = (int)($share['storage_id'] ?? 0);
+        $path = (string)($share['file_path'] ?? '');
+        $par = dirname(str_replace('\\', '/', $path));
+        if ($par === '.' || $par === '/' || $par === '\\') $par = '';
+        $st = $this->storage;
+        if (!$st->userFolderPermAllowed($uid, $sid, $par !== '' ? $par : $path, 'can_read', false) || !$st->userFolderPermAllowed($uid, $sid, $path, 'can_read', true)) return false;
+        if ($internal) {
+            if (!$st->userStoragePermAllowed($uid, $sid, 'can_download')) return false;
+            if ($need === 'write' || $need === 'full') {
+                if (!$st->userStoragePermAllowed($uid, $sid, 'can_write') || !$st->userFolderPermAllowed($uid, $sid, $path, 'can_write', true)) return false;
+            }
+            if ($need === 'full') {
+                if (!$st->userStoragePermAllowed($uid, $sid, 'can_delete') || !$st->userFolderPermAllowed($uid, $sid, $path, 'can_delete', true)) return false;
+            }
+        } elseif (($share['share_type'] ?? 'download') === 'filedrop') {
+            if (!$st->userStoragePermAllowed($uid, $sid, 'can_write') || !$st->userFolderPermAllowed($uid, $sid, $path, 'can_write', false)) return false;
+        } else {
+            if (!$st->userStoragePermAllowed($uid, $sid, 'can_download')) return false;
+        }
+        return true;
+    }
+
+    public function accessShare(string $token, ?string $password = null, bool $resumeRange = false): array {
         $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
         
         if (!$share) {
@@ -532,9 +688,11 @@ class ShareManager {
         $storage = $this->db->find('storages', ['id' => $share['storage_id']]);
         if (!$storage) {
             // 스토리지가 삭제된 경우 공유도 삭제
-            $this->db->delete('shares', ['id' => $share['id']]);
+            if ($this->shareCleanupSafe((int)$share['storage_id'], 'storage')) $this->db->delete('shares', ['id' => $share['id']]);   // ★ (2026-11-11 12:24, 73차) 스토리지 표를 믿을 수 없으면 지우지 않고 같은 응답만(MIG_73 #1)
             return ['success' => false, 'error' => __('api_err_storage_not_found', '스토리지를 찾을 수 없습니다.')];
         }
+        
+        if (!$this->_creatorStillAllowed($share, false)) return ['success' => false, 'error' => __('share_creator_no_access', '공유한 사람에게 이 항목에 대한 권한이 없어 열 수 없습니다.')];   // ★ (2026-11-17 13:28, 322차) 위 _creatorStillAllowed
         
         // 만료 확인
         if ($share['expire_at'] && strtotime($share['expire_at']) < time()) {
@@ -550,7 +708,14 @@ class ShareManager {
         if ($share['max_downloads'] && $share['download_count'] >= $share['max_downloads'] && ($share['share_type'] ?? '') === 'filedrop') {
             return ['success' => false, 'error' => __('ishare_upload_limit', '업로드 횟수를 초과했습니다.')];
         }
-        if ($share['max_downloads'] && $share['download_count'] >= $share['max_downloads']) {
+        // ★ (2026-11-01 01:52, 36차 전체 점검) 마지막 허용 다운로드의 이어받기·분할 받기가 '횟수 초과'로 막히고 공유까지 지워지던 것 —
+        //   16·20차의 '이어받기는 세지 않음'(share_dl_started)이 이 검사 뒤에 있어서였음. 그 표시가 있는 Range 시작>0 단일 파일 요청만 통과(폴더 ZIP 은 Range 를 안 써 그대로 막음)
+        $resumeOk = false;
+        if ($resumeRange && $share['max_downloads'] && $share['download_count'] >= $share['max_downloads']) {
+            $_rbp = $this->storage->getRealPath($share['storage_id']);
+            $resumeOk = $_rbp && is_file($_rbp . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']));
+        }
+        if ($share['max_downloads'] && $share['download_count'] >= $share['max_downloads'] && !$resumeOk) {
             // 횟수 초과 공유 삭제
             $this->_cleanShareCache($share);  // ★ 캐시 정리
             $this->db->delete('shares', ['id' => $share['id']]);
@@ -562,15 +727,15 @@ class ShareManager {
             // 세션에서 인증 완료 여부 먼저 확인
             // ★ (2026-10-29 18:46, 22차 점검) 세션 인증 표시는 '그때의 비밀번호'에 묶음(shareAuthMark) — 종전엔 true 하나라, 공유자가 비밀번호를 바꿔도 이미 들어온 방문자는 계속 보고·받고·올릴 수 있었음
             $sessionAuthed = self::isShareSessionAuthed($token, $share);
-            if (!$password && !$sessionAuthed) {
+            if (($password === null || $password === '') && !$sessionAuthed) {   // ★ (2026-11-01 17:16, 40차 점검) '0' 을 '안 보냄'으로 봐 비밀번호 '0' 공유를 열 수 없었음
                 return ['success' => false, 'error' => 'password_required', 'needs_password' => true];
             }
             // ★ (2026-10-28 18:22, 소스 점검 5단계) 무차별 대입 제한 — 틀린 시도가 많으면 잠시 막음
-            if (!$sessionAuthed && $this->sharePwBlocked($token)) {
+            if (!$sessionAuthed && !$this->sharePwReserve($token)) {   // ★ (2026-10-31 13:44, 34차 후속 개선) 확인+기록을 한 잠금 안에서
                 return ['success' => false, 'error' => __('api_err_too_many_attempts', '시도가 너무 많습니다. 잠시 후 다시 시도하세요.')];
             }
             if (!$sessionAuthed && !password_verify($password, $share['password'])) {
-                $this->sharePwFail($token);
+                // (실패 기록은 위 sharePwReserve 에서 이미 함)
                 return ['success' => false, 'error' => __('api_err_share_password_wrong', '비밀번호가 올바르지 않습니다.')];
             }
             if (!$sessionAuthed) {
@@ -583,24 +748,27 @@ class ShareManager {
         $basePath = $this->storage->getRealPath($share['storage_id']);
         
         if (!$basePath) {
-            $this->db->delete('shares', ['id' => $share['id']]);
+            if ($this->shareCleanupSafe((int)$share['storage_id'], 'path', $storage)) $this->db->delete('shares', ['id' => $share['id']]);   // ★ (2026-11-11 12:24, 73차) SMB 접속 정보를 못 푼 경우는 지우지 않음(MIG_73 #3)
             return ['success' => false, 'error' => __('api_err_storage_path_not_found', '스토리지 경로를 찾을 수 없습니다.')];
         }
         
         $fullPath = $basePath . DIRECTORY_SEPARATOR . str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $share['file_path']);
         
+        // ★ (2026-11-03 11:48, 50차 점검) 앱 밖에서 지운 파일 — 아래 경로 검사(realpath)가 없는 파일을 '잘못된 경로' 로 돌려보내 22차의 '공유 삭제 + 파일이 존재하지 않습니다'
+        //   처리에 닿지 못했음(재현: 파일을 지운 뒤 방문해도 공유가 남음). 저장된 경로에 '..' 가 없을 때만 먼저 존재 여부를 봄('..' 는 종전대로 아래 검사가 거부)
+        $shFileMissing = !file_exists($fullPath) && !in_array('..', explode('/', str_replace('\\', '/', (string)$share['file_path'])), true);
         // 경로 안전성 검증
-        if (!$this->isSharePathSafe($basePath, $fullPath)) {
+        if (!$shFileMissing && !$this->isSharePathSafe($basePath, $fullPath)) {
             return ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
         }
         
-        if (!file_exists($fullPath)) {
+        if ($shFileMissing || !file_exists($fullPath)) {
             // ★ (2026-10-29 18:42, 22차 점검) 스토리지 자체에 닿지 않으면(일시 끊김) 공유는 남기고 실패만 — 종전엔 방문 한 번에 영구 삭제됐음
             if (!is_dir($basePath)) {
                 return ['success' => false, 'error' => __('api_err_storage_path_not_found', '스토리지 경로를 찾을 수 없습니다.')];
             }
             // 파일이 삭제된 경우 공유도 삭제
-            $this->db->delete('shares', ['id' => $share['id']]);
+            if ($this->shareCleanupSafe((int)$share['storage_id'], 'file')) $this->db->delete('shares', ['id' => $share['id']]);   // ★ (2026-11-11 12:24, 73차) 경로 설정이 깨진 요청이면 홈·공용 폴더 공유는 남김(MIG_73 #2)
             return ['success' => false, 'error' => __('api_err_shared_file_not_exists', '파일이 존재하지 않습니다.')];
         }
         
@@ -625,7 +793,10 @@ class ShareManager {
     
     // 공유 파일 다운로드
     public function downloadShare(string $token, ?string $password = null): void {
-        $access = $this->accessShare($token, $password);
+        // ★ (2026-11-01 01:52, 36차 전체 점검) 아래 $isRangePart 와 같은 조건(이 세션에서 받기 시작 + Range 시작>0)이면 accessShare 의 횟수 초과 삭제를 건너뜀
+        $resumeRange = !empty($_SESSION['share_dl_started'][$token]) && isset($_SERVER['HTTP_RANGE'])
+            && preg_match('/^\s*bytes=(\d+)-/i', $_SERVER['HTTP_RANGE'], $_rrM) && (int)$_rrM[1] > 0;
+        $access = $this->accessShare($token, $password, $resumeRange);
         
         if (!$access['success']) {
             if (($access['error'] ?? '') === 'password_required') {
@@ -664,7 +835,10 @@ class ShareManager {
         
         // ★ HLS playlist/segment 액션은 세션 ID로 처리 (sub-file 무관, segment 파일명이 file에 들어옴)
         $hlsAction = $_GET['hls_action'] ?? '';
-        $isHlsPlaylistOrSegment = isset($_GET['hls']) && in_array($hlsAction, ['playlist', 'segment'], true);
+        // ★ (2026-11-01 11:41, 39차 점검) stop 도 세션 ID 만 쓰는 요청인데, share.php 의 stop 주소 5곳은 file= 없이 만들어져 폴더 스트리밍 공유에선
+        //   아래 'file 없는 stream 호출 400' 에 막혀 ffmpeg 가 안 꺼졌음(페이지 떠나기·화질 변경·음성 SW 재시작·MMS 전환). 400 예외만 두면 폴더라 ZIP 으로
+        //   빠지므로 playlist/segment 처럼 여기서 바로 hlsShareStream 으로 넘김(세션이 이 공유의 것인지는 hlsShareStream 이 meta.json 으로 확인)
+        $isHlsPlaylistOrSegment = isset($_GET['hls']) && in_array($hlsAction, ['playlist', 'segment', 'stop'], true);
         
         if ($isHlsPlaylistOrSegment) {
             // HLS playlist/segment 요청: file 파라미터는 segment 파일명이거나 무시 — sub-file 검증 스킵
@@ -679,7 +853,7 @@ class ShareManager {
             require_once __DIR__ . '/FileManager.php';
             $fileManager = new FileManager();
             if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // ★ (2026-10-02) FileManager 생성자의 new Auth() 가 세션을 다시 열어 요청 내내 잠갔다(transcode=1 대체 재생은 영상 끝까지) — 같은 시청자의 다른 요청이 기다림. 세션 내용은 안 쓰고 session_id() 는 닫아도 같음(확인)
-            $fileManager->hlsShareStream($fullPath);
+            $fileManager->hlsShareStream($fullPath, !empty($share['password']));   // ★ (2026-11-04) 56차 비밀번호 공유면 조각을 private 캐시로(아래 일반 스트림 54차와 같은 기준)
             exit;
         } elseif ($isFolderStream && $subFile !== null && $subFile !== '') {
             // 보안 검증 (basename + 화이트리스트 + realpath)
@@ -711,7 +885,21 @@ class ShareManager {
         if (isset($_SERVER['HTTP_RANGE']) && !is_dir($fullPath) && preg_match('/^\s*bytes=(\d+)-/i', $_SERVER['HTTP_RANGE'], $_rgM) && (int)$_rgM[1] > 0) {
             $isRangePart = !empty($_SESSION['share_dl_started'][$token]);
         }
-        if (!$isStreamCount && !$isRangePart && empty($_SESSION['share_dl_started'][$token])) {
+        // ★ (2026-11-01 07:19, 37차 기능 점검) 횟수 +1 을 잠금 안에서 '한도 미만일 때만' 하고 실패하면 거부 — 종전엔 accessShare 검사와 +1 이 따로라 max_downloads=1 링크도 동시 요청 10개가 모두 받았음.
+        //   아래 '받기 시작' 세션 표시보다 먼저 해, 거부된 요청이 표시를 남겨 36차 이어받기 예외(resumeRange)로 새는 일이 없게 함. 이어받기($isRangePart)·스트리밍은 종전처럼 세지 않음
+        // ★ (2026-11-02 10:29, 42차 점검) HEAD 요청(링크 검사기·받기 도구의 사전 확인)은 횟수를 세지 않고 '받기 시작' 표시도 남기지 않음 — 종전엔 GET 과 같은 길이라
+        //   max_downloads=1 링크가 HEAD 한 번으로 소진되고 이어진 실제 받기는 '횟수 초과' + 공유 삭제였음. HEAD 는 아래에서 헤더만 보내고 끝냄(본문·ZIP 만들기 없음)
+        $isHeadReq = strtoupper((string)($_SERVER['REQUEST_METHOD'] ?? 'GET')) === 'HEAD';
+        $dlCounted = false;
+        if (!$isStreamCount && !$isRangePart && !$isHeadReq) {
+            if (!$this->shareIncrementIfBelow($token)) {
+                http_response_code(403);
+                header('Content-Type: text/plain; charset=utf-8');
+                exit(__('api_err_share_download_limit', '다운로드 횟수를 초과했습니다.'));
+            }
+            $dlCounted = $this->lastIncApplied;   // ★ (2026-11-02 11:01, 42차 재검토) 실제로 올렸을 때만 되돌림 대상
+        }
+        if (!$isStreamCount && !$isRangePart && !$isHeadReq && empty($_SESSION['share_dl_started'][$token])) {
             // ★ (2026-10-29 09:23, 20차) share.php 는 내려받기 전에 세션을 닫아(session_write_close) 16차의 이 표시가 저장되지 않았음 →
             //   이어받기(시작>0)마다 횟수가 올라 한도에 닿으면 받던 도중 공유가 지워졌음. 닫혀 있으면 잠깐 다시 열어 표시만 저장
             if (session_status() === PHP_SESSION_ACTIVE) {
@@ -721,10 +909,6 @@ class ShareManager {
                 session_write_close();
             }
         }
-        if (!$isStreamCount && !$isRangePart) {
-            $this->shareIncrement($token, ['download_count' => 1]);
-        }
-        
         // ★ stream 공유 폴더의 잘못된 stream 호출 차단 (v5.8.1c — 펜닐님 환경 share_*.zip 잔류 원인)
         //   isFolderStream + stream=1 파라미터 있는데 file 파라미터 없는 호출은
         //   "트랙 라우팅 실패 또는 잘못된 stream URL" — 폴더 통째 zip 생성 의도와 다름.
@@ -737,7 +921,16 @@ class ShareManager {
         
         // 폴더인 경우 ZIP으로 압축
         if (is_dir($fullPath)) {
-            $this->downloadAsZip($fullPath);
+            if ($isHeadReq) {   // ★ (2026-11-02 10:29, 42차 점검) HEAD 는 ZIP 을 만들지 않고 형식·이름만(크기는 만들어 봐야 알 수 있어 보내지 않음)
+                $zhName = basename($fullPath) . '.zip';
+                header('Content-Type: application/zip');
+                header("Content-Disposition: attachment; filename=\"" . preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $zhName) . "\"; filename*=UTF-8''" . rawurlencode($zhName));
+                header('Cache-Control: no-cache, no-store, must-revalidate');
+                exit;
+            }
+            $zRb = $this->safeRealpath($basePath); $zRf = $this->safeRealpath($fullPath);   // ★ (2026-11-17 11:28, 319차) ZIP 숨김 거르기용 스토리지 기준 경로(못 구하면 공유 경로)
+            $zRel = ($zRb !== false && $zRf !== false && strpos($zRf, $zRb) === 0) ? trim(str_replace('\\', '/', substr($zRf, strlen($zRb))), '/') : (string)($share['file_path'] ?? '');
+            $this->downloadAsZip($fullPath, $dlCounted ? $token : '', (int)$share['storage_id'], $zRel);   // ★ (2026-11-11 07:27, 72차) ZIP 만들기 실패 때 위에서 센 1회를 되돌릴 수 있게(실제로 올렸을 때만 토큰을 넘김)
             return;
         }
         
@@ -755,7 +948,7 @@ class ShareManager {
             require_once __DIR__ . '/FileManager.php';
             $fileManager = new FileManager();
             if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // ★ (2026-10-02) FileManager 생성자의 new Auth() 가 세션을 다시 열어 요청 내내 잠갔다(transcode=1 대체 재생은 영상 끝까지) — 같은 시청자의 다른 요청이 기다림. 세션 내용은 안 쓰고 session_id() 는 닫아도 같음(확인)
-            $fileManager->hlsShareStream($fullPath);
+            $fileManager->hlsShareStream($fullPath, !empty($share['password']));   // ★ (2026-11-04) 56차 비밀번호 공유면 조각을 private 캐시로(아래 일반 스트림 54차와 같은 기준)
             exit;
         }
         
@@ -813,6 +1006,17 @@ class ShareManager {
             exit;
         }
         
+        // ★ (2026-11-02 10:29, 42차 점검) 헤더(206·Content-Length·첨부 이름)를 정하기 전에 열어 봄 — 종전엔 다 정한 뒤 fopen 이 실패하면(Windows 에서 다른 프로그램이 잡은 파일,
+        //   목록과 받기 사이에 지워진 파일) '500 + Content-Length: <파일 크기> + 첨부 이름'이 남아 브라우저가 깨진 파일을 남겼음. 못 열면 위에서 센 1회도 되돌림
+        $_fpProbe = @fopen($fullPath, 'rb');
+        if ($_fpProbe === false) {
+            if ($dlCounted) $this->shareIncrement($token, ['download_count' => -1]);
+            http_response_code(500);
+            header('Content-Type: text/plain; charset=utf-8');
+            exit(__('file_open_fail'));
+        }
+        fclose($_fpProbe);
+        
         if ($isStream) {
             // 스트리밍: 올바른 MIME + inline
             // ★ v5.8.1c: 메인 FileManager::getMimeType()와 동기화 (펜닐님 모바일 FLAC 재생 이슈 해결)
@@ -836,7 +1040,8 @@ class ShareManager {
                 'm4b' => 'audio/mp4', 'weba' => 'audio/webm',   // ★ (2026-10-08) 웹 플레이어가 여는 형식 추가
                 'aiff' => 'audio/aiff', 'aif' => 'audio/aiff',  // ★ 추가
             ];
-            $mime = $mimeMap[$ext] ?? (mime_content_type($fullPath) ?: 'application/octet-stream');
+            // ★ (2026-11-02 10:29, 42차 점검) fileinfo 확장이 없으면 mime_content_type 이 정의되지 않아 치명 오류(500) — 있을 때만 부르고 없으면 octet-stream(내려받기 + sandbox 로 감)
+            $mime = $mimeMap[$ext] ?? ((function_exists('mime_content_type') ? @mime_content_type($fullPath) : false) ?: 'application/octet-stream');
             $filenameSafe = preg_replace('/[^\x20-\x7E]|["\\\\]/', '_', $filename);
             $filenameEncoded = rawurlencode($filename);
             // ★ (2026-10-29 18:00, 22차 점검) 표에 없는 형식은 안전한 것(그림·PDF·텍스트)만 화면에 띄우고 나머지는 내려받기 + sandbox — 탐색기 inline(api.php)과 같은 기준.
@@ -887,35 +1092,39 @@ class ShareManager {
         $end = $filesize - 1;
         $isPartial = false;
         
-        if (isset($_SERVER['HTTP_RANGE'])) {
-            if (preg_match('/bytes=(\d+)-(\d*)/', $_SERVER['HTTP_RANGE'], $matches)) {
+        // ★ (2026-11-02 10:29, 42차 점검) 해석할 수 있는 Range 만 206 — 종전엔 정규식이 안 맞아도('bytes=-500' 접미 범위, 'items=0-5' 다른 단위) 블록 밖의 206 + 'bytes 0-끝' 으로
+        //   파일 전체를 보냈음. 접미 범위는 마지막 N바이트(WebDAV 22차와 같은 해석), 그 밖에 해석 못 한 Range 는 무시하고 200 전체
+        if (isset($_SERVER['HTTP_RANGE']) && preg_match('/^\s*bytes=(\d*)-(\d*)/i', $_SERVER['HTTP_RANGE'], $matches) && ($matches[1] !== '' || $matches[2] !== '')) {
+            if ($matches[1] === '') {   // 접미 범위 'bytes=-N' (N=0 이면 아래 검증에서 416)
+                $start = max(0, $filesize - intval($matches[2]));
+            } else {
                 $start = intval($matches[1]);
-                if (!empty($matches[2])) {
+                if ($matches[2] !== '') {   // ★ (2026-11-01 17:16, 40차 점검) empty('0') 라 'bytes=0-0'(1바이트)에 파일 전체를 보냈음 — 39차 api.php·FileManager 와 같게 빈 값만 '끝 없음'
                     $end = intval($matches[2]);
                 }
-                // 범위 검증
-                if ($start > $end || $start >= $filesize) {
-                    http_response_code(416);
-                    header("Content-Range: bytes */{$filesize}");
-                    exit;
-                }
-                if ($end >= $filesize) {
-                    $end = $filesize - 1;
-                }
-                // ★ (2026-09-23) 음악 재생(미리보기·공유 스트리밍)은 한 번에 최대 1MB 만 보낸다 — 나머지는 재생기가 이어서 요청한다.
-                //   [원인] 곡 파일을 '처음부터 끝까지'로 요청하면 5~11MB 전체를 12~23Mbps 로 한꺼번에 밀어냈는데, 휴대폰 회선이
-                //   5Mbps 면 수 MB 가 망 중간에 쌓인다. 그 상태에서 곡을 넘기면 새 곡의 요청·응답이 쌓인 데이터 뒤에서 기다려
-                //   곡 시작이 3~4초 늦었다(09-23 Apache 로그: 서버 처리는 0.01~0.1초인데 휴대폰의 '맛보기 2바이트 → 본 요청'
-                //   간격이 3초 — 이전 곡 전송 직후 넘긴 경우에만, 오전의 빠른 회선에선 0초).
-                //   [처리] 요청 범위가 1MB 보다 크면 끝을 '시작+1MB' 로 줄여 206 으로 보낸다(RFC 9110 §15.3.7 — 서버는 요청 범위의
-                //   일부만 보낼 수 있고, Content-Range 로 스스로 설명되므로 재생기가 나머지를 이어서 요청한다).
-                //   1MB 는 320kbps 기준 약 26초 분량이라 재생이 끊기지 않고, 넘길 때 쌓여 있는 양이 최대 1MB(5Mbps 에서 약 1.6초)로 준다.
-                //   음악 재생에만 적용 — 일반 다운로드·동영상·이미지·범위 요청이 아닌 경우는 종전과 같다.
-                if ($isStream && isset($mime) && strpos($mime, 'audio/') === 0) {
-                    $capBytes = 1048576;
-                    if ($end - $start + 1 > $capBytes) {
-                        $end = $start + $capBytes - 1;
-                    }
+            }
+            // 범위 검증
+            if ($start > $end || $start >= $filesize) {
+                http_response_code(416);
+                header("Content-Range: bytes */{$filesize}");
+                exit;
+            }
+            if ($end >= $filesize) {
+                $end = $filesize - 1;
+            }
+            // ★ (2026-09-23) 음악 재생(미리보기·공유 스트리밍)은 한 번에 최대 1MB 만 보낸다 — 나머지는 재생기가 이어서 요청한다.
+            //   [원인] 곡 파일을 '처음부터 끝까지'로 요청하면 5~11MB 전체를 12~23Mbps 로 한꺼번에 밀어냈는데, 휴대폰 회선이
+            //   5Mbps 면 수 MB 가 망 중간에 쌓인다. 그 상태에서 곡을 넘기면 새 곡의 요청·응답이 쌓인 데이터 뒤에서 기다려
+            //   곡 시작이 3~4초 늦었다(09-23 Apache 로그: 서버 처리는 0.01~0.1초인데 휴대폰의 '맛보기 2바이트 → 본 요청'
+            //   간격이 3초 — 이전 곡 전송 직후 넘긴 경우에만, 오전의 빠른 회선에선 0초).
+            //   [처리] 요청 범위가 1MB 보다 크면 끝을 '시작+1MB' 로 줄여 206 으로 보낸다(RFC 9110 §15.3.7 — 서버는 요청 범위의
+            //   일부만 보낼 수 있고, Content-Range 로 스스로 설명되므로 재생기가 나머지를 이어서 요청한다).
+            //   1MB 는 320kbps 기준 약 26초 분량이라 재생이 끊기지 않고, 넘길 때 쌓여 있는 양이 최대 1MB(5Mbps 에서 약 1.6초)로 준다.
+            //   음악 재생에만 적용 — 일반 다운로드·동영상·이미지·범위 요청이 아닌 경우는 종전과 같다.
+            if ($isStream && isset($mime) && strpos($mime, 'audio/') === 0) {
+                $capBytes = 1048576;
+                if ($end - $start + 1 > $capBytes) {
+                    $end = $start + $capBytes - 1;
                 }
             }
             http_response_code(206);
@@ -930,13 +1139,15 @@ class ShareManager {
         header('Content-Length: ' . ($end - $start + 1));
         header('Accept-Ranges: bytes');
         if ($isStream) {
-            header('Cache-Control: public, max-age=86400');
+            // ★ (2026-11-04 01:47, 54차 점검) 비밀번호 공유는 private(커버·가사 34차와 같음) — public 이라 중간 공유 캐시가 비밀번호 확인된 본문을 저장해 다른 사람에게 줄 수 있었음(재현). 비밀번호 없는 공유는 종전 그대로
+            header('Cache-Control: ' . (!empty($share['password']) ? 'private' : 'public') . ', max-age=86400');
         } else {
             header('Cache-Control: no-cache, no-store, must-revalidate');
             header('Pragma: no-cache');
             header('Expires: 0');
         }
         header('X-Accel-Buffering: no');
+        if ($isHeadReq) exit;   // ★ (2026-11-02 10:29, 42차 점검) HEAD 는 헤더만(위에서 횟수도 안 셈)
         
         // 전체 파일 요청이면 readfile 사용
         if (!$isPartial) {
@@ -968,7 +1179,12 @@ class ShareManager {
     }
     
     // ZIP 압축 다운로드
-    private function downloadAsZip(string $dir): void {
+    private function downloadAsZip(string $dir, string $revertToken = '', ?int $hidSid = null, ?string $hidBase = null): void {
+        // ★ (2026-11-17 11:28, 319차 — 2026-10-28 펜닐 결정 "숨김 항목은 공유받은 사람에게도 안 보이게"를 폴더 ZIP 에도) $hidSid·$hidBase(스토리지 기준 폴더 경로)를 주면
+        //   목록(공개 공유 페이지·내부 공유 listInternalShareFolder)과 같은 기준으로 숨김 항목을 ZIP 에 넣지 않음 — 종전엔 목록엔 안 보이는 .git/config·.secret·Thumbs.db·사용자 숨김 파일이
+        //   공개·내부 공유 ZIP 에 모두 들어갔음(재현). 기준: 경로 조각이 '.' 로 시작·시스템 이름(HiddenItems::isSystemName)·사용자 숨김 경로(자기 또는 상위 폴더). 안 주면 종전 그대로
+        $zHidMap = ($hidSid !== null && class_exists('HiddenItems')) ? HiddenItems::mapFor($hidSid) : null;
+        $zHidBase = ($zHidMap !== null) ? HiddenItems::norm((string)$hidBase) : '';
         // ★ 잔류 정리 안전망 (v5.8.1c — 다운로드 중단 시 unlink 못 한 zip 자동 정리)
         //   readfile() 도중 사용자 abort/네트워크 끊김 시 PHP가 즉시 종료되어 @unlink 못 실행 →
         //   sys_temp_dir에 share_*.zip 잔류 (큰 폴더면 GB급). 1시간 이상 된 것만 자동 삭제.
@@ -978,7 +1194,9 @@ class ShareManager {
         }
         
         $zipName = basename($dir) . '.zip';
-        $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . uniqid('share_') . '.zip';
+        // ★ (2026-11-02 09:01, 41차 점검) uniqid() 는 다른 PHP 프로세스가 같은 마이크로초에 부르면 같은 값 → 두 방문자의 ZIP 이 같은 임시 경로에 써져 섞이거나 깨질 수 있었음.
+        //   34차(휴지통·사본 이름)와 같게 임의 hex 로. 'share_' 접두어·'.zip' 은 그대로(위 1시간 잔류 정리 glob 과 맞춤)
+        $zipPath = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'share_' . bin2hex(random_bytes(8)) . '.zip';
         
         // php.ini 설정에 의존하지 않도록 런타임 설정
         @set_time_limit(0);
@@ -998,7 +1216,18 @@ class ShareManager {
         );
         
         $fileCount = 0;
+        $zTop = realpath($dir);
         foreach ($iterator as $file) {
+            if ($file->isLink() && !((($zLr = realpath($file->getPathname())) !== false) && $zTop !== false && ($zLr === $zTop || isSubPath($zLr, $zTop)))) continue;   // ★ (2026-11-03 23:38, 53차 점검) 받는 폴더 밖을 가리키는 심볼릭 링크는 뺌 — 종전엔 링크된 바깥 파일 내용(예: data/users.json)이 ZIP 에 들어갔음(재현, 공유 링크 비로그인 받기 포함). 기준은 받는 폴더(같은 스토리지의 다른 폴더를 가리키는 링크도 뺌 — 공유 범위·폴더 권한을 넘지 않게)
+            if ($zHidMap !== null) {   // ★ (2026-11-17 11:28, 319차) 위 숨김 기준 — 조각마다 확인(숨긴 폴더 아래도 뺌)
+                $zAcc = $zHidBase; $zSkip = false;
+                foreach (explode('/', str_replace('\\', '/', $iterator->getSubPathname())) as $zSeg) {
+                    if ($zSeg === '') continue;
+                    $zAcc = ($zAcc === '') ? $zSeg : $zAcc . '/' . $zSeg;
+                    if ($zSeg[0] === '.' || HiddenItems::isSystemName($zSeg) || isset($zHidMap[$zAcc])) { $zSkip = true; break; }
+                }
+                if ($zSkip) continue;
+            }
             $relativePath = str_replace('\\', '/', $baseName . '/' . $iterator->getSubPathname());   // ★ (2026-10-30 02:05, 26차 점검) ZIP 항목 이름은 '/' 로(규격) — Windows 에선 '\\' 가 들어가 macOS·리눅스·아이폰에서 '폴더\\파일' 이름의 파일 하나로 풀렸음
             if ($file->isDir()) {
                 $zip->addEmptyDir($relativePath);
@@ -1013,8 +1242,18 @@ class ShareManager {
             $zip->addEmptyDir($baseName);
         }
         
-        $zip->close();
-        
+        // ★ (2026-11-11 07:27, 72차) close() 결과·결과 파일 확인(탐색기 폴더 ZIP 55차 Z2 와 같게) — ZipArchive 는 close 때 파일을 읽어, 그 사이 넣은 파일이 지워지거나 잠기면
+        //   ZIP 이 안 생기는데도 200 + 빈 본문(0바이트 '다운로드 완료')을 보내고 받기 횟수만 깎였음(재현). 실패면 임시 파일을 지우고 500, 센 1회는 42차 방식으로 되돌림
+        $zClosed = $zip->close();
+        clearstatcache(true, $zipPath);
+        if (!$zClosed || !is_file($zipPath)) {
+            @unlink($zipPath);
+            if ($revertToken !== '') $this->shareIncrement($revertToken, ['download_count' => -1]);
+            http_response_code(500);
+            header('Content-Type: text/plain; charset=utf-8');
+            exit(__('zip_create_fail'));
+        }
+
         // 출력 버퍼링 완전 비활성화
         @ini_set('output_buffering', 'Off');
         @ini_set('zlib.output_compression', 'Off');
@@ -1085,7 +1324,7 @@ class ShareManager {
         
         if (isset($options['expire_days'])) {
             if ($options['expire_days']) {
-                $days = (float)$options['expire_days'];
+                $days = min(36500.0, (float)$options['expire_days']);   // ★ (2026-11-16 12:31, 233차) 만들 때(createShare)와 같은 위 한도 100년
                 $seconds = max(60, (int)round($days * 86400));
                 $updateData['expire_at'] = date('Y-m-d H:i:s', time() + $seconds);
             } else {
@@ -1094,12 +1333,17 @@ class ShareManager {
         }
         
         if (isset($options['max_downloads'])) {
-            $updateData['max_downloads'] = $options['max_downloads'] ?: null;
+            $updateData['max_downloads'] = (is_numeric($options['max_downloads']) && (int)$options['max_downloads'] > 0) ? (int)$options['max_downloads'] : null;   // ★ (2026-10-31 12:03, 34차 전체 점검) 정수로
         }
         
         if (isset($options['password'])) {
-            $updateData['password'] = $options['password'] 
-                ? password_hash($options['password'], PASSWORD_DEFAULT)
+            // ★ (2026-11-01 17:16, 40차 점검) 수정에서 '0' 을 넣으면 거짓으로 봐 기존 비밀번호를 지웠음 → 빈 문자열일 때만 지움
+            if (!is_scalar($options['password'])) {   // 배열 등으로 기존 비밀번호를 지우지 않게 거부(종전엔 password_hash TypeError 로 실패)
+                return ['success' => false, 'error' => __('api_err_invalid_request', '잘못된 요청입니다.')];
+            }
+            $_pwIn = (string)$options['password'];
+            $updateData['password'] = $_pwIn !== ''
+                ? password_hash($_pwIn, PASSWORD_DEFAULT)
                 : null;
         }
         
@@ -1138,7 +1382,8 @@ class ShareManager {
         if (preg_match('#(^|[\\/])\\.\\.($|[\\/])#', $filePath)) {
             return ['success' => false, 'error' => __('api_err_invalid_path', '잘못된 경로입니다.')];
         }
-        
+        $filePath = implode('/', array_filter(explode('/', $filePath), static fn($s) => $s !== '' && $s !== '.'));   // ★ (2026-11-01 07:19, 37차 기능 점검) 위 createShare 와 같은 경로 정리
+
         // 파일 존재 확인
         $basePath = $this->storage->getRealPath($storageId);
         if (!$basePath) {
@@ -1185,6 +1430,9 @@ class ShareManager {
             'permission' => $permission,
             'created_at' => date('Y-m-d H:i:s')
         ]);
+        if (!$id) {   // ★ (2026-11-01 17:21, 40차 점검) 저장 실패(insert 0)도 성공으로 응답했음(외부 공유 createShare 와 같음)
+            return ['success' => false, 'error' => __('err_save_failed', '저장 실패')];
+        }
         
         return ['success' => true, 'id' => $id];
     }
@@ -1256,22 +1504,28 @@ class ShareManager {
             // 파일이 존재하지 않으면 자동 삭제 대상
             // ★ (2026-10-29 18:42, 22차 점검) 스토리지 자체에 닿을 때만(일시 끊김이면 표시만 '없음', 기록은 남김)
             if (!$share['file_exists'] && (!$basePath || is_dir($basePath))) {
-                $toDelete[] = $share['id'];
-                continue;
+                // ★ (2026-11-11 12:24, 73차) 스토리지 표를 믿을 수 없음·SMB 접속 정보 못 풂·경로 설정 깨짐이면 지우지 않고 목록에 '없음'으로 남김(shareCleanupSafe, MIG_73 #1~#3)
+                $stRowE = $basePath ? null : $this->storage->getStorageById((int)$share['storage_id']);
+                $ieSafe = $basePath ? $this->shareCleanupSafe((int)$share['storage_id'], 'file')
+                    : ($stRowE ? $this->shareCleanupSafe((int)$share['storage_id'], 'path', $stRowE) : $this->shareCleanupSafe((int)$share['storage_id'], 'storage'));
+                if ($ieSafe) {
+                    $toDelete[] = $share['id'];
+                    continue;
+                }
             }
             
             $result[] = $share;
         }
         
         // 존재하지 않는 파일의 공유 레코드 자동 삭제
-        foreach ($toDelete as $id) {
-            $this->db->delete('internal_shares', ['id' => $id]);
-        }
+        $this->deleteIdsOnce('internal_shares', $toDelete);   // ★ (2026-11-02 17:37, 46차 점검) 종전 id 마다 delete(표 전체 다시 쓰기) — 한 번에(결과 같음)
         
         // 최신순 정렬
-        usort($result, function($a, $b) {
-            return strtotime($b['created_at']) - strtotime($a['created_at']);
-        });
+        // ★ (2026-11-02 17:37, 46차 점검) 비교마다 strtotime 을 두 번 불렀음(H1#2) → 항목마다 한 번 계산해 번호 배열을 같은 비교식으로 정렬(안정 정렬이라 동률 순서도 같음)
+        $ts = array_map(fn($r) => strtotime($r['created_at']), $result);
+        $ix = array_keys($result);
+        usort($ix, function($a, $b) use ($ts) { return $ts[$b] - $ts[$a]; });
+        $result = array_map(fn($i) => $result[$i], $ix);
         
         return $result;
     }
@@ -1328,6 +1582,7 @@ class ShareManager {
             http_response_code(403);
             exit(__('api_err_no_permission'));
         }
+        if (!$this->_creatorStillAllowed($share, true, 'read')) { http_response_code(403); exit(__('share_creator_no_access', '공유한 사람에게 이 항목에 대한 권한이 없어 열 수 없습니다.')); }   // ★ (2026-11-17 13:28, 322차) 받기도 만든 사람 권한 다시 확인
         
         $basePath = $this->storage->getRealPath($share['storage_id']);
         if (!$basePath) {
@@ -1364,7 +1619,7 @@ class ShareManager {
         
         // 폴더인 경우 ZIP
         if (is_dir($fullPath)) {
-            $this->downloadAsZip($fullPath);
+            $this->downloadAsZip($fullPath, '', (int)$share['storage_id'], (string)$filePath);   // ★ (2026-11-17 11:28, 319차) 숨김 항목 빼기(위 downloadAsZip 설명 — 내부 공유 목록과 같은 기준)
             return;
         }
         
@@ -1396,6 +1651,7 @@ class ShareManager {
         if (!$share || (int)$share['shared_with'] !== $userId) {
             return ['success' => false, 'error' => __('api_err_no_permission', '권한이 없습니다.')];
         }
+        if (!$this->_creatorStillAllowed($share, true, 'read')) return ['success' => false, 'error' => __('share_creator_no_access', '공유한 사람에게 이 항목에 대한 권한이 없어 열 수 없습니다.')];   // ★ (2026-11-17 13:28, 322차) 목록도 만든 사람 권한 다시 확인
         
         if (!$share['is_dir']) {
             return ['success' => false, 'error' => __('ishare_not_folder', '폴더가 아닙니다.')];
@@ -1462,6 +1718,20 @@ class ShareManager {
         
         // ★ (2026-10-29 14:20, 21차 점검) 화면 제목에 쓰는 filename 을 채움(목록 화면과 같게 basename) — 종전엔 DB 기록 그대로라 제목이 '📁 ' 만 보였음(재현)
         $share['filename'] = basename(str_replace('\\', '/', (string)($share['file_path'] ?? '')));
+        // ★ (2026-11-13 00:13, 107차 개선 W2) 지울 수 있는 사람(전체 권한)에게만, 지우면 휴지통 없이 영구 삭제되는 항목에 in_vault 표시 — deleteInInternalShare 와 같은 판정
+        //   (보관함 폴더 자신, 또는 이 폴더~위로 5단계 안에 .vault.json). 화면 확인 창이 '영구 삭제' 경고를 띄우는 데만 씀 — 종전엔 목록에 표시가 없어 일반 '삭제' 확인만 나왔음(재현). 삭제 동작은 그대로
+        if (($share['permission'] ?? '') === 'full') {
+            $ivIn = false; $ivBase = rtrim((string)$basePath, '/\\'); $ivChk = $targetPath;
+            for ($i = 0; $i < 5 && $ivBase !== ''; $i++) {
+                if (file_exists($ivChk . DIRECTORY_SEPARATOR . '.vault.json')) { $ivIn = true; break; }
+                $ivUp = dirname($ivChk);
+                if ($ivUp === $ivChk || strlen($ivUp) < strlen($ivBase)) break;
+                $ivChk = $ivUp;
+            }
+            foreach ($items as $ivK => $ivIt) {
+                if ($ivIn || ($ivIt['is_dir'] && file_exists($targetPath . DIRECTORY_SEPARATOR . $ivIt['name'] . DIRECTORY_SEPARATOR . '.vault.json'))) $items[$ivK]['in_vault'] = true;
+            }
+        }
         return ['success' => true, 'items' => $items, 'share' => $share];
     }
     
@@ -1481,8 +1751,13 @@ class ShareManager {
             return ['success' => false, 'error' => __('ishare_not_folder', '폴더가 아닙니다.')];
         }
         
+        if (!$this->_creatorStillAllowed($share, true, $requiredPerm)) return ['success' => false, 'error' => __('share_creator_no_access', '공유한 사람에게 이 항목에 대한 권한이 없어 열 수 없습니다.')];   // ★ (2026-11-17 13:28, 322차) 요청한 작업(read·write·full) 기준으로 만든 사람 권한 다시 확인
+        
         // 권한 체크
         $perm = $share['permission'] ?? 'read';
+        // ★ (2026-11-02 09:00, 41차 점검) 24차 전에 저장될 수 있던 permission=true(문자열 아님)가 'read' 가 아니라서 쓰기(올리기·이름 바꾸기·폴더 만들기)를 통과했음.
+        //   저장값은 그대로 두고 읽을 때만 — 'read'·'write'·'full' 이 아니면 'read' 로 봄(createInternalShare·updateInternalShare 검사와 같은 값 집합)
+        if (!in_array($perm, ['read', 'write', 'full'], true)) $perm = 'read';
         if ($requiredPerm === 'write' && $perm === 'read') {
             return ['success' => false, 'error' => __('ishare_no_write', '쓰기 권한이 없습니다.')];
         }
@@ -1533,11 +1808,14 @@ class ShareManager {
         if (!$v['success']) return $v;
         
         $targetDir = $v['targetPath'];
+        $lockSub = trim(str_replace('\\', '/', $subPath), '/');   // ★ (2026-11-04 01:29, 54차 점검) 잠금 검사에 쓸 '실제 저장 폴더' 경로
         if (!is_dir($targetDir)) {
             $targetDir = dirname($v['targetPath']);
             if (!is_dir($targetDir)) {
                 return ['success' => false, 'error' => __('ishare_target_not_folder', '대상 폴더가 존재하지 않습니다.')];
             }
+            // sub_path 가 파일이면 그 파일이 든 폴더에 저장되므로 잠금도 그 폴더 기준 — 종전엔 '파일/새이름' 으로 검사해 잠긴 파일을 덮어쓸 수 있었음(재현)
+            $lockSub = (strpos($lockSub, '/') !== false) ? substr($lockSub, 0, strrpos($lockSub, '/')) : '';
         }
         
         if ($file['error'] !== UPLOAD_ERR_OK) {
@@ -1545,8 +1823,12 @@ class ShareManager {
         }
         
         $filename = basename($file['name']);
-        $filename = preg_replace('/[\/\\\\]/', '', $filename);
-        if (empty($filename) || $filename === '.' || $filename === '..') {
+        // ★ (2026-11-01 07:19, 37차 기능 점검) 저장 이름을 조각 경로·FileManager::sanitizeFilename 과 같은 정리로(위험 문자 제거 + 앞뒤 점·공백 제거) 만든 뒤 그 이름으로 검사·저장 —
+        //   종전엔 슬래시만 지워 '.vault.json' 을 심어(이후 그 폴더 삭제가 영구 삭제) 보관함 메타를 덮어쓰거나 'x.docx::$DATA'·끝 점/공백 이름으로 검사와 실제 저장 이름이 달라졌음
+        $filename = trim(preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', $filename), '. ');
+        $filename = trim(fsStripBidi($filename), '. ');   // ★ (2026-11-17 07:56, 297차 — 296차 펜닐 결정 "이름의 방향 뒤집기 문자 빼기"를 다른 올리기 길에도)
+        if (DIRECTORY_SEPARATOR === '\\' && preg_match('/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i', $filename)) $filename = '_' . $filename;   // ★ (2026-11-04, 56차 C2-2) Windows 장치 이름은 '_' 를 붙여 보통 파일로(FileManager::sanitizeFilename 40차와 같은 식·조건)
+        if ($filename === '' || $filename === '.' || $filename === '..') {   // ★ (2026-11-01 17:20, 40차 점검) empty('0') 라 이름이 정확히 '0' 인 항목을 '잘못된 이름'으로 거부했음 → 빈 문자열만
             return ['success' => false, 'error' => __('api_err_invalid_filename', '잘못된 파일명입니다.')];
         }
         // ★ (2026-10-28 17:42, 소스 점검 3단계) 서버 실행 확장자 차단(저장될 이름 기준 — config.php fsServerExecReason) — 종전엔 내부 공유 일반 업로드에 확장자 검사가 아예 없었음
@@ -1572,9 +1854,17 @@ class ShareManager {
                 case 'overwrite':
                     // 기존 파일 덮어쓰기
                     // ★ (2026-10-29 18:45, 22차 점검) 잠긴 파일은 덮어쓰지 않음
-                    if ($this->_ishareLocked((int)$v['share']['storage_id'], $this->_ishareRelPath($v, trim(str_replace('\\', '/', $subPath), '/') . '/' . $filename), false)
-                        || $this->_ishareLocked((int)$v['share']['storage_id'], $this->_ishareRelPath($v, $subPath), false)) {
+                    if ($this->_ishareLocked((int)$v['share']['storage_id'], $this->_ishareRelPath($v, ($lockSub !== '' ? $lockSub . '/' : '') . $filename), false)
+                        || $this->_ishareLocked((int)$v['share']['storage_id'], $this->_ishareRelPath($v, $lockSub), false)) {
                         return ['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')];
+                    }
+                    // ★ (2026-11-04) 55차: 조각 경로(FileManager::uploadChunk 덮어쓰기)와 같은 순서로 대량 덮어쓰기 감지 → 이전 버전 저장 — 종전엔 둘 다 없어 버전이 안 남고 차단 중에도 덮어써졌음(재현)
+                    if (!is_dir($targetFile)) {
+                        require_once __DIR__ . '/FileManager.php';
+                        $isOwFm = new FileManager();
+                        $isOwBulk = $isOwFm->checkBulkOperationPublic('overwrite');
+                        if (empty($isOwBulk['allowed'])) return ['success' => false, 'error' => '🔐 ' . ($isOwBulk['reason'] ?? '')];
+                        $isOwFm->saveFileVersionPublic($targetFile, $this->_ishareRelPath($v, ($lockSub !== '' ? $lockSub . '/' : '') . $filename), (int)$v['share']['storage_id']);
                     }
                     break;
                 case 'rename':
@@ -1583,7 +1873,7 @@ class ShareManager {
                     $name = pathinfo($filename, PATHINFO_FILENAME);
                     $i = 1;
                     do {
-                        $newName = $name . " ({$i})" . ($ext ? ".{$ext}" : '');
+                        $newName = $name . " ({$i})" . ($ext !== '' ? ".{$ext}" : '');   // ★ (2026-11-01 17:20, 40차 점검) 확장자 '0'(log.0)이 거짓이라 'log (1)' 로 확장자가 떨어졌음
                         $targetFile = $targetDir . DIRECTORY_SEPARATOR . $newName;
                         $i++;
                     } while (file_exists($targetFile));
@@ -1603,10 +1893,65 @@ class ShareManager {
         }
         $isDelta = (int)@filesize($targetFile) - $isOld;
         if ($isDelta !== 0) $this->storage->updateUsedSize((int)$v['share']['storage_id'], $isDelta);
-        
+        // ★ (2026-11-01 01:10, 35차 전체 점검) 공유 주인 알림·검색 인덱스를 조각 업로드(uploadToInternalShareChunk·uploadChunk)와 같게 — 종전엔 이 옛 경로로 올리면 둘 다 빠졌음
+        // ★ (2026-11-01 01:53, 36차 전체 점검) Windows 는 이름 끝 점·공백을 떼고 저장하므로 알림·인덱스 이름도 실제와 같게(폴더 만들기 24차 방식) — 종전엔 'a.txt.' 로 유령 인덱스 행이 생겼음
+        $isUpName = (DIRECTORY_SEPARATOR === '\\' && rtrim($filename, '. ') !== '') ? rtrim($filename, '. ') : $filename;
+        $this->db->atomicUpdate('internal_shares', function ($rows) use ($shareId, $isUpName) {
+            $rows = is_array($rows) ? $rows : [];
+            foreach ($rows as &$row) {
+                if ((int)($row['id'] ?? 0) !== (int)$shareId) continue;
+                $row['pending_uploads'] = (int)($row['pending_uploads'] ?? 0) + 1;
+                $row['last_upload_at'] = date('Y-m-d H:i:s');
+                $row['last_upload_name'] = $isUpName;
+            }
+            unset($row);
+            return $rows;
+        });
+        try {
+            require_once __DIR__ . '/FileIndex.php';
+            // ★ (2026-11-01 01:30, 35차 전체 점검) 실제 저장 폴더 기준(공유 대상이 폴더가 아니면 위에서 그 상위 폴더에 저장함)
+            $isIxDir = $this->_ishareRelPath($v, $subPath);
+            if (!is_dir($v['targetPath'])) { $isIxDir = dirname($isIxDir); if ($isIxDir === '.' || $isIxDir === '\\' || $isIxDir === '/') $isIxDir = ''; }
+            \FileIndex::getInstance()->addFile((int)$v['share']['storage_id'], trim($isIxDir . '/' . $isUpName, '/'), ['is_dir' => 0, 'size' => (int)@filesize($targetFile), 'modified' => date('Y-m-d H:i:s')]);
+        } catch (\Throwable $e) {}
+        // ★ (2026-11-04) 56차 활동 기록(위 색인과 같은 실제 저장 경로)
+        $isLogDir = $this->_ishareRelPath($v, $subPath);
+        if (!is_dir($v['targetPath'])) { $isLogDir = dirname(str_replace('\\', '/', $isLogDir)); if ($isLogDir === '.' || $isLogDir === '/') $isLogDir = ''; }
+        $this->_logShareUpload((int)$v['share']['storage_id'], $isLogDir . '/' . $isUpName, (int)@filesize($targetFile), 'internal share #' . (int)$shareId);
+
         return ['success' => true, 'filename' => $filename];
     }
     
+    /** ★ (2026-11-04) 56차 내부 공유·파일받기 업로드도 '업로드' 활동 기록(실제 저장 경로·이름) — 종전엔 기록이 없었음. 기록 실패는 업로드 결과에 영향 없음 */
+    private function _logShareUpload(int $storageId, string $relPath, int $size, string $details, array $who = []): void {
+        try {
+            if (!class_exists('ActivityLog')) return;
+            $relPath = trim(str_replace('\\', '/', $relPath), '/');
+            $st = $this->storage->getStorageById($storageId) ?: [];
+            (new ActivityLog($this->db, $this->auth))->log(ActivityLog::TYPE_UPLOAD, array_merge([
+                'storage_id' => $storageId,
+                'storage_name' => $st['name'] ?? '',
+                'path' => $relPath,
+                'filename' => basename($relPath),
+                'size' => $size,
+                'details' => $details
+            ], $who));
+        } catch (\Throwable $e) {}
+    }
+    /** ★ (2026-11-04) 56차 파일받기 기록의 사용자 — 세션 사용자(있으면) 아니면 guest. getUser() 는 부르지 않음(ActivityLog 24차 주석: 공유 비밀번호 인증 세션을 지울 수 있음) */
+    private function _filedropLogWho(): array {
+        $uid = (int)($_SESSION['user_id'] ?? 0);
+        $u = $uid > 0 ? ($this->db->find('users', ['id' => $uid]) ?: null) : null;
+        return [
+            'user_id' => $u ? $uid : 0,
+            'username' => $u ? (string)($u['username'] ?? 'guest') : 'guest',
+            'display_name' => $u ? (string)($u['display_name'] ?? ($u['username'] ?? 'Guest')) : 'Guest',
+        ];
+    }
+    private function _filedropLogDetails(array $share): string {
+        return 'filedrop share #' . (int)($share['id'] ?? 0) . ' (owner user #' . (int)($share['created_by'] ?? 0) . ')';
+    }
+
     /** ★ (2026-10-29 18:45, 22차 점검) 옛(비조각) 업로드 공통 검사 — 문제 있으면 사유, 없으면 null */
     private function _legacyUploadGuard(int $storageId, string $filename, int $size, string $tmpPath = ''): ?string {
         try {
@@ -1618,6 +1963,11 @@ class ShareManager {
             if (empty($rc['allowed'])) return '🔐 ' . ($rc['reason'] ?? '');
             if (($pre = $fm->davUploadPrecheck($filename, $size)) !== null) return '📤 ' . $pre;
             if ($tmpPath !== '' && is_file($tmpPath) && ($post = $fm->davUploadPostcheck($tmpPath, $filename)) !== null) return '🔐 ' . $post;
+            // ★ (2026-11-01 07:29, 37차 기능 점검) 백신 검사도(조각 경로·일반 업로드와 같게) — 비로그인 filedrop_upload 를 직접 부르면 백신을 건너뛰었음
+            if ($tmpPath !== '' && is_file($tmpPath) && method_exists($fm, 'scanForVirusPublic')) {
+                $vs = $fm->scanForVirusPublic($tmpPath, $filename, (int)@filesize($tmpPath));
+                if (empty($vs['clean'])) return !empty($vs['scan_error_blocked']) ? \FileManager::avBlockMessage($vs) : __('api_av_virus_detected', '🛡️ 바이러스 감지: ') . ($vs['threat'] ?? __('api_av_unknown_threat', '알 수 없는 위협'));   // ★ (2026-11-04) 56차 검사 오류 차단은 감염과 다른 문구(판정 그대로)
+            }
             $q = $fm->checkQuotaPublic($storageId, $size);
             if (empty($q['allowed'])) return (string)($q['error'] ?? __('quota_exceeded', '용량 한도를 초과했습니다.'));
         } catch (\Throwable $e) {
@@ -1655,7 +2005,7 @@ class ShareManager {
         $result = $fileManager->uploadChunk($storageId, $relativePath, $data, true);
         
         // 조립 완료 시 공유 소유자 알림 정보 기록 (중복 조립 deduped 제외)
-        if (!empty($result['success']) && !empty($result['complete']) && empty($result['deduped'])) {
+        if (!empty($result['success']) && !empty($result['complete']) && empty($result['deduped']) && empty($result['skipped'])) {   // ★ (2026-11-04) 55차: '건너뛰기'(저장 안 함)는 알림 안 올림(옛 경로와 같게)
             // ★ (2026-10-29 22:08, 24차 점검) 잠금 안에서 최신 값에 +1(파일받기 20차 shareIncrement 와 같게) — 종전엔 처음 읽은 값에 +1 해 동시에 올리면 알림 수가 빠졌음
             $isUpName = $result['filename'] ?? ($data['filename'] ?? '');
             $this->db->atomicUpdate('internal_shares', function ($rows) use ($shareId, $isUpName) {
@@ -1669,10 +2019,12 @@ class ShareManager {
                 unset($row);
                 return $rows;
             });
+            // ★ (2026-11-04) 56차 활동 기록(uploadChunk 가 알려 준 실제 저장 경로)
+            $this->_logShareUpload($storageId, (string)($result['saved_path'] ?? trim($relativePath . '/' . $isUpName, '/')), (int)($result['size'] ?? 0), 'internal share #' . (int)$shareId);
         }
         return $result;
     }
-    
+
     /**
      * 공유 업로드 알림 목록: 내 공유(shares=filedrop/download + internal_shares) 중
      * pending_uploads > 0 인 것만 반환. 클라이언트 폴링용(가벼움).
@@ -1802,6 +2154,7 @@ class ShareManager {
         }
         // ★ (2026-10-29 18:42, 22차 점검) 잠긴 파일(폴더면 그 안의 잠긴 파일)은 지우지 않고, 지운 만큼 사용량에서 뺌 — 종전엔 주인이 잠근 파일도 받은 사람이 바로 지울 수 있었고 사용량은 그대로 남았음
         $isRel = $this->_ishareRelPath($v, $subPath);
+        if ((new FileManager())->isStorageProtectFilePublic((int)$v['share']['storage_id'], $isRel)) return ['success' => false, 'error' => __('storage_protect_file_locked', '스토리지 보호 파일(.htaccess)은 지우거나 바꿀 수 없습니다.')];   // ★ (2026-11-17 10:49, 313차 — 296차 펜닐 결정 "보호 파일 지우기 막기"를 내부 공유에도) 맨 위를 '전체'로 공유받은 사람이 스토리지 맨 위 .htaccess 를 지우거나 이름을 바꿔 보호를 풀 수 있었음(재현: 이름 바꾸기 성공)
         if ($this->_ishareLocked((int)$v['share']['storage_id'], $isRel, is_dir($target))) {
             return ['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')];
         }
@@ -1851,6 +2204,19 @@ class ShareManager {
             $isFm->cleanupSharesForPathPublic($isSid, $isRel, $isWasDir);
             if (class_exists('HiddenItems')) \HiddenItems::removePath($isSid, $isRel);
         } catch (\Throwable $e) {}
+        // ★ (2026-11-04) 55차: 보관함 폴더는 휴지통 없이 영구 삭제되므로 그 경로·하위 폴더 규칙도 정리(api.php 'delete' 26차와 같은 비교) — 종전엔 남아 같은 이름 새 폴더에 걸렸음(재현)
+        if ($isVault && $isWasDir) {
+            try {
+                $isSid = (int)$v['share']['storage_id'];
+                $isClean = trim(str_replace('\\', '/', $isRel), '/');
+                foreach ($this->storage->getAllFolderPermissions($isSid) as $fp) {
+                    $fpPath = trim($fp['folder_path'] ?? '', '/');
+                    if ($fpPath === $isClean || strpos($fpPath . '/', $isClean . '/') === 0 || strpos($fpPath, $isClean . '/') === 0) {
+                        $this->storage->removeFolderPermission($isSid, $fp['folder_path'], (int)($fp['user_id'] ?? 0));
+                    }
+                }
+            } catch (\Throwable $e) {}
+        }
         
         return ['success' => true];
     }
@@ -1866,6 +2232,12 @@ class ShareManager {
     private function _ishareLocked(int $storageId, string $rel, bool $isDir): bool {
         // ★ (2026-10-30 02:21, 26차 재검토) 경로 정리 후 비교(WebDAV·FileManager 잠금 검사와 같은 기준)
         $_lkN = function ($p) { $p = str_replace('\\', '/', (string)$p); $p = preg_replace('#(^|/)\.(?=/|$)#', '$1', $p); $p = trim(preg_replace('#/{2,}#', '/', $p), '/'); return DIRECTORY_SEPARATOR === '\\' ? mb_strtolower($p) : $p; };
+        // ★ (2026-11-01 17:17, 40차 점검) Windows 는 조각 끝 점·공백을 떼고 같은 파일로 열어 'docs./a.txt'·'docs/a.txt..' 가 잠금 비교만 지나갔음 →
+        //   Windows 에서만 조각마다 끝 ' .' 를 떼고 비교(폴더 권한 Storage::normFolderPath 와 같은 기준). Linux 는 종전 그대로
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $_lkN0 = $_lkN;
+            $_lkN = function ($p) use ($_lkN0) { return implode('/', array_filter(array_map(static fn($s) => rtrim($s, ' .'), explode('/', $_lkN0($p))), static fn($s) => $s !== '')); };
+        }
         $rel = $_lkN($rel);
         foreach (($this->db->load('locked_files') ?: []) as $lk) {
             if ((int)($lk['storage_id'] ?? 0) !== $storageId) continue;
@@ -1902,10 +2274,14 @@ class ShareManager {
         if (!file_exists($target)) {
             return ['success' => false, 'error' => __('api_err_file_not_found', '파일을 찾을 수 없습니다.')];
         }
+        if ((new FileManager())->isStorageProtectFilePublic((int)$v['share']['storage_id'], $this->_ishareRelPath($v, $subPath))) return ['success' => false, 'error' => __('storage_protect_file_locked', '스토리지 보호 파일(.htaccess)은 지우거나 바꿀 수 없습니다.')];   // ★ (2026-11-17 10:49, 313차) 위 지우기와 같음
         
         $newName = basename($newName);
-        $newName = preg_replace('/[\/\\\\]/', '', $newName);
-        if (empty($newName) || $newName === '.' || $newName === '..') {
+        // ★ (2026-11-03 08:04, 48차 점검) 업로드(37차)와 같은 정리(위험 문자 + 앞뒤 점·공백) — 종전엔 슬래시만 지워, 쓰기 공유만 받은 사람이 이름을 '.vault.json' 으로 바꿔 주인 폴더를 보관함처럼 보이게(목록 멈춤·삭제가 휴지통 없이 영구) 할 수 있었음(재현)
+        $newName = trim(preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', $newName), '. ');
+        $newName = trim(fsStripBidi($newName), '. ');   // ★ (2026-11-17 07:56, 297차 — 296차 펜닐 결정 "이름의 방향 뒤집기 문자 빼기"를 다른 올리기 길에도)
+        if (DIRECTORY_SEPARATOR === '\\' && preg_match('/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i', $newName)) $newName = '_' . $newName;   // ★ (2026-11-04, 56차 C2-2) Windows 장치 이름은 '_' 접두(FileManager::sanitizeFilename 40차와 같은 식·조건)
+        if ($newName === '' || $newName === '.' || $newName === '..') {   // ★ (2026-11-01 17:20, 40차 점검) empty('0') 라 이름이 정확히 '0' 인 항목을 '잘못된 이름'으로 거부했음 → 빈 문자열만
             return ['success' => false, 'error' => __('api_err_invalid_filename', '잘못된 파일명입니다.')];
         }
         // ★ (2026-10-28 17:42, 소스 점검 3단계) 서버 실행 확장자 차단(저장될 이름 기준 — config.php fsServerExecReason) — 파일만(폴더 이름은 실행과 무관)
@@ -1913,19 +2289,35 @@ class ShareManager {
             return ['success' => false, 'error' => $execReason];
         }
         
+        // ★ (2026-11-04 01:29, 54차 점검) 랜섬웨어 의심·무작위 확장자로 바꾸는 것 막기(53차 웹 이름 바꾸기와 같은 기준 — 파일이고 확장자가 바뀔 때만). 종전엔 내부 공유로는 a.txt → a.locked 가 됐음(재현)
+        if (!is_dir($target) && strtolower(pathinfo($newName, PATHINFO_EXTENSION)) !== strtolower(pathinfo($target, PATHINFO_EXTENSION))) {
+            $rnRw = (new FileManager())->checkRansomwarePublic($newName);
+            if (empty($rnRw['allowed'])) return ['success' => false, 'error' => (string)($rnRw['reason'] ?? '')];
+        }
         $newPath = dirname($target) . DIRECTORY_SEPARATOR . $newName;
-        if (file_exists($newPath)) {
+        // ★ (2026-11-04 01:29, 54차 점검) 대소문자만 바꾸는 이름 바꾸기는 '같은 이름 있음'으로 막지 않음(일반 이름 바꾸기 isCaseOnlyRename 과 같은 기준 — Windows 는 같은 파일로 보임)
+        $rnOldBase = basename($target);
+        $rnCaseOnly = false;
+        if ($rnOldBase !== $newName && mb_strtolower($rnOldBase, 'UTF-8') === mb_strtolower($newName, 'UTF-8')) {
+            $rnEnt = @scandir(dirname($target));
+            $rnCaseOnly = is_array($rnEnt) && in_array($rnOldBase, $rnEnt, true) && !in_array($newName, $rnEnt, true);
+        }
+        if (file_exists($newPath) && !$rnCaseOnly) {
             return ['success' => false, 'error' => __('api_err_file_exists', '같은 이름의 파일이 이미 존재합니다.')];
         }
         // ★ (2026-10-29 18:42, 22차 점검) 잠긴 파일은 이름을 바꾸지 않음(일반 이름 바꾸기와 같은 기준 — 그 경로 자체)
-        if ($this->_ishareLocked((int)$v['share']['storage_id'], $this->_ishareRelPath($v, $subPath), false)) {
+        // ★ (2026-11-02 10:24, 42차 점검) 폴더 이름을 바꾸면 그 안의 잠긴 파일 잠금이 옛 경로에 남아 풀렸음(그 경로 자체만 검사) →
+        //   폴더면 하위 잠금까지 봄(받은 쪽 삭제·일반 이름 바꾸기 isTreeLocked 와 같은 기준)
+        if ($this->_ishareLocked((int)$v['share']['storage_id'], $this->_ishareRelPath($v, $subPath), is_dir($target))) {
             return ['success' => false, 'error' => __('exif_strip_locked', '잠긴 파일입니다.')];
         }
-        
+
         $rnWasDir = is_dir($target);
         if (!rename($target, $newPath)) {
             return ['success' => false, 'error' => __('api_err_rename_failed', '이름 변경 실패')];
         }
+        // ★ (2026-11-01 01:53, 36차 전체 점검) Windows 는 끝 점·공백을 떼고 바꾸므로('b.' → 'b') 인덱스·숨김·권한·응답 이름도 실제 이름으로(폴더 만들기 24차 방식) — 종전엔 유령 인덱스 행·틀린 new_name
+        if (DIRECTORY_SEPARATOR === '\\' && rtrim($newName, '. ') !== '') $newName = rtrim($newName, '. ');
         // ★ (2026-10-29 23:24, 24차 점검) 일반 이름 바꾸기와 같은 뒷정리 — 인덱스(옛→새)·옛 경로의 공유 링크·숨김 표시(3회차 재검토: 이 경로만 빠져 옛 링크가 남았음)
         try {
             $rnSid = (int)$v['share']['storage_id'];
@@ -1953,14 +2345,19 @@ class ShareManager {
         }
         
         $folderName = basename($folderName);
-        $folderName = preg_replace('/[\/\\\\]/', '', $folderName);
-        if (empty($folderName) || $folderName === '.' || $folderName === '..') {
-            return ['success' => false, 'error' => __('api_err_invalid_filename', '잘못된 폴더명입니다.')];
+        // ★ (2026-11-03 08:04, 48차 점검) 새 폴더 이름도 같은 정리 — 종전엔 '.vault.json' 이라는 폴더를 만들 수 있었음(재현, 위 이름 바꾸기와 같음)
+        $folderName = trim(preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', $folderName), '. ');
+        $folderName = trim(fsStripBidi($folderName), '. ');   // ★ (2026-11-17 07:56, 297차 — 296차 펜닐 결정 "이름의 방향 뒤집기 문자 빼기"를 다른 올리기 길에도)
+        if (DIRECTORY_SEPARATOR === '\\' && preg_match('/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i', $folderName)) $folderName = '_' . $folderName;   // ★ (2026-11-04, 56차 C2-2) Windows 장치 이름은 '_' 접두(FileManager::sanitizeFilename 40차와 같은 식·조건)
+        if ($folderName === '' || $folderName === '.' || $folderName === '..') {   // ★ (2026-11-01 17:20, 40차 점검) empty('0') 라 이름이 정확히 '0' 인 항목을 '잘못된 이름'으로 거부했음 → 빈 문자열만
+            // ★ (2026-11-02 10:24, 42차 점검) 파일용 키(lang 값 '잘못된 파일명입니다.')를 써서 기본 문구 '폴더명'이 안 나왔음 → 폴더용 새 키
+            return ['success' => false, 'error' => __('api_err_invalid_foldername', '잘못된 폴더명입니다.')];
         }
-        
+
         $newPath = $targetDir . DIRECTORY_SEPARATOR . $folderName;
         if (file_exists($newPath)) {
-            return ['success' => false, 'error' => __('api_err_file_exists', '같은 이름이 이미 존재합니다.')];
+            // ★ (2026-11-02 10:24, 42차 점검) 파일용 키(lang 값 '같은 이름의 파일이…')라 폴더 만들기에 '파일'로 나왔음 → 기존 키 name_exists(같은 이름이 이미 존재합니다.)
+            return ['success' => false, 'error' => __('name_exists', '같은 이름이 이미 존재합니다.')];
         }
         
         // 경로 범위 확인
@@ -1991,6 +2388,7 @@ class ShareManager {
         foreach ($items as $item) {
             if ($item === '.' || $item === '..') continue;
             $path = $dir . DIRECTORY_SEPARATOR . $item;
+            if (is_link($path)) { if (!@unlink($path)) @rmdir($path); continue; }   // ★ (2026-11-04 01:27, 54차 점검) 링크는 링크만 지움 — 종전엔 폴더 링크를 따라 들어가 스토리지 밖 파일까지 지웠음(재현)
             is_dir($path) ? $this->deleteDirectory($path) : unlink($path);
         }
         rmdir($dir);
@@ -2011,7 +2409,9 @@ class ShareManager {
         $result = [];
         foreach ($users as $user) {
             if ((int)$user['id'] === $currentUserId) continue;
-            if (($user['status'] ?? 'active') !== 'active') continue;
+            // ★ (2026-11-02 11:55, 43차 점검) 정지를 미래 날짜로 예약했거나 종료일이 지난 계정은 아직(이미) 쓸 수 있으므로 공유 대상에서 빼지 않음(로그인 판정 fsUserSuspendedNow 와 같은 기준)
+            $usSt = $user['status'] ?? 'active';
+            if ($usSt !== 'active' && !($usSt === 'suspended' && function_exists('fsUserSuspendedNow') && !fsUserSuspendedNow($user))) continue;
             
             $username = mb_strtolower($user['username'] ?? '');
             $displayName = mb_strtolower($user['display_name'] ?? '');
@@ -2037,6 +2437,7 @@ class ShareManager {
      */
     public function uploadToFileDrop(string $token, array $file, ?string $password = null): array {
         $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
+        if ($share && !$this->_creatorStillAllowed($share, false)) return ['success' => false, 'error' => __('share_creator_no_access', '공유한 사람에게 이 항목에 대한 권한이 없어 열 수 없습니다.')];   // ★ (2026-11-17 13:28, 322차) 파일 받기도 만든 사람 권한 다시 확인
         
         if (!$share || ($share['share_type'] ?? '') !== 'filedrop') {
             return ['success' => false, 'error' => __('ishare_invalid_filedrop', '유효하지 않은 파일 드롭 링크입니다.')];
@@ -2053,13 +2454,16 @@ class ShareManager {
         // ★ (2026-10-28 19:55, 6차 점검) 파일 드롭 비밀번호도 무차별 대입 제한(공유 열기와 같은 IP+토큰 10회/10분) — 종전엔 제한이 없었음
         // ★ (2026-10-29 09:39, 20차 점검) share.php 에서 비밀번호로 들어온 세션이면 통과 — 화면은 비밀번호를 다시 보내지 않아(password='') 종전엔 업로드가 항상 '비밀번호 틀림'
         if (!empty($share['password']) && !self::isShareSessionAuthed($token, $share)) {   // ★ (22차) 비밀번호에 묶인 세션 인증
-            if ($this->sharePwBlocked($token)) {
+            // ★ (2026-10-31 13:44, 34차 후속 개선) 비밀번호를 보낸 시도는 확인+기록을 한 잠금 안에서(sharePwReserve), 빈 비밀번호는 종전처럼 차단 여부만 봄. 맞으면 기록을 비움(시도를 먼저 기록하므로)
+            // ★ (2026-11-01 17:16, 40차 점검) 비밀번호 '0' 을 '안 보냄'으로 보던 판정을 빈 값/null 기준으로
+            $_pwGiven = ($password !== null && $password !== '');
+            if ($_pwGiven ? !$this->sharePwReserve($token) : $this->sharePwBlocked($token)) {
                 return ['success' => false, 'error' => __('api_err_too_many_attempts', '시도가 너무 많습니다. 잠시 후 다시 시도하세요.')];
             }
-            if (!$password || !password_verify($password, $share['password'])) {
-                if ($password) $this->sharePwFail($token);
+            if (!$_pwGiven || !password_verify($password, $share['password'])) {
                 return ['success' => false, 'error' => __('api_err_share_password_wrong', '비밀번호가 올바르지 않습니다.')];
             }
+            $this->sharePwClear($token);
         }
         
         // 업로드 횟수 제한 확인 (max_downloads를 max_uploads로도 활용)
@@ -2091,11 +2495,15 @@ class ShareManager {
         
         // 파일명 안전성 검증
         $filename = basename($file['name']);
-        $filename = preg_replace('/[\/\\\\]/', '', $filename);
-        if (empty($filename) || $filename === '.' || $filename === '..') {
+        // ★ (2026-11-01 07:19, 37차 기능 점검) 저장 이름을 조각 경로(uploadToFileDropChunk)·sanitizeFilename 과 같은 정리로 만든 뒤 그 이름으로 검사·저장 —
+        //   종전엔 슬래시만 지워 'virus.exe '·'run.bat::$DATA'(Windows 저장 땐 virus.exe·run.bat)가 위험 확장자 검사를 지났고 '.vault.json' 도 심을 수 있었음
+        $filename = trim(preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', $filename), '. ');
+        $filename = trim(fsStripBidi($filename), '. ');   // ★ (2026-11-17 07:56, 297차 — 296차 펜닐 결정 "이름의 방향 뒤집기 문자 빼기"를 다른 올리기 길에도)
+        if (DIRECTORY_SEPARATOR === '\\' && preg_match('/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i', $filename)) $filename = '_' . $filename;   // ★ (2026-11-04, 56차 C2-2) Windows 장치 이름은 '_' 접두(FileManager::sanitizeFilename 40차와 같은 식·조건)
+        if ($filename === '' || $filename === '.' || $filename === '..') {   // ★ (2026-11-01 17:20, 40차 점검) empty('0') 라 이름이 정확히 '0' 인 항목을 '잘못된 이름'으로 거부했음 → 빈 문자열만
             return ['success' => false, 'error' => __('api_err_invalid_filename', '잘못된 파일명입니다.')];
         }
-        
+
         // 위험 확장자 차단 (PHP, JSP, 실행파일 등)
         $dangerousExts = DANGEROUS_EXTS;
         $finalExt = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
@@ -2139,7 +2547,7 @@ class ShareManager {
             $name = pathinfo($filename, PATHINFO_FILENAME);
             $i = 1;
             do {
-                $newName = $name . " ({$i})" . ($ext ? ".{$ext}" : '');
+                $newName = $name . " ({$i})" . ($ext !== '' ? ".{$ext}" : '');   // ★ (2026-11-01 17:20, 40차 점검) 확장자 '0'(log.0)이 거짓이라 'log (1)' 로 확장자가 떨어졌음
                 $targetPath = $targetDir . DIRECTORY_SEPARATOR . $newName;
                 $i++;
             } while (file_exists($targetPath));
@@ -2151,16 +2559,39 @@ class ShareManager {
         if (($lgErr = $this->_legacyUploadGuard((int)$share['storage_id'], $filename, (int)($file['size'] ?? 0), (string)($file['tmp_name'] ?? ''))) !== null) {
             return ['success' => false, 'error' => $lgErr];
         }
-        
+
+        // ★ (2026-11-01 07:19, 37차 기능 점검) 업로드 수 한도를 잠금 안에서 '한도 미만일 때만 +1'로 먼저 잡고(실패하면 거부), 저장에 실패하면 되돌림 —
+        //   종전엔 위 검사와 저장 뒤 +1 이 따로라 동시에 올린 여러 파일이 한도를 넘겨 저장됐음
+        if (!$this->shareIncrementIfBelow($token)) {
+            return ['success' => false, 'error' => __('ishare_upload_limit', '업로드 횟수를 초과했습니다.')];
+        }
+        $fdApplied = $this->lastIncApplied;   // ★ (2026-11-02 11:36, 43차 점검) 실제로 올렸는지(잠금 실패면 못 올림 — 42차 재검토의 다른 두 호출부와 같게)
         // 파일 이동
         if (!move_uploaded_file($file['tmp_name'], $targetPath)) {
+            if ($fdApplied) $this->shareIncrement($token, ['download_count' => -1]);   // ★ (2026-11-01 07:19, 37차 기능 점검) 위에서 잡은 1회 되돌림 — ★ (2026-11-02 11:36, 43차 점검) 실제로 올렸을 때만
             return ['success' => false, 'error' => __('err_upload_failed', '업로드 실패')];
         }
         $this->storage->updateUsedSize((int)$share['storage_id'], (int)@filesize($targetPath));
-        
+
         // 업로드 카운트 증가
-        $this->shareIncrement($token, ['download_count' => 1]);
-        
+        // ★ (2026-11-01 01:10, 35차 전체 점검) 주인 알림(미확인 업로드 수·마지막 업로드)도 조각 업로드(uploadToFileDropChunk)와 같게 올림 — 종전엔 이 옛 경로로 올리면 알림이 없었음
+        // ★ (2026-11-01 01:53, 36차 전체 점검) Windows 는 이름 끝 점·공백을 떼고 저장하므로 알림·인덱스 이름도 실제와 같게(폴더 만들기 24차 방식)
+        $fdIxName = (DIRECTORY_SEPARATOR === '\\' && rtrim($filename, '. ') !== '') ? rtrim($filename, '. ') : $filename;
+        // ★ (2026-11-01 07:19, 37차 기능 점검) download_count 는 위 shareIncrementIfBelow 에서 이미 +1 — 여기선 알림 수만
+        $this->shareIncrement($token, $fdApplied ? ['pending_uploads' => 1] : ['download_count' => 1, 'pending_uploads' => 1], [   // ★ (2026-11-02 11:36, 43차 점검) 못 올렸으면 여기서 셈
+            'last_upload_at' => date('Y-m-d H:i:s'),
+            'last_upload_name' => $fdIxName
+        ]);
+        // ★ (2026-11-01 01:10, 35차 전체 점검) 검색 인덱스에도 넣음(조각 업로드는 uploadChunk 가 넣음) — 실패해도 업로드는 성공
+        try {
+            require_once __DIR__ . '/FileIndex.php';
+            $fdRel = trim(trim(str_replace('\\', '/', (string)($share['file_path'] ?? '')), '/') . '/' . $fdIxName, '/');
+            \FileIndex::getInstance()->addFile((int)$share['storage_id'], $fdRel, ['is_dir' => 0, 'size' => (int)@filesize($targetPath), 'modified' => date('Y-m-d H:i:s')]);
+        } catch (\Throwable $e) {}
+        // ★ (2026-11-04) 56차 활동 기록 — 올린 사람은 링크 방문자라 공유 주인이 아니라 guest(로그인한 방문자면 그 사람 — share.php 공유 접근 기록과 같은 기준), details 에 파일받기·공유 번호·주인 번호
+        $this->_logShareUpload((int)$share['storage_id'], trim(trim(str_replace('\\', '/', (string)($share['file_path'] ?? '')), '/') . '/' . $fdIxName, '/'), (int)@filesize($targetPath),
+            $this->_filedropLogDetails($share), $this->_filedropLogWho());
+
         return ['success' => true, 'filename' => $filename];
     }
     
@@ -2180,7 +2611,40 @@ class ShareManager {
             return $data;
         });
     }
-    
+
+    /**
+     * ★ (2026-11-01 07:19, 37차 기능 점검) 잠금 안에서 '한도(max_downloads) 미만일 때만' download_count +1 — 성공하면 true.
+     *   종전엔 횟수 검사(accessShare·업로드 앞)와 +1 이 따로라, 동시에 보내면 모두 검사를 지나 한도를 넘겨 받거나 올릴 수 있었음
+     */
+    /** ★ (2026-11-02 11:01, 42차 재검토) 바로 앞 shareIncrementIfBelow 가 숫자를 실제로 올렸는지 — 잠금을 못 얻으면 '허용(true)했지만 못 올림'이라, 이걸 '1회 잡아 둠'으로 보고 되돌리면
+     *   올린 적 없는 숫자를 깎아 한도가 1회 더 열렸고, 파일받기는 완료 때 +1 을 건너뛰어 그 업로드를 아예 안 셌음(검토 발견) */
+    private bool $lastIncApplied = false;
+    private function shareIncrementIfBelow(string $token): bool {
+        $this->lastIncApplied = false;
+        $ok = false;
+        $saved = $this->db->atomicUpdate('shares', function ($data) use ($token, &$ok) {
+            $data = is_array($data) ? $data : [];
+            foreach ($data as &$row) {
+                if ((string)($row['token'] ?? '') !== (string)$token) continue;
+                $max = (int)($row['max_downloads'] ?? 0);
+                $cnt = (int)($row['download_count'] ?? 0);
+                if ($max > 0 && $cnt >= $max) break;
+                $row['download_count'] = $cnt + 1;
+                $ok = true;
+                break;
+            }
+            unset($row);
+            return $data;
+        });
+        if ($saved) { $this->lastIncApplied = $ok; return $ok; }
+        // ★ (2026-11-01 07:57, 37차 기능 점검 재검토) 잠금을 못 얻어 저장이 안 됐으면(부하) 종전처럼 읽은 값으로만 판정 — 처음 고친 코드는 이때 늘 false 라
+        //   한도 없는 공유까지 정상 받기·올리기가 '횟수 초과' 로 막혔음. 숫자는 이번엔 못 올림(종전 잠금 없는 방식과 같은 정도)
+        $row = $this->db->find('shares', ['token' => $token]);
+        if (!$row) return false;
+        $max = (int)($row['max_downloads'] ?? 0);
+        return !($max > 0 && (int)($row['download_count'] ?? 0) >= $max);
+    }
+
     /**
      * 파일 드롭 공유 링크로 청크 업로드 (대용량 파일 지원)
      * - 외부 공개(비로그인)이므로 매 청크마다 토큰/만료/비밀번호/횟수 재검증.
@@ -2190,6 +2654,7 @@ class ShareManager {
      */
     public function uploadToFileDropChunk(string $token, array $data, ?string $password = null): array {
         $share = $this->db->find('shares', ['token' => $token, 'is_active' => 1]);
+        if ($share && !$this->_creatorStillAllowed($share, false)) return ['success' => false, 'error' => __('share_creator_no_access', '공유한 사람에게 이 항목에 대한 권한이 없어 열 수 없습니다.')];   // ★ (2026-11-17 13:28, 322차) 파일 받기도 만든 사람 권한 다시 확인
         if (!$share || ($share['share_type'] ?? '') !== 'filedrop') {
             return ['success' => false, 'error' => __('ishare_invalid_filedrop', '유효하지 않은 파일 드롭 링크입니다.')];
         }
@@ -2203,13 +2668,16 @@ class ShareManager {
         // ★ (2026-10-28 19:55, 6차 점검) 파일 드롭 비밀번호도 무차별 대입 제한(공유 열기와 같은 IP+토큰 10회/10분) — 종전엔 제한이 없었음
         // ★ (2026-10-29 09:39, 20차 점검) share.php 에서 비밀번호로 들어온 세션이면 통과 — 화면은 비밀번호를 다시 보내지 않아(password='') 종전엔 업로드가 항상 '비밀번호 틀림'
         if (!empty($share['password']) && !self::isShareSessionAuthed($token, $share)) {   // ★ (22차) 비밀번호에 묶인 세션 인증
-            if ($this->sharePwBlocked($token)) {
+            // ★ (2026-10-31 13:44, 34차 후속 개선) 비밀번호를 보낸 시도는 확인+기록을 한 잠금 안에서(sharePwReserve), 빈 비밀번호는 종전처럼 차단 여부만 봄. 맞으면 기록을 비움(시도를 먼저 기록하므로)
+            // ★ (2026-11-01 17:16, 40차 점검) 비밀번호 '0' 을 '안 보냄'으로 보던 판정을 빈 값/null 기준으로
+            $_pwGiven = ($password !== null && $password !== '');
+            if ($_pwGiven ? !$this->sharePwReserve($token) : $this->sharePwBlocked($token)) {
                 return ['success' => false, 'error' => __('api_err_too_many_attempts', '시도가 너무 많습니다. 잠시 후 다시 시도하세요.')];
             }
-            if (!$password || !password_verify($password, $share['password'])) {
-                if ($password) $this->sharePwFail($token);
+            if (!$_pwGiven || !password_verify($password, $share['password'])) {
                 return ['success' => false, 'error' => __('api_err_share_password_wrong', '비밀번호가 올바르지 않습니다.')];
             }
+            $this->sharePwClear($token);
         }
         // 업로드 횟수 제한 확인 (max_downloads를 max_uploads로 활용)
         if (!empty($share['max_downloads']) && ($share['download_count'] ?? 0) >= $share['max_downloads']) {
@@ -2217,9 +2685,12 @@ class ShareManager {
         }
         
         // 파일명 안전성 + 위험 확장자 차단 (파일명 기반이라 데이터 불필요, 모든 청크 검증)
-        $filename = basename($data['filename'] ?? '');
-        $filename = preg_replace('/[\/\\\\]/', '', $filename);
-        if (empty($filename) || $filename === '.' || $filename === '..') {
+        // ★ (2026-11-01 01:53, 36차 전체 점검) 검사 이름을 실제 저장 이름과 같은 정리로(FileManager::sanitizeFilename 과 같은 식) — 종전엔 basename(마지막 '/' 뒤만)으로 검사해
+        //   'virus.ex/e'·'virus.ex:e' 가 확장자 없음으로 통과한 뒤 'virus.exe' 로 저장됐음(DANGEROUS_EXTS 우회)
+        $filename = trim(preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', (string)($data['filename'] ?? '')), '. ');
+        $filename = trim(fsStripBidi($filename), '. ');   // ★ (2026-11-17 07:56, 297차 — 296차 펜닐 결정 "이름의 방향 뒤집기 문자 빼기"를 다른 올리기 길에도)
+        if (DIRECTORY_SEPARATOR === '\\' && preg_match('/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i', $filename)) $filename = '_' . $filename;   // ★ (2026-11-04, 56차 C2-2) 검사·기록 이름을 실제 저장 이름(FileManager::uploadChunk→sanitizeFilename 의 Windows '_' 접두)과 같게
+        if ($filename === '' || $filename === '.' || $filename === '..') {   // ★ (2026-11-01 17:20, 40차 점검) empty('0') 라 이름이 정확히 '0' 인 항목을 '잘못된 이름'으로 거부했음 → 빈 문자열만
             return ['success' => false, 'error' => __('api_err_invalid_filename', '잘못된 파일명입니다.')];
         }
         $dangerousExts = DANGEROUS_EXTS;
@@ -2247,15 +2718,37 @@ class ShareManager {
         require_once __DIR__ . '/FileManager.php';
         $fileManager = new FileManager();
         // skipPermCheck=true: filedrop은 토큰으로 검증(스토리지 로그인 권한 체계 아님)
-        $result = $fileManager->uploadChunk($storageId, $relativePath, $data, true);
+        // ★ (2026-11-02 10:29, 42차 점검) 마지막 조각(조립을 끝내는 조각 — share.php 는 마지막 조각을 다른 조각이 다 끝난 뒤 따로 보냄)은 업로드 수를 잠금 안에서 먼저 1회 잡고
+        //   (한도면 거부), 조립이 안 끝났거나 실패·중복(deduped)이면 되돌림 — 37차 옛 경로(uploadToFileDrop)와 같은 방식. 종전엔 위 한도 확인은 조립 전, +1 은 조립 뒤라
+        //   그 사이(큰 파일은 수 초) 들어온 다른 방문자의 마지막 조각도 통과해 한도를 넘겨 저장됐음
+        $fdTotal = (int)($data['totalChunks'] ?? 0);
+        $fdReserved = false;
+        if ($fdTotal > 0 && (int)($data['chunkIndex'] ?? -1) === $fdTotal - 1) {
+            if (!$this->shareIncrementIfBelow($token)) {
+                return ['success' => false, 'error' => __('ishare_upload_limit', '업로드 횟수를 초과했습니다.')];
+            }
+            $fdReserved = $this->lastIncApplied;   // ★ (2026-11-02 11:01, 42차 재검토) 실제로 올렸을 때만 '잡아 둠'(못 올렸으면 완료 때 종전처럼 +1)
+        }
+        try {
+            $result = $fileManager->uploadChunk($storageId, $relativePath, $data, true);
+        } catch (\Throwable $e) {
+            if ($fdReserved) $this->shareIncrement($token, ['download_count' => -1]);
+            throw $e;
+        }
+        $fdDone = !empty($result['success']) && !empty($result['complete']) && empty($result['deduped']);
+        if ($fdReserved && !$fdDone) $this->shareIncrement($token, ['download_count' => -1]);   // 잡아 둔 1회 되돌림
         
         // 조립 완료 시에만 업로드 횟수 증가 (중복 조립 deduped 제외)
-        if (!empty($result['success']) && !empty($result['complete']) && empty($result['deduped'])) {
+        if ($fdDone) {
             // 공유 소유자 알림용: 미확인 업로드 수 + 마지막 업로드 정보
-            $this->shareIncrement($token, ['download_count' => 1, 'pending_uploads' => 1], [
+            // ★ (2026-11-02 10:29, 42차 점검) 마지막 조각에서 이미 잡았으면 download_count 는 더하지 않음(다른 조각이 조립을 끝낸 경우 — 옛 화면 등 — 만 종전처럼 +1)
+            $this->shareIncrement($token, $fdReserved ? ['pending_uploads' => 1] : ['download_count' => 1, 'pending_uploads' => 1], [
                 'last_upload_at' => date('Y-m-d H:i:s'),
                 'last_upload_name' => $result['filename'] ?? $filename
             ]);
+            // ★ (2026-11-04) 56차 활동 기록(옛 경로 uploadToFileDrop 과 같은 사용자 기준, uploadChunk 가 알려 준 실제 저장 경로)
+            if (empty($result['skipped'])) $this->_logShareUpload($storageId, (string)($result['saved_path'] ?? trim($relativePath . '/' . ($result['filename'] ?? $filename), '/')), (int)($result['size'] ?? 0),
+                $this->_filedropLogDetails($share), $this->_filedropLogWho());
         }
         return $result;
     }
@@ -2311,18 +2804,34 @@ class ShareManager {
                 if ($cacheMtime !== false && $fileMtime !== false && $cacheMtime >= $fileMtime) {
                     $mime = @file_get_contents($cacheMeta);
                     $data = @file_get_contents($cacheFile);
-                    if ($mime !== false && $data !== false && strlen($data) > 100) {
+                    // ★ (2026-10-31 13:44, 34차 후속 개선) 단일 파일 커버(26차)와 같이 그림(래스터) 형식만 — 종전엔 .meta 의 형식을 그대로 돌려줘 수정 전에 만든 image/svg+xml 캐시가 계속 쓰였음.
+                    //   맞지 않으면 아래에서 캐시를 지우고 다시 추출(추출 함수는 이미 래스터만 돌려줌)
+                    $mime = ($mime !== false) ? trim($mime) : false;
+                    // ★ (2026-11-02 10:27, 42차 점검) .meta 둘째 줄에 곡 파일 크기를 적어 두고 다르면 다시 추출 — 종전엔 시각만 비교해 mp3tag 처럼 시각을 유지한 채 표지를 바꾸면
+                    //   옛 표지가 계속 나왔음(탐색기 39차 '크기 포함' 키와 같은 기준). 크기 줄이 없는 옛 캐시는 종전처럼 시각만 봄
+                    $_cvSzOk = true;
+                    if ($mime !== false && strpos($mime, "\n") !== false) {
+                        [$mime, $_cvSz] = explode("\n", $mime, 2);
+                        $mime = trim($mime); $_cvSz = trim($_cvSz);
+                        if ($_cvSz !== '' && (int)$_cvSz !== (int)@filesize($fullPath)) $_cvSzOk = false;
+                    }
+                    if ($_cvSzOk && $mime !== false && $data !== false && strlen($data) > 100 && preg_match('/^image\/(jpe?g|pjpeg|png|x-png|gif|webp|bmp|x-ms-bmp|avif|heic|heif)$/i', $mime)) {
                         return ['mime' => $mime, 'data' => $data, 'cached' => true, 'cache_key' => $retKey];
                     }
+                    if ($mime !== false && !preg_match('/^image\/(jpe?g|pjpeg|png|x-png|gif|webp|bmp|x-ms-bmp|avif|heic|heif)$/i', $mime)) { @unlink($cacheFile); @unlink($cacheMeta); }
                 }
             }
             
             // ★ 네거티브 캐시 hit — 커버 없는 mp3로 기록된 경우 ID3 파싱 스킵 (즉시 null)
             //   파일 mtime 비교로 stale 감지 (파일 변경 시 마커 무효화)
+            if (file_exists($cacheNoCover) && substr((string)@file_get_contents($cacheNoCover), -strlen(';cv:' . self::COVER_VER)) !== ';cv:' . self::COVER_VER) @unlink($cacheNoCover);   // ★ (2026-11-12 16:10, 100차 CVR-1) 다른 판 표시는 지우고 다시 추출(COVER_VER 주석)
             if (file_exists($cacheNoCover)) {
                 $markerMtime = @filemtime($cacheNoCover);
                 $fileMtime = @filemtime($fullPath);
-                if ($markerMtime !== false && $fileMtime !== false && $markerMtime >= $fileMtime) {
+                // ★ (2026-11-02 10:27, 42차 점검) 표시에 적어 둔 곡 파일 크기가 다르면 다시 확인(위 커버 캐시와 같음, 옛 '1' 표시는 종전처럼 시각만)
+                $_ncRaw = (string)@file_get_contents($cacheNoCover);
+                $_ncSzOk = !(strncmp($_ncRaw, 'sz:', 3) === 0 && (int)substr($_ncRaw, 3) !== (int)@filesize($fullPath));
+                if ($_ncSzOk && $markerMtime !== false && $fileMtime !== false && $markerMtime >= $fileMtime) {
                     return null;  // 커버 없음 (캐시된 결과)
                 }
             }
@@ -2332,13 +2841,13 @@ class ShareManager {
             $cover = $this->extractID3v2Cover($fullPath);
             if (!$cover) {
                 // 커버 없음 → 네거티브 캐시 마커 저장 (다음 요청 시 ID3 파싱 스킵)
-                @file_put_contents($cacheNoCover, '1');
+                @file_put_contents($cacheNoCover, 'sz:' . (int)@filesize($fullPath) . ';cv:' . self::COVER_VER);   // ★ (2026-11-02 10:27, 42차 점검) 곡 파일 크기도 적음(위 비교용)   // ★ (2026-11-12 16:10, 100차 CVR-1) 끝에 추출 판(COVER_VER 주석)
                 return null;
             }
             
             // 캐시 저장
             @file_put_contents($cacheFile, $cover['data']);
-            @file_put_contents($cacheMeta, $cover['mime']);
+            @file_put_contents($cacheMeta, $cover['mime'] . "\n" . (int)@filesize($fullPath));   // ★ (2026-11-02 10:27, 42차 점검) 둘째 줄 = 곡 파일 크기(위 비교용)
             
             return ['mime' => $cover['mime'], 'data' => $cover['data'], 'cached' => false, 'cache_key' => $retKey];
         }
@@ -2382,7 +2891,9 @@ class ShareManager {
         
         // 캐시 경로 (토큰별 분리)
         $mtime = @filemtime($fullPath) ?: 0;
-        $cacheKey = md5($token . '/' . $share['file_path'] . '/' . $mtime);
+        // ★ (2026-11-02 10:27, 42차 점검) 키에 파일 크기도 넣음 — 종전엔 시각만이라 mp3tag 처럼 시각을 유지한 채 표지를 바꾸면 옛 표지(·커버 없음 표시)가 계속 쓰였음.
+        //   이 키는 ETag 로도 쓰여 브라우저 쪽도 함께 갱신됨. 공유 삭제 정리(_cleanShareCache 3-B)도 같은 키로
+        $cacheKey = md5($token . '/' . $share['file_path'] . '/' . $mtime . '-' . (int)$fileSize);
         $dataDir = dirname(__DIR__) . DIRECTORY_SEPARATOR . 'data';
         $cacheDir = $dataDir . DIRECTORY_SEPARATOR . 'thumbcache' . DIRECTORY_SEPARATOR . 'share_audio';
         if (!is_dir($cacheDir)) {
@@ -2412,6 +2923,7 @@ class ShareManager {
         }
         
         // 네거티브 캐시 (커버 없음 기록)
+        if (is_file($cacheNoCoverFile) && substr((string)@file_get_contents($cacheNoCoverFile), -strlen(';cv:' . self::COVER_VER)) !== ';cv:' . self::COVER_VER) @unlink($cacheNoCoverFile);   // ★ (2026-11-12 16:10, 100차 CVR-1) 다른 판 표시('1' 등)는 지우고 다시 추출(COVER_VER 주석)
         if (is_file($cacheNoCoverFile)) {
             return null;
         }
@@ -2419,7 +2931,7 @@ class ShareManager {
         // FileManager의 ID3v2 추출 로직과 동일 (프라이빗 메서드 복제 — 결합도 낮춤)
         $cover = $this->extractID3v2Cover($fullPath);
         if (!$cover) {
-            @file_put_contents($cacheNoCoverFile, '1');
+            @file_put_contents($cacheNoCoverFile, '1;cv:' . self::COVER_VER);   // ★ (2026-11-12 16:10, 100차 CVR-1) 추출 판도 적음(COVER_VER 주석) — 종전 '1'
             return null;
         }
         
@@ -2486,6 +2998,27 @@ class ShareManager {
                 // 프레임 크기 (4바이트, ID3v2.3는 일반 정수, 2.4는 syncsafe)
                 $frameSize = unpack('Nsize', substr($tagData, $offset + 4, 4))['size'];
                 
+                // ★ (2026-11-12 15:30, 99차 AUD-1) v2.4 는 syncsafe 로 읽음(가사 추출·탐색기 표지와 같은 기준) — 종전엔 일반 정수로 먼저 읽어 앞 프레임이 128바이트 이상(한글 제목 약 43자)이면
+                //   그 값이 태그 안이라 엉뚱한 곳으로 건너뛰어 표지 없음(204)이었음(재현: 탐색기 200·공유 204). 다만 v2.4 머리에 일반 정수 크기를 쓴 비표준 파일은 종전에 공유에서 표지가 나왔으므로,
+                //   syncsafe 로 건너뛴 자리가 프레임 시작·패딩·태그 끝이 아니고 일반 정수 자리는 맞을 때만 종전 값(일반 정수)을 그대로 씀
+                if (ord($header[3]) >= 4) {
+                    $sb = substr($tagData, $offset + 4, 4);
+                    $ssSize = ((ord($sb[0]) & 0x7F) << 21) | ((ord($sb[1]) & 0x7F) << 14) | ((ord($sb[2]) & 0x7F) << 7) | (ord($sb[3]) & 0x7F);
+                    $okNext = static function (string $d, int $p): bool {   // 그 자리가 태그 끝·패딩(0)·'프레임 ID + 태그 안에 드는 크기'인지
+                        $n = strlen($d);
+                        if ($p === $n) return true;
+                        if ($p > $n) return false;
+                        if (strspn($d, "\x00", $p, 4) === min(4, $n - $p)) return true;
+                        if ($p + 10 > $n || preg_match('/^[A-Z0-9]{4}$/', substr($d, $p, 4)) !== 1) return false;
+                        $q = substr($d, $p + 4, 4);
+                        return (((ord($q[0]) & 0x7F) << 21) | ((ord($q[1]) & 0x7F) << 14) | ((ord($q[2]) & 0x7F) << 7) | (ord($q[3]) & 0x7F)) <= $n - $p - 10;
+                    };
+                    // ★ (2026-11-12 16:39, 100차 RGR19-1) 비표준 v2.4(일반 정수 크기) + 0 바이트가 이어지는 표지(BMP·무압축 PNG)는 syncsafe 로 건너뛴 자리가 그림 속 0 바이트라 패딩으로 보여 표지가 잘렸음(재현: 270054 → 69478바이트, 99차 AUD-1 뒤).
+                    //   일반 정수 자리가 맞고 ① 크기 바이트에 0x80 이상이 있거나(syncsafe 로는 나올 수 없는 값) ② syncsafe 자리는 0 바이트인데 거기서 일반 정수 자리(+4)까지 0 아닌 바이트가 있으면(진짜 패딩이면 끝까지 0) 일반 정수를 씀 — 표준 v2.4 는 두 경우가 생기지 않음
+                    $ssAt = $offset + 10 + $ssSize; $plEnd = min($offset + 14 + $frameSize, $tagDataLen);
+                    $plKeep = $ssSize !== $frameSize && $okNext($tagData, $offset + 10 + $frameSize) && ((((ord($sb[0]) | ord($sb[1]) | ord($sb[2]) | ord($sb[3])) & 0x80) !== 0) || ($ssAt < $tagDataLen && strspn($tagData, "\x00", $ssAt, 4) === min(4, $tagDataLen - $ssAt) && $plEnd > $ssAt && strspn($tagData, "\x00", $ssAt, $plEnd - $ssAt) !== $plEnd - $ssAt));
+                    if ($ssSize !== $frameSize && !$plKeep && ($okNext($tagData, $offset + 10 + $ssSize) || !$okNext($tagData, $offset + 10 + $frameSize))) $frameSize = $ssSize;   // ★ (2026-11-12 16:39, 100차 RGR19-1) !$plKeep 추가(위 주석)
+                }
                 // ID3v2.4의 syncsafe 크기 처리 (대부분 2.3이라 일반 정수가 맞음, 폴백)
                 if ($frameSize > $tagDataLen - $offset || $frameSize < 0) {
                     // syncsafe로 재시도
@@ -2558,6 +3091,28 @@ class ShareManager {
         } finally {
             @fclose($fp);
         }
+    }
+    
+    /**
+     * ★ (2026-11-02 08:58, 41차 점검) ID3 가사(USLT/SYLT) 인코딩 0·3 바이트를 UTF-8 로.
+     *   종전: 인코딩 3(UTF-8)은 검사 없이 그대로 → 옛 태거의 CP949·잘린 바이트면 json_encode 가 false 라 본문 빈 200(30일 immutable 캐시)이었고,
+     *   인코딩 0 은 무조건 ISO-8859-1 → 한국 옛 MP3 의 CP949 가사가 '»ç¶ûÇØ' 로 깨졌음.
+     *   지금: 0 은 0x80 이상 바이트가 있고 CP949 로 유효하며 결과에 한글 음절이 있을 때만 CP949(라틴-1 가사는 종전대로),
+     *   3 은 UTF-8 이 아니면 같은 조건으로 CP949, 아니면 깨진 바이트만 대체 문자로.
+     */
+    private static function id3LegacyText(string $bytes, int $enc): string {
+        $cp = static function (string $b): ?string {
+            // ★ (2026-11-02 10:15, 42차 점검) 정규식 반복을 '*+'(소유)로 — '*' 는 PCRE JIT 스택 한계로 약 8~16KB 넘는 가사에서 false 가 나 CP949 가사가 라틴-1 로 깨졌음(검토 재현)
+            // ★ (2026-11-02 09:44, 41차 재검토) KS X 1001 완성형 바이트 쌍으로만 된 글일 때만 CP949 — 확장 영역까지 받아 'Ärger' 가 '훣ger'(한글 음절이라 아래 검사도 통과)로 바뀌었음(검토 재현)
+            if (!preg_match('/[\x80-\xFF]/', $b) || !preg_match('/^(?:[\x00-\x7F]|[\xA1-\xFE][\xA1-\xFE])*+$/', $b) || !@mb_check_encoding($b, 'CP949')) return null;
+            $cv = @mb_convert_encoding($b, 'UTF-8', 'CP949');
+            return (is_string($cv) && preg_match('/[\x{AC00}-\x{D7A3}]/u', $cv)) ? $cv : null;
+        };
+        if ($enc === 3) {
+            if (mb_check_encoding($bytes, 'UTF-8')) return $bytes;
+            return $cp($bytes) ?? (string)mb_convert_encoding($bytes, 'UTF-8', 'UTF-8');
+        }
+        return $cp($bytes) ?? (string)@mb_convert_encoding($bytes, 'UTF-8', 'ISO-8859-1');
     }
     
     /**
@@ -2668,8 +3223,8 @@ class ShareManager {
                     // 인코딩별 디코드
                     $lyricsText = '';
                     if ($textEncoding === 0) {
-                        // ISO-8859-1
-                        $lyricsText = @mb_convert_encoding($lyricsBytes, 'UTF-8', 'ISO-8859-1');
+                        // ISO-8859-1 — ★ (2026-11-02 08:58, 41차 점검) 옛 MP3 의 CP949 는 살림(id3LegacyText)
+                        $lyricsText = self::id3LegacyText($lyricsBytes, 0);
                     } elseif ($textEncoding === 1) {
                         // UTF-16 with BOM
                         if (strlen($lyricsBytes) >= 2) {
@@ -2687,8 +3242,8 @@ class ShareManager {
                         // UTF-16BE
                         $lyricsText = @mb_convert_encoding($lyricsBytes, 'UTF-8', 'UTF-16BE');
                     } elseif ($textEncoding === 3) {
-                        // UTF-8
-                        $lyricsText = $lyricsBytes;
+                        // UTF-8 — ★ (2026-11-02 08:58, 41차 점검) 검사 없이 쓰면 CP949·잘린 바이트에서 JSON 응답이 빈 본문이 됐음(id3LegacyText)
+                        $lyricsText = self::id3LegacyText($lyricsBytes, 3);
                     }
                     
                     // null 바이트 제거 + trim
@@ -2805,7 +3360,7 @@ class ShareManager {
                         
                         $lyricText = '';
                         if ($textEncoding === 0) {
-                            $lyricText = @mb_convert_encoding($textBytes, 'UTF-8', 'ISO-8859-1');
+                            $lyricText = self::id3LegacyText($textBytes, 0);   // ★ (2026-11-02 08:58, 41차 점검) USLT 와 같은 처리(CP949 살림)
                         } elseif ($textEncoding === 1) {
                             if (strlen($textBytes) >= 2) {
                                 $bom = substr($textBytes, 0, 2);
@@ -2820,7 +3375,7 @@ class ShareManager {
                         } elseif ($textEncoding === 2) {
                             $lyricText = @mb_convert_encoding($textBytes, 'UTF-8', 'UTF-16BE');
                         } elseif ($textEncoding === 3) {
-                            $lyricText = $textBytes;
+                            $lyricText = self::id3LegacyText($textBytes, 3);   // ★ (2026-11-02 08:58, 41차 점검) UTF-8 검사(USLT 와 같은 처리)
                         }
                         
                         if ($lyricText === false || $lyricText === null) continue;
@@ -2856,6 +3411,24 @@ class ShareManager {
     }
     
     /**
+     * ★ (2026-11-02 09:00, 41차 점검) 가사 짝 파일(같은이름.lrc/.txt) 경로.
+     *   종전엔 '$dir/$baseName.lrc' 의 file_exists 만 봐서, 맥에서 온 NFD 이름 음악 옆의 NFC 이름 가사(또는 반대)를 못 찾았음.
+     *   그대로 있으면 종전 경로를 그대로 돌려주고, 없을 때만(이름에 비ASCII 가 있고 intl Normalizer 가 있을 때) 폴더에서 NFC 로 같은 이름을 찾음 — 비교만, 파일 이름은 그대로.
+     */
+    private static function lyricsPairPath(string $dir, string $baseName, string $ext): string {
+        $exact = $dir . DIRECTORY_SEPARATOR . $baseName . '.' . $ext;
+        if (file_exists($exact) || !class_exists('Normalizer') || !preg_match('/[\x80-\xFF]/', $baseName)) return $exact;
+        $want = \Normalizer::normalize($baseName . '.' . $ext, \Normalizer::FORM_C);
+        if (!is_string($want)) return $exact;
+        foreach ((@scandir($dir) ?: []) as $f) {
+            if ($f === '.' || $f === '..' || !preg_match('/[\x80-\xFF]/', $f)) continue;
+            $n = \Normalizer::normalize($f, \Normalizer::FORM_C);
+            if (is_string($n) && $n === $want) return $dir . DIRECTORY_SEPARATOR . $f;
+        }
+        return $exact;
+    }
+    
+    /**
      * ============================================================================
      * 🌐 [공유 스트리밍] MP3 파일의 가사 추출 (LRC 파일 → SYLT → USLT → TXT 우선순위)
      * ============================================================================
@@ -2884,7 +3457,7 @@ class ShareManager {
             $baseName = pathinfo($fullPath, PATHINFO_FILENAME);
             
             // 1. LRC
-            $lrcPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.lrc';
+            $lrcPath = self::lyricsPairPath($dir, $baseName, 'lrc');   // ★ (2026-11-02 09:00, 41차 점검) NFC/NFD 이름 차이도 짝으로(lyricsPairPath)
             if (file_exists($lrcPath) && is_readable($lrcPath)) {
                 $lrcSize = @filesize($lrcPath);
                 if ($lrcSize > 0 && $lrcSize < 1 * 1024 * 1024) {
@@ -2918,7 +3491,7 @@ class ShareManager {
             }
             
             // 4. TXT
-            $txtPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.txt';
+            $txtPath = self::lyricsPairPath($dir, $baseName, 'txt');   // ★ (2026-11-02 09:00, 41차 점검) NFC/NFD 이름 차이도 짝으로(lyricsPairPath)
             if (file_exists($txtPath) && is_readable($txtPath)) {
                 $txtSize = @filesize($txtPath);
                 if ($txtSize > 0 && $txtSize < 1 * 1024 * 1024) {
@@ -2943,6 +3516,9 @@ class ShareManager {
         $access = $this->accessShare($token, $password);
         if (!$access['success']) return null;
         if ($access['share']['is_dir']) return null;
+        // ★ (2026-11-01 01:09, 35차 전체 점검) 재생(stream) 공유만 — 화면도 stream 공유에서만 플레이어·가사를 씀(share.php $isStreamable).
+        //   종전엔 download 공유에서도 같은 폴더의 '같은이름.lrc/.txt'(공유 안 한 파일) 내용을 돌려줬음. 폴더 경로(validateSharedFolderSubPath)와 같은 기준
+        if (($access['share']['share_type'] ?? '') !== 'stream') return null;
         
         $filename = $access['share']['filename'];
         $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
@@ -2964,7 +3540,7 @@ class ShareManager {
         // 1. 같은 폴더의 LRC 파일 (정확 매칭)
         $dir = dirname($fullPath);
         $baseName = pathinfo($filename, PATHINFO_FILENAME);
-        $lrcPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.lrc';
+        $lrcPath = self::lyricsPairPath($dir, $baseName, 'lrc');   // ★ (2026-11-02 09:00, 41차 점검) NFC/NFD 이름 차이도 짝으로(lyricsPairPath)
         if (file_exists($lrcPath) && is_readable($lrcPath)) {
             $lrcSize = @filesize($lrcPath);
             if ($lrcSize > 0 && $lrcSize < 1 * 1024 * 1024) { // 최대 1MB
@@ -3002,7 +3578,7 @@ class ShareManager {
         }
         
         // 4. 같은 폴더의 TXT 파일 (정확 매칭)
-        $txtPath = $dir . DIRECTORY_SEPARATOR . $baseName . '.txt';
+        $txtPath = self::lyricsPairPath($dir, $baseName, 'txt');   // ★ (2026-11-02 09:00, 41차 점검) NFC/NFD 이름 차이도 짝으로(lyricsPairPath)
         if (file_exists($txtPath) && is_readable($txtPath)) {
             $txtSize = @filesize($txtPath);
             if ($txtSize > 0 && $txtSize < 1 * 1024 * 1024) {
@@ -3205,10 +3781,15 @@ class ShareManager {
         
         // ★ 캐시 저장 (다음 요청 시 재사용)
         if (!is_dir($_cacheDir)) @mkdir($_cacheDir, 0755, true);
-        @file_put_contents($_cacheFile, json_encode([
+        // ★ (2026-11-02 08:57, 41차 점검) UTF-8 이 아닌 이름이 하나라도 있으면 json_encode 가 false → 빈 캐시 파일이 남아 30초 캐시가 늘 빗나갔음.
+        //   INVALID_UTF8_SUBSTITUTE 추가(깨진 이름은 '�' 로 저장 — 화면도 같은 값을 받아 어차피 재생 안 되고, validateSharedFolderSubPath 는 realpath 실패로 거부)
+        // ★ (2026-11-02 09:45, 41차 재검토) 위 SUBSTITUTE 는 되돌림 — 캐시가 맞으면 '�' 로 바뀐 이름이 돌아와 목록 확인(validateSharedFolderSubPath)·재생 링크가 원래 바이트 이름과 안 맞아
+        //   UTF-8 이 아닌 이름의 재생·이동이 막혔음(검토 발견). 인코딩이 실패하면 캐시를 쓰지 않음(종전처럼 매번 새로 읽음 — 빈 캐시 파일도 남기지 않음). 화면 출력 쪽 SUBSTITUTE(share.php)는 그대로
+        $_cacheJson = json_encode([
             'folder_mtime' => $_folderMtime,
             'tracks' => $tracks,
-        ], JSON_UNESCAPED_UNICODE), LOCK_EX);
+        ], JSON_UNESCAPED_UNICODE);
+        if ($_cacheJson !== false) @file_put_contents($_cacheFile, $_cacheJson, LOCK_EX);
         $_gsftLog('CACHE WRITE - tracks count=' . count($tracks));
         
         return $tracks;

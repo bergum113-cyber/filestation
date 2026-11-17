@@ -294,10 +294,10 @@ body {
     color: var(--theme-text) !important;
 }
 
-/* select 요소 강화 */
-select,
-.modal select,
-.modal-body select,
+/* select 요소 강화 */   /* ★ (2026-11-10 07:24, 61차 E) 아래 세 줄에 플레이어 안쪽 제외(위 10-24 입력칸과 같은 방식, 우선순위 그대로) — 이퀄라이저 프리셋 선택칸이 어두운 판 안에 테마 바탕 칸으로 나왔음 */
+select:not(:where(.fsvs-root *, .fap *)),
+.modal select:not(:where(.fsvs-root *, .fap *)),
+.modal-body select:not(:where(.fsvs-root *, .fap *)),
 #storage-type,
 #bulk-quota-target,
 #bulk-quota-unit,
@@ -646,7 +646,7 @@ select,
 }
 
 .badge-warning {
-    background: #f57c00;
+    background: #b45309;   /* ★ (2026-11-01 01:07, 35차 전체 점검) #f57c00 위 흰 글자 2.7:1 → 짙은 주황(5.0:1) */
     color: #ffffff;
 }
 
@@ -680,7 +680,7 @@ select,
 .sqlite-warning {
     background: rgba(255, 193, 7, 0.2);
     border-color: rgba(255, 193, 7, 0.5);
-    color: #ffcc80;
+    color: var(--fs-fg-warn, #b45309);   /* ★ (2026-10-31 12:03, 34차 전체 점검) 옅은 주황(#ffcc80)이라 밝은 바탕에서 안 보였음 */
 }
 
 /* ========== 설정 설명 ========== */
@@ -1056,7 +1056,7 @@ a:hover {
 }
 
 .error-msg {
-    color: #ef5350;
+    color: #b71c1c;   /* ★ (2026-11-01 01:07, 35차 전체 점검) 옅은 로그인 창 바탕에서 #ef5350 이 2.9:1 로 흐렸음 → 짙은 빨강 */
 }
 
 /* ========== 파일 뷰어 버튼 ========== */
@@ -1375,22 +1375,23 @@ a:hover {
 }
 
 .status-pending {
-    background: #f57c00;
+    background: #b45309;   /* ★ (2026-11-01 01:07, 35차 전체 점검) #f57c00 위 흰 글자 2.7:1 → 짙은 주황(5.0:1) */
     color: #ffffff;
 }
 
 /* ========== 로그인 실패 행 ========== */
+/* ★ (2026-10-31 12:03, 34차 전체 점검) 다크 테마에서 옮겨 온 옅은 분홍 글자(#ef9a9a)라 밝은 바탕에서 거의 안 보였음 → 짙은 빨강 글자 + 옅은 바탕 */
 .login-logs-table tr.fail {
-    background: rgba(198, 40, 40, 0.3);
-    color: #ef9a9a;
+    background: rgba(198, 40, 40, 0.10);
+    color: #9b1c1c;
 }
 
 .login-logs-table tr.fail td {
-    color: #ef9a9a;
+    color: #9b1c1c;
 }
 
 .login-logs-table tr.fail:hover {
-    background: rgba(198, 40, 40, 0.4);
+    background: rgba(198, 40, 40, 0.16);
 }
 
 /* ========== 차단 기능 활성화 섹션 ========== */
@@ -1551,6 +1552,7 @@ body.is-mobile .header {
     --fs-border: #dbd2fe;
     --fs-border-2: #cec2fd;
     --fs-fg-warn: #b45309;   /* 주황 경고 글자(#e65100)가 진해진 바탕 위 2.95:1 → 4.5:1 (style.css .status-warn 과 같은 짙은 호박색) */
+    --fs-fg-ok: #1b5e20;   /* ★ (2026-11-01 01:58, 36차 전체 점검) 초록 안내 글자(대체값 #2e7d32)가 진해진 바탕(--fs-surface-2) 위 3.96~4.21:1 → 짙은 초록 */
 }
 
 /* ===== ★ (2026-10-24) 파일 칸 색 — 탐색기보다 밝게 =====
@@ -1668,7 +1670,7 @@ body.is-mobile .header {
 .storage-item.active, .menu-list li.active > a, .menu-list li > a.board-sidebar-item.active, #storage-list a.active { background:#dacefd !important; color:#352c50 !important; font-weight:600; }
 .quota-bar { background:#e3dafd !important; }
 .quota-fill { background:#a78bfa !important; }
-.modal-header { background:#a78bfa !important; color:#110e19 !important; --fs-text-2:#110e19; --fs-text-3:#110e19; }
+.modal-header { background:#a78bfa !important; color:#110e19 !important; --fs-text-2:#110e19; --fs-text-3:#110e19; --fs-fg-err:#110e19; } /* ★ (2026-11-10 18:52, 67차 점검) 머리줄 위 상태색 아이콘(금지 아이디·닉네임 창 🚫 .fs-ico-err)이 대체값 빨강 #c62828 로 칠해져 강조색 바탕과 대비 3:1 미달 → 머리줄 글자색을 따름 */
 .modal-header h2, .modal-header .modal-close { color:#110e19 !important; }
 .btn.btn-primary, .btn-primary { background:#a78bfa !important; border-color:#a78bfa !important; color:#110e19 !important; }
 .btn.btn-primary:hover, .btn-primary:hover { background:#937adc !important; border-color:#937adc !important; }
@@ -1713,3 +1715,8 @@ body.is-mobile .header {
 .header .digital-clock.style-4, .header .digital-clock.style-5, .header .digital-clock.style-6, .header .digital-clock.style-7, .header .digital-clock.style-10 { color:#e6e8eb !important; --fs-text-2:#c9cdd3; --fs-text-3:#b4bac2; }
 .header .digital-clock.style-5 .clock-date, .header .digital-clock.style-6 .clock-date { color:#b4bac2 !important; }
 .header .digital-clock.style-7 .clock-date { color:#c9cdd3 !important; }
+/* ★ (2026-11-09 12:21, 57차 Z19-1) 업로드 진행창 '완료' 글자가 고정 초록(#28a745)이라 이 테마의 진한 목록 바탕 위 대비 2.2~2.4:1 → 이 테마의 짙은 성공 글자색으로(다른 테마는 그대로) */
+.upload-session-item.completed .upload-session-percent { color: var(--fs-fg-ok, var(--success)); }
+
+/* ★ (2026-11-12 20:02, 103차 개선 X5) Tab 으로 들어온 검색칸 테두리(102차 KBD-6)를 짙은 남색으로 — 이 테마는 머리줄 배경이 강조색(--primary)과 같아 종전 테두리가 안 보였음(대비 1.00:1, 캡처 실측). 머리줄 대비 3.45:1 이상 */
+.search-box.kbd-focus { box-shadow: 0 0 0 2px #0f172a; }

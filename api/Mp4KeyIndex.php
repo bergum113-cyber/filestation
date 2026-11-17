@@ -58,6 +58,16 @@ class Mp4KeyIndex {
         }
         if ($video === null) return null;
         [$trak, $mdia, $stbl, $vcodec] = $video;
+        // ★ (2026-11-11 18:36, 79차 VID-1) 영상 트랙 tkhd 의 표시 행렬이 기본(회전·뒤집기 없음)이 아니면 'rot' — 빠른 시작의 TS 조각은 이 정보를 담지 못해 휴대폰 세로 영상이 90° 누워 나왔음(재현). 못 읽으면 false(종전과 같음)
+        $rot = false;
+        $tkhd = self::child($trak, 'tkhd');
+        if ($tkhd !== null) {
+            $mo = (ord($tkhd[0] ?? "\0") === 1) ? 52 : 40;
+            if (strlen($tkhd) >= $mo + 20) {
+                $ma = self::s32($tkhd, $mo); $mb = self::s32($tkhd, $mo + 4); $mc = self::s32($tkhd, $mo + 12); $md = self::s32($tkhd, $mo + 16);
+                $rot = !($ma === 0x10000 && $mb === 0 && $mc === 0 && $md === 0x10000);
+            }
+        }
         $mdhd = self::child($mdia, 'mdhd'); $ts = $mdhd ? self::mdhdTimescale($mdhd) : 0;
         if ($ts <= 0) return null;
         $stts = self::child($stbl, 'stts'); if ($stts === null || strlen($stts) < 8) return null;
@@ -81,15 +91,22 @@ class Mp4KeyIndex {
         $total = 0; $durTicks = 0;
         for ($i = 0, $p = 8; $i < $sttsN; $i++, $p += 8) { $c = self::u32($stts, $p); $total += $c; $durTicks += $c * self::u32($stts, $p + 4); }
         if ($total <= 0) return null;
+        // ★ (2026-10-31 12:03, 34차 전체 점검) 상한 — 조작한 mp4(stts count=0xFFFFFFFF, timescale=1)면 아래 반복이 수십억 번 돌며 키 배열이 메모리를 다 썼음
+        if ($total > 20000000) return null;
 
         // 키프레임 번호(0부터, 오름차순). stss 가 없으면 모든 프레임이 키프레임 — 조각이 너무 잘아지지 않게 계획 쪽에서 묶는다
         $keys = [];
         if ($stss !== null && strlen($stss) >= 8) {
             $n = self::u32($stss, 4); if (8 + $n * 4 > strlen($stss)) return null;
-            for ($i = 0, $p = 8; $i < $n; $i++, $p += 4) { $k = self::u32($stss, $p) - 1; if ($k >= 0 && $k < $total) $keys[] = $k; }
+            // ★ (2026-11-01 01:13, 35차 전체 점검) stss 경로에도 상한 — 항목이 20만 개를 넘으면 고르게 솎아 읽음(stss 는 오름차순이라 일부만 써도 올바른 키프레임 목록).
+            //   종전엔 조작한 stss(수천만 항목)면 키 배열과 뒤따르는 같은 크기 배열 4개가 GB 단위 메모리를 썼음(34차 상한은 stss 없는 경로에만 있었음)
+            $sStep = ($n > 200000) ? (int)ceil($n / 200000) : 1;
+            for ($i = 0, $p = 8; $i < $n; $i += $sStep, $p += 4 * $sStep) { $k = self::u32($stss, $p) - 1; if ($k >= 0 && $k < $total) $keys[] = $k; }
             sort($keys);
+            if ($sStep > 1) $keys = array_values(array_unique($keys));
         } else {
             $step = max(1, (int)round($ts > 0 ? $total / max(1, $durTicks / $ts) : 1));   // 약 1초 간격 표본만(모두 키프레임인 경우)
+            if ($total / $step > 200000) $step = (int)ceil($total / 200000);   // ★ (2026-10-31 12:03, 34차 전체 점검) 표본 키는 최대 20만 개
             for ($k = 0; $k < $total; $k += $step) $keys[] = $k;
         }
         if (!$keys) return null;
@@ -120,7 +137,7 @@ class Mp4KeyIndex {
         }
         array_multisort($keyPts, $keyDts);
         return ['duration' => $durTicks / $ts, 'keyPts' => $keyPts, 'keyDts' => $keyDts,
-                'vcodec' => $vcodec, 'acodec' => $acodec, 'acodecs' => $acodecs, 'frames' => $total];
+                'vcodec' => $vcodec, 'acodec' => $acodec, 'acodecs' => $acodecs, 'frames' => $total, 'rot' => $rot];   // ★ (2026-11-11 18:36, 79차 VID-1) rot
     }
 
     /** 키프레임 경계로 약 $target 초 이상씩 묶은 조각 계획: [[시작pts, 끝pts(목록 길이용), 끊는 시각(다음 키프레임 dts)], ...] */

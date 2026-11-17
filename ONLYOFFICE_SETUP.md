@@ -117,18 +117,7 @@ openssl rand -hex 32
 -join ((1..32) | ForEach-Object { '{0:x2}' -f (Get-Random -Maximum 256) })
 ```
 
-#### 방법 B: JWT 비활성화 (간단 설치, 내부망 전용)
-
-```bash
-docker run -d \
-  --name onlyoffice \
-  -p 8080:80 \
-  --restart=always \
-  -e JWT_ENABLED=false \
-  onlyoffice/documentserver
-```
-
-> ⚠️ JWT 비활성화는 보안에 취약합니다. 내부망에서만 사용하세요.
+> ⚠️ 이 웹하드는 **JWT 시크릿이 필수**입니다(2026-11-04 확인). 시크릿을 비우거나 `JWT_ENABLED=false` 로 설치하면 문서 받기가 401 로 막혀 열리지 않고 저장도 되지 않습니다(외부 요청 위조 방어 설계). 반드시 위 방법 A 로 설치하고 같은 값을 웹하드 설정에 입력하세요.
 
 ### 3. 설치 확인
 
@@ -162,7 +151,7 @@ docker run -d \
   --name onlyoffice \
   -p 9090:80 \
   --restart=always \
-  -e JWT_ENABLED=false \
+  -e JWT_SECRET=여기에_시크릿키 \
   onlyoffice/documentserver
 ```
 
@@ -383,7 +372,7 @@ curl -I https://your-domain.com/oo/
 |------|-----|------|
 | **OnlyOffice 연동 활성화** | ✅ 체크 | 기능 활성화 |
 | **Document Server URL** | `https://도메인/oo` | 리버스 프록시 경로 |
-| **JWT 시크릿 키** | Docker 설정과 동일 | JWT_ENABLED=false면 비워둠 |
+| **JWT 시크릿 키** | Docker 설정과 동일 | **필수** — Docker 의 JWT_SECRET 과 같은 값 |
 | **콜백 URL** | (비워둠) | 자동 감지, 필요시만 입력 |
 
 **예시:**
@@ -483,20 +472,7 @@ docker exec onlyoffice cat /etc/onlyoffice/documentserver/local.json | grep secr
 
 웹하드 설정의 JWT 시크릿과 동일한지 확인하세요.
 
-**JWT 비활성화로 테스트:**
-```bash
-# 기존 컨테이너 삭제
-docker stop onlyoffice
-docker rm onlyoffice
-
-# JWT 비활성화로 재실행
-docker run -d \
-  --name onlyoffice \
-  -p 8080:80 \
-  --restart=always \
-  -e JWT_ENABLED=false \
-  onlyoffice/documentserver
-```
+> 이 웹하드는 시크릿이 필수라 JWT 를 끄고 시험할 수 없습니다. 두 값이 글자 하나까지 같은지(앞뒤 공백 포함) 확인하세요.
 
 ### 문제 4: "502 Bad Gateway"
 
@@ -561,7 +537,7 @@ docker run -d \
   --name onlyoffice \
   -p 8080:80 \
   --restart=always \
-  -e JWT_ENABLED=false \
+  -e JWT_SECRET=여기에_시크릿키 \
   -e SSL_VERIFY=false \
   onlyoffice/documentserver
 ```
@@ -620,7 +596,7 @@ docker run -d \
   -p 8080:80 \
   --restart=always \
   --memory=2g \
-  -e JWT_ENABLED=false \
+  -e JWT_SECRET=여기에_시크릿키 \
   onlyoffice/documentserver
 ```
 
@@ -736,7 +712,7 @@ docker run -d \
   --name onlyoffice \
   -p 8080:80 \
   --restart=always \
-  -e JWT_ENABLED=false \
+  -e JWT_SECRET=여기에_시크릿키 \
   onlyoffice/documentserver
 ```
 
@@ -788,7 +764,7 @@ server {
 
 **웹하드 설정:**
 - Document Server URL: `https://mynas.example.com/oo`
-- JWT 시크릿 키: (비워둠)
+- JWT 시크릿 키: Docker 의 JWT_SECRET 과 같은 값(필수)
 - 콜백 URL: `https://mynas.example.com/`
 
 ---

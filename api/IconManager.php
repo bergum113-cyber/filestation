@@ -52,6 +52,7 @@ class IconManager {
         $dir = dirname($this->mapFile);
         if (!is_dir($dir)) @mkdir($dir, 0755, true);
         $json = json_encode($map, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        if (function_exists('fsKeepCorruptCopy')) fsKeepCorruptCopy($this->mapFile);   // ★ (2026-11-11 12:24, 73차) 깨진 매핑 파일이면 덮기 전에 원문 보관(config.php, MIG_73 #7)
         return @file_put_contents($this->mapFile, $json, LOCK_EX) !== false;
     }
     
@@ -186,6 +187,20 @@ class IconManager {
         }
         
         // 내부 콘텐츠 추출 (<svg...>와 </svg> 사이)
+        // ★ (2026-11-01 01:54, 36차 전체 점검) 원본 루트의 그리기 속성(화이트리스트만)을 새 루트로 옮김 — 종전엔 viewBox 만 남기고 버려
+        //   fill="none" stroke="currentColor" stroke-width="2" 같은 선 아이콘(Feather/Lucide)이 검은 덩어리로 칠해졌음. on*·href·style 은 옮기지 않고, 값도 안전한 글자만
+        $rootPaint = '';
+        if (preg_match('/<svg\b([^>]*)>/i', $content, $rm)
+            && preg_match_all('/(?<![\w:.-])(fill|fill-opacity|fill-rule|clip-rule|stroke|stroke-width|stroke-linecap|stroke-linejoin|stroke-miterlimit|stroke-dasharray|stroke-dashoffset|stroke-opacity|opacity|color)\s*=\s*(?:"([^"]*)"|\'([^\']*)\')/i', $rm[1], $pm, PREG_SET_ORDER)) {
+            $seenPaint = [];
+            foreach ($pm as $p) {
+                $pn = strtolower($p[1]);
+                $pv = trim(($p[2] ?? '') !== '' ? $p[2] : ($p[3] ?? ''));
+                if (isset($seenPaint[$pn]) || $pv === '' || !preg_match('/^[#\w\s.,%()+-]+$/', $pv)) continue;
+                $seenPaint[$pn] = true;
+                $rootPaint .= ' ' . $pn . '="' . $pv . '"';
+            }
+        }
         if (preg_match('/<svg\b[^>]*>(.*)<\/svg\s*>/is', $content, $m)) {
             $innerContent = $m[1];
             // ★ (2026-10-29 23:35, 24차 점검) 편집기 전용 이름공간(inkscape:·sodipodi: 등) 요소·속성 제거 — 새 루트로 감싸면 그 선언이 빠져 브라우저가 그림을 못 그렸음
@@ -199,7 +214,7 @@ class IconManager {
             $content = '<?xml version="1.0" encoding="UTF-8"?>' . "\n"
                      . '<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
                      . 'viewBox="' . $origViewBox . '" width="48" height="48" '
-                     . 'preserveAspectRatio="xMidYMid meet">' . "\n"
+                     . 'preserveAspectRatio="xMidYMid meet"' . $rootPaint . '>' . "\n"
                      . $innerContent
                      . "\n</svg>";
         }
@@ -220,6 +235,7 @@ class IconManager {
                 $content = preg_replace('/([\s"\'\/])on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)/i', '$1', $content);
             } while ($content !== $before);
             if (preg_match('/&#|javascript\s*:|vbscript\s*:|attributeName\s*=\s*["\']?\s*(on|[a-z:]*href)/i', $content)) return '';
+            if (preg_match('/<!(DOCTYPE|ENTITY)/i', $content)) return '';   // ★ (2026-11-01 09:38, 38차 점검) DOCTYPE·엔티티가 남으면 거부(아래 DOM 단계와 같음)
             return $content;
         }
         $prevErr = libxml_use_internal_errors(true);
@@ -228,6 +244,14 @@ class IconManager {
         libxml_clear_errors();
         libxml_use_internal_errors($prevErr);
         if (!$ok || !$doc->documentElement || strtolower($doc->documentElement->localName) !== 'svg') return '';
+        // ★ (2026-11-01 09:38, 38차 점검) DOCTYPE(내부 엔티티 선언)이 남았으면 거부 — 앞 정규식은 '<!DOC<!DOCTYPE z>TYPE' 처럼 겹쳐 쓰면 지운 뒤 다시 맞춰져 통과했고,
+        //   아래 순회는 엔티티 내용을 보지 않아 저장된 파일을 브라우저가 열면 엔티티가 펼쳐져 &lt;script&gt; 가 실행됐음(재현). 엔티티 참조 노드도 거부,
+        //   루트가 SVG 이름공간인지 확인하고, 출력은 루트 요소만(머리말의 주석·처리 지시는 버림)
+        if ($doc->doctype !== null) return '';
+        if ((string)$doc->documentElement->namespaceURI !== 'http://www.w3.org/2000/svg') return '';
+        foreach ((new \DOMXPath($doc))->query('//node()') as $nd) {
+            if ($nd->nodeType === XML_ENTITY_REF_NODE || $nd->nodeType === XML_ENTITY_NODE) return '';
+        }
         
         $badTags = ['script', 'foreignobject', 'iframe', 'object', 'embed', 'handler', 'listener'];
         $animTags = ['set', 'animate', 'animatetransform', 'animatemotion', 'animatecolor'];
@@ -253,8 +277,9 @@ class IconManager {
             foreach ($dropAttrs as $attr) $el->removeAttributeNode($attr);
         }
         foreach ($removeEls as $el) { if ($el->parentNode) $el->parentNode->removeChild($el); }
-        $out = $doc->saveXML();
-        return $out === false ? '' : $out;
+        $out = $doc->saveXML($doc->documentElement);   // ★ (2026-11-01 09:38, 38차 점검) 루트 요소만
+        if ($out === false || preg_match('/<!(DOCTYPE|ENTITY)/i', $out)) return '';
+        return '<?xml version="1.0" encoding="UTF-8"?>' . "\n" . $out;
     }
     
     /**
@@ -375,12 +400,27 @@ class IconManager {
         }
         
         // 저장
+        // ★ (2026-11-01 01:55, 36차 전체 점검) 화면(app.js)은 업로드마다 새 이름(user_확장자_시각)을 만들어 보냄 — 덮어쓰기 의도 없음. 그런데 라벨형 'archive_' 를 붙여 32자에서 자르면
+        //   긴 확장자는 시각 부분이 잘려 같은 이름이 되어, 그 아이콘을 쓰는 다른 확장자 그림까지 바뀌었음 → 이미 있으면 겹치지 않는 이름으로
+        $name = $this->uniqueCustomName($name);
         $targetPath = $this->customDir . '/' . $name . '.svg';
         if (@file_put_contents($targetPath, $svgContent, LOCK_EX) === false) {
             return ['success' => false, 'error' => '파일 저장 실패'];
         }
-        
+
         return ['success' => true, 'name' => $name];
+    }
+
+    /** ★ (2026-11-01 01:55, 36차 전체 점검) custom 폴더에 없는 이름 — 있으면 앞부분을 줄여 '_시각4자리[번호]' 를 붙이고(32자 안, archive_ 접두어 유지) 겹치면 번호를 늘려 다시 */
+    private function uniqueCustomName(string $name): string {
+        if (!file_exists($this->customDir . '/' . $name . '.svg')) return $name;
+        $ts = substr((string)time(), -4);
+        for ($i = 0; $i < 10000; $i++) {
+            $sfx = '_' . $ts . ($i > 0 ? (string)$i : '');
+            $cand = substr($name, 0, 32 - strlen($sfx)) . $sfx;
+            if (!file_exists($this->customDir . '/' . $cand . '.svg')) return $cand;
+        }
+        return substr($name, 0, 15) . '_' . bin2hex(random_bytes(8));   // 거의 안 옴(32자)
     }
     
     /**
@@ -481,12 +521,10 @@ class IconManager {
         }
         
         // 저장 (이름 충돌 방지: 이미 존재하면 타임스탬프 추가)
+        // ★ (2026-11-01 01:55, 36차 전체 점검) 종전 substr($name.'_'.4자리, 0, 32) 는 이름이 이미 32자면 원래 이름 그대로라 기존 파일을 덮었음 → uniqueCustomName(앞부분을 줄여 접미사 자리 확보 + 겹치면 다시)
+        $name = $this->uniqueCustomName($name);
         $targetPath = $this->customDir . '/' . $name . '.svg';
-        if (file_exists($targetPath)) {
-            $name = substr($name . '_' . substr((string)time(), -4), 0, 32);
-            $targetPath = $this->customDir . '/' . $name . '.svg';
-        }
-        
+
         if (@file_put_contents($targetPath, $svgContent, LOCK_EX) === false) {
             return ['success' => false, 'error' => '파일 저장 실패'];
         }
@@ -585,6 +623,7 @@ class IconManager {
         try {
             $img = @imagecreatefromstring($data);
             if (!$img) return null;
+            if (!imageistruecolor($img)) imagepalettetotruecolor($img);   // ★ (2026-11-04 01:30, 54차 점검) 팔레트 그림(GIF·팔레트 PNG)은 imagecolorat 이 색이 아니라 색 번호를 줘 배경 제거가 말없이 안 됐음(재현)
             
             $w = imagesx($img);
             $h = imagesy($img);
@@ -769,6 +808,7 @@ class IconManager {
                 $log("FAIL: imagecreatefromstring 반환값 false (ext=$ext, size=" . strlen($data) . "B)");
                 return null;
             }
+            if (!imageistruecolor($img)) imagepalettetotruecolor($img);   // ★ (2026-11-04 01:30, 54차 점검) 팔레트 그림도 색으로 읽게(배경 제거와 같음 — 종전엔 라벨 교체가 말없이 안 됐음, 재현)
             
             $w = imagesx($img);
             $h = imagesy($img);
@@ -1718,6 +1758,7 @@ class IconManager {
         if (!is_dir($dir) && !@mkdir($dir, 0755, true)) {
             return ['success' => false, 'error' => 'data 디렉토리 생성 실패'];
         }
+        if (function_exists('fsKeepCorruptCopy')) fsKeepCorruptCopy($file);   // ★ (2026-11-11 12:24, 73차) 위 saveUserMap 과 같음(MIG_73 #7)
         $ok = @file_put_contents($file, json_encode($map, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT), LOCK_EX);
         if ($ok === false) {
             return ['success' => false, 'error' => '저장 실패'];

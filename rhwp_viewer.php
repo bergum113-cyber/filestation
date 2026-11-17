@@ -5,7 +5,7 @@ require_once __DIR__ . '/php_version_check.php';
  * 
  * Rust + WebAssembly (rhwp) 기반 고품질 HWP/HWPX 렌더링
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.8.7
+ * @rhwp_version 0.9.0
  */
 
 require_once __DIR__ . '/config.php';
@@ -21,28 +21,51 @@ header('Cache-Control: no-cache, must-revalidate');
 header('Pragma: no-cache');
 header('Expires: 0');
 
+$rhwpAssetKey = substr((string)@md5_file(__DIR__ . '/assets/rhwp/rhwp.js'), 0, 10) ?: APP_VERSION;   // ★ (2026-11-09 09:37) 아래 rhwp.js·wasm 캐시 키(파일을 못 읽으면 종전 값)
+// ★ (2026-11-15 03:18, 159차 펜닐 요청 '같은 엔진 파일 2개 중 1개 빼기') 엔진(wasm)은 편집기(studio)와 같은 파일을 씀 — 종전엔 뷰어용 assets/rhwp/rhwp_bg.wasm 과
+//   편집기 빌드가 만든 assets/rhwp/studio/rhwp_bg-<해시>.wasm 이 바이트까지 같은 파일(26.8MB, npm 원본과 md5 같음)로 두 벌 배포돼 묶음이 약 9.9MB 컸음.
+//   studio 폴더의 엔진을 쓰되, 업그레이드 잔재로 여러 개면 편집기 index js 가 부르는 것(cleanup_rhwp_studio.php 와 같은 판정), 하나도 없으면 종전 위치
+$rhwpWasmRel = 'assets/rhwp/rhwp_bg.wasm';
+$_rvStudioDir = __DIR__ . '/assets/rhwp/studio';
+$_rvWasm = glob($_rvStudioDir . '/rhwp_bg-*.wasm') ?: [];
+if (count($_rvWasm) > 1) {
+    $_rvPick = null;
+    $_rvEd = (string)@file_get_contents(__DIR__ . '/rhwp_editor.php');
+    if (preg_match('/index-[A-Za-z0-9_-]+\.js/', $_rvEd, $_rvM) && ($_rvJs = @file_get_contents($_rvStudioDir . '/' . $_rvM[0])) !== false
+        && preg_match('/rhwp_bg-[A-Za-z0-9_-]+\.wasm/', $_rvJs, $_rvW) && is_file($_rvStudioDir . '/' . $_rvW[0])) $_rvPick = $_rvStudioDir . '/' . $_rvW[0];
+    if ($_rvPick === null) { usort($_rvWasm, function ($x, $y) { return (int)@filemtime($y) - (int)@filemtime($x); }); $_rvPick = $_rvWasm[0]; }
+    $_rvWasm = [$_rvPick];
+    unset($_rvEd, $_rvJs, $_rvM, $_rvW, $_rvPick);
+}
+if ($_rvWasm) $rhwpWasmRel = 'assets/rhwp/studio/' . basename($_rvWasm[0]);
+unset($_rvStudioDir, $_rvWasm);
 $storage = new Storage();
 $auth = new Auth();
 
-if (!$auth->isLoggedIn()) {
+// ★ (2026-11-07 11:20, 로그인 유지 풀림 재검토) 세션이 없으면 로그인 유지 토큰으로 복구 시도(index.php·api.php 와 같게) — 종전엔 이 화면이 첫 요청이면(iPhone 이 탭을 정리한 뒤 뷰어 탭을 다시 읽을 때 등) 로그인 유지를 켜도 로그인 화면/401 로 갔음(재현)
+if (!$auth->isLoggedIn() && !$auth->checkRememberToken()) {
     header('Location: index.php');
     exit;
 }
 
 // 스토리지 읽기 권한 체크
 $_checkSid = (int)($_GET['storage_id'] ?? 0);
+if (isset($_GET['path']) && !is_string($_GET['path'])) { http_response_code(400); exit('Invalid path'); }   // ★ (2026-11-11 13:21, 74차) path[]= 배열이면 dirname()/basename() TypeError 로 500 이었음(api.php 는 56차에 400 으로 정리, 이 진입점은 앞단을 안 거침) → 400. 문자열 경로는 그대로
 $_checkPath = $_GET['path'] ?? '';
+// ★ (2026-11-03 14:21, 51차 재검토) 로컬 스토리지도 원격처럼 '..'(또는 점·공백만 있는 '.. '·'...') 조각을 거부 — api.php 앞단 차단을 거치지 않는 진입점이라, 루트 위로 넘치는 '..'
+//   ('../<스토리지 폴더>/secret/a.docx')나 Linux 의 '.. '·'...' 폴더를 끼운 경로가 폴더 권한·잠금 비교만 비켜 가 읽기 금지 폴더 읽기·쓰기 금지/잠긴 한글 파일 덮어쓰기가 됐음(재현)
+if (preg_match('#(^|[\\\\/])[. ]*\.\.[. ]*($|[\\\\/])#', (string)$_checkPath)) { http_response_code(403); exit('Invalid path'); }
 if ($_checkSid && !$storage->checkPermission($_checkSid, 'can_read')) {
     http_response_code(403);
-    $currentLang = $_SESSION['lang'] ?? 'ko';
+    $currentLang = getLang();   // ★ (2026-11-02 10:28, 42차 점검) 403 화면 언어를 세션 값만 봐서, 쿠키·브라우저 언어로 정해진 영어 사용자(세션에 lang 없음)에게 한국어가 나왔음 → lang.php 판정(getLang) 사용
     exit('<!DOCTYPE html><html><head><meta charset="utf-8"><title>403</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;background:#f5f5f5;"><div style="text-align:center;"><h2 style="color:#d32f2f;">' . fsi_inline('ban') . ' ' . ($currentLang === 'en' ? 'Access Denied' : '접근 권한이 없습니다') . '</h2><p style="color:#666;">' . ($currentLang === 'en' ? 'You do not have permission to access this file.' : '이 파일에 대한 읽기 권한이 없습니다.') . '</p><a href="index.php" style="color:#1976d2;">' . ($currentLang === 'en' ? 'Go back' : '돌아가기') . '</a></div></body></html>');
 }
 if ($_checkSid && $_checkPath) {
     $_checkDir = dirname($_checkPath);
     if ($_checkDir === '.') $_checkDir = '';
-    if (!$storage->checkFolderPermission($_checkSid, $_checkDir ?: $_checkPath)) {
+    if (!$storage->checkFolderPermission($_checkSid, ($_checkDir !== '' ? $_checkDir : $_checkPath))) { // ★ (2026-11-01 17:17, 40차 점검) 부모 폴더가 '0' 이면 ?: 가 빈 값으로 봐 항목 자신 규칙으로 검사했음 → '' 일 때만 항목 자신
         http_response_code(403);
-        $currentLang = $_SESSION['lang'] ?? 'ko';
+        $currentLang = getLang();   // ★ (2026-11-02 10:28, 42차 점검) 403 화면 언어를 세션 값만 봐서, 쿠키·브라우저 언어로 정해진 영어 사용자(세션에 lang 없음)에게 한국어가 나왔음 → lang.php 판정(getLang) 사용
         exit('<!DOCTYPE html><html><head><meta charset="utf-8"><title>403</title></head><body style="display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-family:sans-serif;background:#f5f5f5;"><div style="text-align:center;"><h2 style="color:#d32f2f;">' . fsi_inline('ban') . ' ' . ($currentLang === 'en' ? 'Access Denied' : '접근 권한이 없습니다') . '</h2><p style="color:#666;">' . ($currentLang === 'en' ? 'You do not have permission to access this folder.' : '이 폴더에 대한 접근 권한이 없습니다.') . '</p><a href="index.php" style="color:#1976d2;">' . ($currentLang === 'en' ? 'Go back' : '돌아가기') . '</a></div></body></html>');
     }
 }
@@ -57,7 +80,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     // 폴더별 권한 체크
     $fileDir = dirname($filePath);
     if ($fileDir === '.') $fileDir = '';
-    if (!$storage->checkFolderPermission($storageId, $fileDir ?: $filePath)) {
+    if (!$storage->checkFolderPermission($storageId, ($fileDir !== '' ? $fileDir : $filePath))) { // ★ (2026-11-01 17:17, 40차 점검) 부모 폴더가 '0' 이면 ?: 가 빈 값으로 봐 항목 자신 규칙으로 검사했음 → '' 일 때만 항목 자신
         http_response_code(403);
         exit('No permission');
     }
@@ -79,7 +102,9 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     $isRemote = in_array($storageType, $remoteTypes);
     
     if ($isRemote) {
-        if (preg_match('/\.\.[\\/\\\\]/', $filePath) || strpos($filePath, '..') !== false) {
+        // ★ (2026-11-01 09:41, 38차 점검) 경로 조각이 '..'(또는 점·공백만으로 된 '.. ' 같은 조각 — Windows 쪽 서버는 끝 점·공백을 버림)일 때만 막음.
+        //   종전엔 strpos 로 '..' 가 어디 있든 막아 '보고서..hwp'·'v1..2/a.hwp' 같은 정상 이름이 403 으로 열리지 않았음
+        if (preg_match('#(^|[\\\\/])[. ]*\.\.[. ]*($|[\\\\/])#', $filePath)) {
             http_response_code(403);
             exit('Invalid path');
         }
@@ -105,7 +130,11 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
             exit('File not found');
         }
         
-        file_put_contents($tempFile, $content);
+        if (file_put_contents($tempFile, $content) === false) {   // ★ (2026-11-01 09:41, 38차 점검) 임시 파일 쓰기 실패(임시 폴더 권한·디스크 가득) 확인 — 종전엔 'Content-Length: ' 가 비고 readfile 경고만 남아 화면엔 '파싱 실패'만 보였음
+            @unlink($tempFile);
+            http_response_code(503);
+            exit('Temp write failed');
+        }
         $realFile = $tempFile;
         $cleanup = true;
     } else {
@@ -152,6 +181,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
 // ============================================================
 $storageId = (int)($_GET['storage_id'] ?? 0);
 $filePath = $_GET['path'] ?? '';
+if ((isset($_GET['vault_url']) && !is_string($_GET['vault_url'])) || (isset($_GET['name']) && !is_string($_GET['name']))) { http_response_code(400); exit('Invalid parameter'); }   // ★ (2026-11-16 21:38, 269차 점검) 74차 path[] 와 같음 — vault_url[]·name[] 배열이면 strpos·preg_match·htmlspecialchars TypeError 로 빈 500 화면이었음(재현)
 $vaultUrl = $_GET['vault_url'] ?? '';
 $vaultName = $_GET['name'] ?? '';
 
@@ -223,6 +253,8 @@ ob_start('fs_icon_convert_html');
         .viewer-body { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; align-items: center; gap: 16px; background: #e8e8e8; -webkit-overflow-scrolling: touch; }
         .page-container { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); max-width: 100%; }
         .page-container svg { display: block; height: auto; }
+        /* ★ (2026-11-10 07:24, 61차 E) PC '화면 맞춤' — 쪽 상자가 내용 폭을 따르는데 svg 는 width 속성을 지우고 100% 만 받아 서로 기대다 기본폭 300px 로 떨어졌음 → 맞춤일 때만 쪽 상자를 본문 폭으로(화면에서만 — 인쇄 규칙은 종전 그대로) */
+        @media screen { .page-container.fit-width { width: 100%; } }
         
         /* 로딩 */
         .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 1000; }
@@ -264,6 +296,8 @@ ob_start('fs_icon_convert_html');
             .page-container { box-shadow: none; page-break-after: always; break-after: page; margin: 0; padding: 0; }
             .page-container:last-child { page-break-after: auto; break-after: auto; }
             .page-container svg { display: block; width: 100% !important; height: auto !important; max-width: 100%; }
+            /* ★ (2026-11-10 13:19, 63차 E) '화면 맞춤'으로 svg width 속성이 지워진 뒤엔 위 100% 가 쪽 상자와 서로 기대 300px 로 인쇄됐음 → 지우기 전 폭(--rv-pw)이 있으면 그 폭으로(없으면 종전 100%) */
+            .page-container svg { width: var(--rv-pw, 100%) !important; }
             @page { margin: 10mm; }
         }
     </style>
@@ -286,11 +320,12 @@ ob_start('fs_icon_convert_html');
 <script>window.FS_ICO_EMOJI = <?= fs_icon_map_json() ?>;</script>
 <script src="assets/js/fs-icons.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-icons.js'), 0, 10) ?>"></script>
     <div class="viewer-header">
-        <span class="title" id="header-title" title="<?php echo htmlspecialchars($fileName); ?>"><?php echo htmlspecialchars($fileName); ?></span>
+        <span class="title fs-noico" id="header-title" title="<?php echo htmlspecialchars($fileName); ?>"><?php echo htmlspecialchars($fileName); ?></span>
         <div class="controls">
-            <button id="btn-prev" disabled title="이전 페이지">◀</button>
+            <?php /* ★ (2026-11-02 10:28, 42차 점검) 이 화면 문구가 번역 함수 밖 한국어 고정이라 영어 화면에도 한국어가 나왔음 → __() 로(한국어 기본 문구는 그대로) */ ?>
+            <button id="btn-prev" disabled title="<?php echo htmlspecialchars(__('rhwp_prev_page', '이전 페이지')); ?>">◀</button>
             <span class="page-info" id="page-info">- / -</span>
-            <button id="btn-next" disabled title="다음 페이지">▶</button>
+            <button id="btn-next" disabled title="<?php echo htmlspecialchars(__('rhwp_next_page', '다음 페이지')); ?>">▶</button>
             <span id="rhwp-version" style="font-size:10px;color:#999;margin-left:4px;"></span>
             <select id="zoom-select">
                 <option value="fit"><?php echo $currentLang === 'en' ? 'Fit Width' : '화면 맞춤'; ?></option>
@@ -312,13 +347,13 @@ ob_start('fs_icon_convert_html');
             }
             if ($hwpSwitchUrl):
             ?>
-            <a href="<?php echo htmlspecialchars($hwpSwitchUrl); ?>" class="switch-btn" title="기본 뷰어로 보기 (문서가 이상하게 보일 때)">🔄 hwp로 보기</a>
+            <a href="<?php echo htmlspecialchars($hwpSwitchUrl); ?>" class="switch-btn" title="<?php echo htmlspecialchars(__('rhwp_switch_hwp_title', '기본 뷰어로 보기 (문서가 이상하게 보일 때)')); ?>">🔄 <?php echo htmlspecialchars(__('rhwp_switch_hwp', 'hwp로 보기')); ?></a>
             <?php endif; ?>
             <?php if ($canDownload): ?>
-            <button id="btn-download" title="다운로드">📥</button>
+            <button id="btn-download" title="<?php echo htmlspecialchars(__('hwp_download', '다운로드')); ?>">📥</button>
             <?php endif; ?>
             <button id="btn-print" title="<?php echo __('viewer_print'); ?> (Ctrl+P)">🖨️</button>
-            <button id="btn-close" title="닫기">✕</button>
+            <button id="btn-close" title="<?php echo htmlspecialchars(__('hwp_close', '닫기')); ?>">✕</button>
         </div>
     </div>
     
@@ -326,7 +361,7 @@ ob_start('fs_icon_convert_html');
     
     <div class="loading-overlay" id="loading">
         <div class="spinner"></div>
-        <div class="loading-text" id="loading-text">WASM 로드 중...</div>
+        <div class="loading-text" id="loading-text"><?php echo htmlspecialchars(__('rhwp_loading_wasm', 'WASM 로드 중...')); ?></div>
     </div>
 
     <!-- 한글 폰트 사전 로드 -->
@@ -390,14 +425,29 @@ ob_start('fs_icon_convert_html');
     </script>
 
     <script type="module">
-    import init, { HwpDocument, version } from './assets/rhwp/rhwp.js?v=<?php echo APP_VERSION; ?>';
+    // ★ (2026-11-09 09:37, rhwp 0.9.0 업그레이드) 캐시 키를 FileStation 버전 대신 rhwp.js 내용으로 — FileStation 버전을 올리지 않고 rhwp 만 바꾸면 브라우저가
+    //   옛 rhwp.js 또는 옛 wasm 하나만 캐시에서 써 JS·wasm 판이 어긋날 수 있었음(같은 페이지 fs-icons.js 와 같은 방식, rhwp.js 는 wasm 과 늘 함께 바뀜)
+    import init, { HwpDocument, version } from './assets/rhwp/rhwp.js?v=<?php echo $rhwpAssetKey; ?>';
     
     const STORAGE_ID = <?php echo $storageId; ?>;
-    const FILE_PATH = <?php echo json_encode($filePath); ?>;
-    const FILE_NAME = <?php echo json_encode($fileName); ?>;
-    const FILE_EXT = <?php echo json_encode($fileExt); ?>;
-    const VAULT_URL = <?php echo json_encode($vaultUrl); ?>;
+    const FILE_PATH = <?php echo json_encode($filePath, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    const FILE_NAME = <?php echo json_encode($fileName, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    const FILE_EXT = <?php echo json_encode($fileExt, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    const VAULT_URL = <?php echo json_encode($vaultUrl, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
     const APP_VER = <?php echo json_encode(APP_VERSION); ?>;
+    // ★ (2026-11-02 10:28, 42차 점검) 스크립트 문구도 번역(종전엔 한국어 고정). 한국어 기본 문구는 그대로
+    const RV_T = <?php echo json_encode([
+        'engine' => __('rhwp_loading_engine', 'WASM 엔진 로드 중...'),
+        'download' => __('rhwp_downloading', '파일 다운로드 중...'),
+        'parse' => __('rhwp_parsing', '문서 파싱 중...'),
+        'noPages' => __('rhwp_no_pages', '페이지가 없습니다.'),
+        'openFailed' => __('rhwp_open_failed', '파일을 열 수 없습니다.'),
+        'openBasic' => __('rhwp_open_in_basic', '기존 뷰어로 열기'),
+        'renderFailed' => __('rhwp_page_render_failed', '페이지 {n} 렌더링 실패'),
+        'pageCount' => __('rhwp_page_count', '{n} 페이지'),
+        'unreadable' => __('rhwp_unreadable_format', '문서 형식을 읽지 못했습니다.'),
+        'pwRequired' => __('rhwp_password_required', '암호가 걸린 문서라 이 뷰어에서는 열 수 없습니다.'),   // ★ (2026-11-10 19:35, 67차 점검) 암호 문서 오류 원문(한국어·개발자 함수 이름) 대신
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
     
     let doc = null;
     let currentPage = 0;
@@ -424,12 +474,12 @@ ob_start('fs_icon_convert_html');
     
     async function start() {
         try {
-            loadingText.textContent = 'WASM 엔진 로드 중...';
-            await init({ module_or_path: './assets/rhwp/rhwp_bg.wasm?v=' + encodeURIComponent(APP_VER) });
+            loadingText.textContent = RV_T.engine;
+            await init({ module_or_path: './' + <?php echo json_encode($rhwpWasmRel); ?> + '?v=' + encodeURIComponent(<?php echo json_encode($rhwpAssetKey); ?>) });   // ★ (2026-11-15 03:18, 159차) 편집기와 같은 엔진 파일(위 $rhwpWasmRel)
             // rhwp 버전 표시
             try { const verEl = document.getElementById('rhwp-version'); if (verEl) verEl.textContent = 'rhwp v' + version(); } catch(e) {}
             
-            loadingText.textContent = '파일 다운로드 중...';
+            loadingText.textContent = RV_T.download;
             const url = VAULT_URL 
                 ? VAULT_URL 
                 : `rhwp_viewer.php?action=stream&storage_id=${STORAGE_ID}&path=${encodeURIComponent(FILE_PATH)}`;
@@ -437,11 +487,11 @@ ob_start('fs_icon_convert_html');
             if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
             const data = new Uint8Array(await resp.arrayBuffer());
             
-            loadingText.textContent = '문서 파싱 중...';
+            loadingText.textContent = RV_T.parse;
             doc = new HwpDocument(data);
             totalPages = doc.pageCount();
             
-            if (totalPages === 0) throw new Error('페이지가 없습니다.');
+            if (totalPages === 0) throw new Error(RV_T.noPages);
             
             currentPage = 0;
             renderAllPages();
@@ -452,7 +502,7 @@ ob_start('fs_icon_convert_html');
             const _errHwpUrl = VAULT_URL 
                 ? `hwp_viewer.php?vault_url=${encodeURIComponent(VAULT_URL)}&name=${encodeURIComponent(FILE_NAME)}`
                 : `hwp_viewer.php?storage_id=${STORAGE_ID}&path=${encodeURIComponent(FILE_PATH)}`;
-            body.innerHTML = `<div class="error-msg">❌ 파일을 열 수 없습니다.<br><br>${escapeHtml(errText(e))}<br><br><small>기존 뷰어로 열기: <a href="${_errHwpUrl}">hwp_viewer.php</a></small></div>`;
+            body.innerHTML = `<div class="error-msg">❌ ${escapeHtml(RV_T.openFailed)}<br><br>${escapeHtml(errText(e))}<br><br><small>${escapeHtml(RV_T.openBasic)}: <a href="${_errHwpUrl}">hwp_viewer.php</a></small></div>`;
         }
     }
     
@@ -475,6 +525,7 @@ ob_start('fs_icon_convert_html');
                         container.classList.add('fit-width');
                         svgEl.style.width = '100%';
                         svgEl.style.height = 'auto';
+                        { const aw = parseFloat(svgEl.getAttribute('width')); if (aw > 0) svgEl.style.setProperty('--rv-pw', aw + 'px'); } // ★ (2026-11-10 13:19, 63차 E) 인쇄용 본래 폭 보관
                         svgEl.removeAttribute('width');
                         svgEl.removeAttribute('height');
                     } else {
@@ -493,11 +544,11 @@ ob_start('fs_icon_convert_html');
             } catch (e) {
                 const errDiv = document.createElement('div');
                 errDiv.className = 'page-container';
-                errDiv.innerHTML = `<div class="error-msg">페이지 ${i + 1} 렌더링 실패: ${escapeHtml(errText(e))}</div>`;
+                errDiv.innerHTML = `<div class="error-msg">${escapeHtml(RV_T.renderFailed.replace('{n}', i + 1))}: ${escapeHtml(errText(e))}</div>`;
                 body.appendChild(errDiv);
             }
         }
-        pageInfo.textContent = `${totalPages} 페이지`;
+        pageInfo.textContent = RV_T.pageCount.replace('{n}', totalPages);
     }
     
     function updateNav() {
@@ -507,10 +558,11 @@ ob_start('fs_icon_convert_html');
     
     // ★ (2026-10-26) 오류 문구 — rhwp(WASM)는 Error 가 아닌 문자열·값을 던지기도 해 e.message 가 없으면 화면에 'undefined' 가 나왔음
     function errText(e) {
+        try { const _raw = (e && typeof e.message === 'string') ? e.message : String(e); if (/password|비밀번호/i.test(_raw)) return RV_T.pwRequired; } catch (_) {}   // ★ (2026-11-10 19:35, 67차 점검) 암호 문서만 번역 문구로 — 그 밖의 오류는 종전대로 원문
         if (e && typeof e.message === 'string' && e.message) return e.message;
         if (typeof e === 'string' && e) return e;
         if (e != null) { const s = String(e); if (s && s !== '[object Object]' && s !== 'undefined') return s; }
-        return '문서 형식을 읽지 못했습니다.';
+        return RV_T.unreadable;
     }
     function escapeHtml(str) {
         const div = document.createElement('div');
@@ -551,6 +603,13 @@ ob_start('fs_icon_convert_html');
                 updateNav();
                 break;
             }
+            // ★ (2026-11-12 06:02, 94차 DOC-5) 맨 끝까지 내렸는데 맞는 쪽이 없으면(마지막 쪽이 화면 높이의 두 배보다 클 때 — 화면 맞춤·150%·200%) 마지막 쪽으로.
+            //   종전엔 번호가 앞 값('1 / 24')에 멈추고 ▶ 를 누르면 3쪽으로 되돌아갔음(재현, PC 1400×850)
+            if (i === pages.length - 1) {
+                currentPage = i;
+                pageInfo.textContent = `${i + 1} / ${totalPages}`;
+                updateNav();
+            }
         }
     });
     
@@ -564,6 +623,7 @@ ob_start('fs_icon_convert_html');
                 if (svg) {
                     svg.style.width = '100%';
                     svg.style.height = 'auto';
+                    { const aw = parseFloat(svg.getAttribute('width')); if (aw > 0) svg.style.setProperty('--rv-pw', aw + 'px'); } // ★ (2026-11-10 13:19, 63차 E) 인쇄용 본래 폭 보관
                     svg.removeAttribute('width');
                     svg.removeAttribute('height');
                 }
@@ -583,6 +643,8 @@ ob_start('fs_icon_convert_html');
                 }
             });
         }
+        // ★ (2026-11-12 06:02, 94차 DOC-5) 배율을 바꾼 뒤 보던 쪽으로 — 종전엔 스크롤 값만 남아 다른 쪽이 보이고 번호는 그대로였음(재현: 4쪽에서 200% → 표시 4, 화면 2쪽)
+        { const _kp = body.querySelector(`.page-container[data-page="${currentPage}"]`); if (_kp) _kp.scrollIntoView({ block: 'start' }); }
     });
     
     // 다운로드
@@ -650,7 +712,7 @@ ob_start('fs_icon_convert_html');
     <script>
     (function() {
         try {
-            const vu = <?php echo json_encode($vaultUrl); ?>;
+            const vu = <?php echo json_encode($vaultUrl, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
             const ps = new URLSearchParams(vu.split('?')[1] || '');
             const tempId = ps.get('temp_id'), storageId = ps.get('storage_id'), path = ps.get('path');
             if (tempId && storageId) {

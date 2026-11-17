@@ -211,3 +211,49 @@ if (version_compare(PHP_VERSION, FS_MIN_PHP_VERSION, '<')) {
     <?php
     exit;
 }
+
+// ★ (2026-11-02 10:30, 42차 점검) 처음 설치할 때 data/ 에 쓸 수 없거나 필수 확장 mbstring 이 없으면 원인이 화면에 안 보였음(E5#8 — 가입 화면에서
+//   '잠시 후 다시 시도'만, mbstring 이 없으면 로그인부터 '서버 오류') → 위 버전 오류처럼 원인과 해결법을 보여 줌.
+//   data/ 검사는 첫 실행(data/users.json 없음)에만 함 — 이미 쓰고 있는 서버의 요청마다 판정이 끼어들지 않게. 웹 요청만(CLI 는 그대로)
+if (PHP_SAPI !== 'cli') {
+    $fsEnvProblems = array();
+    if (!extension_loaded('mbstring')) {
+        $fsEnvProblems[] = array(
+            'PHP 확장 mbstring 이 꺼져 있습니다. php.ini 에서 extension=mbstring 을 켜고 웹 서버(또는 PHP-FPM)를 다시 시작하세요.',
+            'The PHP extension mbstring is not enabled. Enable extension=mbstring in php.ini and restart the web server (or PHP-FPM).'
+        );
+    }
+    $fsDataDir = __DIR__ . '/data';
+    if (!file_exists($fsDataDir . '/users.json')) {
+        $fsDataOk = is_dir($fsDataDir) ? is_writable($fsDataDir) : is_writable(__DIR__);
+        if (!$fsDataOk) {
+            $fsEnvProblems[] = array(
+                'data 폴더에 쓸 수 없습니다(' . $fsDataDir . '). 웹 서버 사용자에게 이 폴더(없으면 FileStation 폴더)의 쓰기 권한을 주세요. 예: Linux chown -R www-data data / Windows IIS_IUSRS 또는 Apache 실행 계정에 수정 권한. 기본 저장 위치 users·shared 폴더도 같습니다.',
+                'Cannot write to the data folder (' . $fsDataDir . '). Give the web server user write permission to this folder (or the FileStation folder if it does not exist yet). E.g. Linux: chown -R www-data data / Windows: Modify permission for IIS_IUSRS or the Apache service account. The default storage folders users and shared need the same.'
+            );
+        }
+    }
+    if ($fsEnvProblems) {
+        $fsEnvIsApi = (isset($_SERVER['REQUEST_URI']) && (strpos($_SERVER['REQUEST_URI'], '/api.php') !== false || strpos($_SERVER['REQUEST_URI'], '/mydav.php') !== false))
+            || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false);
+        http_response_code(500);
+        if ($fsEnvIsApi) {
+            header('Content-Type: application/json; charset=utf-8');
+            $ko = array(); $en = array();
+            foreach ($fsEnvProblems as $p) { $ko[] = $p[0]; $en[] = $p[1]; }
+            echo json_encode(array('success' => false, 'error' => implode(' ', $ko), 'error_en' => implode(' ', $en)));
+            exit;
+        }
+        header('Content-Type: text/html; charset=utf-8');
+        echo '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>FileStation - 서버 환경 오류</title></head>'
+            . '<body style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',\'Malgun Gothic\',sans-serif;background:#f5f5f5;margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;">'
+            . '<div style="background:#fff;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);padding:32px;max-width:640px;width:90%;">'
+            . '<h1 style="color:#d32f2f;font-size:22px;margin:0 0 6px;">서버 환경 오류</h1><h2 style="color:#666;font-size:15px;font-weight:normal;margin:0 0 20px;">Server environment error</h2><ul style="padding-left:20px;color:#333;line-height:1.6;">';
+        foreach ($fsEnvProblems as $p) {
+            echo '<li style="margin-bottom:12px;">' . htmlspecialchars($p[0]) . '<br><span style="color:#666;">' . htmlspecialchars($p[1]) . '</span></li>';
+        }
+        echo '</ul></div></body></html>';
+        exit;
+    }
+    unset($fsEnvProblems, $fsDataDir, $fsDataOk);
+}
