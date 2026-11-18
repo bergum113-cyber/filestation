@@ -364,6 +364,8 @@ ob_start('fs_icon_convert_html');
         <div class="loading-text" id="loading-text"><?php echo htmlspecialchars(__('rhwp_loading_wasm', 'WASM 로드 중...')); ?></div>
     </div>
 
+    <?php /* ★ (2026-11-18 21:29, 349차 펜닐 요청 "웹 폰트가 아니라 일반 폰트 인식, 특정 경로에 넣어도 인식") 설치 글꼴 확인·서버 글꼴 폴더(rhwp_fonts.php) 도우미 */ ?>
+    <script src="assets/js/fs-rhwp-fonts.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-rhwp-fonts.js'), 0, 10) ?>"></script>
     <!-- 한글 폰트 사전 로드 -->
     <script>
     (function() {
@@ -400,11 +402,18 @@ ob_start('fs_icon_convert_html');
             { name: '나눔명조', file: base + 'fonts/NanumMyeongjo-Regular.woff2' },
             { name: '나눔고딕코딩', file: base + 'fonts/NanumGothicCoding-Regular.woff2' },
         ];
+        // ★ (2026-11-18 21:29, 349차 펜닐 요청 "웹 폰트가 아니라 일반 폰트 인식, 특정 경로에 넣어도 인식")
+        //   ① 이 기기에 같은 이름 글꼴이 설치돼 있으면 대체 웹 글꼴을 등록하지 않음(설치 글꼴이 그대로 쓰임 — 종전엔 대체 글꼴이 설치 글꼴을 가렸음)
+        //   ② 서버 글꼴 폴더에 같은 이름이 있으면 문서를 열 때 대체 글꼴을 빼고 그 글꼴로 바꿈(아래 start 의 FsRhwpFonts.ensure) — 그래서 이름별로 기억해 둠
+        //   설치 확인은 대체 글꼴을 넣기 '전'에 해야 함(넣은 뒤엔 대체 글꼴을 재게 됨). 설치된 게 없으면 종전과 똑같음
+        const subFaces = window.__rvSubFaces = {};
         fonts.forEach(f => {
+            if (window.FsRhwpFonts && FsRhwpFonts.installed(f.name)) return;
             const format = f.format || 'woff2';
             const src = f.file.startsWith('http') ? f.file : f.file;
             const face = new FontFace(f.name, `url('${src}') format('${format}')`);
-            face.load().then(loaded => document.fonts.add(loaded)).catch(() => {});
+            const rec = subFaces[f.name.toLowerCase()] = { cancelled: false, face: face };
+            face.load().then(loaded => { if (!rec.cancelled) document.fonts.add(loaded); }).catch(() => {});
         });
     })();
     </script>
@@ -489,6 +498,18 @@ ob_start('fs_icon_convert_html');
             
             loadingText.textContent = RV_T.parse;
             doc = new HwpDocument(data);
+            // ★ (2026-11-18 21:29, 349차 펜닐 요청 "웹 폰트가 아니라 일반 폰트 인식, 특정 경로에 넣어도 인식")
+            //   문서에 적힌 글꼴 중 이 기기에 없고 서버 글꼴 폴더(data/fonts)에 있는 것을 받아 등록한 뒤, 글자 폭을 그 글꼴로 다시 재도록 문서를 한 번 더 읽음
+            //   (쪽 나누기·줄 바꿈이 글자 폭으로 정해짐). 서버 폴더가 비었거나 맞는 글꼴이 없으면 아무것도 안 함(종전과 같음)
+            try {
+                if (window.FsRhwpFonts) {
+                    const added = await FsRhwpFonts.ensure(FsRhwpFonts.namesFromPlan(doc), { beforeAdd: (n) => {
+                        const rec = window.__rvSubFaces && window.__rvSubFaces[String(n).trim().toLowerCase()];
+                        if (rec) { rec.cancelled = true; try { document.fonts.delete(rec.face); } catch (e) {} }
+                    } });
+                    if (added.length) { try { doc.free(); } catch (e) {} doc = new HwpDocument(data); }
+                }
+            } catch (e) { /* 글꼴 폴더 문제로 문서 열기가 막히지 않게 */ }
             totalPages = doc.pageCount();
             
             if (totalPages === 0) throw new Error(RV_T.noPages);

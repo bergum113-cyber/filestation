@@ -2200,6 +2200,12 @@ class FileManager {
         }
         
         $filename = $this->sanitizeFilename($file['name']);
+        // ★ (2026-11-18 14:09, 344차 펜닐 요청 "맥·아이폰 자모 떨어진 이름을 붙은 이름으로") 붙은 이름(NFC)으로 저장 — 같은 이름 확인은 아래 getUniqueFilename(…, true) 가 NFC·NFD 짝을 같은 이름으로 봄(41차)
+        $_nfcName = $this->nfcUploadName($filename);
+        if ($_nfcName !== $filename) {
+            if (($_nfcErr = $this->nfcUploadNameError($_nfcName, $fileSize)) !== null) return ['success' => false, 'error' => $_nfcErr];
+            $filename = $_nfcName;
+        }
         $targetPath = $targetDir . DIRECTORY_SEPARATOR . $filename;
         
         // 파일명 중복 처리 (덮어쓰기 안 함, 새 파일명 생성)
@@ -2337,6 +2343,12 @@ class FileManager {
         }
         
         $filename = $this->sanitizeFilename($data['filename']);
+        // ★ (2026-11-18 14:09, 344차 펜닐 요청 "맥·아이폰 자모 떨어진 이름을 붙은 이름으로") 붙은 이름(NFC)으로 저장 — 조립 때 같은 이름 확인은 nfcTwinPath 가 NFC·NFD 짝을 같은 이름으로 봄(41차). 조각마다 같은 값이 나옴
+        $_nfcName = $this->nfcUploadName($filename);
+        if ($_nfcName !== $filename) {
+            if (($_nfcErr = $this->nfcUploadNameError($_nfcName, (int)($data['totalSize'] ?? 0))) !== null) return ['success' => false, 'error' => $_nfcErr];
+            $filename = $_nfcName;
+        }
         $chunkIndex = (int)$data['chunkIndex'];
         $totalChunks = (int)$data['totalChunks'];
         $uploadId = preg_replace('/[^a-zA-Z0-9_-]/', '', $data['uploadId']); // 보안
@@ -2359,6 +2371,9 @@ class FileManager {
             if (!empty($pathParts)) {
                 // 안전한 경로로 변환
                 $nfParts = array_map([$this, 'sanitizeFilename'], $pathParts);
+                // ★ (2026-11-18 14:09, 344차 펜닐 요청 "맥·아이폰 자모 떨어진 이름을 붙은 이름으로") 새로 만드는 폴더도 붙은 이름(NFC)으로. 바뀐 폴더 경로에 쓰기 권한이 없으면(api.php 는 올린 이름으로 권한을 봄) 아래에서 올린 이름 그대로
+                $nfRaw = $nfParts;
+                $nfParts = array_map([$this, 'nfcUploadName'], $nfParts);
                 // ★ (2026-11-04) 56차 C6-5 폴더 조각도 정규화 형태(NFC↔NFD)만 다른 같은 이름 폴더가 이미 있으면 그 폴더를 씀(41차 파일 이름 nfcTwinPath 와 같은 기준, Normalizer 있을 때만) —
                 //   종전엔 맥에서 끌어온 폴더(NFD)가 같은 이름 NFC 폴더 옆에 하나 더 만들어져 파일이 나뉘었음(재현). 새로 만드는 폴더 이름은 그대로(올린 이름)
                 //   바뀐 최종 폴더에 쓰기 권한이 없으면(api.php 는 올린 이름으로 권한을 봄) 종전처럼 올린 이름 그대로 — 폴더 규칙을 비켜 가지 않게
@@ -2373,8 +2388,8 @@ class FileManager {
                     }
                     $nfCur = $nfCand;
                 }
-                if ($nfIdx && !$this->storage->checkFolderPermission($storageId, trim(trim(str_replace('\\', '/', (string)$relativePath), '/') . '/' . implode('/', $nfParts), '/'), 'can_write')) {
-                    $nfParts = $nfOrig;
+                if (($nfIdx || $nfParts !== $nfRaw) && !$this->storage->checkFolderPermission($storageId, trim(trim(str_replace('\\', '/', (string)$relativePath), '/') . '/' . implode('/', $nfParts), '/'), 'can_write')) {
+                    $nfParts = $nfRaw;   // ★ (2026-11-18 14:09, 344차 펜닐 요청 "맥·아이폰 자모 떨어진 이름을 붙은 이름으로") 종전 $nfOrig(정리만 한 올린 이름) — NFC 로 바꾸기 전 이름
                 } else {
                     foreach ($nfIdx as $nfI) $pathParts[$nfI] = $nfParts[$nfI];   // 아래 색인 경로도 실제 폴더로
                 }
@@ -18551,6 +18566,32 @@ class FileManager {
      * ★ (2026-11-02 09:02, 41차 점검) 같은 폴더에 정규화 형태(NFC↔NFD)만 다른 같은 이름이 있으면 그 실제 경로, 없으면 null.
      *   비교에만 씀(저장 이름은 바꾸지 않음). Normalizer(intl) 가 없거나 ASCII·UTF-8 아닌 이름이면 null(종전 동작). 폴더를 훑지 않고 두 형태만 file_exists 로 봄
      */
+    /**
+     * ★ (2026-11-18 14:09, 344차 펜닐 요청 "맥·아이폰 자모 떨어진 이름을 붙은 이름으로")
+     *   업로드로 새로 생기는 이름만 NFC 로(로컬 upload·uploadChunk). intl(Normalizer) 이 없거나 ASCII·UTF-8 아닌 이름이면 그대로(종전 동작).
+     *   애플 파일 시스템이 분해하지 않는 구간(U+2000–2FFF 기호·켈빈 기호 등, CJK 호환 한자 U+F900–FAFF·U+2F800–2FAFF)은 그대로 둠 — 윈도우에서 만든 한자 이름이 바뀌지 않게.
+     *   원격 스토리지·WebDAV 는 짝 이름 확인이 없어 바꾸면 겉보기 같은 두 번째 파일이 생길 수 있어 그대로 둠
+     */
+    private function nfcUploadName(string $name): string {
+        if ($name === '' || !class_exists('Normalizer') || !preg_match('/[\x80-\xff]/', $name) || !mb_check_encoding($name, 'UTF-8')) return $name;
+        $out = preg_replace_callback('/[^\x{2000}-\x{2FFF}\x{F900}-\x{FAFF}\x{2F800}-\x{2FAFF}]+/u', function ($m) {
+            $n = \Normalizer::normalize($m[0], \Normalizer::FORM_C);
+            return is_string($n) ? $n : $m[0];
+        }, $name);
+        if (!is_string($out) || $out === '') return $name;
+        $out = $this->sanitizeFilename($out);
+        return ($out === 'unnamed') ? $name : $out;
+    }
+
+    /** ★ (2026-11-18 14:09, 344차 펜닐 요청 "맥·아이폰 자모 떨어진 이름을 붙은 이름으로") 바뀐 이름으로도 업로드 검사(확장자 설정·랜섬웨어 확장자·서버 실행 이름)를 한 번 더 — 통과면 null, 막히면 사유 */
+    private function nfcUploadNameError(string $name, int $size): ?string {
+        $uc = $this->checkUploadSettings($name, $size);
+        if (empty($uc['allowed'])) return '📤 ' . ($uc['reason'] ?? '');
+        $rc = $this->checkRansomwareExtension($name);
+        if (empty($rc['allowed'])) return '🔐 ' . ($rc['reason'] ?? '');
+        return \fsServerExecReason($name);
+    }
+
     private function nfcTwinPath(string $path): ?string {
         if (!class_exists('Normalizer')) return null;
         $name = basename(str_replace('\\', '/', $path));

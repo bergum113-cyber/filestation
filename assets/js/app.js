@@ -18244,6 +18244,7 @@ const App = {
                 session.uploadedSize += file.size;
             } else if (result?.error) {
                 // 에러 발생해도 계속 진행
+                (session._fails = session._fails || []).push({ name: (typeof relativePath !== 'undefined' && relativePath) || file.name, reason: result.error || t('nt_error_generic', '오류가 발생했습니다.'), file, rel: (typeof relativePath !== 'undefined' && relativePath) || null });   // ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기)
                 session._failN = (session._failN || 0) + 1; session._lastErr = `${file.name}: ${result.error || t('nt_error_generic', '오류가 발생했습니다.')}`;   // ★ (2026-10-29 23:35, 24차 점검) 마지막 알림에 합침
             }
         }
@@ -18271,13 +18272,37 @@ const App = {
         // Wake Lock 해제
         if (session._wakeLockCleanup) { session._wakeLockCleanup(); session._wakeLockCleanup = null; }
         
-        // 완료된 세션 정리 (5초 후)
-        setTimeout(() => {
-            this.removeMultiUploadItem(sessionId);
-        }, 5000);
+        // 완료된 세션 정리 (5초 후) — ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기) 실패가 있으면 목록을 남김
+        this._uploadSessionEnd(sessionId, 5000);
     },
     
     // 멀티 업로드용 청크 업로드
+    /** ★ (2026-11-18 16:04, 346차 펜닐 요청 "진행률이 실시간으로 안 되고 천천히 갱신")
+     *  조각 업로드 요청을 XMLHttpRequest 로 보내 '보내는 중' 바이트를 알 수 있게 함 — fetch 는 보내는 진행을 알려 주지 않아 조각 하나(PC 10MB·폰 2MB)가
+     *  다 끝나야 막대가 움직였음(실측 1MB/s 에서 3~5초마다 7~11% 씩 뜀). 돌려주는 값·오류는 fetch 와 같게 맞춤:
+     *  응답 → {ok, status, text(), json()} / 네트워크 끊김 → TypeError / 취소(signal) → DOMException 'AbortError'. 쿠키는 같은 출처라 fetch 와 같이 감
+     *  onUp(loaded, total) 은 보낸 바이트(조각 + 폼 머리글 포함) — 진행 표시에만 씀 */
+    _fsXhrPost(url, body, signal, onUp) {
+        return new Promise((resolve, reject) => {
+            if (signal && signal.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+            const xhr = new XMLHttpRequest();
+            let settled = false;
+            const onAbortSig = () => { try { xhr.abort(); } catch (e) {} };
+            const done = (fn, v) => { if (settled) return; settled = true; if (signal) signal.removeEventListener('abort', onAbortSig); fn(v); };
+            xhr.open('POST', url, true);
+            if (onUp && xhr.upload) xhr.upload.onprogress = (e) => { if (e.lengthComputable) { try { onUp(e.loaded, e.total); } catch (err) {} } };
+            xhr.onload = () => {
+                const txt = xhr.responseText || '';
+                done(resolve, { ok: xhr.status >= 200 && xhr.status < 300, status: xhr.status,
+                    text: () => Promise.resolve(txt), json: () => new Promise((ok, no) => { try { ok(JSON.parse(txt)); } catch (e) { no(e); } }) });
+            };
+            xhr.onerror = () => done(reject, new TypeError('Failed to fetch'));
+            xhr.onabort = () => done(reject, new DOMException('Aborted', 'AbortError'));
+            if (signal) signal.addEventListener('abort', onAbortSig);
+            xhr.send(body);
+        });
+    },
+
     async uploadChunkedMulti(file, relativePath, duplicateAction, storageId, path, sessionId) {
         const session = this.multiUpload.sessions.get(sessionId);
         if (!session || session.status === 'cancelled') {
@@ -18319,6 +18344,19 @@ const App = {
         (session._chunkUploadIds = session._chunkUploadIds || []).push(uploadId);   // ★ (2026-11-15 10:13, 174차) 취소할 때 서버의 받은 조각을 지우려고(_abortChunkUploads)
         
         let uploadedChunks = 0;
+        // ★ (2026-11-18 16:04, 346차 펜닐 요청 "진행률이 실시간으로 안 되고 천천히 갱신") 끝난 조각 바이트 + 보내는 중인 조각 바이트로 이 파일 진행(%)을 셈 — 종전엔 끝난 조각 수로만(조각 하나 끝날 때마다 뜀)
+        let _upDoneBytes = 0;
+        const _upSending = new Map();
+        let _upLastPaint = 0;
+        const _upSetProgress = (force) => {
+            if (!(uploadFile.size > 0)) return;   // 크기 0 으로 보고된 파일(iOS)은 종전처럼 조각 수로
+            let inflight = 0; _upSending.forEach(v => { inflight += v; });
+            const pct = Math.min(100, (_upDoneBytes + inflight) / uploadFile.size * 100);
+            if (pct < session.currentFileProgress && !force) return;   // 다시 보내기로 줄어드는 값은 그리지 않음(뒤로 가지 않게)
+            session.currentFileProgress = pct;
+            const now = Date.now();
+            if (force || now - _upLastPaint >= 200) { _upLastPaint = now; this.updateMultiUploadProgress(sessionId); }
+        };
         const PARALLEL = isMobile ? 2 : 3; // 모바일 2개, PC 3개 동시
         
         // 청크 하나를 업로드하는 함수 (네트워크 에러 시 재시도)
@@ -18347,11 +18385,10 @@ const App = {
             
             let response;
             try {
-                response = await fetch('api.php?action=upload_chunk', {
-                    method: 'POST',
-                    body: formData,
-                    signal: session.abortController.signal
-                });
+                _upSending.set(i, 0);
+                // ★ (2026-11-18 16:04, 346차 펜닐 요청 "진행률이 실시간으로 안 되고 천천히 갱신") fetch → _fsXhrPost(같은 요청·같은 응답 모양) + 보내는 바이트 알림
+                response = await this._fsXhrPost('api.php?action=upload_chunk', formData, session.abortController.signal,
+                    (loaded, total) => { _upSending.set(i, (end - start) * Math.min(1, loaded / Math.max(1, total))); _upSetProgress(false); });
             } catch (fetchErr) {
                 // 네트워크 에러 — 최대 3회 재시도
                 if (retryCount < 3 && fetchErr.name !== 'AbortError') {
@@ -18401,11 +18438,9 @@ const App = {
                 await this.refreshCsrfToken();
                 if (await this._acctSwitchGuard()) return { success: false, error: t('account_switched_reload', '다른 탭에서 다른 계정으로 로그인되었습니다. 이 화면은 이전 계정으로 열려 있어 새로 고칩니다.') };   // ★ (2026-11-11 22:04, 85차 RGR4-1)
                 formData.set('csrf_token', this.csrfToken);
-                const retryRes = await fetch('api.php?action=upload_chunk', {
-                    method: 'POST',
-                    body: formData,
-                    signal: session.abortController.signal
-                });
+                _upSending.set(i, 0);
+                const retryRes = await this._fsXhrPost('api.php?action=upload_chunk', formData, session.abortController.signal,   // ★ (2026-11-18 16:04, 346차 펜닐 요청 "진행률이 실시간으로 안 되고 천천히 갱신")
+                    (loaded, total) => { _upSending.set(i, (end - start) * Math.min(1, loaded / Math.max(1, total))); _upSetProgress(false); });
                 result = await retryRes.json();
             }
             
@@ -18414,8 +18449,11 @@ const App = {
             }
             
             uploadedChunks++;
-            session.currentFileProgress = Math.round((uploadedChunks / totalChunks) * 100);
-            this.updateMultiUploadProgress(sessionId);
+            // ★ (2026-11-18 16:04, 346차 펜닐 요청 "진행률이 실시간으로 안 되고 천천히 갱신") 끝난 조각은 보내는 중 목록에서 빼고 끝난 바이트에 더함(크기 0 파일은 종전처럼 조각 수로)
+            _upSending.delete(i);
+            _upDoneBytes += (end - start);
+            if (uploadFile.size > 0) _upSetProgress(true);
+            else { session.currentFileProgress = Math.round((uploadedChunks / totalChunks) * 100); this.updateMultiUploadProgress(sessionId); }
             
             return result;
         };
@@ -18617,6 +18655,9 @@ const App = {
             eta = t('remaining_time', '남은 시간: ') + this.formatTime(seconds);
         }
         
+        // ★ (2026-11-18 16:26, 347차 재검토) 아직 올리는 중이면 99% 까지만 — 346차부터 보낸 바이트로 세서, 마지막 조각을 다 보낸 뒤 서버가 합치고 검사(백신 등)하는 동안
+        //   100% 로 보였음(시험 사본에서 서버 처리 3초 흉내: 여러 파일 업로드가 3초 동안 '100%' 인데 진행 중). 끝나면 아래 완료 표시가 100%·'완료' 로 바꿈
+        if (session.status === 'uploading' || session.status === 'pending') totalProgress = Math.min(totalProgress, 99);
         fillEl.style.width = `${totalProgress}%`;
         percentEl.textContent = `${totalProgress}%`;
         speedEl.textContent = speed > 0 ? this.formatSize(speed) + '/s' : '';
@@ -18718,6 +18759,80 @@ const App = {
         if (this.vault && this.vault.isVaultView) this.vaultLoadFiles(); else this.loadFiles(false);
     },
     
+    /** ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기) 진행 칸에 실패 목록 상자 — 실패가 섞이면 파일마다 ✗ 이름·이유를 남기고 사용자가 닫을 때까지 둠(모두 성공·취소는 종전대로 잠깐 뒤 사라짐).
+     *  탐색기는 실패한 자리에서 멈춰 묻고, 웹하드는 실패 목록을 남기는데 종전엔 알림 3초·진행 칸 1.5~5초 뒤 사라져 놓치기 쉬웠고 이유도 하나만 보였음.
+     *  fails: [{name, reason}] · opts.onRetry(있으면 [실패한 것만 다시]) · opts.onClose(닫기 — 머리 ✕ 도 같은 동작) */
+    _fsShowFailBox(item, fails, opts = {}) {
+        if (!item || !Array.isArray(fails) || !fails.length) return;
+        const esc = (v) => this.escapeHtml(String(v == null ? '' : v));
+        const SHOW = 5, MAX = 200;
+        const row = (f) => `<div class="fs-fail-row"><span class="fs-fail-x" aria-hidden="true">✗</span><span class="fs-fail-txt"><span class="fs-fail-name" title="${esc(f.name)}">${esc(f.name || '-')}</span>${f.reason ? `<span class="fs-fail-why">${esc(f.reason)}</span>` : ''}</span></div>`;
+        const old = item.querySelector('.fs-fail-box'); if (old) old.remove();
+        const box = document.createElement('div');
+        box.className = 'fs-fail-box';
+        box.innerHTML = `<div class="fs-fail-head">${esc(tf('fail_list_head', { n: fails.length }, '실패 {n}개'))}</div>`
+            + `<div class="fs-fail-list">${fails.slice(0, SHOW).map(row).join('')}</div>`
+            + (fails.length > SHOW ? `<button type="button" class="fs-fail-more">${esc(tf('fail_list_more', { n: fails.length - SHOW }, '외 {n}개 더 보기'))}</button>` : '')
+            + `<div class="fs-fail-btns">${opts.onRetry ? `<button type="button" class="fs-fail-retry">↻ ${esc(t('fail_retry', '실패한 것만 다시'))}</button>` : ''}<button type="button" class="fs-fail-close">${esc(t('close', '닫기'))}</button></div>`;
+        item.appendChild(box);
+        item.classList.add('fs-has-fail');
+        const close = () => { try { opts.onClose && opts.onClose(); } catch (e) {} };
+        const more = box.querySelector('.fs-fail-more');
+        if (more) more.onclick = () => {
+            box.querySelector('.fs-fail-list').innerHTML = fails.slice(0, MAX).map(row).join('') + (fails.length > MAX ? `<div class="fs-fail-why">${esc(tf('fail_list_rest', { n: fails.length - MAX }, '… 외 {n}개'))}</div>` : '');
+            more.remove();
+        };
+        const rt = box.querySelector('.fs-fail-retry');
+        if (rt) rt.onclick = () => { rt.disabled = true; try { opts.onRetry(); } catch (e) {} close(); };
+        box.querySelector('.fs-fail-close').onclick = close;
+        const hx = item.querySelector('.upload-session-cancel');
+        if (hx) { hx.onclick = close; hx.title = t('close', '닫기'); }
+    },
+
+    /** ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기) 서버 작업의 실패 줄('이름: 이유')을 {name, reason} 으로 */
+    _fsFailParse(list) {
+        return (Array.isArray(list) ? list : []).map(x => {
+            const sx = String(x == null ? '' : x); const k = sx.indexOf(': ');
+            return k > 0 ? { name: sx.slice(0, k), reason: sx.slice(k + 2) } : { name: sx, reason: '' };
+        });
+    },
+
+    /** ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기) 업로드 세션이 끝난 뒤 — 실패가 있으면 목록을 남기고 [실패한 것만 다시](브라우저가 아직 들고 있는 그 파일만 같은 자리·같은 겹침 처리로 새 세션), 없으면 종전대로 delay 뒤 지움 */
+    _uploadSessionEnd(sessionId, delay) {
+        const session = this.multiUpload.sessions.get(sessionId);
+        const fails = (session && session.status !== 'cancelled' && Array.isArray(session._fails)) ? session._fails : [];
+        if (!fails.length) { setTimeout(() => this.removeMultiUploadItem(sessionId), delay); return; }
+        const retry = fails.filter(f => f.file);
+        const target = { storageId: session.storageId, path: session.path };
+        this._fsShowFailBox(document.getElementById(`upload-session-${sessionId}`), fails, {
+            onRetry: retry.length ? () => {
+                if (session.relativePathMap) this.startMultiUploadDrop(retry.map(f => ({ file: f.file, relativePath: f.rel || null })), session.duplicateAction, target);
+                else this.startMultiUpload(retry.map(f => f.file), session.duplicateAction, target);
+            } : null,
+            onClose: () => this.removeMultiUploadItem(sessionId)
+        });
+    },
+
+    /** ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기) 복사·이동·삭제 등 작업 세션이 끝난 뒤 — 서버가 준 실패 목록이 있으면 남김, 없으면 종전대로 delay 뒤 지움 */
+    _transferSessionEnd(sessionId, delay) {
+        const session = this.multiTransfer.sessions.get(sessionId);
+        const removeIt = () => {
+            this.multiTransfer.sessions.delete(sessionId);
+            const el = document.getElementById(`transfer-session-${sessionId}`);
+            if (el) el.remove();
+            this._cleanupTransferUI();
+        };
+        const fails = (session && session.status !== 'cancelled' && !session.cancelled) ? this._fsFailParse(session.errorsList) : [];
+        if (!fails.length) { setTimeout(removeIt, delay); return; }
+        this._fsShowFailBox(document.getElementById(`transfer-session-${sessionId}`), fails, { onClose: removeIt });
+    },
+
+    /** ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기) 다운로드가 실제로 실패했을 때(서버 거절·저장 실패 등) — 이유를 보이고 닫을 때까지 남김 */
+    _downloadSessionFail(session, reason) {
+        if (!session) return;
+        this._fsShowFailBox(document.getElementById(`download-session-${session.id}`), [{ name: session.filename || '', reason: reason || t('nt_download_failed', '다운로드 실패') }], { onClose: () => this._removeMultiDownloadItem(session.id) });
+    },
+
     // 멀티 업로드 아이템 제거
     removeMultiUploadItem(sessionId) {
         const item = document.getElementById(`upload-session-${sessionId}`);
@@ -19330,13 +19445,14 @@ const App = {
                 session.uploadedSize += file.size;
             } else if (result?.error) {
                 session.failedCount = (session.failedCount || 0) + 1;
+                (session._fails = session._fails || []).push({ name: (typeof relativePath !== 'undefined' && relativePath) || file.name, reason: result.error || t('nt_error_generic', '오류가 발생했습니다.'), file, rel: (typeof relativePath !== 'undefined' && relativePath) || null });   // ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기)
                 session._failN = (session._failN || 0) + 1; session._lastErr = `${file.name}: ${result.error || t('nt_error_generic', '오류가 발생했습니다.')}`;   // ★ (2026-10-29 23:35, 24차 점검) 마지막 알림에 합침
             }
         }
         
         if (session.status !== 'cancelled' && session.emptyDirs && session.emptyDirs.length > 0) {   // ★ (2026-11-11 23:54, 88차 개선 G3-4) 파일을 다 올린 뒤 빈 폴더를 만듦(실패는 끝 알림의 실패 개수·이유에 합침)
             const _g34 = await this._dropMakeEmptyDirs(session.emptyDirs, { storageId: session.storageId, path: session.path });
-            if (_g34.err) { session._failN = (session._failN || 0) + 1; session._lastErr = session._lastErr || _g34.err; }
+            if (_g34.err) { session._failN = (session._failN || 0) + 1; session._lastErr = session._lastErr || _g34.err; (session._fails = session._fails || []).push({ name: t('empty_folders', '빈 폴더'), reason: _g34.err }); }   // ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기)
         }
         if (session.status !== 'cancelled') {
             session.status = 'completed';
@@ -19358,10 +19474,8 @@ const App = {
             this.loadStorageQuotaMini(session.storageId);
         }
         
-        // 완료된 세션 정리 (5초 후)
-        setTimeout(() => {
-            this.removeMultiUploadItem(sessionId);
-        }, 5000);
+        // 완료된 세션 정리 (5초 후) — ★ (2026-11-18 12:27, 342차 펜닐 요청 — 실패 결과 남기기) 실패가 있으면 목록을 남김
+        this._uploadSessionEnd(sessionId, 5000);
     },
     
     // ★ (2026-11-11 23:54, 88차 개선 G3-4) 끌어 놓은 폴더 속 빈 폴더를 기존 '새 폴더 만들기'(mkdir) API 로 한 단계씩 만듦 — 같은 이름 폴더가 있으면 그대로 두고(오류로 보지 않음), 그 밖의 실패(쓰기 권한 등)는 마지막 이유를 돌려줌
@@ -19975,7 +20089,7 @@ const App = {
                 session.status = 'error';
                 this._updateMultiDownloadItem(session);
                 this.toast(e.message, 'error');
-                setTimeout(() => this._removeMultiDownloadItem(sessionId), 3000);
+                this._downloadSessionFail(session, e.message);   // ★ (2026-11-18 12:27, 342차) 이유를 남기고 닫을 때까지(종전 3초 뒤 지움)
                 return;
             }
             
@@ -20298,7 +20412,7 @@ const App = {
             }
             session.status = 'error';
             this._updateMultiDownloadItem(session);
-            setTimeout(() => this._removeMultiDownloadItem(sessionId), 3000);
+            this._downloadSessionFail(session, e && e.message);   // ★ (2026-11-18 12:27, 342차)
             throw e;
         }
     },
@@ -21429,7 +21543,8 @@ const App = {
                 const errorCount = (p.errors || []).length;
                 session.success = (p.done_success !== undefined) ? p.done_success : Math.max(0, (p.done_items || 0) - errorCount);
                 session.failed = errorCount;
-                session.firstError = errorCount ? String(p.errors[0] || '') : '';   // ★ (2026-11-03 14:04, 51차 점검) 끝 알림에 첫 실패 이유를 붙이려고 보관
+                session.firstError = errorCount ? String(p.errors[0] || '') : '';
+                session.errorsList = Array.isArray(p.errors) ? p.errors : [];   // ★ (2026-11-18 12:27, 342차) 끝난 뒤 실패 목록 상자에 씀   // ★ (2026-11-03 14:04, 51차 점검) 끝 알림에 첫 실패 이유를 붙이려고 보관
                 
                 this._updateTransferSessionUI(sessionId);
                 
@@ -21455,12 +21570,7 @@ const App = {
                     }
                     if (job.type === 'move' && session.success > 0) this._favRefreshSoon();   // ★ (2026-11-17 15:44, 339차) 옮긴 뒤 즐겨찾기 목록도 새 경로로(서버는 336차부터 따라감)
                     
-                    setTimeout(() => {
-                        this.multiTransfer.sessions.delete(sessionId);
-                        const el = document.getElementById(`transfer-session-${sessionId}`);
-                        if (el) el.remove();
-                        this._cleanupTransferUI();
-                    }, 3000);
+                    this._transferSessionEnd(sessionId, 3000);   // ★ (2026-11-18 12:27, 342차) 실패가 있으면 목록을 남김(없으면 종전대로 3초 뒤 지움)
                 }
             } catch(e) {
                 // 네트워크 에러 시 폴링 계속 (일시적 실패)
@@ -21502,6 +21612,7 @@ const App = {
                     currentIndex: p.done_items || 0,
                     success: (p.done_success !== undefined) ? p.done_success : Math.max(0, (p.done_items || 0) - (p.errors || []).length),
                     failed: (p.errors || []).length,
+                    errorsList: Array.isArray(p.errors) ? p.errors : [],   // ★ (2026-11-18 12:27, 342차)
                     cancelled: job.status === 'cancelled',
                     startTime: Date.now(),
                     lastTime: Date.now(),
@@ -21542,14 +21653,9 @@ const App = {
                         this.loadAllStorageQuotas();
                     });
                 } else {
-                    // 이미 완료된 작업 - 3초 후 제거
+                    // 이미 완료된 작업 - 3초 후 제거 — ★ (2026-11-18 12:27, 342차) 실패가 있으면 목록을 남김
                     this._updateTransferSessionUI(sessionId);
-                    setTimeout(() => {
-                        this.multiTransfer.sessions.delete(sessionId);
-                        const el = document.getElementById(`transfer-session-${sessionId}`);
-                        if (el) el.remove();
-                        this._cleanupTransferUI();
-                    }, 3000);
+                    this._transferSessionEnd(sessionId, 3000);
                 }
             }
             
@@ -52737,7 +52843,7 @@ const App = {
             session.status = 'error';
             this._updateMultiDownloadItem(session);
             this.toast(e.message || t('nt_download_failed', '다운로드 실패'), 'error');
-            setTimeout(() => this._removeMultiDownloadItem(sessionId), 3000);
+            this._downloadSessionFail(session, e.message);   // ★ (2026-11-18 12:27, 342차)
         }
     },
     
@@ -53863,7 +53969,7 @@ const App = {
             session.filename = '❌ ' + item.name;
             this._updateMultiDownloadItem(session);
             this.toast(e.message || t('nt_decrypt_failed', '암호화 해제 실패'), 'error');
-            setTimeout(() => this._removeMultiDownloadItem(sessionId), 3000);
+            this._downloadSessionFail(session, e.message || t('nt_decrypt_failed', '암호화 해제 실패'));   // ★ (2026-11-18 12:27, 342차)
             return false;   // ★ (2026-10-29 10:39, 20차 점검) 결과를 돌려줌 — 여러 개 해제 때 실패도 성공으로 세던 것
         }
     },

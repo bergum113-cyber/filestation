@@ -598,6 +598,8 @@ ob_start('fs_icon_convert_html');
 <script>window.FS_ICO_EMOJI = <?= fs_icon_map_json() ?>;</script>
 <?php /* ★ (2026-10-29 23:42, 24차 점검) 위 <base href="assets/rhwp/studio/"> 때문에 상대 주소가 studio/assets/js/… 로 풀려 404 → 루트 기준 주소로 */ ?>
 <script src="<?= htmlspecialchars(rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/')) ?>/assets/js/fs-icons.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-icons.js'), 0, 10) ?>"></script>
+<?php /* ★ (2026-11-18 21:29, 349차 펜닐 요청 "웹 폰트가 아니라 일반 폰트 인식, 특정 경로에 넣어도 인식") 설치 글꼴 확인·서버 글꼴 폴더(rhwp_fonts.php) 도우미 — 위 <base> 때문에 루트 기준 주소 */ ?>
+<script src="<?= htmlspecialchars(rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/')) ?>/assets/js/fs-rhwp-fonts.js?v=<?= substr(md5_file(__DIR__ . '/assets/js/fs-rhwp-fonts.js'), 0, 10) ?>"></script>
   <div id="studio-root">
     <!-- 메뉴바 -->
     <div id="menu-bar">
@@ -978,6 +980,9 @@ ob_start('fs_icon_convert_html');
         <span class="menu-title">도구</span>
         <div class="menu-dropdown">
           <div class="md-item" data-cmd="tool:options"><span class="md-icon"></span><span class="md-label">환경 설정</span></div>
+          <?php /* ★ (2026-11-18 21:53, 350차 펜닐 요청 "폰트 위치 설정 변경, 메뉴에 폰트 위치 지정(편집기에서 설정하면 뷰어는 자동)") 관리자(또는 '시스템 설정' 권한 부관리자)만 보임 — 처리는 아래 fsFontFolderDialog */ ?>
+          <?php /* ★ (2026-11-18 22:17, 351차 펜닐 지적 "비활성화(회색)인데 클릭됨 / 어디어디에서 폰트를 가져다 쓰고 활성화 여부도 안 나옴") — rhwp 는 data-cmd 가 있는 메뉴 항목 중 자기가 모르는 명령을 회색(disabled)으로 바꿈 → data-fs-cmd 로 */ ?>
+          <?php if ($auth->isAdmin() || ($auth->isSubAdmin() && $auth->hasAdminPerm('system_settings'))): ?><div class="md-item" data-fs-cmd="font-folders"><span class="md-icon"></span><span class="md-label"><?= htmlspecialchars(__('rf_menu', '글꼴 폴더 설정')) ?></span></div><?php endif; ?>
         </div>
       </div>
     </div>
@@ -1317,6 +1322,61 @@ ob_start('fs_icon_convert_html');
     const STREAM_URL = '<?php echo rtrim(dirname($_SERVER["SCRIPT_NAME"]), "/"); ?>/rhwp_editor.php?action=stream&storage_id=<?php echo $storageId; ?>&path=<?php echo rawurlencode($filePath); ?>';
     const FILE_NAME = <?php echo json_encode($fileName, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
     // ★ (2026-11-01 09:42, 38차 점검) 문서 받기 실패 안내 문구(아래 DOMContentLoaded 끝)
+    // ★ (2026-11-18 21:29, 349차 펜닐 요청 "웹 폰트가 아니라 일반 폰트 인식, 특정 경로에 넣어도 인식")
+    //   문서를 넘기기 전에 문서 글꼴 이름을 읽으려고 뷰어와 같은 엔진(rhwp.js + 편집기와 같은 wasm)을 따로 씀 — 서버 글꼴 폴더가 비어 있으면 부르지 않음
+<?php
+    $_reStudio = __DIR__ . '/assets/rhwp/studio';
+    $_reW = glob($_reStudio . '/rhwp_bg-*.wasm') ?: [];
+    if (count($_reW) > 1) {   // 업그레이드 잔재로 여러 개면 이 편집기 묶음이 부르는 것(뷰어·cleanup_rhwp_studio.php 와 같은 판정)
+        $_reJs = preg_match('/index-[A-Za-z0-9_-]+\.js/', (string)@file_get_contents(__FILE__), $_reM) ? (string)@file_get_contents($_reStudio . '/' . $_reM[0]) : '';
+        $_reW = (preg_match('/rhwp_bg-[A-Za-z0-9_-]+\.wasm/', $_reJs, $_reX) && is_file($_reStudio . '/' . $_reX[0])) ? [$_reStudio . '/' . $_reX[0]] : [];
+    }
+    $_reRoot = rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/');
+    $_reEngineJs = is_file(__DIR__ . '/assets/rhwp/rhwp.js') ? $_reRoot . '/assets/rhwp/rhwp.js?v=' . substr((string)md5_file(__DIR__ . '/assets/rhwp/rhwp.js'), 0, 10) : '';
+    $_reEngineWasm = $_reW ? $_reRoot . '/assets/rhwp/studio/' . basename($_reW[0]) : '';
+?>
+    const FS_RHWP_ENGINE_JS = <?php echo json_encode($_reEngineJs, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES); ?>;
+    const FS_RHWP_ENGINE_WASM = <?php echo json_encode($_reEngineWasm, JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES); ?>;
+    // ★ (2026-11-18 22:49, 353차 펜닐 "글꼴 감지는 자기 PC 것 — 그거 안 해도 글꼴 폴더 설정하면 서버에 폰트 넣어 놓고 운영할 수 있어야")
+    //   [재현] 종전엔 처음 여는 Chrome·Edge 에서 rhwp '로컬 글꼴 감지' 창이 뜨고, [대체 글꼴로 보기]를 누르면 서버 글꼴을 받아 놓고도 대체 글꼴로만 그렸음
+    //          (rhwp 는 브라우저 저장소 'rhwp-local-fonts' 기록에 있는 이름만 '있는 글꼴'로 씀 — 그 기록은 [로컬 글꼴 감지]를 눌러야 생김)
+    //   [수정] 문서가 서버 글꼴 폴더의 글꼴을 쓰면, 그 이름들만 rhwp 형식으로 기록해 둠(fsServerFonts 표시). rhwp 묶음 파일은 그대로
+    //          · 사용자가 직접 [로컬 글꼴 감지]로 만든 기록(fsServerFonts 표시 없음)은 절대 안 건드림
+    //          · 문서가 서버 글꼴을 안 쓰면(또는 서버 폴더가 비면) 우리 기록만 지움 → 종전과 똑같이 감지 창이 뜸
+    function fsRhwpSeedServerFonts(names) {
+        const KEY = 'rhwp-local-fonts';
+        try {
+            let cur = null;
+            try { cur = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { cur = null; }
+            const ours = !!(cur && cur.fsServerFonts === true);
+            if (cur && !ours) return;
+            const fam = Array.from(new Set(names || [])).sort();
+            if (!fam.length) { if (ours) localStorage.removeItem(KEY); return; }
+            localStorage.setItem(KEY, JSON.stringify({ version: 3, source: 'font-presence-probe', detectedAt: new Date().toISOString(),
+                families: fam, fontRecords: [], checkedFamilies: fam, probedFamilies: fam, fsServerFonts: true }));
+        } catch (e) { /* 저장소를 못 쓰면 종전과 같이 */ }
+    }
+    async function fsRhwpPrepareFonts(blob) {
+        let served = [];
+        try {
+            if (window.FsRhwpFonts && FS_RHWP_ENGINE_JS && FS_RHWP_ENGINE_WASM) {
+                const fl = await FsRhwpFonts.list();
+                if (fl.length) {   // 서버 글꼴 폴더가 비면 종전과 똑같이
+                    const mod = await import(FS_RHWP_ENGINE_JS);
+                    if (!window.__fsRhwpEngineInit) window.__fsRhwpEngineInit = mod.default({ module_or_path: FS_RHWP_ENGINE_WASM });
+                    await window.__fsRhwpEngineInit;
+                    const d = new mod.HwpDocument(new Uint8Array(await blob.arrayBuffer()));
+                    let names = [];
+                    try { names = FsRhwpFonts.namesFromPlan(d); } finally { try { d.free(); } catch (e) {} }
+                    // 편집기는 문서를 열 때 '이미 받아 둔' 글꼴을 시스템 글꼴처럼 씀(화면 폭 비교) — 그래서 다 받을 때까지 기다린 뒤 문서를 넘김. 설치 글꼴이 있으면 서버 것은 안 받음
+                    await FsRhwpFonts.ensure(names);
+                    served = await FsRhwpFonts.served(names);
+                }
+            }
+        } catch (e) { served = []; /* 글꼴 준비가 실패해도 문서는 그대로 엶 */ }
+        fsRhwpSeedServerFonts(served);
+    }
+
     const LOAD_FAIL_MSG = <?php echo json_encode(__('rhwp_load_failed', '문서를 불러오지 못했습니다'), JSON_HEX_TAG | JSON_HEX_AMP); ?>;
     const LOAD_FAIL_CLOSE = <?php echo json_encode(__('rhwp_load_failed_close', '눌러서 닫기'), JSON_HEX_TAG | JSON_HEX_AMP); ?>;
     // ★ (2026-11-12 19:20, 102차 I18N-1) 로딩 문구도 화면 언어로(LOAD_FAIL_MSG 와 같은 방식, 한국어 값은 종전 문구 그대로) — 종전엔 영어 화면에서도 '문서 로딩 중...'(재현: pc_rhwp_editor.png)
@@ -1437,6 +1497,7 @@ ob_start('fs_icon_convert_html');
         const blob = await resp.blob();
         // ★ 서버에서 파일을 받아오는 데 걸린 시간과 크기 — 파싱/렌더와 구분하기 위한 계측.
         _mark('file_fetched', { bytes: blob.size, fetch_ms: Math.round(performance.now() - _fs) });
+        await fsRhwpPrepareFonts(blob);   // ★ (2026-11-18 21:29, 349차 펜닐 요청 "웹 폰트가 아니라 일반 폰트 인식, 특정 경로에 넣어도 인식")
         const ext = FILE_NAME.split('.').pop().toLowerCase();
         const mime = ext === 'hwpx' ? 'application/hwp+zip' : 'application/x-hwp';
         const file = new File([blob], FILE_NAME, { type: mime });
@@ -1906,6 +1967,19 @@ ob_start('fs_icon_convert_html');
     };
     
     
+    // ★ (2026-11-18 21:53, 350차 펜닐 요청 "폰트 위치 설정 변경, 메뉴에 폰트 위치 지정(편집기에서 설정하면 뷰어는 자동)")
+    //   [도구 › 글꼴 폴더 설정] — rhwp 묶음 명령이 아니라 FileStation 창을 엶(묶음으로 가지 않게 먼저 가로챔)
+    document.addEventListener('click', function(e) {
+        // ★ (2026-11-18 22:17, 351차 펜닐 지적 "비활성화(회색)인데 클릭됨 / 어디어디에서 폰트를 가져다 쓰고 활성화 여부도 안 나옴")
+        //   rhwp 메뉴는 data-cmd 항목을 눌렀을 때만 닫으므로, rhwp 의 '바깥 누르기' 닫기(문서 mousedown → closeAll)로 닫은 뒤 창을 엶
+        //   (open 클래스만 지우면 rhwp 는 아직 열린 줄 알아 다른 메뉴 제목에 마우스만 올려도 열림)
+        const it = e.target && e.target.closest && e.target.closest('.md-item[data-fs-cmd="font-folders"]');
+        if (!it) return;
+        e.preventDefault();
+        try { document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window })); } catch (er) {}
+        setTimeout(() => { if (typeof window.fsFontFolderDialog === 'function') window.fsFontFolderDialog(); }, 0);
+    }, true);
+
     // file:save / file:save-as 메뉴 클릭 가로채기
     // - e.__serverSave (synthetic dispatchEvent용 마커, 레거시)
     // - window.__rhwpServerSaveTrigger (element.click() 재귀 방지용 플래그)
@@ -2267,5 +2341,244 @@ ob_start('fs_icon_convert_html');
     window.__rhwpServerSave = exportAndSave;
 })();
 </script>
+<?php /* ★ (2026-11-18 21:53, 350차 펜닐 요청 "폰트 위치 설정 변경, 메뉴에 폰트 위치 지정(편집기에서 설정하면 뷰어는 자동)")
+   ★ (2026-11-18 22:17, 351차 펜닐 지적 "비활성화(회색)인데 클릭됨 / 어디어디에서 폰트를 가져다 쓰고 활성화 여부도 안 나옴")
+   [도구 › 글꼴 폴더 설정] 창 — 관리자만. 서버(data/rhwp_font_settings.json)에 저장하므로 뷰어도 같은 폴더를 씀.
+   351차: 글꼴을 어디서 가져다 쓰는지 4곳(① 이 PC 설치 ② 서버 글꼴 폴더 ③ rhwp 기본 ④ 인터넷)과 각각 사용 여부를 보여 주고,
+          서버 폴더는 폴더마다 켜기/끄기·지우기·추가(텍스트 칸 대신 줄 목록).
+   모달 원칙: [저장]은 창을 닫지 않고 '저장됨'만, 닫기는 [닫기]·[X]·Esc. 좁고 세로로 긴 모양 */ ?>
+<?php if ($auth->isAdmin() || ($auth->isSubAdmin() && $auth->hasAdminPerm('system_settings'))): ?>
+<script>
+(function () {
+    const ROOT = <?php echo json_encode(rtrim(str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? '')), '/'), JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_SLASHES); ?>;
+    const CSRF = <?php echo json_encode(getCsrfToken(), JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+    const T = <?php echo json_encode([
+        'title' => __('rf_title', '글꼴 폴더 설정'),
+        'intro' => __('rf_intro', '문서를 열 때 위에서부터 차례로 글꼴을 찾습니다. 앞에서 찾으면 뒤의 것은 쓰지 않습니다.'),
+        's1' => __('rf_s1', '이 PC에 설치된 글꼴'),
+        's1_viewer' => __('rf_s1_viewer', '뷰어: 문서에 적힌 글꼴이 이 PC에 있으면 바로 씀(항상)'),
+        's1_editor_ok' => __('rf_s1_editor_ok', '편집기: 로컬 글꼴 감지 {n}개 ({when})'),
+        's1_editor_partial' => __('rf_s1_editor_partial', '편집기: 문서에 필요한 글꼴만 확인 ({when})'),
+        's1_editor_none' => __('rf_s1_editor_none', '편집기: 아직 감지 안 함 — 도구 › 환경 설정 › 글꼴에서 [로컬 글꼴 감지]'),
+        's1_editor_server' => __('rf_s1_editor_server', '편집기: 로컬 글꼴 감지 안 함 — 서버 글꼴만 사용 (이 PC 글꼴도 쓰려면 도구 › 환경 설정 › 글꼴에서 [로컬 글꼴 감지])'),
+        's1_editor_unsup' => __('rf_s1_editor_unsup', '편집기: 이 브라우저는 전체 감지를 지원하지 않음(문서에 필요한 글꼴만 확인)'),
+        's1_perm_denied' => __('rf_s1_perm_denied', '브라우저에서 글꼴 사용 권한이 거부됨'),
+        's2' => __('rf_s2', '서버 글꼴 폴더'),
+        's2_desc' => __('rf_s2_desc', 'TTF·OTF·TTC·WOFF·WOFF2, 하위 폴더 3단계까지 — 모든 사용자에게 적용'),
+        's2_add_ph' => __('rf_s2_add_ph', '폴더 경로 (예: C:/Windows/Fonts)'),
+        's2_add' => __('rf_s2_add', '추가'),
+        's2_del' => __('rf_s2_del', '목록에서 빼기'),
+        's2_use' => __('rf_s2_use', '사용'),
+        's3' => __('rf_s3', 'rhwp 기본 글꼴'),
+        's3_desc' => __('rf_s3_desc', '서버 assets/rhwp/studio/fonts · 파일 {n}개 — 맑은 고딕·굴림·바탕·HY 등이 없을 때 대신 씀'),
+        's4' => __('rf_s4', '인터넷 글꼴'),
+        's4_desc' => __('rf_s4_desc', '{names} (cdn.jsdelivr.net) — 인터넷에 연결돼 있어야 함'),
+        'b_on' => __('rf_b_on', '사용 중'),
+        'b_on_n' => __('rf_b_on_n', '사용 중 · 글꼴 {n}개'),
+        'b_empty' => __('rf_b_empty', '켜짐 · 글꼴 없음'),
+        'b_off' => __('rf_b_off', '꺼짐'),
+        'b_check' => __('rf_b_check', '확인 필요'),
+        'fonts_n' => __('rf_fonts_n', '글꼴 {n}개'),
+        'names_n' => __('rf_names_n', '인식한 글꼴 이름 {n}개'),
+        'none' => __('rf_none', '지정한 폴더가 없습니다(서버 글꼴을 쓰지 않음)'),
+        'note' => __('rf_note', '저장하면 다음에 여는 문서부터 적용됩니다(뷰어도 같이). 상용 글꼴은 사용 허락 범위를 확인하세요.'),
+        'dirty' => __('rf_dirty', '바꾼 내용이 아직 저장되지 않았습니다'),
+        'rescan' => __('rf_rescan', '다시 읽기'),
+        'save' => __('rf_save', '저장'),
+        'close' => __('rf_close', '닫기'),
+        'saved' => __('rf_saved', '저장됨'),
+        'scanned' => __('rf_scanned', '다시 읽음'),
+        'loading' => __('rf_loading', '읽는 중…'),
+        'failed' => __('rf_failed', '처리하지 못했습니다'),
+        'e_not_found' => __('rf_e_not_found', '폴더가 없습니다'),
+        'e_not_dir' => __('rf_e_not_dir', '폴더가 아닙니다'),
+        'e_not_readable' => __('rf_e_not_readable', '읽을 수 없습니다(권한)'),
+        'e_invalid' => __('rf_e_invalid', '쓸 수 없는 글자가 있습니다'),
+        'e_duplicate' => __('rf_e_duplicate', '위와 같은 폴더'),
+        'e_too_many' => __('rf_e_too_many', '폴더는 10개까지입니다'),
+        'e_deferred' => __('rf_e_deferred', '글꼴 {n}개는 아직 못 읽었습니다 — [다시 읽기]를 누르면 이어서 읽습니다'),
+        'e_csrf' => __('rf_e_csrf', '보안 토큰이 만료됐습니다. 편집기를 새로 고쳐 주세요'),
+    ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_UNESCAPED_UNICODE); ?>;
+    const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmt = (s, o) => String(s).replace(/\{(\w+)\}/g, (m, k) => (k in o ? o[k] : m));
+    const errText = (code, n) => T['e_' + code] ? fmt(T['e_' + code], { n: n || 0 }) : String(code || '');
+    const badge = (cls, text) => '<span class="rf-badge rf-' + cls + '">' + esc(text) + '</span>';
+    let box = null, data = null, rows = [], rowErr = {}, dirty = false;
+
+    function close() { if (box) { try { box.remove(); } catch (e) {} box = null; document.removeEventListener('keydown', onKey, true); } }
+    function onKey(e) { if (e.key === 'Escape' && box) { e.preventDefault(); e.stopPropagation(); close(); } }
+
+    // ① 이 PC — rhwp 편집기의 로컬 글꼴 감지 결과(브라우저 저장소 'rhwp-local-fonts', rhwp 가 쓰는 형식)를 읽어서 보여 줌(바꾸지 않음)
+    async function localInfo() {
+        let rec = null;
+        try { const raw = localStorage.getItem('rhwp-local-fonts'); if (raw) rec = JSON.parse(raw); } catch (e) {}
+        let perm = '';
+        try { if (navigator.permissions) perm = (await navigator.permissions.query({ name: 'local-fonts' })).state; } catch (e) {}
+        const when = (iso) => { try { const d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString(); } catch (e) { return ''; } };
+        let line;
+        if (rec && rec.fsServerFonts === true) {   // ★ (2026-11-18 22:49, 353차) FileStation 이 서버 글꼴로 적어 둔 기록
+            line = T.s1_editor_server;
+        } else if (rec && rec.source === 'local-font-access') {
+            const n = Array.isArray(rec.fontRecords) && rec.fontRecords.length ? new Set(rec.fontRecords.map(r => r && (r.family || r.name)).filter(Boolean)).size : (Array.isArray(rec.families) ? rec.families.length : 0);
+            line = fmt(T.s1_editor_ok, { n, when: when(rec.detectedAt) });
+        } else if (rec && rec.source === 'font-presence-probe') {
+            line = fmt(T.s1_editor_partial, { when: when(rec.detectedAt) });
+        } else if (typeof window.queryLocalFonts !== 'function') {
+            line = T.s1_editor_unsup;
+        } else {
+            line = T.s1_editor_none;
+        }
+        return { line, denied: perm === 'denied' };
+    }
+
+    function folderStatus(r) {
+        if (!r.enabled) return '<span class="rf-off">' + esc(T.b_off) + '</span>';
+        if (rowErr[r.path]) return '<span class="rf-bad">✗ ' + esc(errText(rowErr[r.path])) + '</span>';
+        if (r.saved === false) return '<span class="rf-warn">' + esc(T.dirty) + '</span>';
+        if (r.ok === false) return '<span class="rf-bad">✗ ' + esc(errText(r.error)) + '</span>';
+        if (r.ok) return '<span class="rf-ok">✓ ' + esc(fmt(T.fonts_n, { n: r.faces })) + '</span>';
+        return '';
+    }
+
+    async function render(msg, isErr) {
+        if (!box || !data) return;
+        // ①
+        const li = await localInfo();
+        box.querySelector('[data-s="1"] .rf-badge-wrap').innerHTML = badge('on', T.b_on);
+        box.querySelector('[data-s="1"] .rf-sub').innerHTML = '<div>' + esc(T.s1_viewer) + '</div><div>' + esc(li.line) + '</div>' + (li.denied ? '<div class="rf-bad">' + esc(T.s1_perm_denied) + '</div>' : '');
+        // ②
+        const en = rows.filter(r => r.enabled);
+        const total = rows.reduce((a, r) => a + (r.enabled && r.ok ? (r.faces || 0) : 0), 0);
+        box.querySelector('[data-s="2"] .rf-badge-wrap').innerHTML = !en.length ? badge('off', T.b_off) : (en.some(r => r.ok === false || rowErr[r.path]) ? badge('warn', T.b_check) : (total > 0 ? badge('on', fmt(T.b_on_n, { n: total })) : badge('warn', T.b_empty)));
+        const list = box.querySelector('.rf-folders');
+        list.innerHTML = rows.length ? rows.map((r, i) =>
+            '<div class="rf-frow"><label class="rf-chk" title="' + esc(T.s2_use) + '"><input type="checkbox" data-i="' + i + '"' + (r.enabled ? ' checked' : '') + '></label>' +
+            '<div class="rf-fmain"><div class="rf-fpath">' + esc(r.path) + '</div><div class="rf-fst">' + folderStatus(r) + '</div></div>' +
+            '<button type="button" class="rf-del" data-del="' + i + '" title="' + esc(T.s2_del) + '" aria-label="' + esc(T.s2_del) + '">✕</button></div>').join('')
+            : '<div class="rf-row rf-off">' + esc(T.none) + '</div>';
+        list.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', () => { const r = rows[+cb.dataset.i]; r.enabled = cb.checked; r.saved = false; delete rowErr[r.path]; dirty = true; render(); }));
+        list.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { rows.splice(+b.dataset.del, 1); dirty = true; render(); }));
+        const sum = box.querySelector('.rf-names summary');
+        sum.textContent = fmt(T.names_n, { n: data.names_total });
+        box.querySelector('.rf-names div').textContent = data.names.join(', ') + (data.names_total > data.names.length ? ' …' : '');
+        box.querySelector('.rf-deferred').textContent = data.deferred ? errText('deferred', data.deferred) : '';
+        // ③ ④
+        box.querySelector('[data-s="3"] .rf-badge-wrap').innerHTML = badge('on', T.b_on);
+        box.querySelector('[data-s="3"] .rf-sub').textContent = fmt(T.s3_desc, { n: data.builtin });
+        box.querySelector('[data-s="4"] .rf-badge-wrap').innerHTML = badge('on', T.b_on);
+        box.querySelector('[data-s="4"] .rf-sub').textContent = fmt(T.s4_desc, { names: (data.cdn || []).join('·') });
+        const m = box.querySelector('.rf-msg');
+        if (msg !== undefined) { m.textContent = msg || ''; m.className = 'rf-msg' + (isErr ? ' rf-bad' : ' rf-ok'); }
+        else if (dirty) { m.textContent = T.dirty; m.className = 'rf-msg rf-warn'; }
+    }
+
+    async function call(action, body) {
+        const opt = { credentials: 'same-origin', headers: {} };
+        if (body !== undefined) { opt.method = 'POST'; opt.headers['Content-Type'] = 'application/json'; opt.headers['X-CSRF-Token'] = CSRF; opt.body = JSON.stringify(body); }
+        const r = await fetch(ROOT + '/rhwp_fonts.php?action=' + action, opt);
+        let j = null; try { j = await r.json(); } catch (e) {}
+        return j || { success: false, error: 'http_' + r.status };
+    }
+    function busy(on) { if (!box) return; box.querySelectorAll('button[data-act]').forEach(b => { b.disabled = on; }); if (on) { const m = box.querySelector('.rf-msg'); m.textContent = T.loading; m.className = 'rf-msg'; } }
+    function take(j, okMsg) {
+        if (j && j.success) {
+            data = j; rowErr = {}; dirty = false;
+            rows = (j.folders || []).map(f => ({ path: f.path, enabled: !!f.enabled, ok: f.ok, error: f.error, faces: f.faces }));
+            try { window.FsRhwpFonts && FsRhwpFonts.reset && FsRhwpFonts.reset(); } catch (e) {}
+            render(okMsg, false);
+        } else if (j && j.error === 'invalid_paths') {
+            rowErr = {}; (j.errors || []).forEach(x => { rowErr[x.path] = x.error; });
+            if ((j.errors || []).some(x => !x.path)) render(T.failed + ' — ' + errText('too_many'), true); else render(T.failed, true);
+        } else render(j && j.csrf_error ? T.e_csrf : (T.failed + (j && j.error ? ' (' + j.error + ')' : '')), true);
+    }
+
+    window.fsFontFolderDialog = async function () {
+        if (box) return;
+        box = document.createElement('div');
+        box.className = 'rf-mask';
+        const sec = (n, title, extra) => '<div class="rf-sec" data-s="' + n + '"><div class="rf-sh"><span class="rf-num">' + n + '</span><b>' + esc(title) + '</b><span class="rf-badge-wrap"></span></div>' + (extra || '<div class="rf-sub"></div>') + '</div>';
+        box.innerHTML =
+            '<div class="rf-box" role="dialog" aria-modal="true" aria-label="' + esc(T.title) + '">' +
+            '<div class="rf-head"><b>' + esc(T.title) + '</b><button type="button" class="rf-x" data-x aria-label="' + esc(T.close) + '">✕</button></div>' +
+            '<p class="rf-desc">' + esc(T.intro) + '</p>' +
+            sec(1, T.s1) +
+            sec(2, T.s2, '<div class="rf-sub">' + esc(T.s2_desc) + '</div><div class="rf-folders"></div>' +
+                '<div class="rf-add"><input type="text" class="rf-add-in" spellcheck="false" autocomplete="off" placeholder="' + esc(T.s2_add_ph) + '"><button type="button" data-add>' + esc(T.s2_add) + '</button></div>' +
+                '<div class="rf-deferred rf-warn"></div><details class="rf-names"><summary></summary><div></div></details>') +
+            sec(3, T.s3) +
+            sec(4, T.s4) +
+            '<p class="rf-note">' + esc(T.note) + '</p>' +
+            '<div class="rf-msg"></div>' +
+            '<div class="rf-btns"><button type="button" data-act="rescan">' + esc(T.rescan) + '</button><span></span>' +
+            '<button type="button" data-x>' + esc(T.close) + '</button><button type="button" data-act="save" class="rf-primary">' + esc(T.save) + '</button></div>' +
+            '</div>';
+        document.body.appendChild(box);
+        document.addEventListener('keydown', onKey, true);
+        box.querySelectorAll('[data-x]').forEach(b => b.addEventListener('click', close));
+        const addIn = box.querySelector('.rf-add-in');
+        const doAdd = () => {
+            const v = addIn.value.trim().replace(/\\/g, '/');
+            if (!v) return;
+            if (!rows.some(r => r.path === v)) rows.push({ path: v, enabled: true, saved: false });
+            addIn.value = ''; dirty = true; render();
+        };
+        box.querySelector('[data-add]').addEventListener('click', doAdd);
+        addIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+        box.querySelector('[data-act="save"]').addEventListener('click', async () => {
+            if (addIn.value.trim()) doAdd();
+            busy(true);
+            try { take(await call('settings_save', { folders: rows.map(r => ({ path: r.path, enabled: r.enabled })) }), T.saved); } catch (e) { render(T.failed, true); }
+            busy(false);
+        });
+        box.querySelector('[data-act="rescan"]').addEventListener('click', async () => {
+            busy(true);
+            try { take(await call('rescan', {}), T.scanned); } catch (e) { render(T.failed, true); }
+            busy(false);
+        });
+        busy(true);
+        try { take(await call('settings'), ''); } catch (e) { render(T.failed, true); }
+        busy(false);
+    };
+})();
+</script>
+<style>
+.rf-mask{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:100000;display:flex;align-items:center;justify-content:center;padding:12px}
+.rf-box{background:#fff;color:#222;border-radius:8px;box-shadow:0 10px 40px rgba(0,0,0,.25);width:440px;max-width:100%;max-height:calc(100vh - 24px);overflow:auto;padding:14px 16px;font:13px/1.45 -apple-system,BlinkMacSystemFont,'Segoe UI','Malgun Gothic',sans-serif;box-sizing:border-box}
+.rf-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;font-size:15px}
+.rf-x{border:0;background:none;font-size:16px;cursor:pointer;color:#666;padding:2px 6px}
+.rf-desc{margin:0 0 8px;color:#555;font-size:12px}
+.rf-sec{border:1px solid #e3e3e3;border-radius:6px;padding:7px 9px;margin-bottom:6px}
+.rf-sh{display:flex;align-items:center;gap:6px}
+.rf-sh b{flex:1;font-size:13px}
+.rf-num{display:inline-flex;width:18px;height:18px;border-radius:50%;background:#e8eefc;color:#0b57d0;font-size:11px;font-weight:700;align-items:center;justify-content:center;flex-shrink:0}
+.rf-sub{font-size:12px;color:#666;margin-top:3px;word-break:break-all}
+.rf-badge{font-size:11px;padding:1px 7px;border-radius:9px;white-space:nowrap;font-weight:600}
+.rf-badge.rf-on{background:#e6f4ea;color:#1a7f37}.rf-badge.rf-off{background:#eee;color:#777}.rf-badge.rf-warn{background:#fff4e0;color:#a15c00}
+.rf-folders{margin-top:5px}
+.rf-frow{display:flex;align-items:flex-start;gap:6px;padding:4px 0;border-top:1px dashed #eee}
+.rf-frow:first-child{border-top:0}
+.rf-chk{padding-top:1px}.rf-chk input{width:15px;height:15px;cursor:pointer;margin:0}
+.rf-fmain{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px}
+.rf-fpath{font:12.5px/1.35 Consolas,'D2Coding',monospace;word-break:break-all;flex:1 1 auto;min-width:0}
+.rf-fst{font-size:12px;white-space:nowrap}
+.rf-del{border:0;background:none;color:#999;cursor:pointer;font-size:13px;padding:0 4px}
+.rf-del:hover{color:#c62828}
+.rf-add{display:flex;gap:5px;margin-top:5px}
+.rf-add-in{flex:1;min-width:0;font:12.5px Consolas,'D2Coding',monospace;padding:4px 6px;border:1px solid #bbb;border-radius:4px}
+.rf-add button{padding:4px 10px;border:1px solid #bbb;background:#f5f5f5;border-radius:4px;cursor:pointer;font:inherit;font-size:12px}
+.rf-deferred{font-size:12px;margin-top:3px}
+.rf-names{margin-top:4px;font-size:12px}.rf-names summary{cursor:pointer;color:#0b57d0}.rf-names div{color:#555;margin-top:3px;max-height:80px;overflow:auto;word-break:break-all}
+.rf-row{padding:2px 0}
+.rf-ok{color:#1a7f37}.rf-bad{color:#c62828}.rf-warn{color:#a15c00}.rf-off{color:#888}
+.rf-note{margin:6px 0 0;font-size:11.5px;color:#777}
+.rf-msg{min-height:17px;font-weight:600;margin-top:4px;font-size:12.5px}
+.rf-btns{display:flex;gap:6px;align-items:center;margin-top:6px;position:sticky;bottom:-14px;background:#fff;padding:6px 0 0}.rf-btns span{flex:1}
+/* ★ (2026-11-18 22:23, 351차) 폰·낮은 화면: 설명 줄 숨기고 간격 줄여 스크롤 없이(버튼 줄은 늘 아래에 보이게 sticky) */
+@media (max-width:520px),(max-height:720px){.rf-box{padding:10px 12px;font-size:12.5px}.rf-desc,.rf-sec[data-s="2"]>.rf-sub{display:none}.rf-sec{padding:5px 8px;margin-bottom:5px}.rf-sub{margin-top:1px;line-height:1.35}.rf-frow{padding:2px 0}.rf-note{margin-top:3px;line-height:1.35}.rf-head{font-size:14px;margin-bottom:2px}.rf-btns{bottom:-10px}.rf-btns button{padding:5px 12px}}
+.rf-btns button{padding:6px 14px;border:1px solid #bbb;background:#f5f5f5;border-radius:4px;cursor:pointer;font:inherit}
+.rf-btns button.rf-primary{background:#0b57d0;border-color:#0b57d0;color:#fff}
+.rf-btns button:disabled{opacity:.55;cursor:default}
+</style>
+<?php endif; ?>
 </body>
 </html>

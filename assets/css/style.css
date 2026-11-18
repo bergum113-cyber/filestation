@@ -2543,6 +2543,22 @@ body.modal-open.trash-modal-active .transfer-progress {
     background: var(--danger);
 }
 
+/* ★ (2026-11-18 12:27, 342차) 진행 칸 실패 목록 상자(app.js _fsShowFailBox) — 실패가 섞이면 닫을 때까지 남음 */
+.upload-session-item.fs-has-fail { border-left: 3px solid var(--danger); }
+.fs-fail-box { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 6px; font-size: 12px; }
+.fs-fail-head { color: var(--danger); font-weight: 600; margin-bottom: 4px; }
+.fs-fail-list { max-height: 180px; overflow-y: auto; }
+.fs-fail-row { display: flex; gap: 6px; padding: 3px 0; align-items: flex-start; }
+.fs-fail-x { color: var(--danger); flex: 0 0 auto; }
+.fs-fail-txt { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.fs-fail-name { color: var(--dark); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fs-fail-why { color: var(--secondary); font-size: 11px; word-break: break-word; }
+.fs-fail-more { background: none; border: none; color: var(--fs-primary-text, var(--primary)); cursor: pointer; font-size: 11px; padding: 2px 0; }
+.fs-fail-btns { display: flex; gap: 6px; margin-top: 6px; }
+.fs-fail-btns button { flex: 1; padding: 5px 8px; font-size: 12px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--dark); cursor: pointer; }
+.fs-fail-btns button:hover { background: rgba(0,0,0,0.06); }
+.fs-fail-btns .fs-fail-retry { color: var(--fs-primary-text, var(--primary)); }
+
 .upload-session-info {
     display: flex;
     justify-content: space-between;
