@@ -1,10 +1,10 @@
-# FileStation v5.9.1
+# FileStation v5.9.2
 
-![version](https://img.shields.io/badge/version-v5.9.1-blue)
+![version](https://img.shields.io/badge/version-v5.9.2-blue)
 ![PHP](https://img.shields.io/badge/PHP-8.0~8.4-777BB4?logo=php&logoColor=white)
 ![license](https://img.shields.io/badge/license-GPL--3.0-green)
 ![webserver](https://img.shields.io/badge/server-Apache%20%7C%20Nginx%20%7C%20IIS-orange)
-![rhwp](https://img.shields.io/badge/rhwp-0.9.0-9cf)
+![rhwp](https://img.shields.io/badge/rhwp-0.9.1-9cf)
 ![platform](https://img.shields.io/badge/platform-self--hosted-lightgrey)
 
 > 🇰🇷 **한국 사용자를 위한 자체호스팅 웹 NAS** — HWP/HWPX 뷰어, OnlyOffice 통합, E2E 암호화 Vault, 5종 외부 스토리지, HLS 비디오 스트리밍, MP3 플레이어 일체형
@@ -15,7 +15,7 @@
 
 | 기능 | 설명 |
 |---|---|
-| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.9.0 통합 — **자체호스팅 NAS 중 글로벌 유일** |
+| 📄 **HWP/HWPX 뷰어 + 편집기** | rhwp 0.9.1 통합 — **자체호스팅 NAS 중 글로벌 유일** |
 | 📝 **OnlyOffice 통합** | docx/xlsx/pptx/odt 등 Office 문서 직접 편집 |
 | 🔐 **E2E 암호화 Vault** | AES-256-GCM, Web Crypto API, 클라이언트 측 복호화 |
 | 🌐 **5종 외부 스토리지** | FTP / SFTP / WebDAV / S3 / SMB 통합 인터페이스 |
@@ -210,7 +210,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 | 음악 | MP3, M4A, M4B, AAC, OGG, OGA, OPUS, FLAC, WAV, WEBA — 웹 플레이어(브라우저가 직접 재생)라 브라우저가 여는 형식만. WMA·APE·AIFF 등은 목록·다운로드만(재생 안 함). 아이폰 등 일부 기기는 OGG·OPUS·WEBA 를 못 열 수 있음 → 플레이어에 '재생할 수 없는 파일' 표시 |
 | 문서 | PDF, TXT, HTML, Markdown |
 | 코드 | PHP, JS, TS, Python, Java, C/C++, Go, Rust, Ruby, Swift 등 80+ 언어 |
-| **한글** | **HWP, HWPX (rhwp 0.9.0 전용 뷰어 + 편집기)** |
+| **한글** | **HWP, HWPX (rhwp 0.9.1 전용 뷰어 + 편집기)** |
 | **오피스** | **DOCX, XLSX, XLS, ODS, PPTX 미리보기(docx-preview 0.4.1 · SheetJS 0.20.3 · pptx-preview 1.0.7) + OnlyOffice 직접 편집**. DOC·PPT(옛 형식)는 내려받기 안내 |
 | 압축 | ZIP, RAR, 7Z, TAR, GZ, BZ2, ISO, CAB, WIM, ARJ, LZH, XZ |
 
@@ -502,7 +502,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ### 통합
 
-- **rhwp 0.9.0** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
+- **rhwp 0.9.1** — HWP/HWPX 뷰어 + 편집기 (Rust+WASM)
 - **OnlyOffice Document Server** — Office 문서 편집 (JWT 인증)
 - **WebDAV 서버** — `mydav.php` (Windows 네트워크 드라이브)
 
@@ -514,7 +514,7 @@ This project is **not affiliated with Synology Inc. or QNAP Systems, Inc.** "Fil
 
 ```bash
 # 웹 서버 디렉토리에 파일 복사
-unzip FileStation_v5_9_1.zip -d /var/www/html/filestation
+unzip FileStation_v5_9_2.zip -d /var/www/html/filestation
 ```
 
 ### 2. 권한 설정
@@ -604,7 +604,7 @@ filestation/
 ```php
 // 사이트 정보
 define('SITE_NAME', 'WebHard');
-define('APP_VERSION', '5.9.1');
+define('APP_VERSION', '5.9.2');
 
 // 데이터 경로
 define('DATA_PATH', BASE_PATH . '/data');
@@ -673,9 +673,9 @@ SSRF 방어: hex 키 우회 + IP 화이트리스트
 ### rhwp (HWP/HWPX 뷰어)
 
 ```
-버전: 0.9.0
+버전: 0.9.1
 파일: assets/rhwp/
-업그레이드: rhwp_업그레이드_가이드_v7_2.md 참조
+업그레이드: rhwp_업그레이드_가이드_v7_3.md 참조
 ```
 
 ### WebDAV 서버
@@ -730,12 +730,27 @@ This program is distributed in the hope that it will be useful, but WITHOUT ANY 
 
 ## 🔄 버전 정보
 
-**현재 버전**: v5.9.1 (rhwp 0.9.0 기반)
+**현재 버전**: v5.9.2 (rhwp 0.9.1 기반)
 
 ### 주요 변경 이력
 
-#### v5.9.1 (2026-11-18~) ⭐ 현재
+#### v5.9.2 (2026-11-19~) ⭐ 현재
 
+- **[버전] 5.9.1 → 5.9.2 (2026-11-19 09:53, 펜닐 지시 '버전 5.9.2로 수정')** — `config.php` `@version`·`APP_VERSION`, README 현재 표기(제목·배지·설치 예시 파일 이름·설정 예시·현재 버전·꼬리말·최종 업데이트). 11-18~11-19 작업(rhwp 0.9.1 업그레이드 356차까지)은 모두 v5.9.1 기록으로 둠(지난 5.9.0 → 5.9.1 때와 같은 방식). 이력 항목의 옛 버전 표기는 그대로
+
+#### v5.9.1 (2026-11-18~2026-11-19)
+
+- **[업그레이드] rhwp 0.9.0 → 0.9.1 (2026-11-19 09:24~09:50, 펜닐 요청 "rhwp 0.9.1 로 업그레이드 — 가이드 7.2 기준으로 안전하게") — FileStation 버전은 5.9.1 그대로**
+  - **STEP 1 진본**: npm latest 0.9.1(2026-11-18 공개), shasum `2859860aec79e5f7cd68ddfe9aa1d38d660e4814` 와 받은 tgz sha1 일치. 0.9.0 바로 다음(결번 없음). CHANGELOG — 조판(중첩 표·셀 그림·머리말/꼬리말·글꼴 프로그램 선택), **저장 후 재열기·재저장 보강**, 붙여넣기, 작은 화면 대화창, 글꼴 요청 수집 비용, 문서 열기 처리 중 시작 화면 경합
+  - **STEP 2 ABI**: 공개 함수 580 → 597, **사라진 것 0**(신규 17 — 바탕쪽·메모·인쇄 글꼴 등). FileStation 이 쓰는 것(`HwpDocument`·`pageCount`·`renderPageSvg`·`exportHwp`·`getSourceFormat`·`setFileName`·`version`·기본 init·`getDocumentFontSelectionPlan`·`free`·`module_or_path`) 모두 같은 수
+  - **STEP 3 빌드**: sparse(6개 폴더) + `npm ci`. 0.9.0 클린 빌드가 배포본과 18개 중 16개 바이트까지 같음(index js·css 만 패치 차이) → 빌드 환경 재현 확인. 0.9.1 청크 18개(종류 같음), 엔진 md5 npm·빌드·배포 셋 다 같음
+  - **STEP 4**: 원본 `index.html` 0.9.0 ↔ 0.9.1 **차이 0줄**(id·명령 변화 0) → 편집기 마크업 손대지 않음. `menusync` 0건, `deadbtn` 고칠 대상 0, 툴바 트리 차이는 종전 사유(찾기 ▾ 안 div) 4줄 그대로. `print.html` 그대로 배치
+  - **STEP 5 패치**: J1·J2·P1·P2 각 1건, 키맵 71 → 71 같음(Ctrl+S·Ctrl+P 없음, 한글 변형 없음)
+  - **STEP 6**: `rhwp_editor.php` `index-BGsUSgOJ.js`·`index-Bqn-gcq0.css`·`@rhwp_version 0.9.1`, `rhwp_viewer.php` `@rhwp_version 0.9.1`(엔진 이름은 스스로 찾음). README 현재 표기 7곳 + 가이드 참조 v7_3. FileStation 버전·래퍼 동작 코드는 그대로
+  - **STEP 7**: 빌드 ↔ 배포 전수 대조 — 다른 것은 패치한 2개뿐, `assets/rhwp/` 는 `rhwp.js`·`studio/` 만
+  - **검증(0.9.0 배포본과 두 포트로 나란히, Chromium)**: 21-b 번들이 찾는 id 26 → 26·우리에게 없는 것 2 → 2(같은 2개) / 22 주요 영역 CSS 10곳 같음(바뀐 것은 rhwp 대화창 크기·스크롤 규칙 — 우리 창은 그 클래스 안 씀) / 23 사라진 클래스 0 / 25 저장 — 6쪽 hwp·24쪽 hwpx·암호 hwpx Ctrl+S 200 success, **저장본 바이트가 0.9.0 과 다름**(CHANGELOG 저장 보강), 셋 다 뷰어로 다시 열기 오류 0 / 열기 취소 → 새 문서 → Ctrl+S 차단 유지 / 다른 이름 저장·인쇄 같음 / 26 뷰어 문서 5개 쪽 수·글자 같음, SVG 4개 다름(조판 보정 — 그림으로 보니 각주 번호·글자 간격 1px 안팎) / 27 글꼴 연동 정적 ①~⑪·실측 3가지 두 판 같음 / 원본 studio 와 나란히 누르기 21항목 모두 같음·오류 0 / 휴대폰(iPhone 13) 편집기 화면 같음·가로 넘침 0 / 래퍼 감지 문구 수 같음(`[CanvasView]` 9 → 7 은 오류 문장 2개, 래퍼가 쓰는 '페이지 로드' 문장 그대로)
+  - **★ 실기기 확인 필요(펜닐)**: ①**0.9.1 로 저장한 파일이 한글에서 열리는지**(저장 바이트가 0.9.0 과 다름) ②실제 Windows·브라우저에서 표가 많은 문서 모양(조판 보정 항목)
+  - 가이드 `rhwp_업그레이드_가이드_v7_3.md`(배포본 밖): 0.9.0 메모에만 있던 빌드 폴더 3개·Worker 확인·감지 문구 세는 법을 본문에 넣고 `npm ci` 빌드 스크립트(C-15)·0.9.1 실적 추가
 - **[점검·수정] 355차 — 349~354차(글꼴 기능) 다시 점검 (2026-11-18 23:47, 펜닐 요청 "소스 잘못 삭제·작동·보안·누락·누수·버그… 연관 파일까지, 오진단 여부도")**
   - 본 범위: 348차 → 354차에서 바뀐 것 전부(`rhwp_fonts.php`·`api/FsBrotli.php`·`assets/js/fs-rhwp-fonts.js`·`rhwp_viewer.php`·`rhwp_editor.php`·lang) + 연관(rhwp 묶음의 감지 기록·메뉴 동작, 로그인·권한)
   - **고침(재현→수정→확인)**: 같은 이름 글꼴 파일이 여러 개이고 그중 하나가 깨져 있으면, 다른 파일은 정상으로 받았는데도 그 이름을 편집기 '서버 글꼴' 기록에서 뺐음(353차 `served`). 깨진 파일을 섞은 시험 폴더로 기록 7개 → 2개 재현 → 이름별로 '하나라도 받으면 쓸 수 있음'으로 고쳐 7개. 뷰어는 이 값을 안 써서 351차와 SVG·화면 md5 같음
@@ -9088,5 +9103,5 @@ McIntosh 가로 비율 (280×130, viewBox 280×130) 첫 도입. 이후 28번째 
 
 ---
 
-*FileStation v5.9.1 — 한국 사용자를 위한 자체호스팅 웹 NAS*
-*최종 업데이트: 2026-11-18 (v5.9.1, rhwp 0.9.0 기준)*
+*FileStation v5.9.2 — 한국 사용자를 위한 자체호스팅 웹 NAS*
+*최종 업데이트: 2026-11-19 (v5.9.2, rhwp 0.9.1 기준)*

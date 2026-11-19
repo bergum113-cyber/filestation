@@ -3,7 +3,7 @@ require_once __DIR__ . '/php_version_check.php';
 /**
  * rhwp-studio HWP 에디터 래퍼
  * https://github.com/edwardkim/rhwp
- * @rhwp_version 0.9.0
+ * @rhwp_version 0.9.1
  */
 
 require_once __DIR__ . '/config.php';
@@ -589,8 +589,8 @@ ob_start('fs_icon_convert_html');
   window.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   document.addEventListener('keydown', window.__rhwpEarlyKeydown, false);
   </script>
-  <script type="module" crossorigin src="index-DuRuHnoY.js?v=<?php echo APP_VERSION; ?>"></script>
-  <link rel="stylesheet" crossorigin href="index-Cty5qsgm.css?v=<?php echo APP_VERSION; ?>">
+  <script type="module" crossorigin src="index-BGsUSgOJ.js?v=<?php echo APP_VERSION; ?>"></script>
+  <link rel="stylesheet" crossorigin href="index-Bqn-gcq0.css?v=<?php echo APP_VERSION; ?>">
 <style>/* ★ (2026-10-26) 선 그림 아이콘(이모지 대신, 원본 api/FsIcons.php) — 글자색을 따름 */ .fs-ico{width:1.2em;height:1.2em;vertical-align:-0.2em;flex-shrink:0} .fs-ico-ok{color:#157347} .fs-ico-err{color:#c62828} .fs-ico-warn{color:#b45309} .tb-icon-text .fs-ico{display:block;width:18px;height:18px} .sb-highlight-icon .fs-ico{width:1em;height:1em}</style>
 </head>
 <body>
