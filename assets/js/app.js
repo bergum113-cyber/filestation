@@ -15808,6 +15808,10 @@ const App = {
         };
         img.onload = () => {
             _removeFromInFlight();
+            // ★ (2026-11-20 15:00, 359차 펜닐 요청 썸네일 라운드 A안) 그림 상자를 실제 그림 크기로 줄여 모서리를 둥글게 한 뒤에도(style.css .thumb-img)
+            //   칸보다 작은 그림을 종전처럼 칸에 맞춰 키우게 — 칸과 그림 비율을 비교해 가로 맞춤/세로 맞춤 표시(못 재면 표시 없이 원래 크기 이하로)
+            try { const W = el.clientWidth, H = el.clientHeight; if (W && H && img.naturalWidth && img.naturalHeight) img.classList.add(img.naturalWidth / img.naturalHeight >= W / H ? 'fs-fit-w' : 'fs-fit-h'); } catch (e) {}
+            try { if (img.naturalWidth && img.naturalHeight) img.style.setProperty('--fs-ar', (img.naturalWidth / img.naturalHeight).toFixed(4)); } catch (e) {}   // ★ (2026-11-20 15:08, 360차 점검) 그림 비율 — 창 크기가 바뀌어도 style.css 가 칸에 맞춘 폭을 다시 계산
             el.innerHTML = '';
             el.appendChild(img);
             el.classList.add('thumb-loaded');

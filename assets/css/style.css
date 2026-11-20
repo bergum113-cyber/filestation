@@ -2087,7 +2087,7 @@ img.fs-file-icon-img {
     width: 100%;
     height: 100px;
     margin-bottom: 8px;
-    border-radius: 6px;
+    border-radius: 10px;   /* ★ (2026-11-20 14:58, 359차 펜닐 요청 썸네일 라운드 A안) 회색 판 6 → 10px */
     overflow: hidden;
     display: flex;
     align-items: center;
@@ -2103,11 +2103,25 @@ img.fs-file-icon-img {
 }
 
 .file-list.grid-view .file-thumbnail .thumb-img {
-    width: 100%;
-    height: 100%;
+    /* ★ (2026-11-20 14:58, 359차 펜닐 요청 썸네일 라운드 A안) 그림 자체를 둥글게 — 종전 width/height 100% + contain 은 둥근 처리가 칸에만 걸려, 칸보다 작은 그림(세로·정사각 등)은 모서리가 각져 보였음.
+       그림 상자를 실제 그림 크기로 줄여(가로·세로 최대 100%) 모서리 8px 이 그림에 걸리게. 비율 유지·잘림 없음은 그대로 */
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
     object-fit: contain;   /* ★ (2026-11-12 21:13, 104차 펜닐 요청 썸네일 B안) 그림 전체가 칸 안에(서버 썸네일도 비율 유지) — 종전 cover 는 위아래·양옆이 잘렸음 */
-    border-radius: 6px;
+    border-radius: 8px;
     transition: opacity 0.2s ease;
+}
+
+.file-list.grid-view .file-thumbnail .thumb-img.fs-fit-w { width: 100%; height: auto; }   /* ★ (2026-11-20 15:00, 359차) 칸보다 작은 그림도 종전처럼 칸에 맞춰 키움 — 그림 비율이 칸보다 넓으면 가로 맞춤 */
+.file-list.grid-view .file-thumbnail .thumb-img.fs-fit-h { width: auto; height: 100%; }   /* ★ (2026-11-20 15:00, 359차) 칸보다 좁으면(세로·정사각) 세로 맞춤 — app.js _loadThumb 이 불러온 뒤 붙임 */
+/* ★ (2026-11-20 15:08, 360차 점검) 위 가로/세로 맞춤은 불러올 때 칸 폭으로 한 번 정해져, 창 크기가 바뀌어 칸 폭이 달라지면(PC 창 1100 → 1200·900)
+   4:3·3:2 사진의 그림 상자가 그림보다 커져 모서리가 다시 각졌음(재현). 칸 크기 단위(cqw·cqh)와 그림 비율(--fs-ar, app.js 가 넣음)로
+   '칸에 맞춘 그림 폭'을 늘 다시 계산 — 이 단위를 모르는 옛 브라우저는 이 블록을 건너뛰고 위 맞춤 표시로 동작 */
+@supports (width: 1cqw) {
+    .file-list.grid-view .file-thumbnail { container-type: size; }
+    .file-list.grid-view .file-thumbnail .thumb-img[style*="--fs-ar"] { width: min(100cqw, calc(100cqh * var(--fs-ar))); height: auto; }
 }
 
 .file-list.grid-view .file-thumbnail.thumb-loaded {
@@ -17996,7 +18010,7 @@ body.is-mobile .toolbar-left #breadcrumb .breadcrumb-item.current { padding: 2px
 .fs-details-pane .dp-close { border: 0; background: transparent; color: inherit; width: 30px; height: 30px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
 .fs-details-pane .dp-close:hover { background: var(--fs-surface-2, rgba(0,0,0,0.06)); }   /* ★ (2026-10-31 12:03, 34차 전체 점검) 없는 --hover 대신(어두운 테마에서 표시 안 됐음) */
 .fs-details-pane .dp-preview { height: 170px; border-radius: 10px; background: var(--light, var(--fs-surface-2, #f3f4f6)); display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 10px; }
-.fs-details-pane .dp-thumb { max-width: 100%; max-height: 100%; object-fit: contain; }
+.fs-details-pane .dp-thumb { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 8px; }   /* ★ (2026-11-20 20:10, 361차 펜닐 요청) 세부 정보 썸네일도 격자(359차 A안)처럼 그림 모서리 8px — 상자가 이미 그림 크기(최대 100%)라 모서리가 그림에 걸림 */
 .fs-details-pane .dp-icon { color: var(--text-secondary, var(--fs-text-2, #6b7280)); }
 .fs-details-pane .dp-icon .fs-ico { width: 56px; height: 56px; }
 .fs-details-pane .dp-name { font-weight: 700; font-size: 14px; word-break: break-all; }
